@@ -159,9 +159,11 @@ enum Tune {
     // 状态栏 (未挂载, 保留)
     static let bottomBarHeight: CGFloat = 24
 
-    // 知识库 (P3.7, 阈值留人工调整)
-    static let knowledgeItemCharLimit: Int   = 8000    // 单条内容截断
-    static let knowledgeTotalCharLimit: Int  = 24000   // 注入块总量预算
+    // 知识库 (P3.7, 阈值留人工调整; 2026-09-10 用户拍板上调)
+    static let knowledgeItemCharLimit: Int   = 16000   // 单条内容截断
+    static let knowledgeTotalCharLimit: Int  = 64000   // 注入块总量预算
+    static let distillMaterialCharLimit: Int = 12000   // 记忆提炼: 对话材料总量截断
+    static let distillTimeoutSeconds: Double = 60      // 记忆提炼: 一次性 pi 轮超时
     static let knowledgeListWidth: CGFloat   = 240     // 面板左列宽 (与 sidebarWidth 同量级)
     static let knowledgeEditorMaxWidth: CGFloat = 760  // 编辑区内容列宽 (与消息列同语言)
     static let knowledgeTitleFontSize: CGFloat  = 17   // 编辑器标题字号

@@ -80,7 +80,8 @@ struct SidebarView: View {
             }
             // P3.7: 原 Plugins 槽位复用为知识库/记忆入口 (nav 保持英文, 与 New chat/Scheduled 一致)
             navRow(icon: "book", title: "Knowledge",
-                   active: store.showKnowledgePanel) {
+                   active: store.showKnowledgePanel,
+                   badge: store.pendingKnowledge.count) {
                 store.toggleKnowledgePanel()
             }
             navRow(icon: "clock.badge", title: "Scheduled",
@@ -98,6 +99,7 @@ struct SidebarView: View {
 
     private func navRow(icon: String, title: String,
                         active: Bool = false,
+                        badge: Int? = nil,
                         action: @escaping () -> Void) -> some View {
         Button(action: action) {
             HStack(spacing: 9) {
@@ -110,6 +112,15 @@ struct SidebarView: View {
                                   weight: title == "New chat" || active ? .medium : .regular))
                     .foregroundStyle(active ? CodexTheme.textPrimary : CodexTheme.textPrimary)
                 Spacer()
+                if let badge, badge > 0 {
+                    Text("\(badge)")
+                        .font(CodexFonts.monoFont(10, weight: .medium))
+                        .foregroundStyle(CodexTheme.accent)
+                        .padding(.horizontal, 5)
+                        .padding(.vertical, 1)
+                        .background(CodexTheme.accentSoft)
+                        .clipShape(Capsule())
+                }
             }
             .padding(.horizontal, 8)
             .padding(.vertical, 6)

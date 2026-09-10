@@ -77,7 +77,8 @@ final class PiRpcTransport: AgentTransport {
     /// pi 是 node 脚本 (shebang #!/usr/bin/env node)。直接 spawn 它时 env 要在
     /// 子进程 PATH 里找 node——Xcode 启动的 App PATH 不含 homebrew, 必失败。
     /// 故解析出 cli.js 真实路径, 显式用 node 跑。
-    private static func launchSpec() -> (executable: String, scriptArgs: [String])? {
+    /// internal: MemoryDistiller 复用同一套启动方式 (node + cli.js 真实路径)。
+    static func launchSpec() -> (executable: String, scriptArgs: [String])? {
         guard let piPath = findBinary() else { return nil }
         let nodeCandidates = ["/opt/homebrew/bin/node", "/usr/local/bin/node"]
         guard let node = nodeCandidates.first(where: { FileManager.default.isExecutableFile(atPath: $0) }) else {

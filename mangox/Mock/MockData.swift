@@ -607,21 +607,26 @@ final class ChatStore: ObservableObject {
 
     // MARK: - Knowledge (P3.7 知识库/记忆, 设计见 docs §3.7)
 
-    /// 当前生效条数 (启用 + 全局/当前 project)——Composer pill 显示用。
+    /// 当前生效条数 (已审核 + 启用 + 全局/当前 project)——Composer pill 显示用。
     var activeKnowledgeCount: Int {
         let pid = activeProject?.id
         return knowledgeItems.filter { item in
-            guard item.enabled else { return false }
+            guard item.enabled, item.status == .active else { return false }
             return item.scope == .global || item.projectId == pid
         }.count
     }
 
+    /// 提炼候选 (待审核)。
+    var pendingKnowledge: [KnowledgeItem] {
+        knowledgeItems.filter { $0.status == .pending }
+    }
+
     /// 组装注入块: 全局 + 当前 project 的启用条目, 带 token 预算 (单条截断/总量丢弃)。
-    /// nil = 无可注入内容。
+    /// pending 候选永不注入 (审核闸门)。nil = 无可注入内容。
     func buildKnowledgeBlock() -> String? {
         let pid = activeProject?.id
         let enabled = knowledgeItems.filter { item in
-            guard item.enabled else { return false }
+            guard item.enabled, item.status == .active else { return false }
             return item.scope == .global || item.projectId == pid
         }
         guard !enabled.isEmpty else { return nil }
@@ -699,6 +704,136 @@ final class ChatStore: ObservableObject {
         knowledgeItems.insert(item, at: 0)
         try? persistence?.upsertKnowledge(item)
         applyKnowledgeChange()
+    }
+
+    // MARK: - Memory distillation (P3.7 记忆自动提炼; v1 人工触发, 自动门槛留 v1.2)
+
+    @Published var distillRunning: Bool = false
+    /// 提炼结果提示 (Composer 上方横幅, 8s 自清)。isError = 红/绿两种横幅。
+    @Published var distillOutcome: (text: String, isError: Bool)?
+    private var distillOutcomeTask: Task<Void, Never>?
+
+    func setDistillOutcome(_ text: String, isError: Bool) {
+        distillOutcome = (text, isError)
+        distillOutcomeTask?.cancel()
+        distillOutcomeTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 8_000_000_000)
+            if !Task.isCancelled { distillOutcome = nil }
+        }
+    }
+
+    /// 打开知识面板 (面板互斥, 与 toggle 同语言但强制打开)。
+    func openKnowledgePanel() {
+        showKnowledgePanel = true
+        showScheduledPanel = false
+        showExtensionsPanel = false
+    }
+
+    /// 提炼模板 (业务语义 = TODO 占位脚手架: 边界示例与反例措辞待首个真实提炼轮后人工打磨)。
+    private static func buildDistillPrompt(material: String, existing: [KnowledgeItem]) -> String {
+        let list = existing.isEmpty ? "无" :
+            existing.map { "- [\( $0.scope == .global ? "全局" : "项目")] \($0.title)" }.joined(separator: "\n")
+        return """
+        【任务: 记忆提炼】
+        下面给你一段人机对话记录与现有知识条目清单。请判断对话中是否出现了值得跨会话长期记住的信息, 只输出 JSON, 不要输出任何其他文字, 不要使用任何工具。
+
+        值得记录的只有三类:
+        1. 环境/技术栈事实 —— 机器、项目结构、服务地址、数据规模等稳定事实
+        2. 用户偏好与约定 —— 沟通/代码/流程上用户明确表达的偏好与规矩
+        3. 决策及理由 —— 对话中拍板的技术或业务决策 (记结论和为什么)
+
+        不要记录: 一次性任务的过程细节、代码片段本身、未验证的推测、与现有条目重复的内容 (见下方清单)。
+        TODO(人工打磨): 补充边界示例与反例, 待首轮真实提炼后定稿。
+
+        【现有知识条目】
+        \(list)
+
+        【对话记录】
+        \(material)
+
+        【输出格式】
+        {"items": [{"title": "简短标题", "content": "事实本体, 精炼成独立可读的一句话或几句话", "scope": "global", "reason": "为什么值得记"}]}
+        scope 只有 "global" 或 "project" 两种。没有值得记录的内容时输出 {"items": []} —— 宁可空, 不要凑数。
+        """
+    }
+
+    /// 手动触发: 提炼当前会话 → 候选落 pending (审核在知识面板)。
+    /// 失败静默 (解析失败/超时直接放弃, 不打扰)。
+    func distillMemoryFromCurrentSession() {
+        guard !distillRunning, !isStreaming else { return }
+        guard let sid = selectedConversationId else { return }
+        // 材料: 最近 12 条 text 消息 (user+assistant), 总量截断
+        var texts = replayMessages(for: sid).compactMap { msg -> String? in
+            guard case .text(let s) = msg.content, !s.isEmpty else { return nil }
+            return "\(msg.role == .user ? "用户" : "助手"): \(s)"
+        }
+        guard texts.count > 2 else { return }   // 太短不值得提炼
+        texts = Array(texts.suffix(12))
+        var material = texts.joined(separator: "\n\n")
+        if material.count > Tune.distillMaterialCharLimit {
+            material = "…(更早的已省略)\n" + String(material.suffix(Tune.distillMaterialCharLimit))
+        }
+        let existing = knowledgeItems.filter { $0.status == .active }
+        let prompt = Self.buildDistillPrompt(material: material, existing: existing)
+        // 归属 = 会话所在的项目分组 (selectedProjectId 只在点项目/建会话时设置,
+        // 从侧栏直接点开会话不同步它——用会话反查才是 source of truth)
+        let projectId = projects.first(where: { $0.items.contains(where: { $0.id == sid }) })?.id
+        let model = currentProvider.isEmpty ? nil : "\(currentProvider)/\(currentModelId)"
+        let thinking = thinkingLevel.rawValue
+        distillRunning = true
+        MemoryDistiller.shared.run(prompt: prompt, model: model, thinking: thinking) { [weak self] raw in
+            guard let self else { return }
+            self.distillRunning = false
+            guard let raw else {
+                self.setDistillOutcome("提炼失败: 超时或引擎无响应 (见控制台日志)", isError: true)
+                return
+            }
+            print("[MemoryDistiller] 原始输出 \(raw.count) 字符: \(raw.prefix(400))")
+            let candidates = MemoryDistiller.parseOutput(raw)
+            guard !candidates.isEmpty else {
+                // 区分"模型认为没什么可记"与"输出解析失败" (都有 items 字段 = 正常应答)
+                if raw.contains("\"items\"") {
+                    self.setDistillOutcome("提炼完成: 本轮没有值得沉淀的内容", isError: false)
+                } else {
+                    self.setDistillOutcome("提炼失败: 输出无法解析 (见控制台日志)", isError: true)
+                }
+                return
+            }
+            self.addPendingKnowledge(candidates, sessionId: sid, projectId: projectId)
+            self.setDistillOutcome("提炼完成: \(candidates.count) 条候选待审核", isError: false)
+        }
+    }
+
+    /// 候选落 pending: 插入列表 + 落库。注入块未变 (pending 不注入) → 不标 dirty。
+    /// 净化: scope=project 但无项目归属 → 降级 global (绝不建"未知项目"条目)。
+    private func addPendingKnowledge(_ candidates: [MemoryDistiller.Candidate],
+                                     sessionId: UUID, projectId: UUID?) {
+        for c in candidates {
+            let scope: KnowledgeScope = c.scope == .project && projectId != nil ? .project : .global
+            let item = KnowledgeItem(id: UUID(), scope: scope,
+                                     projectId: scope == .project ? projectId : nil,
+                                     title: c.title, content: c.content,
+                                     source: .session, originSessionId: sessionId,
+                                     enabled: true, status: .pending, note: c.reason)
+            knowledgeItems.insert(item, at: 0)
+            try? persistence?.upsertKnowledge(item)
+        }
+    }
+
+    /// 审核采纳: pending → active, 清 note, 注入块变更 → 标 dirty (重启引擎生效)。
+    func adoptKnowledge(id: UUID) {
+        guard let idx = knowledgeItems.firstIndex(where: { $0.id == id }),
+              knowledgeItems[idx].status == .pending else { return }
+        knowledgeItems[idx].status = .active
+        knowledgeItems[idx].note = nil
+        knowledgeItems[idx].updatedAt = .now
+        try? persistence?.upsertKnowledge(knowledgeItems[idx])
+        applyKnowledgeChange()
+    }
+
+    /// 审核丢弃。
+    func discardKnowledge(id: UUID) {
+        deleteKnowledge(id: id)
     }
 
     /// 知识变动后: 重算注入块下发给 transport + 标记引擎待重启。

@@ -92,4 +92,47 @@ struct CronExpr {
             && months.contains(mo)
             && weekdays.contains(wd - 1)
     }
+
+    // MARK: - 人类可读描述 (录入器预览 / 任务列表状态行共用)
+
+    /// 形态识别出人话; 识别不出 (月/日受限等) 或非法 → 原文/标记兜底, 不硬翻。
+    static func describe(_ cron: String) -> String {
+        guard let e = CronExpr.parse(cron) else { return "cron 无效" }
+        guard e.months == Set(1...12), e.days == Set(1...31) else { return cron }
+        let hhmm = { String(format: "%02d:%02d", $0, $1) }
+        // 每天 HH:MM (日/月/星期全量, 时/分单值)
+        if e.weekdays == Set(0...6), e.hours.count == 1, e.minutes.count == 1 {
+            return "每天 \(hhmm(e.hours.first!, e.minutes.first!))"
+        }
+        // 每周X·Y HH:MM (星期受限, 日/月全量)
+        if !e.weekdays.isEmpty, e.weekdays != Set(0...6),
+           e.hours.count == 1, e.minutes.count == 1 {
+            let names = e.weekdays.sorted().map { weekdayName($0) }.joined()
+            return "每周\(names) \(hhmm(e.hours.first!, e.minutes.first!))"
+        }
+        // 每 N 小时: 分钟={0}, 小时从 0 起等差 (*/n 或全量=每小时)
+        if e.weekdays == Set(0...6), e.minutes == Set([0]), let step = stepSize(e.hours, low: 0, high: 23) {
+            return step == 1 ? "每小时" : "每 \(step) 小时"
+        }
+        // 每 N 分钟: 小时/星期全量, 分钟从 0 起等差 (全量=每分钟)
+        if e.weekdays == Set(0...6), e.hours == Set(0...23), let step = stepSize(e.minutes, low: 0, high: 59) {
+            return step == 1 ? "每分钟" : "每 \(step) 分钟"
+        }
+        return cron
+    }
+
+    private static func weekdayName(_ cronWd: Int) -> String {
+        ["日", "一", "二", "三", "四", "五", "六"][cronWd]
+    }
+
+    /// 等差序列识别 (*/n 的 set 投影): 必须从 low 起、等差; 末段允许不满步长 (*/30 → [0,30])。
+    private static func stepSize(_ set: Set<Int>, low: Int, high: Int) -> Int? {
+        guard set.count > 1 else { return nil }
+        let s = set.sorted()
+        guard s[0] == low else { return nil }
+        let d = s[1] - s[0]
+        guard d > 0, low + d <= high else { return nil }
+        for i in 1..<s.count where s[i] - s[i - 1] != d { return nil }
+        return d
+    }
 }

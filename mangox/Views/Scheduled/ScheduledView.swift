@@ -2,7 +2,8 @@
 //  ScheduledView.swift
 //  P3.6 本地定时任务管理面板 (主区切换视图)。
 //  视觉语言与 KnowledgeView 一致: 左列 Sidebar 行语言 + 编辑区 Composer 输入卡语言。
-//  cron 第一版纯文本框 (分 时 日 月 周), 友好录入留后。
+//  cron 四档录入器 (每天/每周/间隔/高级): 控件生成 cron, cron 仍是唯一真相 (调度器零改动);
+//  高级档保留 mono 文本框兜底, 人类可读预览走 CronExpr.describe (识别不出显示原文)。
 //
 
 import SwiftUI
@@ -24,6 +25,13 @@ struct ScheduledView: View {
     @State private var draftUnattended: Bool = true
     @State private var draftFrequency: FrequencyKind = .low
     @State private var showUnattendedConfirm: Bool = false
+    // cron 四档录入器: 控件态 → 生成 cron; 编辑时 classifyCron 反解析回填 (解析不出落高级档)
+    @State private var cronMode: CronMode = .daily
+    @State private var cronHour: Int = 9
+    @State private var cronMinute: Int = 0
+    @State private var cronWeekdays: Set<Int> = [1, 2, 3, 4, 5]   // cron 星期: 0=日
+    @State private var cronInterval: Int = 30
+    @State private var cronIntervalUnit: IntervalUnit = .minutes
     // 工作日志 (P3.9 交接文件): 编辑器内嵌可编辑区块, 磁盘为准
     @State private var draftLog: String = ""
     @State private var handoffUpdatedAt: Date?
@@ -163,6 +171,7 @@ struct ScheduledView: View {
                 parts.append("已暂停")
             }
         } else {
+            parts.append(CronExpr.describe(task.cron))   // "每天 09:00" 等人话描述 (识别不出=cron 原文)
             if !task.enabled {
                 parts.append("已暂停")
             } else if task.continuous {
@@ -273,8 +282,15 @@ struct ScheduledView: View {
 
     private func kindPill(_ title: String, active: Bool) -> some View {
         Button(action: {
-            draftIsWaiting = (title == "哨兵")
-            if draftIsWaiting { draftFrequency = FrequencyKind.from(cron: draftCron) }
+            if title == "哨兵" {
+                // 定时→哨兵: 检查频率从当前生效的 cron 反推 (匹配不上落 low 档)
+                draftFrequency = FrequencyKind.from(cron: effectiveCron)
+                draftIsWaiting = true
+            } else {
+                // 哨兵→定时: 控件态从检查频率 cron 反解析
+                draftIsWaiting = false
+                syncCronControls(draftFrequency.cron)
+            }
         }) {
             Text(title)
                 .font(CodexTheme.fontSmall)
@@ -434,6 +450,25 @@ struct ScheduledView: View {
         }
     }
 
+    /// cron 录入四档: 前三档控件生成 cron, 高级档直写表达式 (手写复杂表达式反解析不出时落这里)
+    enum CronMode: String, CaseIterable, Identifiable {
+        case daily, weekly, interval, advanced
+        var id: String { rawValue }
+        var label: String { switch self {
+        case .daily: "每天"
+        case .weekly: "每周"
+        case .interval: "间隔"
+        case .advanced: "高级"
+        } }
+    }
+
+    enum IntervalUnit: String, CaseIterable, Identifiable {
+        case minutes, hours
+        var id: String { rawValue }
+        var label: String { self == .minutes ? "分钟" : "小时" }
+        var clamp: ClosedRange<Int> { self == .minutes ? 1...59 : 1...23 }
+    }
+
     private var cronRow: some View {
         HStack(spacing: 8) {
             if draftIsWaiting {
@@ -457,20 +492,140 @@ struct ScheduledView: View {
                     .font(CodexTheme.fontTiny)
                     .foregroundStyle(CodexTheme.textMuted)
             } else {
-                TextField("分 时 日 月 周", text: $draftCron)
-                    .textFieldStyle(.plain)
-                    .font(CodexTheme.fontMono)
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 6)
-                    .background(CodexTheme.bgElevated)
-                    .clipShape(RoundedRectangle(cornerRadius: CodexTheme.radius))
-                    .frame(width: 200)
-                Text("例: 0 9 * * 1-5 = 工作日 09:00 · */30 * * * * = 每 30 分钟")
-                    .font(CodexTheme.fontTiny)
-                    .foregroundStyle(CodexTheme.textMuted)
+                cronEditor
             }
             Spacer()
         }
+    }
+
+    /// cron 四档录入器: 模式段选 + 分档控件 + 人类可读预览 (识别不出显示原文)
+    private var cronEditor: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 4) {
+                ForEach(CronMode.allCases) { m in
+                    cronModePill(m)
+                }
+            }
+            HStack(spacing: 8) {
+                switch cronMode {
+                case .daily:
+                    timeField(label: "时", value: $cronHour, range: 0...23)
+                    timeField(label: "分", value: $cronMinute, range: 0...59)
+                case .weekly:
+                    weekdayChips
+                    timeField(label: "时", value: $cronHour, range: 0...23)
+                    timeField(label: "分", value: $cronMinute, range: 0...59)
+                case .interval:
+                    intervalField
+                    Menu {
+                        ForEach(IntervalUnit.allCases) { u in
+                            Button(u.label) { cronIntervalUnit = u; clampInterval() }
+                        }
+                    } label: {
+                        Text(cronIntervalUnit.label)
+                            .font(CodexTheme.fontSmall)
+                            .foregroundStyle(CodexTheme.textSecondary)
+                            .contentShape(Rectangle())
+                    }
+                    .menuStyle(.borderlessButton)
+                    .menuIndicator(.hidden)
+                case .advanced:
+                    TextField("分 时 日 月 周", text: $draftCron)
+                        .textFieldStyle(.plain)
+                        .font(CodexTheme.fontMonoSm)
+                        .frame(width: 200)
+                }
+                Spacer()
+            }
+            cronPreviewLine
+        }
+    }
+
+    private func cronModePill(_ mode: CronMode) -> some View {
+        Button(action: { cronMode = mode }) {
+            Text(mode.label)
+                .font(CodexTheme.fontSmall)
+                .foregroundStyle(cronMode == mode ? CodexTheme.textPrimary : CodexTheme.textTertiary)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 2)
+                .frame(height: 22)
+                .background(cronMode == mode ? CodexTheme.bgElevated : Color.clear)
+                .clipShape(Capsule())
+                .overlay(Capsule().stroke(CodexTheme.border.opacity(cronMode == mode ? 0.6 : 0.35), lineWidth: 1))
+        }
+        .buttonStyle(.plain)
+    }
+
+    /// 自绘时间输入 (对齐页面自绘控件语言, 不用原生 DatePicker): 整数域外自动钳制
+    private func timeField(label: String, value: Binding<Int>, range: ClosedRange<Int>) -> some View {
+        HStack(spacing: 4) {
+            Text(label)
+                .font(CodexTheme.fontTiny)
+                .foregroundStyle(CodexTheme.textMuted)
+            TextField("0", value: value, format: .number.grouping(.never))
+                .textFieldStyle(.plain)
+                .font(CodexTheme.fontMonoSm)
+                .multilineTextAlignment(.center)
+                .frame(width: 36)
+                .onChange(of: value.wrappedValue) { _, newValue in
+                    value.wrappedValue = min(max(newValue, range.lowerBound), range.upperBound)
+                }
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 4)
+        .background(CodexTheme.bgElevated)
+        .clipShape(RoundedRectangle(cornerRadius: CodexTheme.radius))
+    }
+
+    private func clampInterval() {
+        cronInterval = min(max(cronInterval, cronIntervalUnit.clamp.lowerBound), cronIntervalUnit.clamp.upperBound)
+    }
+
+    private var intervalField: some View {
+        HStack(spacing: 4) {
+            Text("每")
+                .font(CodexTheme.fontTiny)
+                .foregroundStyle(CodexTheme.textMuted)
+            TextField("30", value: $cronInterval, format: .number.grouping(.never))
+                .textFieldStyle(.plain)
+                .font(CodexTheme.fontMonoSm)
+                .multilineTextAlignment(.center)
+                .frame(width: 40)
+                .onChange(of: cronInterval) { _, _ in clampInterval() }
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 4)
+        .background(CodexTheme.bgElevated)
+        .clipShape(RoundedRectangle(cornerRadius: CodexTheme.radius))
+    }
+
+    /// 星期多选 chips (cron 星期 0=日; 显示序 一二三四五六日)
+    private var weekdayChips: some View {
+        HStack(spacing: 3) {
+            ForEach([1, 2, 3, 4, 5, 6, 0], id: \.self) { wd in
+                let active = cronWeekdays.contains(wd)
+                Button(action: {
+                    if active { cronWeekdays.remove(wd) } else { cronWeekdays.insert(wd) }
+                }) {
+                    Text(["日", "一", "二", "三", "四", "五", "六"][wd])
+                        .font(CodexTheme.fontSmall)
+                        .foregroundStyle(active ? CodexTheme.textPrimary : CodexTheme.textMuted)
+                        .frame(width: 22, height: 22)
+                        .background(active ? CodexTheme.accentSoft : CodexTheme.bgElevated)
+                        .clipShape(Capsule())
+                }
+                .buttonStyle(.plain)
+            }
+        }
+    }
+
+    /// 生成的 cron + describe 预览; 高级档非法时红字
+    private var cronPreviewLine: some View {
+        let cron = effectiveCron
+        let valid = CronExpr.parse(cron) != nil
+        return Text("\(cron)  ·  \(CronExpr.describe(cron))")
+            .font(CodexFonts.monoFont(10))
+            .foregroundStyle(valid ? CodexTheme.textMuted : CodexTheme.toolError)
     }
 
     private var promptCard: some View {
@@ -498,11 +653,78 @@ struct ScheduledView: View {
         )
     }
 
+    /// 实际生效的 cron: 哨兵=频率档; 定时=控件生成 (高级档直取 draftCron 原文)
+    private var effectiveCron: String {
+        if draftIsWaiting { return draftFrequency.cron }
+        switch cronMode {
+        case .daily:
+            return "\(cronMinute) \(cronHour) * * *"
+        case .weekly:
+            let days = cronWeekdays.sorted().map(String.init).joined(separator: ",")
+            return "\(cronMinute) \(cronHour) * * \(days.isEmpty ? "*" : days)"
+        case .interval:
+            return cronIntervalUnit == .minutes ? "*/\(cronInterval) * * * *" : "0 */\(cronInterval) * * *"
+        case .advanced:
+            return draftCron
+        }
+    }
+
     private var draftReady: Bool {
         !draftPrompt.trimmingCharacters(in: .whitespaces).isEmpty
-        && (!draftIsWaiting || CronExpr.parse(draftFrequency.cron) != nil)
+        && CronExpr.parse(effectiveCron) != nil
         && (!draftIsWaiting || !draftCondition.trimmingCharacters(in: .whitespaces).isEmpty)
         // 名称可空: 留空自动取 prompt 首行; 项目可空: 落平铺 Chats (纯对话场景)
+    }
+
+    /// 反解析: cron → 录入控件态 (识别不出 → 高级档显示原文, 不丢不猜)
+    private func classifyCron(_ s: String) -> (mode: CronMode, hour: Int, minute: Int, weekdays: Set<Int>, interval: Int, unit: IntervalUnit)? {
+        let f = s.split(whereSeparator: \.isWhitespace).map(String.init)
+        guard f.count == 5 else { return nil }
+        if let m = Int(f[0]), let h = Int(f[1]), f[2] == "*", f[3] == "*", f[4] == "*" {
+            return (.daily, h, m, [1, 2, 3, 4, 5], 30, .minutes)
+        }
+        if let m = Int(f[0]), let h = Int(f[1]), f[2] == "*", f[3] == "*",
+           let days = parseDayField(f[4]) {
+            return (.weekly, h, m, days, 30, .minutes)
+        }
+        if f[0].hasPrefix("*/"), let n = Int(f[0].dropFirst(2)),
+           f[1] == "*", f[2] == "*", f[3] == "*", f[4] == "*" {
+            return (.interval, 0, 0, [1, 2, 3, 4, 5], n, .minutes)
+        }
+        if f[0] == "0", f[1].hasPrefix("*/"), let n = Int(f[1].dropFirst(2)),
+           f[2] == "*", f[3] == "*", f[4] == "*" {
+            return (.interval, 0, 0, [1, 2, 3, 4, 5], n, .hours)
+        }
+        return nil
+    }
+
+    /// 星期字段: 逗号列表 / a-b 范围 → Set (0...6)
+    private func parseDayField(_ s: String) -> Set<Int>? {
+        var out: Set<Int> = []
+        for part in s.split(separator: ",") {
+            if let dash = part.firstIndex(of: "-") {
+                guard let lo = Int(part[..<dash]), let hi = Int(part[part.index(after: dash)...]),
+                      lo <= hi, (0...6).contains(lo), (0...6).contains(hi) else { return nil }
+                out.formUnion(lo...hi)
+            } else {
+                guard let v = Int(part), (0...6).contains(v) else { return nil }
+                out.insert(v)
+            }
+        }
+        return out.isEmpty ? nil : out
+    }
+
+    private func syncCronControls(_ s: String) {
+        if let c = classifyCron(s) {
+            cronMode = c.mode
+            cronHour = c.hour
+            cronMinute = c.minute
+            cronWeekdays = c.weekdays
+            cronInterval = c.interval
+            cronIntervalUnit = c.unit
+        } else {
+            cronMode = .advanced
+        }
     }
 
     // MARK: - 草稿动作
@@ -520,6 +742,12 @@ struct ScheduledView: View {
         draftLog = ""
         handoffUpdatedAt = nil
         showWorkLog = false
+        cronMode = .daily
+        cronHour = 9
+        cronMinute = 0
+        cronWeekdays = [1, 2, 3, 4, 5]
+        cronInterval = 30
+        cronIntervalUnit = .minutes
     }
 
     /// 工作日志区块 (P3.9 交接文件): agent 运行期写、用户可改, 磁盘为准; 保存即写回。
@@ -615,6 +843,7 @@ struct ScheduledView: View {
         draftCondition = task.condition ?? ""
         draftUnattended = task.unattended
         draftFrequency = FrequencyKind.from(cron: task.cron)
+        if !draftIsWaiting { syncCronControls(task.cron) }
         let h = store.readHandoff(for: task)
         draftLog = h?.content ?? ""
         handoffUpdatedAt = h?.updatedAt
@@ -632,7 +861,7 @@ struct ScheduledView: View {
            var existing = store.scheduledTasks.first(where: { $0.id == id }) {
             existing.name = draftName
             existing.prompt = draftPrompt
-            existing.cron = draftIsWaiting ? draftFrequency.cron : draftCron
+            existing.cron = effectiveCron
             existing.projectId = draftProjectId
             existing.continuous = draftContinuous
             existing.condition = draftIsWaiting && !draftCondition.trimmingCharacters(in: .whitespaces).isEmpty
@@ -640,7 +869,7 @@ struct ScheduledView: View {
             existing.unattended = draftUnattended
             store.updateScheduled(existing)
         } else {
-            let cron = draftIsWaiting ? draftFrequency.cron : draftCron
+            let cron = effectiveCron
             store.addScheduled(name: draftName, prompt: draftPrompt,
                                cron: cron, projectId: draftProjectId,
                                continuous: draftContinuous)

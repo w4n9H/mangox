@@ -14,6 +14,9 @@ struct ChatView: View {
                 engineMissingBanner
             }
             messageList
+            if let outcome = store.distillOutcome {
+                distillOutcomeBanner(outcome)
+            }
             ChatComposer(store: store)
         }
     }
@@ -32,6 +35,47 @@ struct ChatView: View {
         .padding(.horizontal, Tune.chatHPadding)
         .padding(.vertical, 8)
         .background(CodexTheme.toolRunning.opacity(0.10))
+        .overlay(
+            Rectangle().frame(height: 1).foregroundStyle(CodexTheme.divider),
+            alignment: .bottom
+        )
+    }
+
+    /// 提炼结果横幅 (8s 自清; 成功带"去审核"入口)。
+    private func distillOutcomeBanner(_ outcome: (text: String, isError: Bool)) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: outcome.isError ? "exclamationmark.circle.fill" : "checkmark.circle.fill")
+                .font(.system(size: 11))
+                .foregroundStyle(outcome.isError ? CodexTheme.toolError : CodexTheme.toolDone)
+            Text(outcome.text)
+                .font(CodexTheme.fontSmall)
+                .foregroundStyle(CodexTheme.textPrimary)
+            Spacer()
+            if !outcome.isError {
+                Button("去审核") { store.openKnowledgePanel() }
+                    .buttonStyle(.plain)
+                    .font(CodexTheme.fontSmall)
+                    .foregroundStyle(CodexTheme.accent)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 2)
+                    .contentShape(Rectangle())
+                    .help("打开知识面板的待审核分组")
+            }
+            Button {
+                store.distillOutcome = nil
+            } label: {
+                Image(systemName: "xmark")
+                    .font(.system(size: 9))
+                    .foregroundStyle(CodexTheme.textTertiary)
+                    .frame(width: 16, height: 16)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help("关闭提示")
+        }
+        .padding(.horizontal, Tune.chatHPadding)
+        .padding(.vertical, 7)
+        .background((outcome.isError ? CodexTheme.toolError : CodexTheme.accent).opacity(0.10))
         .overlay(
             Rectangle().frame(height: 1).foregroundStyle(CodexTheme.divider),
             alignment: .bottom
@@ -93,14 +137,17 @@ struct MessageBlockView: View {
     @State private var hovering: Bool = false
 
     var body: some View {
-        content
-            .onHover { hovering = $0 }
-            .overlay(alignment: .topTrailing) {
-                if hovering, let raw = rawText {
-                    hoverToolbar(raw: raw)
-                        .offset(x: 0, y: -8)
-                }
+        VStack(alignment: .leading, spacing: 3) {
+            content
+            if let raw = rawText {
+                footerToolbar(raw: raw)
+                    .opacity(hovering ? 1 : 0.5)
+                    .animation(.easeInOut(duration: 0.15), value: hovering)
+                    .frame(maxWidth: .infinity,
+                           alignment: message.role == .user ? .trailing : .leading)
             }
+        }
+        .onHover { hovering = $0 }
     }
 
     @ViewBuilder
@@ -129,47 +176,54 @@ struct MessageBlockView: View {
         return s
     }
 
-    // MARK: - Message hover toolbar (复制 / 重新生成)
+    // MARK: - 消息底部工具条 (常驻淡显, hover 变清晰; 挂在文档流里不抖)
 
-    private func hoverToolbar(raw: String) -> some View {
-        HStack(spacing: 2) {
-            Button(action: { copyToPasteboard(raw) }) {
-                Image(systemName: "doc.on.doc")
-                    .font(.system(size: 10))
-                    .foregroundStyle(CodexTheme.textTertiary)
-                    .frame(width: 22, height: 22)
-            }
-            .buttonStyle(.plain)
-            .help("复制")
+    private func footerToolbar(raw: String) -> some View {
+        HStack(spacing: 10) {
+            footerButton("doc.on.doc", "复制", label: "复制") { copyToPasteboard(raw) }
 
             // P3.7: 保存为记忆 (沉淀为全局知识条目, 带会话溯源)
-            Button(action: { store.saveAsMemory(raw, sessionId: store.selectedConversationId) }) {
-                Image(systemName: "bookmark")
-                    .font(.system(size: 10))
-                    .foregroundStyle(CodexTheme.textTertiary)
-                    .frame(width: 22, height: 22)
+            footerButton("bookmark", "保存为记忆", label: "记忆") {
+                store.saveAsMemory(raw, sessionId: store.selectedConversationId)
             }
-            .buttonStyle(.plain)
-            .help("保存为记忆")
 
-            if message.role == .assistant && !message.isStreaming {
-                Button(action: { store.regenerate() }) {
-                    Image(systemName: "arrow.clockwise")
-                        .font(.system(size: 10))
-                        .foregroundStyle(CodexTheme.textTertiary)
-                        .frame(width: 22, height: 22)
+            if message.role == .assistant {
+                // 记忆自动提炼 (人工触发): 整段会话 → 候选 → 知识面板待审核
+                footerButton(store.distillRunning ? "hourglass" : "wand.and.stars",
+                             store.distillRunning ? "提炼中…" : "提炼本会话 → 待审核记忆",
+                             label: store.distillRunning ? "提炼中…" : "提炼",
+                             disabled: store.distillRunning) {
+                    store.distillMemoryFromCurrentSession()
                 }
-                .buttonStyle(.plain)
-                .help("重新生成")
+                if !message.isStreaming {
+                    footerButton("arrow.clockwise", "重新生成", label: "重新生成") { store.regenerate() }
+                }
             }
         }
-        .padding(2)
-        .background(CodexTheme.bgElevated)
-        .clipShape(RoundedRectangle(cornerRadius: CodexTheme.radiusSm))
-        .overlay(
-            RoundedRectangle(cornerRadius: CodexTheme.radiusSm)
-                .stroke(CodexTheme.border, lineWidth: 1)
-        )
+    }
+
+    /// 图标 + 文字标签 (裸图标不解释, 猜谜界面不要有)
+    private func footerButton(_ icon: String, _ help: String,
+                              label: String? = nil,
+                              disabled: Bool = false,
+                              action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 3) {
+                Image(systemName: icon)
+                    .font(.system(size: 9))
+                    .frame(width: 12)
+                if let label {
+                    Text(label)
+                        .font(.system(size: 9))
+                }
+            }
+            .foregroundStyle(CodexTheme.textTertiary)
+            .frame(height: 18)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(disabled)
+        .help(help)
     }
 
     private func copyToPasteboard(_ s: String) {

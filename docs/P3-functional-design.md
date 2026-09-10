@@ -53,12 +53,12 @@ UI 不是一张皮，它已经对用户做出了交互承诺，P3 的功能设�
 - 数据：`ScheduledTask { id, name, prompt, schedule(cron 表达式), projectId, enabled, lastRunAt, lastSessionId }`，存 `scheduled_tasks` 表（§5.3）。
 - 调度：应用内 Timer 驱动（每分钟对齐检查）。立场：**先只做 App 运行期间生效**，个人工具够用；launchd 后台唤醒作为后续增强，不进本期。
 - Sidebar Scheduled nav 项：任务列表（名称/周期/上次运行）+ 启停开关 + 点击跳转到最近一次的执行会话。创建入口先给最简形式（任务页内手动新建，cron 文本输入）。
-- TODO：cron 的 UI 友好录入（自然语言/常用模板）留人工补全，第一版直接文本框。
+- ✅ 已实现（2026-09-10）：cron 四档录入器——每天（自绘时间输入）/ 每周（星期多选 chips + 时间）/ 间隔（N + 分钟/小时）/ 高级（mono 文本框兜底）。控件生成 cron（cron 仍是唯一真相，调度器零改动）；编辑时 `classifyCron` 反解析回填控件态，手写复杂表达式落高级档不丢不猜；`CronExpr.describe` 人类可读预览（识别不出显示原文），任务列表状态行复用。自然语言录入否决：失败模式隐蔽（解析错词任务静默跑错时间）。
 - **迭代（2026-09-09）**：持续模式（continuous）的"4000 字符原文截断注入"方案已被 **§3.9 任务持续性记忆**取代；无项目任务、名称自动命名等已随首版落地。
 
 ### 3.6 模型与思考强度
 - 当前 mock 三选一（deepseek-v4-flash / gpt-5.6-sol / o4-mini）。真实模型列表由 Agent 进程上报（能力协商的一部分），UI 不硬编码。
-- TODO：模型清单与 effort 映射依赖所选 Agent 引擎的能力上报格式，接 ACP 后人工补全配置。
+- ✅ 已实现（P3.5）：pi RPC `get_available_models` 能力上报（PiRpcTransport），Composer 模型菜单消费 `availableModels`，空清单降级只显当前模型；effort 档位同批接入。原"接 ACP 后补全"作废——已拍板 pi 单协议。
 
 ### 3.7 知识库/记忆（已拍板：做，顶替原 Plugins nav 槽位）
 - **定位**：跨会话上下文供给层。解决"每个新会话都要重新交代背景"（环境、技术栈、偏好、项目约定）。个人工具，v1 不做 RAG。
@@ -69,8 +69,8 @@ UI 不是一张皮，它已经对用户做出了交互承诺，P3 的功能设�
   - **生效时机 = pi 进程重启**（App 重启 / 切 project / Composer 知识 pill 菜单"重启引擎生效"）。RPC `new_session` 不带 system prompt 参数，会话内无法改——协议面约束，非实现偷懒。
 - **与 AGENTS.md 的分工（互补，不替代）**：AGENTS.md 属于仓库（pi 自动从 cwd 向上加载，可提交、随 repo 走）；MangoX 知识库属于客户端（个人私有、跨 repo）。两者叠加生效。
 - **检索立场**：v1 无检索，启用条目全量注入——个人条目量级 < 100，全量 + LLM 自找比引入 embedding 划算。v2 SQLite FTS5 关键词过滤；v3 本地 embedding（Qwen 部署后）。均不进本期。
-- **token 预算**：单条上限 8k chars、总量上限 24k chars，超出提示并建议禁用最旧条目（阈值留人工调整）。
-- **记忆生成**：v1 只做手动——知识面板直接写 + 会话内"保存为记忆"（消息 hover 工具条，带溯源）。agent 自动提炼 = TODO 占位脚手架（会话结束钩子 + 提炼 prompt 模板），**人工审核后才入库，禁止全自动**（业务语义人工把关）。
+- **token 预算**：单条上限 16k chars、总量上限 64k chars，超出提示并建议禁用最旧条目（阈值留人工调整；2026-09-10 用户拍板由 8k/24k 上调）。
+- **记忆生成**：手动 + 提炼双轨（2026-09-10 落地）——手动：知识面板直接写 + 会话内"保存为记忆"（消息 hover 工具条，带溯源）；**自动提炼 v1（人工触发）**：消息 hover "提炼本会话" → 独立一次性 pi 进程（`--no-session`，extension_ui 一律 Deny——只许说话不许动手，与主 transport 并行不碰 UI 流式状态）→ 提炼模板（最近 12 条 text 消息截 12k + 现有条目清单去重）→ 结构化 JSON 候选 → 落 `status='pending'`（永不注入）→ 知识面板"待审核"分组人工采纳（可编辑后采纳）/丢弃，Sidebar Knowledge nav 角标显示候选数。**人工审核闸门是硬约束，禁止全自动入库**；pending 用独立 `status` 列（与 enabled 正交），提炼依据存 `note` 列。自动触发（回合门槛）留 v1.2——先让模板措辞在人工触发下打磨。提炼模板的边界示例 = TODO 占位脚手架，待首轮真实提炼后人工定稿。
 - **UI**：Sidebar nav 复用原 Plugins 槽位（book 图标）→ 主区切换知识面板（master-detail：条目列表 + 编辑器，启停开关 + scope 标签"全局/项目名"）；Composer 底部加知识注入 pill（显示本会话生效条数，菜单含"重启引擎生效"）。
 
 ### 3.8 明确的占位（本期不做）
@@ -315,7 +315,7 @@ settings        (key, value)
 | **P3.2** | **PiRpcTransport（已拍板：只做 pi RPC 单协议，不做 ACP）**——spawn `pi --mode rpc --no-session`，JSONL over stdio；协议映射 prompt→send / abort→cancel / text_delta→textChunk / thinking_delta→thoughtChunk / tool_execution_*→toolUpdated / agent_start+agent_end→stream 事件 | 用 pi（已拍板联调基线）完成一次真实问答，流式渲染正确 |
 | **P3.3** | 审批通道：pi 默认 YOLO 无审批 → 用 permission-gate 扩展 + RPC 的 extension_ui_request/extension_ui_response 子协议桥到 Approval footer；askApproval 联动，始终允许白名单 | 触发一次写文件审批，允许/拒绝/始终允许三条路径正确 |
 | **P3.4** | 工作区真实化：仅 project 会话可用；文件树/预览接磁盘，@引用真实文件；非 project 会话 Work 禁用 ✅ 已实现（2026-09-08：WorkspaceScanner 深度 6/排除点文件与依赖目录、projects.path 持久化、pi cwd 绑定 + 换目录重启进程、Work 灰掉 + tooltip、@引用 canUseWorkspace 门控、文件预览读磁盘 1MB 上限） | 选中项目后工作区展示真实仓库；普通 chat 的 Work 灰掉 |
-| **P3.5** | 模型/effort 由对端能力上报驱动；call trajectory 落盘已是副产品，补导出/查看入口 | 切换模型实际生效 |
+| **P3.5** | 模型/effort 由对端能力上报驱动 ✅（pi RPC `get_available_models`，Composer 模型菜单，空清单降级）；call trajectory 落盘已是副产品，导出/查看入口**未做**（events 表就绪，缺 UI 入口）→ **部分完成** | 切换模型实际生效 ✅ |
 | **P3.6** | Scheduled 定时任务：数据模型 + 应用内调度器 + Sidebar 任务列表/启停 + 执行落会话 | 建一个每分钟任务，到点自动产出会话 |
 | **P3.7** | 知识库/记忆：knowledge_items 表 + spawn 期 `--append-system-prompt` 注入（全局+当前 project）+ Sidebar 知识面板 + 会话"保存为记忆" + Composer 注入 pill（§3.7） | 加一条知识 → 重启引擎 → 新会话回答体现该知识；注入 pill 条数正确 |
 | **P3.8** | ~~Mangopi CLI v0.2 对接~~ **已冻结（2026-09-09 拍板：对端长期用 pi）**，Mangopi 侧进展恢复后再解冻 | — |
@@ -328,17 +328,17 @@ settings        (key, value)
 1. ~~联调基线选谁~~ → **已拍板：pi**（最轻量级 ACP coding agent）。
 2. ~~Plugins/Scheduled 去留~~ → **已拍板：Scheduled 实现**（§3.5）；Plugins 槽位复用为**知识库/记忆**（§3.7，2026-09-09）。
 3. ~~工作区根目录规则~~ → **已拍板：仅 project 模式生效**（§3.4）。
-4. **模型清单配置格式**：等对端能力上报格式确定后补（§3.6）。
-5. **diff 视图**：依赖对端是否上报写前内容（ACP fs 能力协商结果），P3.4 时评估。
-6. **Scheduled 的 cron 录入**：第一版纯文本框，友好录入（模板/自然语言）后续迭代。
+4. ~~模型清单配置格式~~ → **已落定（P3.5）**：pi RPC `get_available_models` 上报 + Composer 模型菜单（§3.6）。
+5. **diff 视图**（事后回看，区别于审批卡的"批前预览"）：git 仓库走 `git diff -- <path>`（numstat 统计已用同源），非 git 场景用审批时扩展侧已捕获的写前快照兜底（存 events 表）；数据源已具备，缺 UI 入口（2026-09-10 更新：原"依赖 ACP fs 能力协商"前提已因拍板 pi 单协议过时）。
+6. ~~Scheduled 的 cron 录入~~ → **已实现（2026-09-10）**：四档录入器（每天/每周/间隔/高级），控件生成 cron 调度器零改动；自然语言录入被否决（§3.5）。
 7. ~~ACP 双协议~~ → **已拍板：不做**。只落 PiRpcTransport 单协议；AgentTransport 抽象保证未来加 ACP 是纯加法。附带策略：Mangopi CLI v0.2 可考虑兼容 pi 的 RPC 协议面（而非实现 ACP），接入 MangoX 零客户端改动。
-8. **知识库 token 预算阈值**（单条/总量上限）：初值 8k/24k chars，等真实条目量与模型 token 表现再调。
-9. **记忆自动提炼**：本期只留 TODO 脚手架（会话结束钩子 + 提炼模板），人工触发、人工审核后入库。
+8. **知识库 token 预算阈值**（单条/总量上限）：✅ 机制已落地——现值 16k/64k chars（CodexTheme 常量 + 注入块单条截断/总量丢弃，§3.7；2026-09-10 用户拍板由 8k/24k 上调）；剩调优，等真实条目量与模型 token 表现再调。
+9. ~~记忆自动提炼~~ → **v1 已实现（2026-09-10，人工触发版）**："提炼本会话"按钮 → 独立一次性 pi 进程 → 候选落 pending → 知识面板待审核分组人工把关（§3.7）。自动触发（回合数+产出量门槛）留 v1.2，等模板措辞打磨后定参数。
 10. **知识检索升级路径**：FTS5（v2）→ 本地 embedding（v3，依赖 Qwen 本地部署），触发条件 = 条目量全量注入超出 token 预算。
 11. **交接文件格式协议**：文件内部结构（状态区/进展区/待办区的字段划分）留 P3.9 实现时随首个真实任务定稿；prompt 指令只约定"开头读、结尾更新"，不约定内部格式，让结构自然涌现后固化。
 12. ~~任务删除的连带策略~~ → **已拍板（2026-09-09）**：删除确认框提供两个动作——"删除任务 (保留会话与工作日志)" / "删除任务和日志会话"；工作日志文件始终保留（成果归档，不随任务删除）。
 13. **推进型目标任务**（§3.10 后置）：goal 完成判据 + 评估轮 + 自终止，与等待型共享底座；等真实需求出现再排期。
 14. **事件驱动触发**（§3.10 后置）：文件监听/webhook/数据源 watch；需事件源接入，v1 用定时轻检查轮近似。
-15. **write 工具覆盖语义**：实现 P3.10 审批分层时确认 pi 的 write 是否可覆盖已存在文件——若是，"目标文件已存在"按 edit 弹卡处理。
+15. ~~write 工具覆盖语义~~ → **已确认并实现（P3.10）**：扩展侧 `fs.existsSync` 放行新建文件；write 覆盖已存在文件时按 edit 弹卡审批。
 16. **接管 pi 全局扩展目录**（§3.11 后置）：`PI_CODING_AGENT_DIR` 指向私有 agent 目录可让 MangoX 完全接管全局扩展发现与启停，但连带隔离 models/auth/sessions 配置；待插件管理真实使用后评估是否值得。
 17. **插件元数据约定**（§3.11 后置）：v1 名称取文件名、描述取文件头注释；若 pi 生态形成 package.json `pi.extensions` manifest 惯例，跟随。

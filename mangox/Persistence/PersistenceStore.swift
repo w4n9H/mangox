@@ -71,6 +71,7 @@ final class PersistenceStore {
             source            TEXT NOT NULL,             -- 'manual' | 'session'
             origin_session_id TEXT,                      -- source=session 时的溯源指针
             enabled           INTEGER NOT NULL DEFAULT 1,
+            status            TEXT NOT NULL DEFAULT 'active',  -- 'pending' | 'active'
             created_at        REAL NOT NULL,
             updated_at        REAL NOT NULL
         )
@@ -79,6 +80,9 @@ final class PersistenceStore {
         // 旧库补列: 先查 PRAGMA table_info, 列已存在就不发 ALTER
         // (无条件 ALTER 会被 try? 吞掉异常, 但 SQLite 自己仍往 stderr 吐 duplicate column 日志)
         addColumnIfMissing("projects", "path", "TEXT")
+        // 记忆提炼: 候选条目待审核状态 (pending 不注入)
+        addColumnIfMissing("knowledge_items", "status", "TEXT NOT NULL DEFAULT 'active'")
+        addColumnIfMissing("knowledge_items", "note", "TEXT")
         // P3.6: 定时任务持续模式
         addColumnIfMissing("scheduled_tasks", "continuous", "INTEGER NOT NULL DEFAULT 0")
         // P3.9: 单日志会话 (补列 + last_session_id 数据搬迁)
@@ -312,12 +316,13 @@ final class PersistenceStore {
     func loadKnowledge() throws -> [KnowledgeItem] {
         let rows = try db.query("""
             SELECT id, scope, project_id, title, content, source, origin_session_id,
-                   enabled, created_at, updated_at
+                   enabled, status, note, created_at, updated_at
             FROM knowledge_items ORDER BY updated_at DESC
             """)
         return rows.compactMap { row in
             let scope: KnowledgeScope = text(row, "scope") == "project" ? .project : .global
             let source: KnowledgeSource = text(row, "source") == "session" ? .session : .manual
+            let status: KnowledgeStatus = text(row, "status") == "pending" ? .pending : .active
             return KnowledgeItem(
                 id: UUID(uuidString: text(row, "id")) ?? UUID(),
                 scope: scope,
@@ -327,6 +332,8 @@ final class PersistenceStore {
                 source: source,
                 originSessionId: UUID(uuidString: text(row, "origin_session_id")),
                 enabled: int(row["enabled"] ?? .null) == 1,
+                status: status,
+                note: text(row, "note").isEmpty ? nil : text(row, "note"),
                 createdAt: Date(timeIntervalSince1970: double(row, "created_at")),
                 updatedAt: Date(timeIntervalSince1970: double(row, "updated_at")))
         }
@@ -336,8 +343,8 @@ final class PersistenceStore {
         try db.run("""
             INSERT OR REPLACE INTO knowledge_items
             (id, scope, project_id, title, content, source, origin_session_id,
-             enabled, created_at, updated_at)
-            VALUES (?,?,?,?,?,?,?,?,?,?)
+             enabled, status, note, created_at, updated_at)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
             """, [.text(item.id.uuidString),
                   .text(item.scope == .project ? "project" : "global"),
                   item.projectId.map { .text($0.uuidString) } ?? .null,
@@ -346,6 +353,8 @@ final class PersistenceStore {
                   .text(item.source == .session ? "session" : "manual"),
                   item.originSessionId.map { .text($0.uuidString) } ?? .null,
                   .int(item.enabled ? 1 : 0),
+                  .text(item.status == .pending ? "pending" : "active"),
+                  item.note.map { .text($0) } ?? .null,
                   .real(item.createdAt.timeIntervalSince1970),
                   .real(item.updatedAt.timeIntervalSince1970)])
     }

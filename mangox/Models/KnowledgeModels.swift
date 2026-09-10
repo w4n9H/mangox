@@ -14,7 +14,14 @@ enum KnowledgeScope: String {
 
 enum KnowledgeSource: String {
     case manual   // 知识面板手动编写
-    case session  // 会话"保存为记忆"沉淀
+    case session  // 会话"保存为记忆"沉淀 / 提炼候选
+}
+
+/// 审核状态: pending = 提炼候选待人工审核 (永不注入); active = 已入库。
+/// 与 enabled 正交——enabled 表达用户启停, status 表达是否过了审核闸门。
+enum KnowledgeStatus: String {
+    case pending
+    case active
 }
 
 struct KnowledgeItem: Identifiable {
@@ -28,6 +35,9 @@ struct KnowledgeItem: Identifiable {
     /// source == .session 时指向沉淀来源会话。
     var originSessionId: UUID?
     var enabled: Bool = true
+    var status: KnowledgeStatus = .active
+    /// 提炼候选的"为什么值得记" (审核卡展示; 采纳时清除)。
+    var note: String?
     var createdAt: Date = Date.now
     var updatedAt: Date = Date.now
 
