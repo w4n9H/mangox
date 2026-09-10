@@ -60,3 +60,17 @@ fastlane/report.xml
 fastlane/Preview.html
 fastlane/screenshots/**/*.png
 fastlane/test_output
+
+.mangocli/
+.zed/
+.workbuddy/
+
+# macOS
+.DS_Store
+
+# 本地工作文件 (图标生成中间稿, 终稿在 AppIcon.appiconset)
+icon_work/
+
+# 构建产物
+build/
+DerivedData/
