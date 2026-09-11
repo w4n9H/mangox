@@ -95,6 +95,12 @@ enum Tune {
     static let windowMinSize     = CGSize(width: 1280, height: 820)
     static let windowDefaultSize = CGSize(width: 1440, height: 900)
 
+    // 迷你条 (P4.2, 主窗口变形为任务台)
+    static let miniBarWidth: CGFloat      = 300   // mini 台窗口宽
+    static let miniWindowChrome: CGFloat  = 44    // 标题栏区 + 内边距
+    static let miniCardRowHeight: CGFloat = 52    // 每张任务卡占高 (卡 44 + 间距)
+    static let miniWindowEmptyHeight: CGFloat = 100  // 空态高 (顶行 + 一句轻提示)
+
     // 中间列 · 消息
     static let chatContentWidth: CGFloat   = 800   // 消息/输入卡内容宽 (唯一源头)
     static let chatHPadding: CGFloat       = 48    // 消息列左右内边距

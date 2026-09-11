@@ -434,6 +434,24 @@ final class PersistenceStore {
         return UUID(uuidString: s)
     }
 
+    // MARK: - Settings (通用 key-value, P4.0.4 并发上限等)
+    // 注意: settings 表 value 列为 TEXT NOT NULL — 整数也按文本存取 (TEXT affinity 语义)。
+
+    func saveSetting(key: String, value: Int) {
+        try? db.run("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)",
+                    [.text(key), .text(String(value))])
+    }
+
+    func loadSetting(key: String, defaultValue: Int) -> Int {
+        let rows = (try? db.query("SELECT value FROM settings WHERE key = ?", [.text(key)])) ?? []
+        guard let v = rows.first?["value"] else { return defaultValue }
+        switch v {
+        case .text(let s): return Int(s) ?? defaultValue
+        case .int(let i):  return Int(i)   // 容错: 若列曾存过原生整数
+        default:           return defaultValue
+        }
+    }
+
     // MARK: - Row helpers
 
     private func text(_ row: [String: DBValue], _ col: String) -> String {

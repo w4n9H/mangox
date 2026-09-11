@@ -196,7 +196,12 @@ struct ChatComposer: View {
     // MARK: - Bottom-right: model picker + send
 
     private var shortModelName: String {
-        store.status.modelName.components(separatedBy: "/").last ?? store.status.modelName
+        // 药丸与菜单勾选同源 (期望选中): 引擎实际模型随 per-turn spawn 下回合生效,
+        // 若显示上报值会出现「勾选 V4.1 药丸还是 V4」的割裂 (已实证)。
+        if !store.currentModelId.isEmpty {
+            return store.currentModelId.components(separatedBy: "/").last ?? store.currentModelId
+        }
+        return store.status.modelName.components(separatedBy: "/").last ?? store.status.modelName
     }
 
     private var modelMenu: some View {
@@ -231,7 +236,7 @@ struct ChatComposer: View {
         .menuStyle(.borderlessButton)
         .menuIndicator(.hidden)
         .fixedSize()
-        .help("模型与思考强度 (来自对端上报)")
+        .help("模型与思考强度 (选中即期望, 下一回合生效)")
     }
 
     @ViewBuilder

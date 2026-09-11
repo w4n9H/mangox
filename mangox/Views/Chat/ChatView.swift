@@ -15,7 +15,13 @@ struct ChatView: View {
             }
             messageList
             if let outcome = store.distillOutcome {
-                distillOutcomeBanner(outcome)
+                noticeBanner(outcome,
+                             clear: { store.distillOutcome = nil },
+                             actionTitle: outcome.isError ? nil : "去审核",
+                             action: outcome.isError ? nil : { store.openKnowledgePanel() })
+            }
+            if let notice = store.turnLimitNotice {
+                noticeBanner(notice, clear: { store.turnLimitNotice = nil })
             }
             ChatComposer(store: store)
         }
@@ -41,8 +47,11 @@ struct ChatView: View {
         )
     }
 
-    /// 提炼结果横幅 (8s 自清; 成功带"去审核"入口)。
-    private func distillOutcomeBanner(_ outcome: (text: String, isError: Bool)) -> some View {
+    /// 通知横幅 (8s 自清, 提炼结果/并发超限共用; 可带一个动作按钮)。
+    private func noticeBanner(_ outcome: (text: String, isError: Bool),
+                              clear: @escaping () -> Void,
+                              actionTitle: String? = nil,
+                              action: (() -> Void)? = nil) -> some View {
         HStack(spacing: 6) {
             Image(systemName: outcome.isError ? "exclamationmark.circle.fill" : "checkmark.circle.fill")
                 .font(.system(size: 11))
@@ -51,18 +60,18 @@ struct ChatView: View {
                 .font(CodexTheme.fontSmall)
                 .foregroundStyle(CodexTheme.textPrimary)
             Spacer()
-            if !outcome.isError {
-                Button("去审核") { store.openKnowledgePanel() }
+            if let actionTitle, let action {
+                Button(actionTitle) { action() }
                     .buttonStyle(.plain)
                     .font(CodexTheme.fontSmall)
                     .foregroundStyle(CodexTheme.accent)
                     .padding(.horizontal, 8)
                     .padding(.vertical, 2)
                     .contentShape(Rectangle())
-                    .help("打开知识面板的待审核分组")
+                    .help(actionTitle == "去审核" ? "打开知识面板的待审核分组" : "")
             }
             Button {
-                store.distillOutcome = nil
+                clear()
             } label: {
                 Image(systemName: "xmark")
                     .font(.system(size: 9))

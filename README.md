@@ -8,8 +8,9 @@ macOS 原生 AI Agent 客户端（SwiftUI），对标 Codex Desktop 的交互形
 
 **对话与 Agent**
 - per-turn 进程架构：每回合拉起一个 pi 进程，跑完即退，无常驻内存与会话串味
+- **多会话并发**：多个会话回合同时运行互不干扰（每会话独立引擎实例 + 事件归属路由），并发上限可设（默认 10，超限明确提示 / 任务落痕跳过）
 - 会话持久化：`--session` 挂载 `<uuid>.jsonl`，重启 App / 切会话 / 切项目不失忆
-- 审批流：bash 只读白名单静默放行，edit/write 审批卡带红绿块对照 diff 预览
+- 审批流：bash 只读白名单静默放行，edit/write 审批卡带红绿块对照 diff 预览；无人值守任务自动关审批
 - 工具卡：bash / read / edit / write / fetch 全事件上屏，含真实执行时长（审批等待不计入）
 
 **项目模式**
@@ -24,6 +25,7 @@ macOS 原生 AI Agent 客户端（SwiftUI），对标 Codex Desktop 的交互形
 
 **工程化**
 - SQLite 持久化（WAL），事件流重放式加载；退出时 WAL checkpoint + 终止在途 pi 进程
+- 冒烟门禁：`scripts/smoke/run.sh` 一条命令跑 42 项语义冒烟（事件归并/并发路由/fire 后台化/上限拒绝/落库对拍）
 - 扩展管理：内置 mangox-approval（源码内嵌, 每次 spawn 自动校验重建，换机器零影响），托管扩展启停/导入/删除
 - 内置 JetBrains Mono（SIL OFL），等宽三级字体链
 - 深/浅色自适应主题
@@ -41,12 +43,14 @@ macOS 原生 AI Agent 客户端（SwiftUI），对标 Codex Desktop 的交互形
 open mangox.xcodeproj   # Xcode 里 Cmd+R
 ```
 
-## 已知限制 (v0.1.1)
+## 已知限制 (v0.1.1 + Unreleased)
 
 - **长会话上下文线性增长**：pi transcript 无 compaction，单会话建议控制在几十轮内，过长后每次拉起的 token 成本与延迟都会上升
+- **并发资源占用**：每个在途任务是一个独立 pi 进程（约 50MB）+ 一路 LLM 流，满并发 10 个任务时请留意机器负载（设置页可调上限）
 - **agent 改文件后文件树不自动刷新**：工作区栏有手动刷新按钮；自动增量刷新在路线图上
-- **asset catalog 未接入构建**：App 图标走 `Resources/AppIcon.icns`（工程 synced group 的历史问题），新增图片类资源时需留意
-- **fire 冲突跳过**：定时任务到点但有回合在途时跳过本轮（cron 到期不重排），跳过记录会写进任务日志会话
+- **fire 冲突跳过**：同一任务日志会话已有回合在途、或并发已满时跳过本轮（cron 到期不重排），跳过记录写进任务日志会话
+
+> 注：App 图标现由 `Assets.xcassets` 的 AppIcon（单尺寸 1024）编译生成；`Resources/AppIcon.icns` 为历史冗余（无引用），待后续清理。
 
 ## License
 

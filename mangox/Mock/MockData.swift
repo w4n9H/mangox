@@ -11,13 +11,26 @@ import AppKit
 @MainActor
 final class ChatStore: ObservableObject {
 
-    private let transport: any AgentTransport
+    /// P4.0.2 Transport 池: sessionId -> 实例 (每会话一个; 内部仍 per-turn 进程, spawn 即跑完即退)。
+    private var transports: [UUID: any AgentTransport] = [:]
+    /// 能力探测专用实例 (get_state/get_available_models, 不承载回合; 冒烟注入时复用注入实例)。
+    private var capabilityProbe: (any AgentTransport)?
+    /// 冒烟/测试注入的单实例: 注入时全会话共用 (串行语义, 保持回归基线)。
+    private let injectedTransport: (any AgentTransport)?
+    /// spawn 期配置快照: 新实例创建时与每次 send 前下发 (P3.7 注入 / P3.11 扩展)。
+    private var currentKnowledgeBlock: String?
+    private var currentExtensionPaths: [String] = []
+    /// P4.0.2 会话化流式状态: 在途回合的会话集合 (并发数 = 集合大小; 上限治理在 P4.0.4)。
+    @Published private(set) var runningTurns: Set<UUID> = []
+    /// 兼容视图: 当前选中会话是否有回合在途。
+    var isStreaming: Bool {
+        selectedConversationId.map { runningTurns.contains($0) } ?? false
+    }
     /// P3.1: SQLite 持久化; 打不开时降级为纯内存 (原 mock 行为)。
     private let persistence: PersistenceStore?
 
     // Chat
     @Published var messages: [ChatMessage] = []
-    @Published var isStreaming: Bool = false
     @Published var draft: String = ""
     /// 引擎不可用 (pi CLI 缺失): Release 下不静默降级, UI 横幅明示 + 发送守卫。
     @Published var engineMissing: Bool = false
@@ -30,10 +43,61 @@ final class ChatStore: ObservableObject {
     @Published var selectedProjectId: UUID? = nil {
         didSet { syncWorkspaceContext() }   // 工作区上下文跟随显式选择的项目
     }
-    /// Codex "Ask for approval": on = 工具调用走人工审批流。
+    /// Codex "Ask for approval": on = 工具调用走人工审批流 (per-session 实例各持策略, didSet 全池下发)。
     @Published var askApproval: Bool = true {
-        didSet { transport.updateApprovalPolicy(askApproval: askApproval) }
+        didSet {
+            injectedTransport?.updateApprovalPolicy(askApproval: askApproval)
+            transports.values.forEach { $0.updateApprovalPolicy(askApproval: askApproval) }
+        }
     }
+
+    // MARK: - P4.0.4 并发上限 (在途回合数口径; settings 持久化, 默认 10)
+
+    /// 同时运行回合数上限; 超限 = 用户发送拒绝+横幅提示, fire 落痕跳过 (v1 不排队)。
+    @Published var maxConcurrentTurns: Int = 10 {
+        didSet {
+            let clamped = min(max(maxConcurrentTurns, 1), 20)   // 与 SettingsView Stepper 同域
+            if clamped != maxConcurrentTurns { maxConcurrentTurns = clamped; return }   // 触发 didSet 二次进入
+            persistence?.saveSetting(key: "max_concurrent_turns", value: clamped)
+        }
+    }
+    /// 超限拒绝横幅 (Composer 上方, 8s 自清; 与提炼横幅同语言)。
+    @Published var turnLimitNotice: (text: String, isError: Bool)?
+    private var turnLimitNoticeTask: Task<Void, Never>?
+
+    /// 主区切换: true = 设置面板 (侧栏 gear 入口)。
+    @Published var showSettingsPanel: Bool = false
+
+    // MARK: - P4.1 回合完成通知 + P4.2 迷你条计时
+
+    /// 通知开关 (settings 持久化, 默认开; 前台不弹 — 触发判定在 streamEnded 路径)。
+    @Published var completionNotificationsEnabled: Bool = true {
+        didSet {
+            persistence?.saveSetting(key: "completion_notifications",
+                                     value: completionNotificationsEnabled ? 1 : 0)
+        }
+    }
+    /// 在途回合起点 (耗时显示/完成通知; beginTurn 记, 结束/停止/删除时清)。
+    private var turnStartAt: [UUID: Date] = [:]
+
+    /// P4.2: 主窗口 mini 工具台形态 (true = 主窗口缩为任务台; 窗口尺寸切换在 ContentView)。
+    @Published var miniMode: Bool = false
+    /// P4.2: 最后完成的回合 (mini 台完成闪显用; 前台记录, 手动停止不记, 5s 自清)。
+    @Published private(set) var lastCompleted: (sid: UUID, title: String, duration: String)?
+    private var lastCompletedTask: Task<Void, Never>?
+
+
+    func setTurnLimitNotice(_ text: String, isError: Bool = true) {
+        turnLimitNotice = (text, isError)
+        turnLimitNoticeTask?.cancel()
+        turnLimitNoticeTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 8_000_000_000)
+            if !Task.isCancelled { turnLimitNotice = nil }
+        }
+    }
+
+    /// 在途回合数是否已达上限。
+    var atTurnLimit: Bool { runningTurns.count >= maxConcurrentTurns }
 
     // MARK: - Workspace (P3.4: 仅 project 会话可用)
 
@@ -83,6 +147,8 @@ final class ChatStore: ObservableObject {
     @Published var currentModelId: String = ""
     /// 当前思考级别 (pi 状态; UI 用 ReasoningEffort 映射)。
     @Published var thinkingLevel: ThinkingLevel = .high
+    /// 用户是否已在 UI 选过模型/级别 (选过 = 期望值钉死, 探测上报不再回写)。
+    @Published var userThinkingLevelPinned: Bool = false
 
     // P3.7: 知识库/记忆 (统一模型, 记忆 = source=session 条目)
     @Published var knowledgeItems: [KnowledgeItem] = []
@@ -96,10 +162,10 @@ final class ChatStore: ObservableObject {
     @Published var showScheduledPanel: Bool = false
     private var schedulerTimer: Timer?
     private var lastSchedulerMinute: Int = 0
-    // P3.10: 等待型任务 fire 的回合追踪 (done 标记扫描 + 自动停用)
+    // P3.10: 等待型任务 fire 的回合追踪 (P4.0.2 会话化: 日志会话 sid -> 任务 id)
     private var bashWhitelist: Set<String> = []
-    private var waitingFireTaskId: UUID?
-    private var waitingFireDone = false
+    private var fireTurnTask: [UUID: UUID] = [:]   // 在途 fire: 日志会话 -> 任务 id
+    private var fireDoneHit: Set<UUID> = []        // 本轮日志会话已命中 done 标记
     /// 等待型任务完成标记 (HTML 注释: Markdown 渲染不可见, 客户端可解析)
     static let doneMarker = "<!--task: done-->"
 
@@ -144,9 +210,10 @@ final class ChatStore: ObservableObject {
             }
         }
         extensions = items
-        // 下发 spawn 加载列表 (托管区启用项)
+        // 下发 spawn 加载列表 (P4.0.2: 快照 + 池内已有实例同步刷新; 新实例由 transportFor 补发)
         let enabled = items.filter { $0.source == .managed && $0.enabled }.map(\.path)
-        transport.updateExtensions(enabled)
+        currentExtensionPaths = enabled
+        transports.values.forEach { $0.updateExtensions(enabled) }
     }
 
     /// 启停托管扩展 (生效需重启引擎)
@@ -193,6 +260,7 @@ final class ChatStore: ObservableObject {
         showExtensionsPanel.toggle()
         showKnowledgePanel = false
         showScheduledPanel = false
+        showSettingsPanel = false
         if showExtensionsPanel { scanExtensions() }
     }
 
@@ -204,15 +272,13 @@ final class ChatStore: ObservableObject {
         // 默认参数表达式是非隔离上下文, transport 的创建放进来。
         // P3.2: 检测到 pi 二进制 → 真引擎; 缺失时 Release 下不再静默降级 Mock
         // (假数据演戏是发布事故), 置 engineMissing 由 UI 报错; DEBUG 保留 mock 回归基线。
-        #if DEBUG
-        let fallback: any AgentTransport = PiRpcTransport.available() ? PiRpcTransport() : MockTransport()
-        #else
-        let fallback: any AgentTransport = PiRpcTransport()
-        #endif
-        let transport = transport ?? fallback
-        self.transport = transport
-        engineMissing = transport is PiRpcTransport && !PiRpcTransport.available()
+        // P4.0.2: 单实例 → 池。注入实例仅供冒烟/测试 (全会话共用, 串行回归基线);
+        // 常规路径只建能力探测实例, 会话实例在首次 send 时按需拉起。
+        let probe = transport ?? Self.makeTransport()
+        capabilityProbe = probe
+        engineMissing = probe is PiRpcTransport && !PiRpcTransport.available()
         // 无默认值的 let 需最先初始化 (两阶段: 赋值前不可访问 self)
+        self.injectedTransport = transport
         self.managedExtensionsDir = managedExtensionsDir ?? (NSHomeDirectory() + "/.mangox/extensions")
 
         // P3.1: 首启播种 SampleSession, 之后全部从 SQLite 加载; 打不开库则回退纯 mock
@@ -246,18 +312,19 @@ final class ChatStore: ObservableObject {
         }
 
         // delegate 挂接必须在全部存储属性初始化之后 (两阶段初始化)
-        transport.delegate = self
-        transport.updateApprovalPolicy(askApproval: askApproval)
+        probe.delegate = self
         if let store {
             bashWhitelist = store.loadBashWhitelist()   // P3.10: 学习白名单恢复
             disabledExtensionPaths = store.loadDisabledExtensions()   // P3.11: 扩展启停恢复
+            maxConcurrentTurns = store.loadSetting(key: "max_concurrent_turns", defaultValue: 10)   // P4.0.4
+            completionNotificationsEnabled =
+                store.loadSetting(key: "completion_notifications", defaultValue: 1) == 1   // P4.1
         }
-        transport.updateBashWhitelist(bashWhitelist)
-        scanExtensions()   // P3.11: 扫描 + 向 transport 下发托管扩展加载列表
-        syncWorkspaceContext()   // 文件树扫描 + pi cwd 绑定 (P3.4)
-        // P3.7: 注入块必须在 refreshCapabilities 之前下发 (spawn args 在拉起时定格)
-        transport.updateKnowledgeContext(buildKnowledgeBlock())
-        transport.refreshCapabilities()   // P3.5: 模型/effort 上报 (pi 拉起 + get_state/models)
+        scanExtensions()   // P3.11: 扫描 + 快照托管扩展列表 (池实例 spawn 期加载)
+        syncWorkspaceContext()   // 文件树扫描 (P3.4); cwd 在每次 send 前按实例下发
+        // P3.7: 注入块快照 (池实例 spawn 期消费)
+        currentKnowledgeBlock = buildKnowledgeBlock()
+        probe.refreshCapabilities()   // P3.5: 模型/effort 上报 (pi 拉起 + get_state/models)
         startScheduler()   // P3.6: 每秒 tick, 分钟对齐检查到期任务
 
         // WAL 落盘 + 杀在途 pi: 强杀/exit 不跑 deinit, 数据滞留 -wal 会在下次清库时全丢;
@@ -267,7 +334,8 @@ final class ChatStore: ObservableObject {
         ) { [weak self] _ in
             MainActor.assumeIsolated {
                 self?.flushPersistence()
-                self?.transport.shutdown()
+                self?.capabilityProbe?.shutdown()
+                self?.transports.values.forEach { $0.shutdown() }
             }
         }
     }
@@ -292,10 +360,10 @@ final class ChatStore: ObservableObject {
         chats.insert(item, at: 0)
         selectedConversationId = item.id
         messages = []
-        bindTranscript(to: item.id)   // 新会话 = 空白 transcript
         showKnowledgePanel = false   // 从面板发起新会话 → 回会话视图
         showScheduledPanel = false
         showExtensionsPanel = false
+        showSettingsPanel = false
         try? persistence?.insertChatSession(item)
         markLastSession()
         syncWorkspaceContext()   // 新 chat 无项目 → 工作区清空, Work 回 Chat
@@ -327,7 +395,7 @@ final class ChatStore: ObservableObject {
     /// 删除会话; deleteTranscript = 连带删除 pi 持久 transcript (<uuid>.jsonl)。
     /// 默认保留: 文件是 agent 的对话记忆, 误删不可恢复 (UI 二次确认里让用户选)。
     func deleteConversation(_ id: UUID, deleteTranscript: Bool = false) {
-        if selectedConversationId == id { stopStreaming() } // 删当前会话先终止在途流
+        evictTransport(id)   // P4.0.2: 逐出池实例 (终止在途 pi + 清回合状态), 无论是否当前选中
         try? persistence?.deleteSession(id: id) // 连带清 events
         if deleteTranscript {
             PiRpcTransport.removeSessionFile(for: id)   // pi 持久 transcript
@@ -339,12 +407,10 @@ final class ChatStore: ObservableObject {
         if selectedConversationId == id {
             if let first = allConversations.first {
                 selectedConversationId = first.id
-                bindTranscript(to: first.id)   // 选中顺延 = 换会话 → 重置 transcript
                 messages = replayMessages(for: first.id)
                 markLastSession()
             } else {
                 selectedConversationId = nil
-                bindTranscript(to: nil)
                 messages = []
             }
             syncWorkspaceContext()   // 选中会话变化 → 工作区上下文跟随
@@ -359,14 +425,13 @@ final class ChatStore: ObservableObject {
 
     // MARK: - Workspace (P3.4: 文件树扫描 + 项目目录管理)
 
-    /// 重扫文件树 + 把 cwd 同步给 transport (cwd 变化在下次 send 时重启 pi 生效)。
+    /// 重扫文件树 (cwd 在每次 send 前按会话实例下发, P4.0.2 池化)。
     private func syncWorkspaceContext() {
         if let root = activeProjectPath {
             fileTree = WorkspaceScanner.scanShallow(root: root)   // lazy: 只扫一层, 展开时按需加载
         } else {
             fileTree = []
         }
-        transport.updateWorkingDirectory(activeProjectPath)
         // P3.11: 项目区扩展跟随 cwd, 目录变了重扫 (托管/全局区结果不变, 幂等)
         scanExtensions()
     }
@@ -437,11 +502,11 @@ final class ChatStore: ObservableObject {
         try? persistence?.insertChatSession(item, projectId: projectId)
         selectedProjectId = projectId
         selectedConversationId = item.id
-        bindTranscript(to: item.id)   // 新会话 = 空白 transcript
         messages = []
         showKnowledgePanel = false
         showExtensionsPanel = false
         showScheduledPanel = false
+        showSettingsPanel = false
         markLastSession()
         syncWorkspaceContext()
     }
@@ -451,6 +516,7 @@ final class ChatStore: ObservableObject {
         guard let g = projects.firstIndex(where: { $0.id == id }) else { return }
         let removed = projects.remove(at: g)
         try? persistence?.deleteProject(id: id)
+        removed.items.forEach { evictTransport($0.id) }   // P4.0.2: 其下会话实例全部逐出
         if selectedProjectId == id { selectedProjectId = nil }
         // 当前会话在被删项目下 → 回欢迎空态
         if let sid = selectedConversationId,
@@ -486,18 +552,51 @@ final class ChatStore: ObservableObject {
         return out.map { (id: $0.0, name: $0.1, path: $0.2) }
     }
 
-    /// pi transcript 当前绑定的 UI 会话 (per-turn 架构)。
-    /// 每回合一个 pi 进程, 结束即退; 绑定决定下回合 spawn 参数——
-    /// 非 nil: --session 文件 (pi 自动持久化 + 恢复, 重启引擎/App 重启不失忆);
-    /// nil: --no-session ephemeral (任务 fire 轮次, 连续性只靠交接文件——P3.9 拍板)。
-    private var transcriptSessionId: UUID?
+    // MARK: - P4.0.2 Transport 池 (每会话一个实例; 实例内部仍 per-turn 进程)
 
-    /// 会话边界绑定: 目标变化时更新 transport 的 spawn 参数 (幂等, 不触发进程操作)。
-    private func bindTranscript(to id: UUID?) {
-        guard transcriptSessionId != id else { return }
-        transport.updateSessionBinding(id)
-        transcriptSessionId = id
+    /// 在途回合的实时投影镜像 (sid -> 消息块): 后台会话的事件先进镜像,
+    /// 用户切回时 replay(库) + 镜像合并上屏; 回合结束即弃 (库为准)。
+    private var liveTurns: [UUID: [ChatMessage]] = [:]
+    /// 冒烟注入实例的当前回合归属 (注入单实例共用, 无法按实例路由 → send 时定格)。
+    private var injectedTurnSid: UUID?
+
+    /// 取会话实例 (get-or-create): 新实例补发全套 spawn 期配置快照
+    /// (审批策略/白名单/扩展/注入块/模型期望)。
+    private func transportFor(_ sid: UUID) -> any AgentTransport {
+        if let injectedTransport { return injectedTransport }   // 冒烟: 全会话共用单实例 (串行基线)
+        if let t = transports[sid] { return t }
+        let t = Self.makeTransport()
+        t.delegate = self
+        t.updateApprovalPolicy(askApproval: askApproval)
+        t.updateBashWhitelist(bashWhitelist)
+        t.updateExtensions(currentExtensionPaths)
+        t.updateKnowledgeContext(currentKnowledgeBlock)
+        if !currentProvider.isEmpty {
+            t.setModel(provider: currentProvider, modelId: currentModelId)
+            t.setThinkingLevel(thinkingLevel.rawValue)
+        }
+        transports[sid] = t
+        return t
     }
+
+    /// 逐出池实例 (会话删除): 终止在途 pi + 清理该会话全部回合状态。
+    private func evictTransport(_ sid: UUID) {
+        transports[sid]?.shutdown()
+        transports[sid] = nil
+        runningTurns.remove(sid)
+        liveTurns[sid] = nil
+        fireTurnTask[sid] = nil
+        fireDoneHit.remove(sid)
+        turnStartAt[sid] = nil
+    }
+
+    #if DEBUG
+    private static func makeTransport() -> any AgentTransport {
+        PiRpcTransport.available() ? PiRpcTransport() : MockTransport()
+    }
+    #else
+    private static func makeTransport() -> any AgentTransport { PiRpcTransport() }
+    #endif
 
     func selectConversation(_ id: UUID?) {
         let previous = selectedConversationId
@@ -505,9 +604,36 @@ final class ChatStore: ObservableObject {
         showKnowledgePanel = false   // 点选会话 → 回会话视图
         showScheduledPanel = false
         showExtensionsPanel = false
-        if id != previous { bindTranscript(to: id) }   // 换会话 → 重置 pi 对话记忆
+        showSettingsPanel = false
+        // P4.0.2: 切走在途回合会话 → 未落库的流式块/非终态工具卡搬进镜像, 后续事件续投镜像
+        if let previous, runningTurns.contains(previous) {
+            let inflight = messages.filter { msg in
+                if msg.isStreaming { return true }
+                if case .tool(let t) = msg.content {
+                    switch t.phase {
+                    case .done, .error: return false
+                    default: return true   // queued/running/awaitingApproval 均未落库
+                    }
+                }
+                return false
+            }
+            if !inflight.isEmpty {
+                var live = liveTurns[previous] ?? []
+                for m in inflight where !live.contains(where: { $0.id == m.id }) {
+                    live.append(m)
+                }
+                liveTurns[previous] = live
+            }
+        }
         guard let id else { return }
         messages = replayMessages(for: id)
+        // 会话回合在途 → 合并实时镜像 (库快照 + 在途产出), 切回不缺半截;
+        // 已落库的 finalized 块 replay 已含 → 按 id 去重
+        if runningTurns.contains(id), let live = liveTurns[id] {
+            let known = Set(messages.map(\.id))
+            messages.append(contentsOf: live.filter { !known.contains($0.id) })
+            liveTurns[id] = nil   // 后续事件直接进 messages (已选中)
+        }
         markLastSession()
         syncWorkspaceContext()   // 选中会话变化 → 工作区上下文跟随 (P3.4)
     }
@@ -515,7 +641,6 @@ final class ChatStore: ObservableObject {
     // MARK: - Send (只做入参整理, 生成逻辑在 transport)
 
     func sendDraft(ephemeral: Bool = false) {
-        guard !isStreaming else { return } // 防止流式中重复触发双流竞争
         let trimmed = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
         // 引擎缺失: 不发请求, 本地给一条说明 (engineMissing 横幅常驻在聊天顶部)
@@ -525,17 +650,37 @@ final class ChatStore: ObservableObject {
             return
         }
         ensureConversationForSend() // 无选中会话时隐式建会话, 消息才有归属
-        // 任务 fire 轮次保持 ephemeral (交接文件注入模板不得滚进持久 transcript)
-        if !ephemeral {
-            bindTranscript(to: selectedConversationId)   // 首轮发送前确保绑定持久 session (幂等)
+        guard let sid = selectedConversationId,
+              !runningTurns.contains(sid) else { return } // P4.0.2: 该会话已有回合在途, 防双流竞争
+        // P4.0.4: 并发上限 —— 拒绝 + 横幅提示 (v1 不排队)
+        if atTurnLimit {
+            draft = trimmed
+            setTurnLimitNotice("并发已达上限 (\(maxConcurrentTurns)), 请等待任务结束或在设置中调高")
+            return
         }
         let msg = ChatMessage(role: .user, content: .text(trimmed))
         messages.append(msg)
         draft = ""
-        persistMessage(msg)
-        // P3.4: 发送前把当前项目工作目录下发给 transport (cwd 变化会触发 pi 重启)
-        transport.updateWorkingDirectory(activeProjectPath)
-        transport.send(prompt: trimmed)
+        persistMessage(msg, sid: sid)
+        // 任务 fire 轮次保持 ephemeral (交接文件注入模板不得滚进持久 transcript)
+        beginTurn(sid: sid, prompt: trimmed, ephemeral: ephemeral,
+                  cwd: activeProjectPath, unattended: false)
+    }
+
+    /// P4.0.2: 回合启动公共路径 (用户会话与定时 fire 共用)。
+    /// spawn 期配置在 send 前逐实例下发 (会话绑定/cwd/审批策略)。
+    private func beginTurn(sid: UUID, prompt: String, ephemeral: Bool,
+                           cwd: String?, unattended: Bool) {
+        let t = transportFor(sid)
+        t.updateSessionBinding(ephemeral ? nil : sid)   // nil = --no-session (fire 轮次, P3.9 拍板)
+        t.updateWorkingDirectory(cwd)
+        // 无人值守 fire 关审批 (弹卡 = 任务死锁); 其余跟随全局开关
+        t.updateApprovalPolicy(askApproval: unattended ? false : askApproval)
+        liveTurns[sid] = liveTurns[sid] ?? []   // 镜像容器就位 (视图会话事件直进 messages)
+        runningTurns.insert(sid)
+        turnStartAt[sid] = Date()   // P4.1: 回合计时起点
+        if injectedTransport != nil { injectedTurnSid = sid }   // 注入实例: 记录串行回合归属
+        t.send(prompt: prompt)
     }
 
     /// 无选中会话时隐式创建 (持久化要求每条消息都有 session 归属)。
@@ -555,30 +700,52 @@ final class ChatStore: ObservableObject {
         markLastSession()
     }
 
-    private func persistMessage(_ m: ChatMessage) {
-        guard let sid = selectedConversationId else { return }
+    /// 落库: 显式 sid 优先 (回合归属), 缺省回落当前选中会话。
+    private func persistMessage(_ m: ChatMessage, sid: UUID? = nil) {
+        guard let sid = sid ?? selectedConversationId else { return }
         try? persistence?.appendMessageEvent(sessionId: sid, m)
     }
 
+    /// 停止选中会话的在途回合 (Composer 停止按钮入口)。
     func stopStreaming() {
-        transport.cancel()
-        isStreaming = false
-        // 收尾在途流式消息, 否则光标永远挂在半截回复上
-        if let idx = messages.lastIndex(where: { $0.isStreaming }) {
+        guard let sid = selectedConversationId else { return }
+        stopTurn(sid)
+    }
+
+    /// 停止指定会话的在途回合 (P4.2 迷你条 [■] 停止按钮也走这里):
+    /// 先 abort, 再兜底收尾 (半截回复落库 + 回合状态清理)。
+    /// pi abort 后进程退出会再发 streamEnded —— 幂等, 不双写 (finalize 翻转沿防重)。
+    /// 手动停止不发完成通知/闪显 (用户自己停的; turnStartAt 先清即可)。
+    func stopTurn(_ sid: UUID) {
+        guard runningTurns.contains(sid) else { return }
+        transportFor(sid).cancel()
+        if sid == selectedConversationId,
+           let idx = messages.lastIndex(where: { $0.isStreaming }) {
             messages[idx].isStreaming = false
-            persistMessage(messages[idx]) // 半截回复也落库
+            persistMessage(messages[idx], sid: sid)
         }
+        runningTurns.remove(sid)
+        liveTurns[sid] = nil
+        turnStartAt[sid] = nil
+        if injectedTurnSid == sid { injectedTurnSid = nil }
+        finishWaitingFireIfNeeded(sid: sid)
     }
 
     /// 重新生成: 截断最后一条 user 消息之后的内容并重放流式回复。
     func regenerate() {
-        guard !isStreaming else { return }
+        guard let sid = selectedConversationId,
+              !runningTurns.contains(sid) else { return }
+        if atTurnLimit {
+            setTurnLimitNotice("并发已达上限 (\(maxConcurrentTurns)), 请等待任务结束或在设置中调高")
+            return
+        }
         guard let lastUserIdx = messages.lastIndex(where: { $0.role == .user }) else { return }
         if messages.count > lastUserIdx + 1 {
             messages.removeSubrange((lastUserIdx + 1)...)
         }
         guard case .text(let prompt) = messages[lastUserIdx].content else { return }
-        transport.send(prompt: prompt)
+        beginTurn(sid: sid, prompt: prompt, ephemeral: false,
+                  cwd: activeProjectPath, unattended: false)
     }
 
     // MARK: - Model / effort (P3.5: 透传给 transport, 状态以对端上报为准)
@@ -599,10 +766,17 @@ final class ChatStore: ObservableObject {
         (entry.level == nil || entry.level == thinkingLevel)
     }
 
-    /// 选中组合: set_model + set_thinking_level (pi 侧各自动回读 get_state 同步 UI)。
+    /// 选中组合: 全局期望更新 (新实例由 transportFor 补发) + 选中会话实例即时下发
+    /// (pi 侧各自动回读 get_state 同步 UI; P4.0.2 spawn 期参数随该会话下回合生效)。
     func selectModel(_ model: AgentModelInfo, level: ThinkingLevel?) {
-        transport.setModel(provider: model.provider, modelId: model.id)
-        if let level { transport.setThinkingLevel(level.rawValue) }
+        currentProvider = model.provider
+        currentModelId = model.id
+        userThinkingLevelPinned = true   // 期望钉死: 探测上报不再回写级别
+        if let level { thinkingLevel = level }
+        guard let sid = selectedConversationId else { return }
+        let t = transportFor(sid)
+        t.setModel(provider: model.provider, modelId: model.id)
+        if let level { t.setThinkingLevel(level.rawValue) }
     }
 
     // MARK: - Knowledge (P3.7 知识库/记忆, 设计见 docs §3.7)
@@ -727,6 +901,7 @@ final class ChatStore: ObservableObject {
         showKnowledgePanel = true
         showScheduledPanel = false
         showExtensionsPanel = false
+        showSettingsPanel = false
     }
 
     /// 提炼模板 (业务语义 = TODO 占位脚手架: 边界示例与反例措辞待首个真实提炼轮后人工打磨)。
@@ -836,15 +1011,17 @@ final class ChatStore: ObservableObject {
         deleteKnowledge(id: id)
     }
 
-    /// 知识变动后: 重算注入块下发给 transport + 标记引擎待重启。
+    /// 知识变动后: 快照注入块 + 池内实例同步下发 + 标记引擎待重启。
     private func applyKnowledgeChange() {
-        transport.updateKnowledgeContext(buildKnowledgeBlock())
+        currentKnowledgeBlock = buildKnowledgeBlock()
+        transports.values.forEach { $0.updateKnowledgeContext(currentKnowledgeBlock) }
         knowledgeDirty = true
     }
 
-    /// Composer pill "重启引擎生效": 重启 pi 使最新注入块生效 (丢进程内对话记忆, 用户显式触发)。
+    /// Composer pill "重启引擎生效": 重启池内全部实例使最新注入块生效 (丢进程内对话记忆, 用户显式触发)。
     func restartEngine() {
-        transport.restartEngine()
+        transports.values.forEach { $0.restartEngine() }
+        capabilityProbe?.restartEngine()
         knowledgeDirty = false
         extensionsDirty = false
     }
@@ -852,14 +1029,25 @@ final class ChatStore: ObservableObject {
     /// 面板互斥: 打开一个关另一个 (主区同一时刻只显示一个面板)。
     func toggleKnowledgePanel() {
         showKnowledgePanel.toggle()
-        if showKnowledgePanel { showScheduledPanel = false }
+        if showKnowledgePanel { showScheduledPanel = false; showSettingsPanel = false }
+    }
+
+    // MARK: - Settings (P4.0.4 最小设置页: 并发上限; 通知开关随 P4.1 加)
+
+    func toggleSettingsPanel() {
+        showSettingsPanel.toggle()
+        if showSettingsPanel {
+            showKnowledgePanel = false
+            showScheduledPanel = false
+            showExtensionsPanel = false
+        }
     }
 
     // MARK: - Scheduled (P3.6 本地定时任务)
 
     func toggleScheduledPanel() {
         showScheduledPanel.toggle()
-        if showScheduledPanel { showKnowledgePanel = false }
+        if showScheduledPanel { showKnowledgePanel = false; showSettingsPanel = false }
     }
 
     func addScheduled(name: String, prompt: String, cron: String,
@@ -910,25 +1098,18 @@ final class ChatStore: ObservableObject {
         }
     }
 
-    /// 到点投递 (P3.9 单日志会话): 任务的全部运行追加进同一个日志会话 (首次 fire 建立),
-    /// 每次运行先插入"── HH:mm 运行 ──"分隔, 再走 sendDraft 完整链路。
-    /// 在途生成时跳过本轮 (cron 到期不重排)。
+    /// 到点投递 (P3.9 单日志会话): 任务的全部运行追加进同一个日志会话 (首次 fire 建立)。
+    /// P4.0.2: 完全后台化 —— 不劫持选中会话/UI, 直接往日志会话投递回合;
+    /// 该任务日志会话已有回合在途则跳过 (cron 到期不重排)。
     /// 持续模式 (continuous): 注入交接文件 (工作日志, agent 写用户可改) + 近期运行摘录,
     /// 并指令 agent 把关键进展写回交接文件——连续性靠文件携带, 磁盘为准零缓存。
     func runScheduledFire(_ task: ScheduledTask, at now: Date = Date()) {
-        guard !isStreaming else {
-            recordFireSkip(task, at: now, reason: "有回合在途")
-            return
-        }
         if let pid = task.projectId {
             guard projects.contains(where: { $0.id == pid }) else {
                 recordFireSkip(task, at: now, reason: "项目已删除")
                 return
             }
         }
-        // fire 是独立轮次: 连续性靠交接文件注入 (P3.9 拍板), 不依赖 pi transcript——
-        // 绑定 ephemeral (--no-session), 每轮空白起点, 防与其他会话/上一轮残留互相污染。
-        bindTranscript(to: nil)
         // 定位/建立日志会话 (有项目归 project, 无项目落平铺 Chats)
         let fmt = DateFormatter()
         fmt.dateFormat = "HH:mm"
@@ -941,34 +1122,39 @@ final class ChatStore: ObservableObject {
                     projects[g].items.insert(item, at: 0)
                 }
                 try? persistence?.insertChatSession(item, projectId: pid)
-                selectedProjectId = pid
             } else {
                 chats.insert(item, at: 0)
                 try? persistence?.insertChatSession(item)
-                selectedProjectId = nil   // cwd 回落 home
             }
             logId = item.id
         }
-        selectedConversationId = logId
-        messages = replayMessages(for: logId!)   // 日志会话全文上屏 (追加式时间线)
-        showKnowledgePanel = false
-        showExtensionsPanel = false
-        showScheduledPanel = false
-        markLastSession()
-        syncWorkspaceContext()
-        // P3.10: 无人值守任务 fire 回合关闭审批 (全 YOLO; streamEnded 恢复)。
-        // 无人值守下弹审批 = 卡片永远挂着 = 任务死锁, 开关即接受。
-        if task.unattended { transport.updateApprovalPolicy(askApproval: false) }
-        if let c = task.condition, !c.isEmpty {
-            waitingFireTaskId = task.id   // 等待型: 本回合结束扫 done 标记
-            waitingFireDone = false
+        guard let logId else { return }
+        guard !runningTurns.contains(logId) else {
+            recordFireSkip(task, at: now, reason: "该任务回合在途")
+            return
         }
-        // 运行分隔标记 (时间线锚点; "──" 前缀用于摘录时过滤)
+        // P4.0.4: 并发已满 → 落痕跳过 (与"冲突跳过"同语义, cron 到期不重排)
+        if runningTurns.count >= maxConcurrentTurns {
+            recordFireSkip(task, at: now, reason: "并发已满 (\(maxConcurrentTurns))")
+            return
+        }
+        // 时间线锚点 + prompt 落库 (用户正看着日志会话则同步上屏)
+        let viewing = selectedConversationId == logId
         let sep = ChatMessage(role: .user, content: .text("── \(fmt.string(from: now)) 运行 ──"))
-        messages.append(sep)
-        persistMessage(sep)
-        draft = buildScheduledPrompt(task)
-        sendDraft(ephemeral: true)
+        persistMessage(sep, sid: logId)
+        if viewing { messages.append(sep) }
+        let prompt = buildScheduledPrompt(task)
+        let promptMsg = ChatMessage(role: .user, content: .text(prompt))
+        persistMessage(promptMsg, sid: logId)
+        if viewing { messages.append(promptMsg) }
+        // fire 是独立轮次: ephemeral (--no-session), 连续性靠交接文件 (P3.9 拍板);
+        // cwd 用任务项目路径 (无项目回落 home); unattended 关审批 (弹卡 = 死锁)
+        let cwd = task.projectId.flatMap { pid in projects.first(where: { $0.id == pid })?.path }
+        beginTurn(sid: logId, prompt: prompt, ephemeral: true,
+                  cwd: cwd, unattended: task.unattended)
+        if let c = task.condition, !c.isEmpty {
+            fireTurnTask[logId] = task.id   // 等待型: 本回合结束扫 done 标记
+        }
         if let idx = scheduledTasks.firstIndex(where: { $0.id == task.id }) {
             scheduledTasks[idx].lastRunAt = now
             scheduledTasks[idx].logSessionId = logId
@@ -1112,11 +1298,11 @@ final class ChatStore: ObservableObject {
     @Published var alwaysAllowedToolIds: Set<UUID> = []
 
     func approveTool(_ toolId: UUID) {
-        transport.respondToPermission(toolId: toolId, decision: .allow)
+        routeToolDecision(toolId, .allow)
     }
 
     func denyTool(_ toolId: UUID) {
-        transport.respondToPermission(toolId: toolId, decision: .deny)
+        routeToolDecision(toolId, .deny)
     }
 
     func alwaysAllowTool(_ toolId: UUID) {
@@ -1127,11 +1313,18 @@ final class ChatStore: ObservableObject {
             if !tokens.isEmpty {
                 bashWhitelist.formUnion(tokens)
                 persistence?.saveBashWhitelist(bashWhitelist)
-                transport.updateBashWhitelist(bashWhitelist)
+                transports.values.forEach { $0.updateBashWhitelist(bashWhitelist) }
             }
         }
         alwaysAllowedToolIds.insert(toolId)
-        transport.respondToPermission(toolId: toolId, decision: .alwaysAllow)
+        routeToolDecision(toolId, .alwaysAllow)
+    }
+
+    /// 审批路由 (P4.0.2): 卡片只可能出现在当前视图的会话中 (后台回合不弹卡),
+    /// 按选中会话取池实例转发; 冒烟注入态由 transportFor 回落注入实例。
+    private func routeToolDecision(_ toolId: UUID, _ decision: PermissionDecision) {
+        guard let sid = selectedConversationId else { return }
+        transportFor(sid).respondToPermission(toolId: toolId, decision: decision)
     }
 
     private func currentToolCard(_ toolId: UUID) -> ToolCall? {
@@ -1165,81 +1358,230 @@ final class ChatStore: ObservableObject {
 // MARK: - AgentTransportDelegate (事件归并: AgentEvent → messages 状态)
 
 extension ChatStore: AgentTransportDelegate {
+    /// P4.0.2: 事件归属路由 —— transport 实例即会话身份 (回调首参数)。
+    /// 注入实例 (冒烟) 全会话共用 → 归属 send 时刻定格的回合会话 (无则在途选中会话)。
+    private func sessionOf(_ transport: any AgentTransport) -> UUID? {
+        if let injectedTransport, transport === injectedTransport {
+            return injectedTurnSid ?? selectedConversationId
+        }
+        for (sid, t) in transports where t === transport { return sid }
+        return nil
+    }
+
     func transport(_ transport: any AgentTransport, didEmit event: AgentEvent) {
+        // 探测实例/已逐出实例的事件 (能力探测进程偶发上行) → 无归属, 丢弃
+        guard let sid = sessionOf(transport) else { return }
+        handleTurnEvent(event, sid: sid)
+    }
+
+    /// 回合事件归并 (带归属会话): 视图会话写 messages, 后台会话写 liveTurns 镜像。
+    /// 两容器同构处理 —— 切换会话时由 selectConversation 负责迁移/合并。
+    private func handleTurnEvent(_ event: AgentEvent, sid: UUID) {
+        let inView = sid == selectedConversationId
+
         switch event {
         case .streamStarted:
-            isStreaming = true
+            break   // runningTurns 在 beginTurn 即插入 (这里仅确认, 不重复维护)
 
         case .textChunk(let id, let delta):
-            if let idx = messages.lastIndex(where: { $0.id == id }) {
-                guard case .text(let existing) = messages[idx].content else { return }
-                messages[idx].content = .text(existing + delta)
-                messages[idx].isStreaming = isStreaming   // 流式态跟随全局, 回合外的迟到块不再点亮光标
+            if inView {
+                upsertStreaming(in: &messages, id: id, delta: delta, think: false)
             } else {
-                messages.append(ChatMessage(id: id, role: .assistant,
-                                            content: .text(delta), isStreaming: isStreaming))
+                upsertStreaming(in: &liveTurns[sid, default: []], id: id, delta: delta, think: false)
             }
 
         case .thoughtChunk(let id, let delta):
-            if let idx = messages.lastIndex(where: { $0.id == id }) {
-                guard case .think(let existing) = messages[idx].content else { return }
-                messages[idx].content = .think(existing + delta)
-                messages[idx].isStreaming = isStreaming
+            if inView {
+                upsertStreaming(in: &messages, id: id, delta: delta, think: true)
             } else {
-                messages.append(ChatMessage(id: id, role: .assistant,
-                                            content: .think(delta), isStreaming: isStreaming))
+                upsertStreaming(in: &liveTurns[sid, default: []], id: id, delta: delta, think: true)
             }
 
         case .toolUpdated(let tool):
-            if let idx = messages.lastIndex(where: {
-                if case .tool(let t) = $0.content { return t.id == tool.id }
-                return false
-            }) {
-                messages[idx].content = .tool(tool)
-                // 终态落库 (trajectory 只存终态事件)
-                if case .done = tool.phase { persistMessage(messages[idx]) }
-                if case .error = tool.phase { persistMessage(messages[idx]) }
+            var terminal = false
+            if case .done = tool.phase { terminal = true }
+            if case .error = tool.phase { terminal = true }
+            let msg = ChatMessage(role: .assistant, content: .tool(tool))
+            if inView {
+                upsertTool(in: &messages, tool: tool)
             } else {
-                let msg = ChatMessage(role: .assistant, content: .tool(tool))
-                messages.append(msg)
+                upsertTool(in: &liveTurns[sid, default: []], tool: tool)
+            }
+            if terminal {
+                persistMessage(msg, sid: sid)   // 终态落库 (trajectory 只存终态事件)
             }
 
         case .messageFinalized(let id):
-            if let idx = messages.lastIndex(where: { $0.id == id }) {
-                messages[idx].isStreaming = false
-                // P3.10: 剥离任务状态标记 (HTML 注释不应呈现/落库), 剥离前记录供回合扫描
-                if case .text(let s) = messages[idx].content, s.contains(Self.doneMarker) {
-                    if waitingFireTaskId != nil { waitingFireDone = true }
-                    let cleaned = s.replacingOccurrences(of: Self.doneMarker, with: "")
-                                   .trimmingCharacters(in: .whitespacesAndNewlines)
-                    messages[idx].content = .text(cleaned)
-                }
-                persistMessage(messages[idx])
+            if inView {
+                finalizeBlock(in: &messages, id: id, sid: sid)
+            } else {
+                finalizeBlock(in: &liveTurns[sid, default: []], id: id, sid: sid)
             }
 
         case .toolPhaseChanged(let toolId, let phase):
-            setToolPhase(toolId, phase)
-            if let sid = selectedConversationId {
-                try? persistence?.appendToolUpdateEvent(sessionId: sid, toolId: toolId, phase: phase)
+            if inView {
+                setToolPhase(toolId, phase)
+            } else {
+                setToolPhaseIn(&liveTurns[sid, default: []], toolId, phase)
             }
+            try? persistence?.appendToolUpdateEvent(sessionId: sid, toolId: toolId, phase: phase)
 
         case .streamEnded:
-            isStreaming = false
-            // 安全网: 收尾所有在途流式块 (text + think 可能同时各有一条)
-            for i in messages.indices where messages[i].isStreaming {
-                messages[i].isStreaming = false
+            runningTurns.remove(sid)
+            if inView {
+                // 安全网: 收尾视图内所有在途流式块 (text + think 可能同时各有一条)
+                for i in messages.indices where messages[i].isStreaming {
+                    messages[i].isStreaming = false
+                }
             }
-            finishWaitingFireIfNeeded()
+            // P4.1/P4.2: 回合完成 —— 前台闪显迷你条完成卡 / 非前台发系统通知。
+            // elapsed 取自 turnStartAt 且只能取一次 (手动停过的回合已被清 → 不通知)。
+            let elapsed = turnStartAt.removeValue(forKey: sid).map { Date().timeIntervalSince($0) }
+            if let elapsed, elapsed >= 1 {
+                // 回复预览须在镜像清除前取
+                let proj = sid == selectedConversationId ? messages : (liveTurns[sid] ?? [])
+                let title = allConversations.first { $0.id == sid }?.title ?? "任务"
+                let mins = Int(elapsed) / 60, secs = Int(elapsed) % 60
+                if appIsForeground {
+                    // P4.2: mini 台完成闪显数据 (显示 5s 后自清, mini 窗口保持不自动还原)
+                    lastCompleted = (sid, title, String(format: "✓ 完成 · 耗时 %02d:%02d", mins, secs))
+                    lastCompletedTask?.cancel()
+                    lastCompletedTask = Task { @MainActor in
+                        try? await Task.sleep(nanoseconds: 5_000_000_000)
+                        if !Task.isCancelled { lastCompleted = nil }
+                    }
+                } else if completionNotificationsEnabled {
+                    notifyCompletion(sid: sid, title: title, elapsed: elapsed, projection: proj)
+                }
+            }
+            liveTurns[sid] = nil   // 产出已落库, 镜像即弃 (库为准)
+            if injectedTurnSid == sid { injectedTurnSid = nil }
+            finishWaitingFireIfNeeded(sid: sid)
         }
     }
 
-    /// P3.10: 等待型回合收尾——恢复审批策略 + done 标记命中则自动停用任务。
-    private func finishWaitingFireIfNeeded() {
-        // 无条件恢复审批策略 (无人值守 fire 回合关闭过; 用户会话的 askApproval 保持不变)
-        transport.updateApprovalPolicy(askApproval: askApproval)
-        guard let tid = waitingFireTaskId else { return }
-        waitingFireTaskId = nil
-        guard waitingFireDone,
+    /// App 是否前台激活 (CLI/冒烟无 NSApplication 实例 → 视为非前台, 通知 no-op)。
+    private var appIsForeground: Bool {
+        guard Bundle.main.bundleIdentifier != nil else { return false }
+        return NSApp.isActive
+    }
+
+    /// P4.1: 组装完成通知 (标题 = 会话/任务名, 正文 = 耗时 + 回复首行 60 字)。
+    private func notifyCompletion(sid: UUID, title: String, elapsed: TimeInterval,
+                                  projection: [ChatMessage]) {
+        let preview = projection.reversed().compactMap { msg -> String? in
+            guard msg.role == .assistant, case .text(let s) = msg.content, !s.isEmpty else { return nil }
+            return s
+        }.first.map { line -> String in
+            let first = line.split(separator: "\n").first.map(String.init) ?? line
+            return first.count > 60 ? String(first.prefix(60)) + "…" : first
+        } ?? ""
+        let mins = Int(elapsed) / 60, secs = Int(elapsed) % 60
+        let body = preview.isEmpty
+            ? String(format: "回合完成 · 耗时 %02d:%02d", mins, secs)
+            : String(format: "回合完成 · 耗时 %02d:%02d\n%@", mins, secs, preview)
+        Task { await CompletionNotifier.shared.post(sessionId: sid, title: title, body: body) }
+    }
+
+    // MARK: - P4.2 迷你条数据投影
+
+    /// 迷你条 L1: 会话名 / 任务名。
+    func turnTitle(_ sid: UUID) -> String {
+        allConversations.first { $0.id == sid }?.title ?? "任务"
+    }
+
+    /// 迷你条 L1: 回合计时 (mm:ss)。
+    func turnElapsedText(_ sid: UUID) -> String {
+        guard let start = turnStartAt[sid] else { return "--:--" }
+        let t = Int(Date().timeIntervalSince(start))
+        return String(format: "%02d:%02d", t / 60, t % 60)
+    }
+
+    /// 迷你条 L2 摘要: 在途工具卡 title → 流式文本尾部 60 字 → "思考中…" → "运行中…"。
+    func miniSummary(_ sid: UUID) -> String {
+        let proj = sid == selectedConversationId ? messages : (liveTurns[sid] ?? [])
+        for msg in proj.reversed() {
+            if case .tool(let t) = msg.content {
+                switch t.phase {
+                case .done, .error: continue   // 终态卡不是"当前活动"
+                default: return t.title
+                }
+            }
+            if msg.isStreaming, case .text(let s) = msg.content {
+                return "…" + String(s.suffix(60))
+            }
+            if msg.isStreaming, case .think = msg.content {
+                return "思考中…"
+            }
+        }
+        return "运行中…"
+    }
+
+    /// 流式块 upsert: 有则追加 delta (光标保持), 无则建块 (归属路由保证内容不断头)。
+    private func upsertStreaming(in list: inout [ChatMessage], id: UUID, delta: String, think: Bool) {
+        if let idx = list.lastIndex(where: { $0.id == id }) {
+            if think, case .think(let existing) = list[idx].content {
+                list[idx].content = .think(existing + delta)
+            } else if !think, case .text(let existing) = list[idx].content {
+                list[idx].content = .text(existing + delta)
+            }
+            list[idx].isStreaming = true
+        } else {
+            list.append(ChatMessage(id: id, role: .assistant,
+                                    content: think ? .think(delta) : .text(delta),
+                                    isStreaming: true))
+        }
+    }
+
+    /// 工具卡整对象 upsert (按 ToolCall.id 定位, 无则新建)。
+    private func upsertTool(in list: inout [ChatMessage], tool: ToolCall) {
+        if let idx = list.lastIndex(where: {
+            if case .tool(let t) = $0.content { return t.id == tool.id }
+            return false
+        }) {
+            list[idx].content = .tool(tool)
+        } else {
+            list.append(ChatMessage(role: .assistant, content: .tool(tool)))
+        }
+    }
+
+    /// 相变原位应用 (镜像容器版本, 与 setToolPhase 同构)。
+    private func setToolPhaseIn(_ list: inout [ChatMessage], _ toolId: UUID, _ phase: ToolPhase) {
+        for i in list.indices {
+            if case .tool(let tool) = list[i].content, tool.id == toolId {
+                list[i].content = .tool(tool.withPhase(phase))
+                return
+            }
+        }
+    }
+
+    /// 流式块收尾: 摘光标 + done 标记剥离 (fire 回合扫描) + 落库。
+    /// 仅在 streaming→false 的翻转沿落库 (防 stopStreaming 兜底与事件收尾双写)。
+    private func finalizeBlock(in list: inout [ChatMessage], id: UUID, sid: UUID) {
+        guard let idx = list.lastIndex(where: { $0.id == id }) else { return }
+        let wasStreaming = list[idx].isStreaming
+        list[idx].isStreaming = false
+        if case .text(let s) = list[idx].content, s.contains(Self.doneMarker) {
+            list[idx].content = .text(stripDoneMarker(s, sid: sid))
+        }
+        if wasStreaming { persistMessage(list[idx], sid: sid) }
+    }
+
+    /// 剥离任务状态标记 (doneMarker); 命中且该会话有在途 fire → 点亮 fireDoneHit。
+    private func stripDoneMarker(_ s: String, sid: UUID) -> String {
+        guard s.contains(Self.doneMarker) else { return s }
+        if fireTurnTask[sid] != nil { fireDoneHit.insert(sid) }
+        return s.replacingOccurrences(of: Self.doneMarker, with: "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// P3.10/P4.0.2: 等待型 fire 收尾——done 命中则自动停用任务。
+    /// 审批策略无需恢复: 池化后策略按回合下发 (unattended fire 只影响自己的实例配置)。
+    private func finishWaitingFireIfNeeded(sid: UUID) {
+        guard let tid = fireTurnTask.removeValue(forKey: sid) else { return }
+        let hit = fireDoneHit.contains(sid)
+        fireDoneHit.remove(sid)
+        guard hit,
               let idx = scheduledTasks.firstIndex(where: { $0.id == tid }) else { return }
         scheduledTasks[idx].enabled = false
         scheduledTasks[idx].completedAt = Date()
@@ -1248,18 +1590,23 @@ extension ChatStore: AgentTransportDelegate {
 
     // MARK: - P3.5: 能力上报归并
 
+    /// 能力上报只接受探测实例 (池实例 spawn 也会上报 get_state, 不覆盖全局状态)。
+    /// 上报值仅作首次初始化 (字段为空时): 探测实例 spawn 不带 --model, 报的是 pi 的
+    /// settings.json 默认——若持续回写, 会把用户刚选的模型打回默认 (已实证)。
     func transport(_ transport: any AgentTransport,
                    didUpdateModelState provider: String, modelId: String, thinkingLevel: String) {
-        currentProvider = provider
-        currentModelId = modelId
-        status.modelName = "\(provider)/\(modelId)"
-        if let level = ThinkingLevel(rawValue: thinkingLevel) {
+        guard transport === capabilityProbe else { return }
+        if currentProvider.isEmpty { currentProvider = provider }
+        if currentModelId.isEmpty { currentModelId = modelId }
+        status.modelName = "\(currentProvider)/\(currentModelId)"
+        if let level = ThinkingLevel(rawValue: thinkingLevel), !userThinkingLevelPinned {
             self.thinkingLevel = level
             status.effort = ReasoningEffort(rawValue: thinkingLevel) ?? status.effort
         }
     }
 
     func transport(_ transport: any AgentTransport, didReportModels: [AgentModelInfo]) {
+        guard transport === capabilityProbe else { return }
         availableModels = didReportModels
     }
 }

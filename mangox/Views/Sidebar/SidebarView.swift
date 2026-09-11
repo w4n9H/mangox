@@ -93,6 +93,11 @@ struct SidebarView: View {
                    active: store.showExtensionsPanel) {
                 store.toggleExtensionsPanel()
             }
+            // P4.0.4: 最小设置页 (并发上限; 通知开关随 P4.1)
+            navRow(icon: "gearshape", title: "Settings",
+                   active: store.showSettingsPanel) {
+                store.toggleSettingsPanel()
+            }
         }
         .padding(.bottom, 6)
     }
@@ -234,7 +239,7 @@ struct SidebarView: View {
                         isSelected: item.id == store.selectedConversationId,
                         indent: indent,
                         badge: store.scheduledBadge(for: item.id) ?? "bubble.left",   // 普通会话 = 对话气泡
-                        isRunning: store.isStreaming && item.id == store.selectedConversationId,
+                        isRunning: store.runningTurns.contains(item.id),   // P4.0.2: 并发在途各自转圈
                         onSelect: { store.selectConversation(item.id) },
                         onRename: { store.renameConversation(item.id, to: $0) },
                         onDelete: { confirmDeleteTarget = item })
@@ -257,7 +262,6 @@ struct ConversationRow: View {
     @State private var hovering: Bool = false
     @State private var isEditing: Bool = false
     @State private var editTitle: String = ""
-    @State private var pulse: Bool = false
 
     var body: some View {
         HStack(spacing: 6) {
@@ -283,20 +287,22 @@ struct ConversationRow: View {
             Spacer(minLength: 2)
 
             if isRunning {
-                // 运行指示 (行尾): 外圈呼吸 + 中心点
-                Circle()
-                    .stroke(CodexTheme.toolDone, lineWidth: 1.5)
-                    .frame(width: 9, height: 9)
-                    .background(Circle().fill(CodexTheme.toolDone).frame(width: 3.5, height: 3.5))
-                    .opacity(pulse ? 0.35 : 1)
-                    .scaleEffect(pulse ? 1.3 : 1)
-                    .onAppear {
-                        pulse = false
-                        withAnimation(.easeInOut(duration: 0.9).repeatForever(autoreverses: true)) {
-                            pulse = true
-                        }
+                // 运行指示 (行尾): 经典旋转弧 (TimelineView 逐帧驱动, 0.8s/圈, 同隐式动画教训)
+                TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { ctx in
+                    let t = ctx.date.timeIntervalSinceReferenceDate
+                    let angle = Angle.degrees(t.truncatingRemainder(dividingBy: 0.8) / 0.8 * 360)
+                    ZStack {
+                        Circle()
+                            .stroke(CodexTheme.textMuted.opacity(0.22), lineWidth: 1.5)
+                        Circle()
+                            .trim(from: 0, to: 0.3)
+                            .stroke(CodexTheme.toolDone,
+                                    style: StrokeStyle(lineWidth: 1.5, lineCap: .round))
+                            .rotationEffect(angle)
                     }
-                    .help("Agent 正在运行…")
+                    .frame(width: 12, height: 12)
+                }
+                .help("Agent 正在运行…")
             }
 
             if hovering && !isEditing {
