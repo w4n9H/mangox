@@ -20,8 +20,9 @@ enum AgentEvent {
     case textChunk(messageID: UUID, delta: String)
     /// 追加思考增量; messageID 首次出现时由 Store 自动建 think 块。
     case thoughtChunk(messageID: UUID, delta: String)
-    /// 某条流式消息落定 (isStreaming = false)。
-    case messageFinalized(messageID: UUID)
+    /// 某条流式消息落定 (isStreaming = false); usage = 该次 LLM 调用用量 (P5.0.1,
+    /// 挂在边界最后一个落定块上; nil = 无上报)。
+    case messageFinalized(messageID: UUID, usage: MessageUsage?)
     /// 工具卡相位变化, Store 按 toolId 定位消息并应用 (P3.2 ACP 换整对象 upsert)。
     case toolPhaseChanged(toolId: UUID, phase: ToolPhase)
     /// 工具卡整对象 upsert (按 ToolCall.id): 无则新建, 有则整体替换。

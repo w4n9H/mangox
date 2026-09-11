@@ -77,6 +77,16 @@ final class PersistenceStore {
         )
         """)
         try db.run("CREATE INDEX IF NOT EXISTS idx_events_session ON events(session_id, seq)")
+        // P5.1: 自定义模型 (菜单自主 — 与 pi 目录条目的展示名解耦)
+        try db.run("""
+        CREATE TABLE IF NOT EXISTS custom_models (
+            provider   TEXT NOT NULL,
+            model_id   TEXT NOT NULL,
+            label      TEXT,
+            created_at REAL NOT NULL,
+            PRIMARY KEY (provider, model_id)
+        )
+        """)
         // 旧库补列: 先查 PRAGMA table_info, 列已存在就不发 ALTER
         // (无条件 ALTER 会被 try? 吞掉异常, 但 SQLite 自己仍往 stderr 吐 duplicate column 日志)
         addColumnIfMissing("projects", "path", "TEXT")
@@ -361,6 +371,36 @@ final class PersistenceStore {
 
     func deleteKnowledge(id: UUID) throws {
         try db.run("DELETE FROM knowledge_items WHERE id = ?", [.text(id.uuidString)])
+    }
+
+    // MARK: - Custom models (P5.1 菜单自主)
+
+    func loadCustomModels() throws -> [CustomModel] {
+        let rows = try db.query("""
+            SELECT provider, model_id, label, created_at
+            FROM custom_models ORDER BY created_at DESC
+            """)
+        return rows.map { row in
+            CustomModel(provider: text(row, "provider"),
+                        modelId: text(row, "model_id"),
+                        label: text(row, "label"),
+                        createdAt: Date(timeIntervalSince1970: double(row, "created_at")))
+        }
+    }
+
+    func upsertCustomModel(_ model: CustomModel) throws {
+        try db.run("""
+            INSERT OR REPLACE INTO custom_models (provider, model_id, label, created_at)
+            VALUES (?,?,?,?)
+            """, [.text(model.provider),
+                  .text(model.modelId),
+                  .text(model.label),
+                  .real(model.createdAt.timeIntervalSince1970)])
+    }
+
+    func deleteCustomModel(provider: String, modelId: String) throws {
+        try db.run("DELETE FROM custom_models WHERE provider = ? AND model_id = ?",
+                   [.text(provider), .text(modelId)])
     }
 
     // MARK: - Scheduled tasks (P3.6 本地定时任务)

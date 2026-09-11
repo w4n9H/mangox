@@ -5,6 +5,31 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [0.1.3] - 2026-09-11
+
+### Added
+
+- **会话轨迹视图（P5.0）**：顶栏胶囊 `Chat / Trace` 切换底档——轨迹视图按事件语义呈现同一会话：摘要头（Duration / Turns / Calls）+ 回合分组（Turn N · 起始时间 · 时长）+ `USER / ASSISTANT / TOOL` 三色事件行；行可展开（ASSISTANT 看全文 + 思考过程 + usage 明细，TOOL 看命令 / 参数 / diff / 错误）；行级实时（回复生成中出旋转弧占位行、工具状态徽章实时翻转），自动锚底；输入区两个底档共享，切到 Trace 也能继续发消息
+- **usage 采集落库（P5.0.1）**：pi `message_end` 的 usage（input/output/cacheRead/cacheWrite/reasoning/totalTokens）、responseId、model 挂到对应 assistant 消息并随事件 payload 落库（轨迹视图数据源；将来成本计算铺路）
+- **自定义模型（P5.1）**：`custom_models` 表管菜单显示名与 API 名的解耦——设置页「自定义模型」卡片内联管理（条目列表 + 启用 / 删除 + 底部常驻添加表单，provider 前缀校验）；模型菜单「自定义」分区（条目带 ` · custom` 标记），药丸显示自定义显示名；**同名 provider/model id 时覆盖 pi 目录条目**，用于解决目录条目名与服务端 API 名错位（DeepSeek V4.1 实证：目录 `deepseek-v4.1-flash` 被服务端 400 拒收，实报名 `deepseek-flash` / `deepseek-v4-pro`）
+- 轨迹视图共享底栏（`ChatBottomBar`）：pi 缺失横幅 + 提炼/超限通知在两个底档一致显示
+
+### Changed
+
+- Work 工作区改为顶栏右侧独立按钮，与 `Chat / Trace` 胶囊完全正交（开不开工作区不影响底档，反之亦然）
+- 顶栏三段布局：左组贴左 / 胶囊居中 / Work 钉右缘（macOS 上 `.principal` 存在时 `.primaryAction` 会紧贴前者，解法是中间插一个只装 `Spacer` 的工具栏项）
+- 轨迹视图正文层级：正文（USER prompt / ASSISTANT 全文）统一 12pt 淡色，事件线与元数据为视觉主线
+- 打开会话默认锚定底部（直接显示最新内容，不再停在最老一条）
+
+### Fixed
+
+- 模型菜单勾选与自定义条目一致性：自定义条目显示名优先，选中仍透传真实 `provider/model id`（不再撞目录条目名与服务端名错位）
+- 轨迹视图/对话视图切换后输入框消失（底栏共享后修复）
+
+### Removed
+
+- `Resources/AppIcon.icns`（无引用的历史冗余，图标由 `Assets.xcassets` 的 AppIcon 编译生成）
+
 ## [0.1.2] - 2026-09-11
 
 ### Added

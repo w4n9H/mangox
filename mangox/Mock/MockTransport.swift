@@ -95,7 +95,7 @@ final class MockTransport: AgentTransport {
             delegate?.transport(self, didEmit: .textChunk(messageID: id, delta: String(ch)))
             try? await Task.sleep(nanoseconds: 18_000_000)
         }
-        delegate?.transport(self, didEmit: .messageFinalized(messageID: id))
+        delegate?.transport(self, didEmit: .messageFinalized(messageID: id, usage: nil))
         delegate?.transport(self, didEmit: .streamEnded)
     }
 }

@@ -215,6 +215,192 @@ struct SmokeMain {
         check(store3.completionNotificationsEnabled == false, "T10 通知开关持久化 roundtrip")
         check(store3.maxConcurrentTurns == 1, "T10 并发上限持久化 roundtrip (T9 遗留值)")
 
-        report()
-    }
+        // ---- T11 P5.0.1: pi message_end usage 捕获 → messageFinalized 搭载 ----
+        do {
+            final class UsageSink: AgentTransportDelegate {
+                var events: [AgentEvent] = []
+                func transport(_ t: any AgentTransport, didEmit event: AgentEvent) { events.append(event) }
+            }
+            let sink = UsageSink()
+            let pi = PiRpcTransport()
+            pi.delegate = sink
+            pi.handleRPCLine(#"{"type":"agent_start"}"#)
+            pi.handleRPCLine(#"{"type":"message_start","message":{"role":"assistant"}}"#)
+            pi.handleRPCLine(#"{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","delta":"thinking..."}}"#)
+            pi.handleRPCLine(#"{"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":"hello"}}"#)
+            let usageJSON = #"{"type":"message_end","message":{"role":"assistant","model":"deepseek-flash","responseId":"resp-1","usage":{"input":100,"output":5,"cacheRead":3,"cacheWrite":0,"reasoning":2,"totalTokens":110}}}"#
+            pi.handleRPCLine(usageJSON)
+            pi.handleRPCLine(#"{"type":"agent_end"}"#)
+            let finalized = sink.events.compactMap { e -> (UUID, MessageUsage?)? in
+                if case .messageFinalized(let id, let u) = e { return (id, u) }
+                return nil
+            }
+            check(finalized.count == 2, "T11 think/text 两块各自落定")
+            let textUsage = finalized.first { $0.1 != nil }?.1
+            check(textUsage?.totalTokens == 110 && textUsage?.input == 100 && textUsage?.output == 5,
+                  "T11 usage 数值捕获 (total=110 input=100 output=5)")
+            check(textUsage?.model == "deepseek-flash" && textUsage?.responseId == "resp-1",
+                  "T11 model/responseId 捕获")
+            check(finalized.filter { $0.1 == nil }.count == 1, "T11 usage 只挂最后一个落定块 (think 块 nil)")
+            // 旧格式: message_end 无 usage → 落定 usage 为 nil (存量数据自然兜底)
+            pi.handleRPCLine(#"{"type":"agent_start"}"#)
+            pi.handleRPCLine(#"{"type":"message_start","message":{"role":"assistant"}}"#)
+            pi.handleRPCLine(#"{"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":"legacy"}}"#)
+            pi.handleRPCLine(#"{"type":"message_end","message":{"role":"assistant"}}"#)
+            let legacy = sink.events.compactMap { e -> MessageUsage?? in
+                if case .messageFinalized(_, let u) = e { return .some(u) }
+                return nil
+            }.last ?? nil
+            check(legacy == nil, "T11 旧格式 message_end (无 usage) → 落定 nil")
+        }
+
+        // ---- T12 P5.0.3: 轨迹事件派生 (TrajectoryBuilder 纯函数) ----
+        do {
+            func msg(_ role: MessageRole, _ content: MessageContent,
+                     _ seconds: Double, streaming: Bool = false,
+                     usage: MessageUsage? = nil) -> ChatMessage {
+                ChatMessage(role: role, content: content,
+                            timestamp: Date(timeIntervalSinceReferenceDate: seconds),
+                            isStreaming: streaming, usage: usage)
+            }
+            func kinds(_ t: TrajectoryTurn) -> [String] { t.events.map(\.kind.rawValue) }
+
+            // 1) 回合分组 + 事件序
+            let u1 = msg(.user, .text("sleep 30"), 0)
+            let a1 = msg(.assistant, .text("好的，开始执行。"), 2)
+            let t1 = msg(.assistant, .tool(ToolCall(kind: .bash, title: "sleep",
+                                                    command: "sleep 30", phase: .done,
+                                                    durationMs: 30_000)), 4)
+            let u2 = msg(.user, .text("再来一次"), 40)
+            let a2 = msg(.assistant, .text("完成"), 42)
+            let turns = TrajectoryBuilder.turns(from: [u1, a1, t1, u2, a2])
+            check(turns.count == 2 && turns[0].index == 1 && turns[1].index == 2,
+                  "T12 两条 user → 两回合")
+            check(kinds(turns[0]) == ["user", "assistant", "tool"],
+                  "T12 回合1事件序 user→assistant→tool")
+            check(kinds(turns[1]) == ["user", "assistant"], "T12 回合2事件序")
+            check(turns[0].events[2].tool?.durationMs == 30_000
+                  && turns[0].events[2].tool?.phase == .done,
+                  "T12 工具行透传 durationMs/phase")
+            check(turns[0].events[1].heuristicMs == 2000,
+                  "T12 时长估计 = 下一事件时间差")
+
+            // 2) think 合并给后续 text 行 (usage 在 text)
+            let think = msg(.assistant, .think("推理中"), 10)
+            let text = msg(.assistant, .text("答案就是 42。"),
+                           12, usage: MessageUsage(input: 100, output: 5,
+                                                   totalTokens: 110,
+                                                   model: "deepseek/deepseek-flash",
+                                                   responseId: "r1"))
+            let t2 = TrajectoryBuilder.turns(from: [u1, think, text])
+            check(t2[0].events.count == 2
+                  && t2[0].events[1].thinkText == "推理中"
+                  && t2[0].events[1].fullText == "答案就是 42。",
+                  "T12 think 块合并进同回合 text 行")
+            check(t2[0].events[1].usage?.totalTokens == 110
+                  && TrajectoryBuilder.shortModelName(t2[0].events[1].usage?.model) == "deepseek-flash",
+                  "T12 usage 随 text 行携带 + 短模型名")
+
+            // 3) 仅 think + 工具 → think 独占一行
+            let t3 = TrajectoryBuilder.turns(from: [u1, think, t1])
+            check(kinds(t3[0]) == ["user", "assistant", "tool"]
+                  && t3[0].events[1].fullText == "推理中",
+                  "T12 think 后无 text → think 独占 ASSISTANT 行")
+
+            // 4) 流式中 assistant 不成行 (事件语义)
+            let streaming = msg(.assistant, .text("生成中..."), 2, streaming: true)
+            let t4 = TrajectoryBuilder.turns(from: [u1, streaming])
+            check(kinds(t4[0]) == ["user"], "T12 流式 assistant 不成行 (视图出占位)")
+
+            // 5) 摘要聚合
+            let s = TrajectoryBuilder.summary(turns)
+            check(s.turns == 2 && s.calls == 1 && s.durationMs == 6_000,
+                  "T12 摘要 turns=2 calls=1 duration=回合内末事件-起始合计")
+
+            // 6) 首句折叠
+            check(TrajectoryBuilder.firstSentence("第一句。第二句！第三句") == "第一句。",
+                  "T12 首句折叠按中文句号截断")
+            let long = String(repeating: "x", count: 100)
+            check(TrajectoryBuilder.firstSentence(long).count == 81,
+                  "T12 超长首句封顶 80+省略号")
+
+            // 7) 格式化
+            check(TrajectoryBuilder.formatDuration(900) == "<1s"
+                  && TrajectoryBuilder.formatDuration(65_000) == "1m 5s"
+                  && TrajectoryBuilder.formatDuration(3_700_000) == "1h 1m",
+                  "T12 时长格式化三段")
+            check(TrajectoryBuilder.formatTokens(999) == "999"
+                  && TrajectoryBuilder.formatTokens(1500) == "1.5k",
+                  "T12 token 格式化 k 缩写")
+        }
+
+        // ---- T13 P5.1: 自定义模型 (菜单自主, 运行时借壳) ----
+        do {
+            let db = dir + "/custom.db"
+            let s = ChatStore(transport: MockTransport(), dbPath: db,
+                              managedExtensionsDir: dir + "/ext")
+            check(s.customModels.isEmpty, "T13 初始自定义条目为空")
+            check(s.validProviders == ["deepseek", "openai"], "T13 provider 集合来自 pi 上报")
+            check(s.isValidProvider("deepseek") && !s.isValidProvider("aliyun")
+                  && !s.isValidProvider("  "), "T13 provider 前缀校验")
+
+            // 治本场景: 目录条目名与 API 名错位 → 自定义覆盖
+            check(s.addCustomModel(provider: "deepseek", modelId: "deepseek-v4.1-flash",
+                                   label: "DeepSeek V4.1 Flash"), "T13 添加自定义条目")
+            check(s.customModels.count == 1
+                  && s.customModelInfos[0].label == "DeepSeek V4.1 Flash",
+                  "T13 自定义条目入菜单 (label 生效)")
+            check(s.customModelInfos[0].supportedLevels.count == ThinkingLevel.allCases.count,
+                  "T13 自定义条目 thinking 全级别")
+
+            // 校验拦截: provider 不在目录中 / model id 为空
+            check(!s.addCustomModel(provider: "aliyun", modelId: "qwen3-max"),
+                  "T13 非法 provider 拒绝添加")
+            check(!s.addCustomModel(provider: "deepseek", modelId: "  "),
+                  "T13 空 model id 拒绝添加")
+            check(s.customModels.count == 1, "T13 拒绝后条目数不变")
+
+            // 覆盖 pi 目录同名条目 (provider/id 相同 → 隐藏目录条目, 不全并重复)
+            check(s.addCustomModel(provider: "deepseek", modelId: "deepseek-v4-flash",
+                                   label: "V4 Flash 别名"), "T13 覆盖同名目录条目")
+            check(!s.catalogModels.contains { $0.id == "deepseek-v4-flash" },
+                  "T13 同名目录条目被覆盖隐藏")
+            let entries = s.modelMenuEntries
+            check(Set(entries.map(\.id)).count == entries.count,
+                  "T13 菜单条目 id 无撞车")
+            check(entries.filter { $0.model.id == "deepseek-v4-flash" }.count
+                  == ThinkingLevel.allCases.count,
+                  "T13 覆盖后同名只出现一份 (全级别)")
+
+            // label 更新 (同 PK upsert 不新增)
+            check(s.addCustomModel(provider: "deepseek", modelId: "deepseek-v4.1-flash",
+                                   label: "V4.1 Flash"), "T13 同 PK 再添加 = 覆盖")
+            check(s.customModels.count == 2
+                  && s.customModels.first { $0.modelId == "deepseek-v4.1-flash" }?
+                      .label == "V4.1 Flash",
+                  "T13 label 更新而非新增")
+
+            // 药丸显示名: 自定义 label 优先
+            s.selectModel(s.customModelInfos.first { $0.id == "deepseek-v4.1-flash" }!,
+                          level: .high)
+            check(s.currentModelDisplayName == "V4.1 Flash",
+                  "T13 药丸显示自定义 label")
+            check(s.currentModelId == "deepseek-v4.1-flash" && s.currentProvider == "deepseek",
+                  "T13 选中仍透传真实 provider/id")
+
+            // 持久化 roundtrip
+            let s2 = ChatStore(transport: MockTransport(), dbPath: db,
+                               managedExtensionsDir: dir + "/ext")
+            check(s2.customModels.count == 2
+                  && s2.customModels.contains { $0.modelId == "deepseek-v4.1-flash" },
+                  "T13 自定义条目落库 roundtrip")
+
+            // 删除收敛
+            s.removeCustomModel(s.customModels.first { $0.modelId == "deepseek-v4-flash" }!)
+            check(s.customModels.count == 1
+                  && s.catalogModels.contains { $0.id == "deepseek-v4-flash" },
+                  "T13 删除后目录条目回归")
+        }
+
+        report()    }
 }

@@ -198,24 +198,32 @@ struct ChatComposer: View {
     private var shortModelName: String {
         // 药丸与菜单勾选同源 (期望选中): 引擎实际模型随 per-turn spawn 下回合生效,
         // 若显示上报值会出现「勾选 V4.1 药丸还是 V4」的割裂 (已实证)。
-        if !store.currentModelId.isEmpty {
-            return store.currentModelId.components(separatedBy: "/").last ?? store.currentModelId
-        }
-        return store.status.modelName.components(separatedBy: "/").last ?? store.status.modelName
+        // P5.1: 自定义条目优先显示其 label。
+        store.currentModelDisplayName
     }
 
     private var modelMenu: some View {
-        Menu {
+        let customEntries = store.menuEntries(for: store.customModelInfos)
+        let catalogEntries = store.menuEntries(for: store.catalogModels)
+        return Menu {
             // P3.5: 条目 = 每个模型 × 其支持的思考级别 (thinkingLevelMap 过滤, 用户拍板样式
             // "DeepSeek V4 Flash（high）"); 未上报时只显示当前项。
-            if store.availableModels.isEmpty {
+            // P5.1: 自定义条目单独分区 (带 custom 标记), 与 pi 目录条目并存 (同名时覆盖)。
+            if customEntries.isEmpty && catalogEntries.isEmpty {
                 Button(shortModelName) {}
             } else {
-                ForEach(store.modelMenuEntries) { entry in
-                    let title: String = entry.level.map { "\(entry.model.label)（\($0.rawValue)）" }
-                        ?? entry.model.label
-                    Button(store.isCurrent(entry) ? "✓ " + title : title) {
+                ForEach(catalogEntries) { entry in
+                    Button(menuTitle(entry, custom: false)) {
                         store.selectModel(entry.model, level: entry.level)
+                    }
+                }
+                if !customEntries.isEmpty {
+                    Section("自定义") {
+                        ForEach(customEntries) { entry in
+                            Button(menuTitle(entry, custom: true)) {
+                                store.selectModel(entry.model, level: entry.level)
+                            }
+                        }
                     }
                 }
             }
@@ -237,6 +245,13 @@ struct ChatComposer: View {
         .menuIndicator(.hidden)
         .fixedSize()
         .help("模型与思考强度 (选中即期望, 下一回合生效)")
+    }
+
+    /// 菜单项标题 (✓ = 当前选中组合; custom 条目带标记)。
+    private func menuTitle(_ entry: ModelMenuEntry, custom: Bool) -> String {
+        let base = entry.level.map { "\(entry.model.label)（\($0.rawValue)）" } ?? entry.model.label
+        let title = custom ? base + " · custom" : base
+        return store.isCurrent(entry) ? "✓ " + title : title
     }
 
     @ViewBuilder

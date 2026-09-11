@@ -48,10 +48,13 @@ struct ContentView: View {
             }
         }
         .toolbar {
-            ToolbarItem(placement: .principal) {
-                HStack {
-                    if store.miniMode {
-                        // mini 台 chrome: 还原按钮 + 标题 (窗口拖动靠工具栏区; 向外扩 = 还原)
+            // P5.0.2 三段钉边 (v3 终态): .navigation 钉左 / .principal 居中 / .primaryAction 钉右。
+            // 坑 (SO 72988380 实证): macOS 上存在 .principal 时 .primaryAction 会紧贴它而非钉右缘
+            // —— 解法: 中间插一个只装 Spacer 的 ToolbarItem 撑开。
+            ToolbarItem(placement: .navigation) {
+                if store.miniMode {
+                    // mini 台 chrome: 还原按钮 + 标题 (窗口拖动靠工具栏区; 向外扩 = 还原)
+                    HStack {
                         Button(action: { store.miniMode = false }) {
                             Image(systemName: "arrow.up.left.and.arrow.down.right")
                                 .font(.system(size: 11))
@@ -63,7 +66,9 @@ struct ContentView: View {
                              : "任务台 · \(store.runningTurns.count) 个在途")
                             .font(.system(size: 12, weight: .semibold))
                             .foregroundStyle(CodexTheme.textPrimary)
-                    } else {
+                    }
+                } else {
+                    HStack {
                         // 侧栏开关 (常驻, 双向 toggle —— toolbar 条件渲染不可靠)
                         Button(action: {
                             withAnimation(CodexTheme.animMed) { store.sidebarCollapsed.toggle() }
@@ -88,13 +93,20 @@ struct ContentView: View {
 
                         TopBarTitleControls(store: store)
                     }
-                    Spacer()   // 双 Spacer 让 Chat/Work 居中于中间列 (对齐 Codex)
-                    if !store.miniMode {
-                        TopBarModeControls(store: store)
-                    }
-                    Spacer()
                 }
-                .frame(maxWidth: .infinity)
+            }
+            ToolbarItem(placement: .principal) {
+                // 胶囊居中 (mini 态无主区胶囊)
+                if !store.miniMode {
+                    TopBarCapsuleControls(store: store)
+                }
+            }
+            ToolbarItem { Spacer() }   // 撑开: 把 Work 推到右缘 (否则紧贴 principal)
+            // Work 独立钉在窗口右缘 (与胶囊解挤; mini 态无主区工具栏)
+            ToolbarItem(placement: .primaryAction) {
+                if !store.miniMode {
+                    TopBarWorkButton(store: store)
+                }
             }
         }
     }
@@ -128,9 +140,16 @@ struct ContentView: View {
                     .frame(maxWidth: .infinity)
                     .background(CodexTheme.bgChat)
             } else {
-                ChatView(store: store)
-                    .frame(maxWidth: .infinity)
-                    .background(CodexTheme.bgChat)
+                // P5.0.2: 底档 = capsuleMode (Chat / 轨迹); Work 右列是独立开关 (下方 if)
+                if store.capsuleMode == .trajectory {
+                    TrajectoryView(store: store)
+                        .frame(maxWidth: .infinity)
+                        .background(CodexTheme.bgChat)
+                } else {
+                    ChatView(store: store)
+                        .frame(maxWidth: .infinity)
+                        .background(CodexTheme.bgChat)
+                }
             }
             if store.workspaceVisible {
                 Divider().overlay(CodexTheme.divider)
@@ -142,6 +161,7 @@ struct ContentView: View {
         }
         .frame(minWidth: Tune.windowMinSize.width, minHeight: Tune.windowMinSize.height)
         .animation(CodexTheme.animMed, value: store.sidebarCollapsed)
+        .animation(CodexTheme.animMed, value: store.capsuleMode)
     }
 
     // MARK: - 主窗口尺寸切换 (P4.2)

@@ -10,85 +10,9 @@ struct ChatView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            if store.engineMissing {
-                engineMissingBanner
-            }
             messageList
-            if let outcome = store.distillOutcome {
-                noticeBanner(outcome,
-                             clear: { store.distillOutcome = nil },
-                             actionTitle: outcome.isError ? nil : "去审核",
-                             action: outcome.isError ? nil : { store.openKnowledgePanel() })
-            }
-            if let notice = store.turnLimitNotice {
-                noticeBanner(notice, clear: { store.turnLimitNotice = nil })
-            }
-            ChatComposer(store: store)
+            ChatBottomBar(store: store)   // P5.0.3: 横幅 + 输入区抽共享组件 (轨迹视图同用)
         }
-    }
-
-    /// pi 缺失横幅: Release 不静默降级 Mock, 缺引擎必须可见。
-    private var engineMissingBanner: some View {
-        HStack(spacing: 8) {
-            Image(systemName: "exclamationmark.triangle.fill")
-                .font(.system(size: 11))
-                .foregroundStyle(CodexTheme.toolRunning)
-            Text("未找到 pi CLI, Agent 引擎不可用。请安装 pi 后重启 MangoX。")
-                .font(CodexTheme.fontSmall)
-                .foregroundStyle(CodexTheme.textPrimary)
-            Spacer()
-        }
-        .padding(.horizontal, Tune.chatHPadding)
-        .padding(.vertical, 8)
-        .background(CodexTheme.toolRunning.opacity(0.10))
-        .overlay(
-            Rectangle().frame(height: 1).foregroundStyle(CodexTheme.divider),
-            alignment: .bottom
-        )
-    }
-
-    /// 通知横幅 (8s 自清, 提炼结果/并发超限共用; 可带一个动作按钮)。
-    private func noticeBanner(_ outcome: (text: String, isError: Bool),
-                              clear: @escaping () -> Void,
-                              actionTitle: String? = nil,
-                              action: (() -> Void)? = nil) -> some View {
-        HStack(spacing: 6) {
-            Image(systemName: outcome.isError ? "exclamationmark.circle.fill" : "checkmark.circle.fill")
-                .font(.system(size: 11))
-                .foregroundStyle(outcome.isError ? CodexTheme.toolError : CodexTheme.toolDone)
-            Text(outcome.text)
-                .font(CodexTheme.fontSmall)
-                .foregroundStyle(CodexTheme.textPrimary)
-            Spacer()
-            if let actionTitle, let action {
-                Button(actionTitle) { action() }
-                    .buttonStyle(.plain)
-                    .font(CodexTheme.fontSmall)
-                    .foregroundStyle(CodexTheme.accent)
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 2)
-                    .contentShape(Rectangle())
-                    .help(actionTitle == "去审核" ? "打开知识面板的待审核分组" : "")
-            }
-            Button {
-                clear()
-            } label: {
-                Image(systemName: "xmark")
-                    .font(.system(size: 9))
-                    .foregroundStyle(CodexTheme.textTertiary)
-                    .frame(width: 16, height: 16)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .help("关闭提示")
-        }
-        .padding(.horizontal, Tune.chatHPadding)
-        .padding(.vertical, 7)
-        .background((outcome.isError ? CodexTheme.toolError : CodexTheme.accent).opacity(0.10))
-        .overlay(
-            Rectangle().frame(height: 1).foregroundStyle(CodexTheme.divider),
-            alignment: .bottom
-        )
     }
 
     private var messageList: some View {
@@ -122,6 +46,15 @@ struct ChatView: View {
                     .frame(maxWidth: Tune.chatColumnWidth, alignment: .leading)  // 内容 + 2×水平内边距, 与 Composer 内容宽同源 (Tune.chatContentWidth)
                     .frame(maxWidth: .infinity, alignment: .center)
                     .animation(CodexTheme.animMessage, value: store.messages.count)
+                }
+            }
+            .defaultScrollAnchor(.bottom)   // 默认锚底: 打开会话即看最新内容 (否则停在最老一条)
+            .onChange(of: store.selectedConversationId) { _, _ in
+                // 换会话: replay 内容整批替换, 兜底滚到最新 (首帧锚点之外的双保险)
+                DispatchQueue.main.async {
+                    withAnimation(nil) {
+                        proxy.scrollTo(store.messages.last?.id ?? UUID(), anchor: .bottom)
+                    }
                 }
             }
             .onChange(of: store.messages) { _, _ in

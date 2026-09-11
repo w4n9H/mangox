@@ -8,6 +8,11 @@ import Foundation
 import SwiftUI
 import AppKit
 
+/// P5.0.2: 主区底档 (TopBar 胶囊二选一)。
+enum CapsuleMode: Hashable {
+    case chat, trajectory
+}
+
 @MainActor
 final class ChatStore: ObservableObject {
 
@@ -86,6 +91,9 @@ final class ChatStore: ObservableObject {
     @Published private(set) var lastCompleted: (sid: UUID, title: String, duration: String)?
     private var lastCompletedTask: Task<Void, Never>?
 
+    /// P5.0.2: 主区底档 (胶囊二选一)。与 workspaceVisible (Work 右列开关) 正交, 互不影响。
+    @Published var capsuleMode: CapsuleMode = .chat
+
 
     func setTurnLimitNotice(_ text: String, isError: Bool = true) {
         turnLimitNotice = (text, isError)
@@ -142,6 +150,8 @@ final class ChatStore: ObservableObject {
     // P3.5: 对端能力上报
     /// 可用模型清单 (pi get_available_models; 空 = 尚未上报, 菜单只显示当前模型)。
     @Published var availableModels: [AgentModelInfo] = []
+    /// P5.1: 自定义模型条目 (菜单自主 — 与 pi 目录展示名解耦; 同名时覆盖 pi 条目)。
+    @Published var customModels: [CustomModel] = []
     /// 当前模型 (provider/id 分量), 与 status.modelName 同步更新。
     @Published var currentProvider: String = ""
     @Published var currentModelId: String = ""
@@ -297,6 +307,7 @@ final class ChatStore: ObservableObject {
             chats = (try? store.loadChats()) ?? []
             knowledgeItems = (try? store.loadKnowledge()) ?? []
             scheduledTasks = (try? store.loadScheduled()) ?? []
+            customModels = (try? store.loadCustomModels()) ?? []   // P5.1
             // 启动恢复: 打开上一次作业会话 (settings.last_session_id);
             // 无记录或会话已删除 → 欢迎空态, 发送时才隐式建会话。
             if let last = store.loadLastSession(),
@@ -753,7 +764,28 @@ final class ChatStore: ObservableObject {
     /// 菜单条目 = 每个模型 × 其支持的思考级别 (无级别的模型单条)。
     /// 条目 id 含级别分量, 笛卡尔积下同模型多条不会 ForEach 撞 id。
     var modelMenuEntries: [ModelMenuEntry] {
-        availableModels.flatMap { m in
+        menuEntries(for: menuModels)
+    }
+
+    /// 自定义条目对应的 AgentModelInfo (全级别)。
+    var customModelInfos: [AgentModelInfo] {
+        customModels.map(\.asAgentModelInfo)
+    }
+
+    /// pi 目录条目 (排除被自定义条目覆盖者 —— P5.1 拍板: 同名 provider/id 时 custom 覆盖)。
+    var catalogModels: [AgentModelInfo] {
+        let overridden = Set(customModels.map(\.id))
+        return availableModels.filter { !overridden.contains("\($0.provider)/\($0.id)") }
+    }
+
+    /// 菜单全集 (自定义置顶)。
+    var menuModels: [AgentModelInfo] {
+        customModelInfos + catalogModels
+    }
+
+    /// 指定模型集的菜单条目展开 (模型 × 级别)。
+    func menuEntries(for models: [AgentModelInfo]) -> [ModelMenuEntry] {
+        models.flatMap { m in
             let levels: [ThinkingLevel?] = m.supportedLevels.isEmpty ? [nil] : m.supportedLevels
             return levels.map { ModelMenuEntry(id: "\(m.provider)/\(m.id)#\($0?.rawValue ?? "-")",
                                                model: m, level: $0) }
@@ -764,6 +796,59 @@ final class ChatStore: ObservableObject {
     func isCurrent(_ entry: ModelMenuEntry) -> Bool {
         entry.model.provider == currentProvider && entry.model.id == currentModelId &&
         (entry.level == nil || entry.level == thinkingLevel)
+    }
+
+    // MARK: - P5.1 自定义模型 (菜单自主, 运行时借壳)
+
+    /// pi 目录中存在的 provider 集合 (从能力上报推导)。
+    var validProviders: Set<String> {
+        Set(availableModels.map(\.provider))
+    }
+
+    /// provider 校验: 上报未到达时不做拦截 (无法判定), 否则必须命中目录。
+    func isValidProvider(_ provider: String) -> Bool {
+        let p = provider.trimmingCharacters(in: .whitespaces)
+        guard !p.isEmpty else { return false }
+        return availableModels.isEmpty || validProviders.contains(p)
+    }
+
+    /// 自定义条目显示名 (药丸优先显示自定义 label; 设计 §3.3 拍板)。
+    func customLabel(provider: String, modelId: String) -> String? {
+        customModels.first { $0.provider == provider && $0.modelId == modelId }?.displayName
+    }
+
+    /// 当前选中模型的显示名: 自定义 label 优先, 回落 id 末段。
+    var currentModelDisplayName: String {
+        if let label = customLabel(provider: currentProvider, modelId: currentModelId) {
+            return label
+        }
+        if !currentModelId.isEmpty {
+            return currentModelId.components(separatedBy: "/").last ?? currentModelId
+        }
+        return status.modelName.components(separatedBy: "/").last ?? status.modelName
+    }
+
+    /// 新增/覆盖自定义模型 (落库 + 刷菜单)。返回 false = provider 不在 pi 目录中。
+    @discardableResult
+    func addCustomModel(provider: String, modelId: String, label: String = "") -> Bool {
+        let p = provider.trimmingCharacters(in: .whitespaces)
+        let m = modelId.trimmingCharacters(in: .whitespaces)
+        guard isValidProvider(p), !m.isEmpty else { return false }
+        let item = CustomModel(provider: p, modelId: m,
+                               label: label.trimmingCharacters(in: .whitespaces))
+        try? persistence?.upsertCustomModel(item)
+        if let idx = customModels.firstIndex(where: { $0.id == item.id }) {
+            customModels[idx] = item          // 覆盖: label 更新
+        } else {
+            customModels.insert(item, at: 0)
+        }
+        return true
+    }
+
+    /// 删除自定义模型 (落库 + 刷菜单; 当前选中项不强制切回, 仅不再出现在菜单)。
+    func removeCustomModel(_ model: CustomModel) {
+        try? persistence?.deleteCustomModel(provider: model.provider, modelId: model.modelId)
+        customModels.removeAll { $0.id == model.id }
     }
 
     /// 选中组合: 全局期望更新 (新实例由 transportFor 补发) + 选中会话实例即时下发
@@ -1411,11 +1496,11 @@ extension ChatStore: AgentTransportDelegate {
                 persistMessage(msg, sid: sid)   // 终态落库 (trajectory 只存终态事件)
             }
 
-        case .messageFinalized(let id):
+        case .messageFinalized(let id, let usage):
             if inView {
-                finalizeBlock(in: &messages, id: id, sid: sid)
+                finalizeBlock(in: &messages, id: id, sid: sid, usage: usage)
             } else {
-                finalizeBlock(in: &liveTurns[sid, default: []], id: id, sid: sid)
+                finalizeBlock(in: &liveTurns[sid, default: []], id: id, sid: sid, usage: usage)
             }
 
         case .toolPhaseChanged(let toolId, let phase):
@@ -1555,12 +1640,13 @@ extension ChatStore: AgentTransportDelegate {
         }
     }
 
-    /// 流式块收尾: 摘光标 + done 标记剥离 (fire 回合扫描) + 落库。
+    /// 流式块收尾: 摘光标 + done 标记剥离 (fire 回合扫描) + 落库 (+ usage 挂载 P5.0.1)。
     /// 仅在 streaming→false 的翻转沿落库 (防 stopStreaming 兜底与事件收尾双写)。
-    private func finalizeBlock(in list: inout [ChatMessage], id: UUID, sid: UUID) {
+    private func finalizeBlock(in list: inout [ChatMessage], id: UUID, sid: UUID, usage: MessageUsage? = nil) {
         guard let idx = list.lastIndex(where: { $0.id == id }) else { return }
         let wasStreaming = list[idx].isStreaming
         list[idx].isStreaming = false
+        if let usage { list[idx].usage = usage }
         if case .text(let s) = list[idx].content, s.contains(Self.doneMarker) {
             list[idx].content = .text(stripDoneMarker(s, sid: sid))
         }

@@ -389,7 +389,7 @@ final class PiRpcTransport: AgentTransport {
         stdinHandle = nil
         guard turnActive else { return }
         turnActive = false
-        finalizeTrackedMessages()
+        finalizeTrackedMessages(usage: nil)   // 进程异常退出: usage 无从上报
         emit(.streamEnded)
     }
 
@@ -461,7 +461,10 @@ final class PiRpcTransport: AgentTransport {
             // pi 一个回合由多条 assistant 消息组成 (think 条 / toolcall 条 / 文本条)。
             // 边界处逐条落定并重置当前块 id, 光标不会跨消息滞留 (修 A4"已完成"光标卡住)。
             if let msg = dict["message"] as? [String: Any], msg["role"] as? String == "assistant" {
-                rollMessageBoundary()
+                // P5.0.1: message_end 携带该次 LLM 调用的 usage/responseId/model,
+                // 挂到本边界落定的块上 (start 只滚边界, usage 传 nil)。
+                let usage = (dict["type"] as? String == "message_end") ? Self.parseUsage(msg) : nil
+                rollMessageBoundary(usage: usage)
             }
 
         case "message_update":
@@ -529,7 +532,7 @@ final class PiRpcTransport: AgentTransport {
         case "agent_end", "agent_settled":
             guard turnActive else { return }
             turnActive = false
-            finalizeTrackedMessages()
+            finalizeTrackedMessages(usage: nil)   // 正常路径 usage 已随 message_end 落定, 此处仅为兜底
             emit(.streamEnded)
             // per-turn: 回合结束即退出 (transcript 已持久化到 --session 文件;
             // 下回合 spawn 恢复, 天然隔离 + 无常驻内存/串味问题)
@@ -618,16 +621,31 @@ final class PiRpcTransport: AgentTransport {
         return id
     }
 
-    /// 消息边界: 落定在途块并重置 id, 下一个 delta 开新块。
-    private func rollMessageBoundary() {
-        finalizeTrackedMessages()
+    /// 消息边界: 落定在途块并重置 id, 下一个 delta 开新块。usage 挂在最后一个落定块
+    /// (LLM 调用级元数据: 同一次调用的 think 块在前, 文本块在后拿 usage; 仅 think 时 think 拿)。
+    private func rollMessageBoundary(usage: MessageUsage? = nil) {
+        finalizeTrackedMessages(usage: usage)
         textMessageID = nil
         thinkMessageID = nil
     }
 
-    private func finalizeTrackedMessages() {
-        if let id = textMessageID { emit(.messageFinalized(messageID: id)) }
-        if let id = thinkMessageID { emit(.messageFinalized(messageID: id)) }
+    private func finalizeTrackedMessages(usage: MessageUsage?) {
+        let textID = textMessageID, thinkID = thinkMessageID
+        if let tid = thinkID { emit(.messageFinalized(messageID: tid, usage: textID == nil ? usage : nil)) }
+        if let sid = textID { emit(.messageFinalized(messageID: sid, usage: usage)) }
+    }
+
+    /// P5.0.1: 从 pi assistant message 提取用量 (字段缺失容忍, 全缺返回 nil)。
+    private static func parseUsage(_ msg: [String: Any]) -> MessageUsage? {
+        guard let u = msg["usage"] as? [String: Any] else { return nil }
+        func int(_ key: String) -> Int { u[key] as? Int ?? 0 }
+        let usage = MessageUsage(
+            input: int("input"), output: int("output"),
+            cacheRead: int("cacheRead"), cacheWrite: int("cacheWrite"),
+            reasoning: int("reasoning"), totalTokens: int("totalTokens"),
+            model: msg["model"] as? String,
+            responseId: msg["responseId"] as? String)
+        return usage.totalTokens > 0 ? usage : nil
     }
 
     // MARK: - 能力上报响应 (P3.5: type=response 行)
