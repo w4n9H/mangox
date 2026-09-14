@@ -1,108 +1,53 @@
 //
 //  BottomStatusBar.swift
-//  Bottom row:
-//  AUTO · {model} · 思考: {effort} · 当前会话 {n} 轮 · 上下文 {p}% · Token ↑{u} / ↓{d} · 缓存 {c}% · 费用 ¥{cny}
+//  P6.1.1/P6.1.2: 主区底部状态栏, 4 项纯展示 (无交互控件):
+//  过程态胶囊 · 上下文 % · Token ↑↓ · 当前会话 N 轮
+//  (费用→Trace Details; 模型/思考→composer 菜单; P6 设计 §2.2 拍板)
 //
 
 import SwiftUI
 
 struct BottomStatusBar: View {
-    @Binding var status: AgentStatus
-    let isStreaming: Bool
+    let phase: RuntimePhase
+    let turnCount: Int
+    let stats: SessionStats?
 
     var body: some View {
         HStack(spacing: 10) {
-            // AUTO toggle
-            Button(action: { status.autoMode.toggle() }) {
-                HStack(spacing: 4) {
-                    Circle()
-                        .fill(status.autoMode ? CodexTheme.statusDone : CodexTheme.textTertiary)
-                        .frame(width: 6, height: 6)
-                    Text("AUTO")
-                        .font(.system(size: 10, weight: .semibold))
-                        .tracking(0.5)
-                }
-                .foregroundStyle(status.autoMode ? CodexTheme.textPrimary : CodexTheme.textTertiary)
-                .padding(.horizontal, 6)
-                .padding(.vertical, 2)
-                .background(CodexTheme.bgCard)
-                .clipShape(Capsule())
+            // 过程态胶囊 (P6.1.2: retrying/compacting/summarizing/queued; amber 警示但不响)
+            HStack(spacing: 4) {
+                Circle()
+                    .fill(capsuleColor)
+                    .frame(width: 6, height: 6)
+                Text(phase.capsuleText)
+                    .font(.system(size: 10, weight: .semibold))
+                    .tracking(0.5)
             }
-            .buttonStyle(.plain)
+            .foregroundStyle(capsuleColor)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 2)
+            .background(CodexTheme.bgCard)
+            .clipShape(Capsule())
 
             dot
 
-            Text(status.modelName)
+            Text("上下文 \(contextText)")
                 .font(CodexFonts.monoFont(10))
-                .foregroundStyle(CodexTheme.textPrimary)
-
-            dot
-
-            // 思考强度 — click to cycle
-            Menu {
-                ForEach(ReasoningEffort.allCases) { e in
-                    Button {
-                        status.effort = e
-                    } label: {
-                        HStack {
-                            Text(e.displayName)
-                            if status.effort == e {
-                                Image(systemName: "checkmark")
-                            }
-                        }
-                    }
-                }
-            } label: {
-                HStack(spacing: 3) {
-                    Text("思考: \(status.effort.displayName)")
-                        .font(.system(size: 10))
-                }
                 .foregroundStyle(CodexTheme.textSecondary)
-            }
-            .menuStyle(.borderlessButton)
-            .fixedSize()
 
             dot
 
-            Text("当前会话 \(status.turnCount) 轮")
+            Text("Token ↑\(tokenText(stats?.inputTokens)) / ↓\(tokenText(stats?.outputTokens))")
+                .font(CodexFonts.monoFont(10))
+                .foregroundStyle(CodexTheme.textSecondary)
+
+            dot
+
+            Text("当前会话 \(turnCount) 轮")
                 .font(.system(size: 10))
                 .foregroundStyle(CodexTheme.textSecondary)
 
-            dot
-
-            Text("上下文 \(formatted(status.contextPercent))%")
-                .font(CodexFonts.monoFont(10))
-                .foregroundStyle(CodexTheme.textSecondary)
-
-            dot
-
-            Text("Token ↑\(status.tokenUp) / ↓\(status.tokenDown)")
-                .font(CodexFonts.monoFont(10))
-                .foregroundStyle(CodexTheme.textSecondary)
-
-            dot
-
-            Text("缓存 \(status.cachePercent)%")
-                .font(CodexFonts.monoFont(10))
-                .foregroundStyle(CodexTheme.textSecondary)
-
-            dot
-
-            Text("费用 ¥\(String(format: "%.4f", status.costCNY))")
-                .font(CodexFonts.monoFont(10))
-                .foregroundStyle(CodexTheme.textSecondary)
-
             Spacer()
-
-            if isStreaming {
-                HStack(spacing: 4) {
-                    ProgressView().controlSize(.mini).scaleEffect(0.5)
-                        .tint(CodexTheme.accent)
-                    Text("streaming")
-                        .font(.system(size: 10))
-                        .foregroundStyle(CodexTheme.accent)
-                }
-            }
         }
         .padding(.horizontal, 10)
         .frame(height: Tune.bottomBarHeight)
@@ -113,13 +58,29 @@ struct BottomStatusBar: View {
         )
     }
 
+    /// idle = 灰 / streaming = 主色 / 过程态 = amber (toolRunning 同源)
+    private var capsuleColor: Color {
+        switch phase {
+        case .idle:       return CodexTheme.textTertiary
+        case .streaming:  return CodexTheme.accent
+        default:          return CodexTheme.thinking
+        }
+    }
+
     private var dot: some View {
         Text("·")
             .font(.system(size: 10))
             .foregroundStyle(CodexTheme.textMuted)
     }
 
-    private func formatted(_ v: Double) -> String {
-        String(format: "%.1f", v)
+    /// contextPercent == nil (刚压缩完/未上报) → "--"
+    private var contextText: String {
+        guard let p = stats?.contextPercent else { return "--" }
+        return String(format: "%.1f%%", p)
+    }
+
+    private func tokenText(_ v: Int?) -> String {
+        guard let v else { return "--" }
+        return "\(v)"
     }
 }

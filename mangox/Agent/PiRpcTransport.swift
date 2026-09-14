@@ -26,6 +26,15 @@ final class PiRpcTransport: AgentTransport {
 
     // 回合状态
     private var turnActive = false
+    /// P6.0①: 最近一次 agent_end 的 willRetry (P6.1.2 过程态消费; 冒烟断言用 internal)。
+    internal private(set) var lastWillRetry = false
+    /// P6.0②冒烟: sendCommand 副本 (无进程时 sendCommand 为 no-op, 日志即可断言"未回 response")。
+    internal private(set) var sentCommands: [[String: Any]] = []
+    /// P6.1.1: 流式期 usage tick 节流 (500ms)。
+    private var lastUsageTickAt = Date.distantPast
+    /// P6.1.1: settled 后拉 get_session_stats, 响应到达再拆进程 (2s 兜底强拆)。
+    private var settleStatsPending = false
+    private var settleStatsTask: Task<Void, Never>?
     private var textMessageID: UUID?
     private var thinkMessageID: UUID?
     private var toolCards: [String: ToolCall] = [:]   // pi toolCallId → 卡片
@@ -54,6 +63,13 @@ final class PiRpcTransport: AgentTransport {
     private var desiredExtensions: [String] = []
     /// 会话持久化绑定 (nil = --no-session ephemeral; 非 nil = --session 文件, 重启恢复)。
     private var desiredSessionId: UUID?
+    /// P6.3.1: 显式会话文件路径 (fork 产物; 优先于 UUID 派生路径)。
+    private var desiredSessionFile: String?
+    /// P6.3.1: fork 源快照 (非 nil = 下次 spawn 带 --fork; 与 --session 互斥, 分支优先)。
+    private var desiredForkSource: String?
+    /// P6.3.1: fork 产物路径回读在途 (get_state.sessionFile 命中后清)。
+    private var forkReadbackPending = false
+    private var forkReadbackTask: Task<Void, Never>?
     /// per-turn: spawn 期模型/思考级别 (--model provider/id, --thinking), 下回合生效。
     private var desiredModel: String?
     private var desiredThinking: ThinkingLevel = .high
@@ -261,11 +277,41 @@ final class PiRpcTransport: AgentTransport {
         try? FileManager.default.removeItem(atPath: sessionFilePath(for: id))
     }
 
+    /// P6.3.1: 按显式路径删除 transcript (侧问 fork 产物文件名不可派生)。
+    static func removeSessionFile(atPath path: String) {
+        try? FileManager.default.removeItem(atPath: path)
+    }
+
     /// 会话绑定: 仅记录, 下回合 spawn 生效 (per-turn 进程架构, 无"绑定重启"概念)。
     /// 非 nil = spawn 带 --session 文件 (pi 恢复持久 transcript);
     /// nil = --no-session ephemeral (任务 fire 轮次用)。
     func updateSessionBinding(_ sessionId: UUID?) {
         desiredSessionId = sessionId
+    }
+
+    // MARK: - Side chat fork (P6.3.1)
+
+    /// 显式会话文件路径 (fork 产物绑定; 优先于 UUID 派生)。
+    func updateSessionFilePath(_ path: String?) {
+        desiredSessionFile = path
+    }
+
+    /// 下回合 spawn 带 --fork <sourceFile> (实测与 --session 互斥硬错误, 只传其一)。
+    /// 产物路径不可预知 → spawn 后轮询 get_state 回读, 经 didReadSessionFile 上报。
+    func startForkSession(sourceFile: String) {
+        desiredForkSource = sourceFile
+        forkReadbackPending = true
+    }
+
+    /// 回读收尾: fork 期望清位 + 显式绑定写回 + delegate 上报。
+    private func finishForkReadback(path: String?) {
+        guard forkReadbackPending else { return }
+        forkReadbackPending = false
+        forkReadbackTask?.cancel()
+        forkReadbackTask = nil
+        desiredForkSource = nil
+        if let path { desiredSessionFile = path }
+        delegate?.transport(self, didReadSessionFile: path)
     }
 
     /// App 退出清理: 终止在途 pi (孤儿进程会继续跑完回合烧 LLM token)。
@@ -299,6 +345,37 @@ final class PiRpcTransport: AgentTransport {
         sendCommand(["id": "req-\(nextRequestId())", "type": "set_thinking_level", "level": level])
     }
 
+    // MARK: - HTML 导出 (P6.2.3)
+
+    private var exportPending = false
+    private var exportWatchdog: Task<Void, Never>?
+
+    /// pi export_html: 进程不活则临时拉起 (调用方需先下发会话绑定/cwd)。
+    /// 响应或 15s 超时后经 didFinishExportHTMLPath 上报, 空闲态随手拆进程。
+    func exportHTML(outputPath: String) {
+        ensureProcessForCwd()
+        guard process != nil else {
+            delegate?.transport(self, didFinishExportHTMLPath: nil)
+            return
+        }
+        exportPending = true
+        sendCommand(["id": "req-\(nextRequestId())", "type": "export_html",
+                     "outputPath": outputPath])
+        exportWatchdog = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 15_000_000_000)
+            guard let self, self.exportPending else { return }
+            self.finishExport(path: nil)
+            if !self.turnActive { self.teardownProcess() }
+        }
+    }
+
+    private func finishExport(path: String?) {
+        exportPending = false
+        exportWatchdog?.cancel()
+        exportWatchdog = nil
+        delegate?.transport(self, didFinishExportHTMLPath: path)
+    }
+
     // MARK: - 进程管理
 
     /// 确保 pi 进程跑在期望的 cwd 上。cwd 变化需重启进程 (pi 会话内无切目录命令);
@@ -327,12 +404,32 @@ final class PiRpcTransport: AgentTransport {
         p.executableURL = URL(fileURLWithPath: spec.executable)
         var args = spec.scriptArgs + ["--mode", "rpc",
                                       "--no-extensions", "--extension", extPath]
-        if let sessionId = desiredSessionId {
-            // 会话持久化: 文件存在则恢复 transcript / 不存在则新建 (pi SessionManager.open
-            // 对缺失文件返回空 entries + persist, 绝对路径模式无 not-found exit 风险)
+        if let fork = desiredForkSource {
+            // P6.3.1: 侧问首回合 — fork 源快照 (互斥分支: 不带 --session/--no-session)。
+            // --session-dir 把产物收进托管目录 (否则落 pi 默认 ~/.pi/agent/sessions);
+            // 产物文件名 = <时间戳>_<uuid>.jsonl, 路径由 get_state.sessionFile 回读获得。
             try? FileManager.default.createDirectory(atPath: Self.sessionDirectory,
                                                      withIntermediateDirectories: true)
-            args += ["--session", Self.sessionFilePath(for: sessionId)]
+            args += ["--session-dir", Self.sessionDirectory, "--fork", fork]
+            // pi 启动早期命令可能不被响应 (实测 2-3s 内单发无回音): 轮询兜底回读
+            forkReadbackTask = Task { [weak self] in
+                for _ in 0..<10 {
+                    try? await Task.sleep(nanoseconds: 700_000_000)
+                    guard let self, self.forkReadbackPending, self.process != nil else { return }
+                    self.sendCommand(["id": "req-\(self.nextRequestId())", "type": "get_state"])
+                }
+            }
+        } else if let sessionId = desiredSessionId {
+            // 会话持久化: 文件存在则恢复 transcript / 不存在则新建 (pi SessionManager.open
+            // 对缺失文件返回空 entries + persist, 绝对路径模式无 not-found exit 风险)。
+            // 侧问会话 (回读过产物) 用显式路径; 普通会话走 UUID 派生。
+            try? FileManager.default.createDirectory(atPath: Self.sessionDirectory,
+                                                     withIntermediateDirectories: true)
+            args += ["--session",
+                     desiredSessionFile ?? Self.sessionFilePath(for: sessionId)]
+        } else if let file = desiredSessionFile {
+            // 无 UUID 绑定但有显式文件 (防御分支, 当前调用面不会走到)
+            args += ["--session", file]
         } else {
             // ephemeral: 任务 fire 轮次等, transcript 仅存进程内存
             args += ["--no-session"]
@@ -380,6 +477,8 @@ final class PiRpcTransport: AgentTransport {
         // P3.5: 能力上报 — spawn 后立即拉当前模型状态与可用模型清单
         sendCommand(["id": "req-\(nextRequestId())", "type": "get_state"])
         sendCommand(["id": "req-\(nextRequestId())", "type": "get_available_models"])
+        // P6.1.1: 会话统计 (会话绑定 spawn 时即得恢复后的 context%; ephemeral 返回空, 上层丢弃)
+        sendCommand(["id": "req-\(nextRequestId())", "type": "get_session_stats"])
     }
 
     /// 身份守卫: 只有当前 process 引用退出才清理 (teardown 重启时旧进程退出不误伤新进程)。
@@ -387,9 +486,12 @@ final class PiRpcTransport: AgentTransport {
         guard process === proc else { return }
         process = nil
         stdinHandle = nil
+        if exportPending { finishExport(path: nil) }   // P6.2.3: 导出中进程死亡 → 上报失败
+        if forkReadbackPending { finishForkReadback(path: nil) }   // P6.3.1: 回读中死亡 → 上报失败
         guard turnActive else { return }
         turnActive = false
         finalizeTrackedMessages(usage: nil)   // 进程异常退出: usage 无从上报
+        emit(.phaseChanged(.idle))            // P6.1.2: 过程态归位
         emit(.streamEnded)
     }
 
@@ -401,6 +503,7 @@ final class PiRpcTransport: AgentTransport {
     }
 
     private func sendCommand(_ dict: [String: Any]) {
+        sentCommands.append(dict)   // P6.0②冒烟: 无进程时 no-op, 日志可断言"未回 response"
         guard let stdinHandle,
               var data = try? JSONSerialization.data(withJSONObject: dict) else { return }
         data.append(0x0A)
@@ -455,6 +558,7 @@ final class PiRpcTransport: AgentTransport {
         switch dict["type"] as? String {
         case "agent_start":
             turnActive = true
+            emit(.phaseChanged(.streaming))   // P6.1.2: 过程态胶囊
             emit(.streamStarted)
 
         case "message_start", "message_end":
@@ -468,7 +572,19 @@ final class PiRpcTransport: AgentTransport {
             }
 
         case "message_update":
+            // P6.1.1: 顶层累计 usage → 状态栏实时 tick (500ms 节流; 无顶层 usage 则忽略)
+            if let u = dict["usage"] as? [String: Any] { noteLiveUsage(u) }
             guard let ev = dict["assistantMessageEvent"] as? [String: Any] else { return }
+            // P6.2.1: toolcall_start 提前出卡 (queued; 参数未知 → title=工具名)。
+            // tool_execution_start 携同一 callId 到达时按现有逻辑整卡替换转 running。
+            if ev["type"] as? String == "toolcall_start" {
+                guard let callId = ev["id"] as? String else { return }
+                let name = ev["toolName"] as? String ?? "bash"
+                let card = ToolCall(kind: kindFor(name), title: name, command: nil, phase: .queued)
+                toolCards[callId] = card
+                emit(.toolUpdated(card))
+                return
+            }
             let delta = ev["delta"] as? String ?? ""
             guard !delta.isEmpty else { return }
             switch ev["type"] as? String {
@@ -486,8 +602,10 @@ final class PiRpcTransport: AgentTransport {
             let name = dict["toolName"] as? String ?? "bash"
             let cmd = args["command"] as? String
             let title = (args["path"] as? String) ?? cmd ?? name
-            // bash 卡 title 与 command 同源, 只显示一处 (避免命令渲染两遍)
-            let card = ToolCall(kind: kindFor(name),
+            // P6.2.1: toolcall_start 提前卡已存在 → 沿用其 id 整卡升级 (否则旧 queued 卡
+            // 永不落定 + 同一调用两张卡, 轨迹里被连续同类分组误并)
+            let card = ToolCall(id: toolCards[callId]?.id ?? UUID(),
+                                kind: kindFor(name),
                                 title: String(title.prefix(120)),
                                 command: (cmd != nil && title == cmd) ? nil : cmd,
                                 phase: .running)
@@ -529,14 +647,65 @@ final class PiRpcTransport: AgentTransport {
         case "response":
             handleRPCResponse(dict)
 
-        case "agent_end", "agent_settled":
+        case "agent_end":
+            // P6.0①: 一次底层 run 结束 ≠ 落定 — willRetry=true 时 pi 还会自动重试/
+            // 压缩重试/投递排队消息, 在此拆进程会腰斩重试。仅记录, 过程态 (P6.1.2) 消费。
+            lastWillRetry = (dict["willRetry"] as? Bool) ?? false
+
+        case "agent_settled":
+            // P6.0①: 会话级彻底落定 (无重试/压缩重试/排队后续) — 唯一拆进程点。
             guard turnActive else { return }
             turnActive = false
             finalizeTrackedMessages(usage: nil)   // 正常路径 usage 已随 message_end 落定, 此处仅为兜底
+            emit(.phaseChanged(.idle))            // P6.1.2: 过程态归位
             emit(.streamEnded)
-            // per-turn: 回合结束即退出 (transcript 已持久化到 --session 文件;
-            // 下回合 spawn 恢复, 天然隔离 + 无常驻内存/串味问题)
-            teardownProcess()
+            if process != nil {
+                // P6.1.1: 拆进程前拉一次会话统计 (context% 以 pi 口径为准), 响应到达再拆;
+                // 2s 无响应兜底强拆。期间若用户已开新回合, turnActive 守卫防误拆。
+                settleStatsPending = true
+                sendCommand(["id": "req-\(nextRequestId())", "type": "get_session_stats"])
+                settleStatsTask = Task { [weak self] in
+                    try? await Task.sleep(nanoseconds: 2_000_000_000)
+                    guard let self, self.settleStatsPending else { return }
+                    self.settleStatsPending = false
+                    if !self.turnActive { self.teardownProcess() }
+                }
+            } else {
+                // per-turn: 回合结束即退出 (transcript 已持久化到 --session 文件;
+                // 下回合 spawn 恢复, 天然隔离 + 无常驻内存/串味问题)
+                teardownProcess()
+            }
+
+        // ---- P6.1.2: 过程态事件 (rpc.md §auto_retry/compaction/queue/summarization) ----
+        case "auto_retry_start":
+            // 瞬态错误自动重试 (overloaded/5xx) → 重试胶囊
+            emit(.phaseChanged(.retrying(attempt: dict["attempt"] as? Int ?? 0,
+                                         maxAttempts: dict["maxAttempts"] as? Int ?? 0,
+                                         delayMs: dict["delayMs"] as? Int ?? 0)))
+
+        case "auto_retry_end":
+            // 成功/终败后底层 run 继续 (终败随 agent_end/settled 归 idle) → 回 streaming
+            emit(.phaseChanged(.streaming))
+
+        case "compaction_start":
+            emit(.phaseChanged(.compacting(reason: dict["reason"] as? String ?? "threshold")))
+
+        case "compaction_end":
+            // 一次性横幅 (复用 extensionNotify 通道); 压缩后 run 继续 (overflow 场景 willRetry 重试)
+            emitCompactionBanner(dict)
+            emit(.phaseChanged(.streaming))
+
+        case "summarization_retry_scheduled", "summarization_retry_attempt_start":
+            emit(.phaseChanged(.summarizing))
+
+        case "summarization_retry_finished":
+            emit(.phaseChanged(.streaming))
+
+        case "queue_update":
+            let steering = dict["steering"] as? [Any] ?? []
+            let followUp = dict["followUp"] as? [Any] ?? []
+            let count = steering.count + followUp.count
+            emit(.phaseChanged(count > 0 ? .queued(count: count) : .streaming))
 
         default:
             break
@@ -548,6 +717,18 @@ final class PiRpcTransport: AgentTransport {
     private func handleExtensionUIRequest(_ dict: [String: Any]) {
         guard let reqId = dict["id"] as? String,
               let method = dict["method"] as? String else { return }
+
+        // P6.0②: fire-and-forget 方法不回 response (rpc.md 明示语义; 回了也只会污染对端)。
+        // notify 上抛横幅; setStatus/setWidget/setTitle/set_editor_text 是 TUI 概念, 忽略。
+        if Self.fireAndForgetMethods.contains(method) {
+            if method == "notify" {
+                let type = dict["notifyType"] as? String ?? "info"
+                let message = dict["message"] as? String ?? ""
+                emit(.extensionNotify(type: type, message: String(message.prefix(200))))
+            }
+            return
+        }
+
         let title = dict["title"] as? String ?? ""
         let parts = title.split(separator: "|", omittingEmptySubsequences: false).map(String.init)
 
@@ -597,6 +778,10 @@ final class PiRpcTransport: AgentTransport {
                                                 callId: callId))
     }
 
+    /// P6.0②: fire-and-forget 扩展 UI 方法 (rpc.md §1277-1345, 不期待 response)。
+    private static let fireAndForgetMethods: Set<String> =
+        ["notify", "setStatus", "setWidget", "setTitle", "set_editor_text"]
+
     private func autoRespondExtensionUI(_ reqId: String, method: String) {
         if method == "confirm" {
             sendCommand(["type": "extension_ui_response", "id": reqId, "confirmed": true])
@@ -635,7 +820,7 @@ final class PiRpcTransport: AgentTransport {
         if let sid = textID { emit(.messageFinalized(messageID: sid, usage: usage)) }
     }
 
-    /// P5.0.1: 从 pi assistant message 提取用量 (字段缺失容忍, 全缺返回 nil)。
+    /// P6.0③: 从 pi assistant message 提取用量 (字段缺失容忍, 全缺返回 nil)。
     private static func parseUsage(_ msg: [String: Any]) -> MessageUsage? {
         guard let u = msg["usage"] as? [String: Any] else { return nil }
         func int(_ key: String) -> Int { u[key] as? Int ?? 0 }
@@ -643,6 +828,7 @@ final class PiRpcTransport: AgentTransport {
             input: int("input"), output: int("output"),
             cacheRead: int("cacheRead"), cacheWrite: int("cacheWrite"),
             reasoning: int("reasoning"), totalTokens: int("totalTokens"),
+            costUSD: (u["cost"] as? [String: Any])?["total"] as? Double,
             model: msg["model"] as? String,
             responseId: msg["responseId"] as? String)
         return usage.totalTokens > 0 ? usage : nil
@@ -652,12 +838,24 @@ final class PiRpcTransport: AgentTransport {
 
     /// pi 响应格式: {id, type:"response", command, success, data?/error?}
     private func handleRPCResponse(_ dict: [String: Any]) {
-        guard dict["success"] as? Bool == true else { return }   // 失败静默 (如模型不存在)
         let command = dict["command"] as? String ?? ""
+        // P6.2.3: export_html 失败也上报 (UI 横幅), 不走"失败静默"
+        if command == "export_html" {
+            let path = (dict["success"] as? Bool == true)
+                ? (dict["data"] as? [String: Any])?["path"] as? String : nil
+            finishExport(path: path)
+            if !turnActive { teardownProcess() }
+            return
+        }
+        guard dict["success"] as? Bool == true else { return }   // 失败静默 (如模型不存在)
         let data = dict["data"] as? [String: Any] ?? [:]
         switch command {
         case "get_state":
-            // data: { model: {provider, id, ...}, thinkingLevel: "...", ... }
+            // data: { model: {provider, id, ...}, thinkingLevel: "...", sessionFile: "...", ... }
+            // P6.3.1: fork 产物路径回读 (仅在 fork 在途时消费, 普通会话的上报忽略)
+            if let file = data["sessionFile"] as? String, !file.isEmpty, forkReadbackPending {
+                finishForkReadback(path: file)
+            }
             if let model = data["model"] as? [String: Any],
                let provider = model["provider"] as? String,
                let modelId = model["id"] as? String {
@@ -693,6 +891,15 @@ final class PiRpcTransport: AgentTransport {
                 }
                 delegate?.transport(self, didReportModels: infos)
             }
+        case "get_session_stats":
+            // P6.1.1: 会话统计上报 (spawn 期 + settled 拆进程前各拉一次)
+            delegate?.transport(self, didReportSessionStats: Self.parseSessionStats(data))
+            if settleStatsPending {
+                settleStatsPending = false
+                settleStatsTask?.cancel()
+                settleStatsTask = nil
+                if !turnActive { teardownProcess() }   // 已开新回合则不拆
+            }
         case "set_model", "set_thinking_level":
             // 切换成功后回读 get_state, 以 pi 侧状态为准同步 UI
             sendCommand(["id": "req-\(nextRequestId())", "type": "get_state"])
@@ -701,14 +908,72 @@ final class PiRpcTransport: AgentTransport {
         }
     }
 
+    // MARK: - 会话统计 (P6.1.1)
+
+    /// P6.1.2: compaction_end → 一次性横幅 (复用 extensionNotify 通道)。
+    /// 成功报 tokensBefore → estimatedTokensAfter; 中止/失败按 warning 报原因。
+    private func emitCompactionBanner(_ dict: [String: Any]) {
+        let aborted = dict["aborted"] as? Bool ?? false
+        let message: String
+        if aborted {
+            message = "上下文压缩已中止"
+        } else if let result = dict["result"] as? [String: Any] {
+            let before = result["tokensBefore"] as? Int ?? 0
+            let after = result["estimatedTokensAfter"] as? Int ?? 0
+            message = String(format: "上下文压缩完成：%d → %d tokens", before, after)
+        } else {
+            let err = dict["errorMessage"] as? String ?? "未知错误"
+            message = "上下文压缩失败：\(err)"
+        }
+        emit(.extensionNotify(type: aborted ? "warning" : "info", message: String(message.prefix(200))))
+    }
+
+    /// message_update 顶层累计 usage → usageTick (500ms 节流)。
+    /// 流式 usage 无 context%, contextPercent 留 nil 由 Store 沿用最近一次上报。
+    private func noteLiveUsage(_ u: [String: Any]) {
+        let stats = SessionStats(
+            contextPercent: nil,
+            inputTokens: u["input"] as? Int ?? 0,
+            outputTokens: u["output"] as? Int ?? 0,
+            cacheReadTokens: u["cacheRead"] as? Int ?? 0,
+            costUSD: (u["cost"] as? [String: Any])?["total"] as? Double)
+        let now = Date()
+        guard now.timeIntervalSince(lastUsageTickAt) >= 0.5 else { return }
+        lastUsageTickAt = now
+        emit(.usageTick(stats))
+    }
+
+    /// get_session_stats data → SessionStats (字段缺失容忍; percent null → nil)。
+    private static func parseSessionStats(_ data: [String: Any]) -> SessionStats {
+        func int(_ v: Any?) -> Int { v as? Int ?? 0 }
+        func dbl(_ v: Any?) -> Double? {
+            if let d = v as? Double { return d }
+            if let i = v as? Int { return Double(i) }
+            return nil
+        }
+        let t = data["tokens"] as? [String: Any] ?? [:]
+        let c = data["contextUsage"] as? [String: Any] ?? [:]
+        return SessionStats(
+            contextPercent: dbl(c["percent"]),
+            contextTokens: int(c["tokens"]),
+            contextWindow: int(c["contextWindow"]),
+            inputTokens: int(t["input"]),
+            outputTokens: int(t["output"]),
+            cacheReadTokens: int(t["cacheRead"]),
+            costUSD: (data["cost"] as? [String: Any]).flatMap { dbl($0["total"]) })
+    }
+
     private func emit(_ event: AgentEvent) {
         delegate?.transport(self, didEmit: event)
     }
 
     private func kindFor(_ toolName: String) -> ToolKind {
         switch toolName {
-        case "bash": return .bash
+        case "bash", "powershell": return .bash   // P6.0④: powershell 是 Windows 同族
         case "read": return .read
+        case "grep": return .grep                 // P6.0④: 内置工具补全 (原落 default 错显 read)
+        case "find": return .find
+        case "ls": return .ls
         case "edit": return .edit
         case "write": return .write
         case "fetch": return .fetch

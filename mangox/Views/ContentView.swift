@@ -141,15 +141,23 @@ struct ContentView: View {
                     .background(CodexTheme.bgChat)
             } else {
                 // P5.0.2: 底档 = capsuleMode (Chat / 轨迹); Work 右列是独立开关 (下方 if)
-                if store.capsuleMode == .trajectory {
-                    TrajectoryView(store: store)
-                        .frame(maxWidth: .infinity)
-                        .background(CodexTheme.bgChat)
-                } else {
-                    ChatView(store: store)
-                        .frame(maxWidth: .infinity)
-                        .background(CodexTheme.bgChat)
+                // P6.1.1: 主区底部挂状态栏 (4 项纯展示; Work 列/其他面板不挂)
+                VStack(spacing: 0) {
+                    if store.capsuleMode == .trajectory {
+                        TrajectoryView(store: store)
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                            .background(CodexTheme.bgChat)
+                    } else {
+                        ChatView(store: store)
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                            .background(CodexTheme.bgChat)
+                    }
+                    BottomStatusBar(phase: store.runtimePhase,
+                                    turnCount: store.currentTurnCount,
+                                    stats: store.sessionStats)
                 }
+                .frame(maxWidth: .infinity)
+                .background(CodexTheme.bgChat)
             }
             if store.workspaceVisible {
                 Divider().overlay(CodexTheme.divider)

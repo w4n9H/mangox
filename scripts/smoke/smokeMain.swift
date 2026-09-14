@@ -402,5 +402,453 @@ struct SmokeMain {
                   "T13 删除后目录条目回归")
         }
 
+        // ---- T14 P6.0: 缺陷修复 (settled 语义 / fire-and-forget / cost / 工具标签) ----
+        do {
+            final class Sink: AgentTransportDelegate {
+                var events: [AgentEvent] = []
+                func transport(_ t: any AgentTransport, didEmit event: AgentEvent) { events.append(event) }
+            }
+            let sink = Sink()
+            let pi = PiRpcTransport()
+            pi.delegate = sink
+
+            // ① agent_end(willRetry) 不落定不拆进程; agent_settled 才落定
+            pi.handleRPCLine(#"{"type":"agent_start"}"#)
+            pi.handleRPCLine(#"{"type":"agent_end","messages":[],"willRetry":true}"#)
+            check(pi.lastWillRetry == true, "T14 agent_end.willRetry 捕获")
+            check(!sink.events.contains { e in
+                if case .streamEnded = e { return true }; return false
+            }, "T14 agent_end(willRetry) 不发 streamEnded (不腰斩重试)")
+            pi.handleRPCLine(#"{"type":"agent_settled"}"#)
+            check(sink.events.contains { e in
+                if case .streamEnded = e { return true }; return false
+            }, "T14 agent_settled 才落定 (streamEnded)")
+
+            // ② fire-and-forget: notify 上抛横幅事件且不回 response; confirm 照旧应答
+            pi.handleRPCLine(#"{"type":"extension_ui_request","id":"u1","method":"notify","notifyType":"warning","message":"命令被拦"}"#)
+            check(sink.events.contains { e in
+                if case .extensionNotify(let type, let msg) = e { return type == "warning" && msg == "命令被拦" }
+                return false
+            }, "T14 notify 上抛 extensionNotify (warning)")
+            check(pi.sentCommands.isEmpty, "T14 fire-and-forget 不回 response")
+            pi.handleRPCLine(#"{"type":"extension_ui_request","id":"u2","method":"confirm"}"#)
+            check(pi.sentCommands.contains {
+                ($0["type"] as? String) == "extension_ui_response" && ($0["id"] as? String) == "u2"
+            }, "T14 confirm 仍自动应答")
+
+            // ③ usage.cost 捕获 (USD) + 旧格式 nil
+            pi.handleRPCLine(#"{"type":"agent_start"}"#)
+            pi.handleRPCLine(#"{"type":"message_start","message":{"role":"assistant"}}"#)
+            pi.handleRPCLine(#"{"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":"x"}}"#)
+            pi.handleRPCLine(#"{"type":"message_end","message":{"role":"assistant","model":"m","usage":{"input":10,"output":5,"totalTokens":15,"cost":{"input":0.0001,"output":0.0002,"total":0.0003}}}}"#)
+            func lastFinalized(_ sink: Sink) -> MessageUsage?? {
+                sink.events.compactMap { e -> MessageUsage?? in
+                    if case .messageFinalized(_, let u) = e { return .some(u) }
+                    return nil
+                }.last ?? nil
+            }
+            check(lastFinalized(sink).flatMap { $0 }?.costUSD == 0.0003, "T14 usage.cost 捕获 (USD)")
+            pi.handleRPCLine(#"{"type":"message_start","message":{"role":"assistant"}}"#)
+            pi.handleRPCLine(#"{"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":"y"}}"#)
+            pi.handleRPCLine(#"{"type":"message_end","message":{"role":"assistant","usage":{"input":1,"output":1,"totalTokens":2}}}"#)
+            check(lastFinalized(sink).flatMap { $0 }?.costUSD == nil, "T14 无 cost 旧格式 → nil")
+
+            // ④ 工具标签: grep/find/ls 不再错显 read; powershell 归 bash
+            pi.handleRPCLine(#"{"type":"tool_execution_start","toolCallId":"c1","toolName":"grep","args":{"pattern":"foo"}}"#)
+            func lastTool(_ sink: Sink) -> ToolCall?? {
+                sink.events.compactMap { e -> ToolCall?? in
+                    if case .toolUpdated(let t) = e { return .some(t) }
+                    return nil
+                }.last ?? nil
+            }
+            check(lastTool(sink).flatMap { $0 }?.kind == .grep, "T14 grep 工具卡标签正确")
+            pi.handleRPCLine(#"{"type":"tool_execution_start","toolCallId":"c2","toolName":"powershell","args":{}}"#)
+            check(lastTool(sink).flatMap { $0 }?.kind == .bash, "T14 powershell 归 bash")
+        }
+
+        // ---- T15 P6.1.1: 状态栏数据链 (usage tick 节流 / settled 拉统计 / 解析投影) ----
+        do {
+            final class Sink: AgentTransportDelegate {
+                var events: [AgentEvent] = []
+                var stats: [SessionStats] = []
+                func transport(_ t: any AgentTransport, didEmit event: AgentEvent) { events.append(event) }
+                func transport(_ t: any AgentTransport, didReportSessionStats s: SessionStats) { stats.append(s) }
+            }
+            let sink = Sink()
+            let pi = PiRpcTransport()
+            pi.delegate = sink
+
+            // ① message_update 顶层累计 usage → usageTick; 500ms 内第二条被节流
+            pi.handleRPCLine(#"{"type":"agent_start"}"#)
+            pi.handleRPCLine(#"{"type":"message_update","usage":{"input":100,"output":20,"cacheRead":1800},"assistantMessageEvent":{"type":"text_delta","delta":"a"}}"#)
+            check(sink.events.contains { e in
+                if case .usageTick(let s) = e { return s.inputTokens == 100 && s.outputTokens == 20 }
+                return false
+            }, "T15 message_update 顶层 usage → usageTick")
+            pi.handleRPCLine(#"{"type":"message_update","usage":{"input":150,"output":40},"assistantMessageEvent":{"type":"text_delta","delta":"b"}}"#)
+            check(sink.events.filter { e in
+                if case .usageTick = e { return true }; return false
+            }.count == 1, "T15 usage tick 500ms 节流")
+
+            // ② settled (无进程) 走兜底路径, 不补发统计命令
+            pi.handleRPCLine(#"{"type":"agent_settled"}"#)
+            check(pi.sentCommands.isEmpty, "T15 无进程 settled 不补发统计命令")
+
+            // ③ get_session_stats 响应解析: percent / tokens / cost / 缓存命中率
+            pi.handleRPCLine(#"{"type":"response","id":"r1","command":"get_session_stats","success":true,"data":{"tokens":{"input":100,"output":311,"cacheRead":1900,"total":2311},"cost":{"total":0.002},"contextUsage":{"tokens":15000,"contextWindow":128000,"percent":11.7}}}"#)
+            check(sink.stats.last?.contextPercent == 11.7, "T15 contextPercent 捕获")
+            check(sink.stats.last?.inputTokens == 100 && sink.stats.last?.outputTokens == 311,
+                  "T15 token 捕获")
+            check(sink.stats.last?.costUSD == 0.002, "T15 cost.total 捕获 (USD)")
+            check(abs((sink.stats.last?.cachePercent ?? 0) - 95.0) < 0.01,
+                  "T15 缓存命中率 = cacheRead/(input+cacheRead)")
+
+            // ④ 压缩后 percent=null → nil (UI 显示 "--"); 全空 token → cachePercent nil
+            pi.handleRPCLine(#"{"type":"response","id":"r2","command":"get_session_stats","success":true,"data":{"tokens":{},"contextUsage":{"tokens":null,"contextWindow":128000,"percent":null}}}"#)
+            check(sink.stats.last?.contextPercent == nil, "T15 压缩后 percent null → nil")
+            check(sink.stats.last?.cachePercent == nil, "T15 无分母 cachePercent → nil")
+        }
+
+        // ---- T16 P6.1.2: 过程态胶囊 (RuntimePhase 事件映射 + 压缩横幅) ----
+        do {
+            final class Sink: AgentTransportDelegate {
+                var events: [AgentEvent] = []
+                var phases: [RuntimePhase] = []
+                func transport(_ t: any AgentTransport, didEmit event: AgentEvent) {
+                    events.append(event)
+                    if case .phaseChanged(let p) = event { phases.append(p) }
+                }
+            }
+            let sink = Sink()
+            let pi = PiRpcTransport()
+            pi.delegate = sink
+
+            func lastPhase(_ s: Sink) -> RuntimePhase? { s.phases.last }
+            func lastNotice(_ s: Sink) -> (String, isError: Bool)? {
+                for e in s.events.reversed() {
+                    if case .extensionNotify(let type, let msg) = e {
+                        return (msg, type != "info")
+                    }
+                }
+                return nil
+            }
+
+            pi.handleRPCLine(#"{"type":"agent_start"}"#)
+            check(lastPhase(sink) == .streaming, "T16 agent_start → streaming")
+            pi.handleRPCLine(#"{"type":"auto_retry_start","attempt":1,"maxAttempts":3,"delayMs":2000,"errorMessage":"529 overloaded"}"#)
+            check(lastPhase(sink) == .retrying(attempt: 1, maxAttempts: 3, delayMs: 2000),
+                  "T16 auto_retry_start → retrying(1/3)")
+            check(lastPhase(sink)?.capsuleText == "重试 1/3 · 2s 后", "T16 retrying 胶囊文案")
+            pi.handleRPCLine(#"{"type":"auto_retry_end","success":true,"attempt":2}"#)
+            check(lastPhase(sink) == .streaming, "T16 auto_retry_end → 回 streaming")
+
+            pi.handleRPCLine(#"{"type":"queue_update","steering":["a"],"followUp":["b","c"]}"#)
+            check(lastPhase(sink) == .queued(count: 3), "T16 queue_update → 排队 3 条")
+            pi.handleRPCLine(#"{"type":"queue_update","steering":[],"followUp":[]}"#)
+            check(lastPhase(sink) == .streaming, "T16 queue 清空 → 回 streaming")
+
+            pi.handleRPCLine(#"{"type":"compaction_start","reason":"threshold"}"#)
+            check(lastPhase(sink) == .compacting(reason: "threshold"), "T16 compaction_start → compacting")
+            pi.handleRPCLine(#"{"type":"compaction_end","reason":"threshold","aborted":false,"willRetry":true,"result":{"summary":"s","tokensBefore":150000,"estimatedTokensAfter":32000}}"#)
+            check(lastPhase(sink) == .streaming, "T16 compaction_end → 回 streaming")
+            check(lastNotice(sink)?.0 == "上下文压缩完成：150000 → 32000 tokens", "T16 压缩完成横幅")
+            check(lastNotice(sink)?.isError == false, "T16 压缩完成横幅为 info")
+
+            pi.handleRPCLine(#"{"type":"summarization_retry_scheduled","attempt":1,"maxAttempts":3,"delayMs":2000,"errorMessage":"terminated"}"#)
+            check(lastPhase(sink) == .summarizing, "T16 summarization_retry_scheduled → summarizing")
+            pi.handleRPCLine(#"{"type":"summarization_retry_finished"}"#)
+            check(lastPhase(sink) == .streaming, "T16 summarization_retry_finished → 回 streaming")
+
+            pi.handleRPCLine(#"{"type":"agent_settled"}"#)
+            check(lastPhase(sink) == .idle, "T16 agent_settled → idle")
+
+            pi.handleRPCLine(#"{"type":"compaction_end","reason":"overflow","aborted":true,"willRetry":false,"result":null}"#)
+            check(lastNotice(sink)?.0 == "上下文压缩已中止" && lastNotice(sink)?.isError == true,
+                  "T16 压缩中止 → warning 横幅")
+        }
+
+        // ---- T17 P6.2: Trace v2 (toolcall 提前卡 / 工具分组 / 折叠规则 / Details / export_html) ----
+        do {
+            final class Sink: AgentTransportDelegate {
+                var events: [AgentEvent] = []
+                var lastExport: String?
+                func transport(_ t: any AgentTransport, didEmit event: AgentEvent) { events.append(event) }
+                func transport(_ t: any AgentTransport, didFinishExportHTMLPath path: String?) { lastExport = path }
+            }
+            let sink = Sink()
+            let pi = PiRpcTransport()
+            pi.delegate = sink
+
+            // ① toolcall_start → queued 提前出卡; execution_start 同 id → 整卡替换转 running
+            pi.handleRPCLine(#"{"type":"agent_start"}"#)
+            pi.handleRPCLine(#"{"type":"message_update","assistantMessageEvent":{"type":"toolcall_start","contentIndex":1,"id":"call_x1","toolName":"bash"}}"#)
+            func lastTool(_ s: Sink) -> ToolCall?? {
+                s.events.compactMap { e -> ToolCall?? in
+                    if case .toolUpdated(let t) = e { return .some(t) }
+                    return nil
+                }.last ?? nil
+            }
+            let early = lastTool(sink).flatMap { $0 }
+            check(early?.kind == .bash && early?.title == "bash", "T17 toolcall_start 提前出卡 (title=工具名)")
+            if case .queued = early?.phase {} else { check(false, "T17 提前卡为 queued") }
+            pi.handleRPCLine(#"{"type":"tool_execution_start","toolCallId":"call_x1","toolName":"bash","args":{"command":"ls -la"}}"#)
+            let running = lastTool(sink).flatMap { $0 }
+            check(running?.title == "ls -la", "T17 execution_start 整卡替换 (title=args)")
+            if case .running = running?.phase {} else { check(false, "T17 替换后转 running") }
+            check(running?.id == early?.id, "T17 提前卡 id 沿用 (同一调用一张卡, 不残留 queued)")
+
+            // ② 工具行分组: 连续同类折叠, 隔行不合并
+            func toolEvent(_ kind: ToolKind) -> TrajectoryEvent {
+                TrajectoryEvent(id: UUID(), kind: .tool, timestamp: Date(),
+                                tool: ToolCall(kind: kind, title: "t", command: nil, phase: .done))
+            }
+            let turn = TrajectoryTurn(id: UUID(), index: 1, startedAt: Date(), prompt: "p",
+                events: [toolEvent(.bash), toolEvent(.bash), toolEvent(.read), toolEvent(.bash)])
+            let rows = TrajectoryBuilder.rows(for: turn)
+            check(rows.count == 3, "T17 连续同类合并 + 隔行不合并 (3 行)")
+            if case .group(let g) = rows[0] {
+                check(g.count == 2 && g.kind == .bash, "T17 首组 = bash × 2")
+            } else { check(false, "T17 首行为 group") }
+            if case .single(let r1) = rows[1] { check(r1.tool?.kind == .read, "T17 中位 read 单行") }
+            else { check(false, "T17 第二行为 single") }
+            if case .single(let b3) = rows[2] { check(b3.tool?.kind == .bash, "T17 末位 bash 不跨组合并") }
+            else { check(false, "T17 第三行为 single") }
+
+            // ③ Turn 折叠规则: 默认仅展开最近一回合, override 优先
+            let t1 = TrajectoryTurn(id: UUID(), index: 1, startedAt: Date(), prompt: "a", events: [])
+            let t2 = TrajectoryTurn(id: UUID(), index: 2, startedAt: Date(), prompt: "b", events: [])
+            check(TrajectoryBuilder.isTurnExpanded(t1, lastTurnId: t2.id, overrides: [:]) == false,
+                  "T17 非最近回合默认折叠")
+            check(TrajectoryBuilder.isTurnExpanded(t2, lastTurnId: t2.id, overrides: [:]) == true,
+                  "T17 最近回合默认展开")
+            check(TrajectoryBuilder.isTurnExpanded(t2, lastTurnId: t2.id, overrides: [t2.id: false]) == false,
+                  "T17 用户 override 优先于默认")
+
+            // ④ Details 派生: responseId 有值成行, 无值归并 unreported, 无 usage 跳过
+            let base = Date(timeIntervalSinceReferenceDate: 100)
+            let m1 = ChatMessage(role: .assistant, content: .text("a"), timestamp: base,
+                                 usage: MessageUsage(input: 1, output: 2, totalTokens: 3, responseId: "r1"))
+            let m2 = ChatMessage(role: .assistant, content: .text("b"), timestamp: base.addingTimeInterval(2),
+                                 usage: MessageUsage(input: 5, output: 6, totalTokens: 11,
+                                                     model: "deepseek/m2", responseId: "r2"))
+            let m3 = ChatMessage(role: .assistant, content: .text("c"), timestamp: base.addingTimeInterval(3),
+                                 usage: MessageUsage(input: 1, output: 1, totalTokens: 2))
+            let m4 = ChatMessage(role: .assistant, content: .text("d"), timestamp: base.addingTimeInterval(4))
+            let details = TrajectoryBuilder.details(from: [m1, m2, m3, m4])
+            check(details.rows.count == 2 && details.unreported == 1, "T17 Details 行派生 + 未上报归并")
+            check(details.rows[0].heuristicMs == 2000, "T17 Details 时长估计 (相邻时间差)")
+            check(details.rows[1].usage.model == "deepseek/m2", "T17 Details model 透传")
+
+            // 空/单行不炸 (0..<(-1) range trap 回归): 空会话直接进 Details 段曾致崩溃
+            let emptyDetails = TrajectoryBuilder.details(from: [])
+            check(emptyDetails.rows.isEmpty && emptyDetails.unreported == 0, "T17 Details 空集安全")
+            let singleDetails = TrajectoryBuilder.details(from: [m1])
+            check(singleDetails.rows.count == 1 && singleDetails.rows[0].heuristicMs == nil,
+                  "T17 Details 单行安全 (无时长估计)")
+            check(TrajectoryBuilder.turnTokens(TrajectoryTurn(
+                id: UUID(), index: 1, startedAt: base, prompt: "p",
+                events: [TrajectoryEvent(id: UUID(), kind: .assistant, timestamp: base,
+                                         fullText: "x", usage: m1.usage),
+                         TrajectoryEvent(id: UUID(), kind: .assistant, timestamp: base,
+                                         fullText: "y", usage: m2.usage)])) == 14,
+                  "T17 回合 tokens 合计")
+
+            // ⑤ export_html 响应: 成功带 path / 失败上报 nil
+            pi.handleRPCLine(#"{"type":"response","id":"e1","command":"export_html","success":true,"data":{"path":"/tmp/mangox-export.html"}}"#)
+            check(sink.lastExport == "/tmp/mangox-export.html", "T17 export 成功上报 path")
+            pi.handleRPCLine(#"{"type":"response","id":"e2","command":"export_html","success":false}"#)
+            check(sink.lastExport == nil, "T17 export 失败上报 nil")
+
+            // ⑥ 导出路径格式
+            let exportPath = ChatStore.exportHTMLPath(
+                sessionId: UUID(uuidString: "00000000-0000-0000-0000-000000000001")!,
+                now: Date(timeIntervalSince1970: 0))
+            check(exportPath.hasPrefix(NSHomeDirectory() + "/.mangox/exports/00000000-0000-0000-0000-000000000001-")
+                  && exportPath.hasSuffix(".html"), "T17 导出路径格式 (sessionId-时间戳.html)")
+        }
+
+        // ---- T18 P6.3.1: Side chat (fork 快照截断 / 绑定决策 / 回读归并 / 失败清孤儿) ----
+        do {
+            // ① 快照截断纯函数: 3 轮源 (每轮 = user + assistant), 截到第 2 轮
+            func userLine(_ n: Int) -> String {
+                #"{"type":"message","message":{"role":"user","content":[{"type":"text","text":"turn \#(n)"}]}}"#
+            }
+            func asstLine() -> String {
+                #"{"type":"message","message":{"role":"assistant","content":[{"type":"text","text":"ok"}]}}"#
+            }
+            let src = [userLine(1), asstLine(), userLine(2), asstLine(), userLine(3), asstLine()]
+            check(ChatStore.snapshotLinePrefix(src, turns: 2) == 4,
+                  "T18 截断到第 2 轮 (丢弃第 3 条 user 起的全部行)")
+            check(ChatStore.snapshotLinePrefix(src, turns: 3) == 6, "T18 turns=源轮数 → 整文件")
+            check(ChatStore.snapshotLinePrefix(src, turns: 99) == 6, "T18 turns 超源 → 整文件")
+            check(ChatStore.snapshotLinePrefix([], turns: 1) == 0, "T18 空文件安全")
+            // 非消息行不计数, 模型切换行混排不干扰
+            let mixed = [#"{"type":"model_change"}"#, userLine(1), asstLine(), userLine(2), asstLine()]
+            check(ChatStore.snapshotLinePrefix(mixed, turns: 1) == 3,
+                  "T18 model_change 行不计轮 (截在第二条 user 前)")
+
+            // ② 截断快照落盘: turns=nil 恒等回源; 截断版行数正确; 源缺失返回 nil
+            let srcPath = dir + "/t18-source.jsonl"
+            try? src.joined(separator: "\n").write(toFile: srcPath, atomically: true, encoding: .utf8)
+            let snapWritten = ChatStore.prepareForkSnapshot(sourcePath: srcPath, turns: 2)
+            check(snapWritten?.hasSuffix(".jsonl") == true, "T18 截断快照落盘 (.jsonl)")
+            if let snap = snapWritten {
+                let snapLines = (try? String(contentsOfFile: snap, encoding: .utf8))?
+                    .components(separatedBy: .newlines).filter { !$0.isEmpty } ?? []
+                check(snapLines.count == 4, "T18 截断快照行数 = 4 (2 轮)")
+                try? FileManager.default.removeItem(atPath: snap)
+            }
+            check(ChatStore.prepareForkSnapshot(sourcePath: dir + "/nope.jsonl", turns: 1) == nil,
+                  "T18 源缺失 → nil")
+
+            // ③ store 级: 无持久记忆 → 入口置灰; 发起侧问 → 建会话 + sideOf + 标题 + 落库
+            check(!store.canStartSideChat, "T18 空态会话不可侧问 (无持久记忆)")
+            let srcConv = sidA   // T1 已在 sidA 发过回合, MockTransport 不产 transcript 文件
+            // Mock 路径无真实 .jsonl → 用显式 session_file 行模拟"有记忆" (loadSessionFile 优先)
+            try? store.persistenceDebug?.setSessionFile(id: sidA, path: srcPath)
+            store.selectConversation(sidA)
+            check(store.canStartSideChat, "T18 显式记忆文件存在 → 侧问可用")
+            store.startSideChat(from: srcConv, upTo: 2)
+            let sideItem = store.chats.first { $0.sideOf == srcConv }
+            check(sideItem != nil, "T18 侧问会话已建 (sideOf=源)")
+            check(sideItem?.title.hasPrefix("Side · ") == true, "T18 标题 = Side · <源标题>")
+            guard let sideId = sideItem?.id else { report() }
+            check(store.selectedConversationId == sideId, "T18 侧问会话已选中")
+            check(store.activeSideChat?.turns == 2 && store.activeSideChat?.parent == srcConv,
+                  "T18 提示条信息 (源/轮数)")
+            check(!(store.activeSideChat?.parentTitle.isEmpty ?? true), "T18 提示条源标题非空")
+            // 绑定决策: 未回读 → fork 截断副本 (临时快照, 非源文件)
+            if case .fork(let f) = store.sideChatBinding(for: sideId) {
+                check(f.hasPrefix(PiRpcTransport.sessionDirectory) && f != srcPath,
+                      "T18 回读前绑定 = fork 截断副本 (非源文件)")
+            } else {
+                check(false, "T18 回读前绑定 = fork 截断副本 (非源文件)")
+            }
+
+            // ④ 回读成功: session_file 落库 + 绑定切显式文件
+            store.transport(mock, didReadSessionFile: dir + "/fork-product.jsonl")
+            check(store.sideChatBinding(for: sideId)
+                  == .explicitFile(path: dir + "/fork-product.jsonl"),
+                  "T18 回读后绑定 = 显式产物路径")
+            check(store.activeSideChat != nil, "T18 回读后提示条仍在")
+
+            // ⑤ 回读失败: 侧问会话删除 (孤儿快照清理) + 横幅
+            store.startSideChat(from: srcConv, upTo: 1)
+            guard let side2 = store.chats.first(where: { $0.sideOf == srcConv && $0.id != sideId })?.id
+            else { check(false, "T18 第二个侧问会话已建"); report() }
+            if case .fork = store.sideChatBinding(for: side2) {
+                check(true, "T18 侧问2 回读前 = fork")
+            } else {
+                check(false, "T18 侧问2 回读前 = fork")
+            }
+            store.transport(mock, didReadSessionFile: nil)
+            check(store.allConversations.first { $0.id == side2 } == nil,
+                  "T18 回读失败 → 侧问会话删除 (孤儿清理)")
+            check(store.extensionNotice?.isError == true, "T18 失败横幅已提示")
+
+            // ⑥ 普通会话绑定决策 = derived; 侧问会话不可再侧问 (入口置灰)
+            check(store.sideChatBinding(for: sidB) == .derived, "T18 普通会话 = derived 绑定")
+            store.selectConversation(sideId)
+            check(!store.canStartSideChat, "T18 侧问自身不可再侧问 (防嵌套)")
+            store.selectConversation(nil)
+            check(store.activeSideChat == nil, "T18 空选中清提示条")
+
+            // ⑦ rename 保留 sideOf; 删源会话不连带侧问
+            store.renameConversation(sideId, to: "Side · 重命名")
+            check(store.chats.first { $0.id == sideId }?.sideOf == srcConv,
+                  "T18 重命名后 sideOf 保留")
+        }
+
+        // ---- T19 P6.3.2: Away summary (在场不积累 / 后台积累 / 分键隔离 / 结算 / 停止不计入) ----
+        do {
+            // 基线: 清早前测试遗留显示态 (T3/T5 的后台完成已在积累器留 key), 记积累器水位
+            store.selectConversation(sidA)
+            store.dismissAwaySummary()
+            let awayBase = store.pendingAway.count
+
+            // ① 在场选中会话完成 → 不积累 (冒烟无 NSApp 视为激活)
+            store.draft = "在场完成"
+            store.sendDraft()
+            check(await waitUntil { store.runningTurns.isEmpty }, "T19 前台回合结束")
+            check(store.pendingAway.count == awayBase, "T19 在场完成不积累")
+
+            // ② 后台会话完成 → 按 sid 积累; 未切回不结算; preview 首行截断
+            // (addScheduled 是 append, 新任务在 .last; 用 [0] 会误 fire T5 的旧任务)
+            mock.scriptedReply = { _ in String(repeating: "很长的后台回复内容。", count: 20) }
+            store.addScheduled(name: "T19巡检", prompt: "执行巡检", cron: "0 0 1 1 *", projectId: nil)
+            store.runScheduledFire(store.scheduledTasks.last!)
+            guard let log1 = store.scheduledTasks.last?.logSessionId else { check(false, "T19 日志会话1"); report() }
+            check(await waitUntil { store.runningTurns.isEmpty }, "T19 后台回合结束")
+            check(store.pendingAway[log1]?.turns == 1, "T19 后台完成积累 turns=1")
+            check(store.awaySummary == nil, "T19 未切回不结算")
+            check(store.pendingAway[log1]?.preview.hasSuffix("…") == true, "T19 preview 首行截断加省略号")
+
+            // ③ 分键隔离: 第二个后台任务各自积累 (并发任务不串数据)
+            mock.scriptedReply = { _ in "第二个任务完成" }
+            store.addScheduled(name: "T19第二", prompt: "执行", cron: "0 0 1 1 *", projectId: nil)
+            store.runScheduledFire(store.scheduledTasks.last!)
+            guard let log2 = store.scheduledTasks.last?.logSessionId else { check(false, "T19 日志会话2"); report() }
+            check(await waitUntil { store.runningTurns.isEmpty }, "T19 第二后台回合结束")
+            check(store.pendingAway[log2]?.turns == 1 && store.pendingAway[log1]?.turns == 1,
+                  "T19 双任务积累器分键隔离")
+
+            // ④ 切回结算: 只消费当前 key; × 只关不滚
+            store.selectConversation(log1)
+            check(store.awaySummary?.sid == log1 && store.awaySummary?.turns == 1,
+                  "T19 切回结算 (sid/turns)")
+            check(store.pendingAway[log1] == nil && store.pendingAway[log2]?.turns == 1,
+                  "T19 结算摘除自身 key, 他 key 不动")
+            check(!hasText(store.messages, "第二个任务完成"), "T19 会话1 视图无任务2 内容")
+            store.dismissAwaySummary()
+            check(store.awaySummary == nil, "T19 × 只关 (显示态清除)")
+
+            // ⑤ 切到任务2 各自结算; 新回合开始清过期摘要
+            store.selectConversation(log2)
+            check(store.awaySummary?.sid == log2 && store.awaySummary?.turns == 1,
+                  "T19 切到任务2 结算各自摘要")
+            store.draft = "新一轮"
+            store.sendDraft()
+            check(store.awaySummary == nil, "T19 新回合开始清摘要")
+            check(await waitUntil { store.runningTurns.isEmpty }, "T19 任务2 回合收尾")
+
+            // ⑥ 手动停止不计入: stop 清 turnStartAt → 补发 streamEnded (pi abort 路径) 无新增积累
+            let awayBeforeStop = store.pendingAway.count
+            store.stopStreaming()
+            store.transport(mock, didEmit: .streamEnded)
+            check(store.pendingAway.count == awayBeforeStop, "T19 停止后 streamEnded 不积累")
+        }
+
+        // ---- T20 P6.4: 首条消息自动命名 (首行前 10 字符, 一次性) ----
+        do {
+            store.newConversation()
+            guard let t20sid = store.selectedConversationId else { check(false, "T20 建会话"); report() }
+            check(store.chats.first { $0.id == t20sid }?.title == ChatStore.defaultConversationTitle,
+                  "T20 初始默认标题")
+            store.draft = "这是一条超过十个字符的首条消息, 用来验证自动命名"
+            store.sendDraft()
+            check(store.chats.first { $0.id == t20sid }?.title == "这是一条超过十个字符",
+                  "T20 标题 = 首条消息前 10 字符")
+            check(await waitUntil { store.runningTurns.isEmpty }, "T20 回合结束")
+            // 第二条消息不再改标题
+            store.draft = "第二条消息不应改标题"
+            store.sendDraft()
+            check(store.chats.first { $0.id == t20sid }?.title == "这是一条超过十个字符",
+                  "T20 第二条消息不改标题")
+            check(await waitUntil { store.runningTurns.isEmpty }, "T20 第二回合结束")
+            // 短消息 (<10 字符) 取整行
+            store.newConversation()
+            guard let t20b = store.selectedConversationId else { check(false, "T20 建会话B"); report() }
+            store.draft = "短名"
+            store.sendDraft()
+            check(store.chats.first { $0.id == t20b }?.title == "短名", "T20 短消息取整行")
+            check(await waitUntil { store.runningTurns.isEmpty }, "T20 回合B结束")
+            // 手动重命名后不再被自动命名覆盖
+            store.renameConversation(t20b, to: "自定义")
+            store.draft = "又一条消息内容"
+            store.sendDraft()
+            check(store.chats.first { $0.id == t20b }?.title == "自定义", "T20 手动重命名不被覆盖")
+            check(await waitUntil { store.runningTurns.isEmpty }, "T20 回合C结束")
+        }
+
         report()    }
 }

@@ -27,6 +27,13 @@ enum AgentEvent {
     case toolPhaseChanged(toolId: UUID, phase: ToolPhase)
     /// 工具卡整对象 upsert (按 ToolCall.id): 无则新建, 有则整体替换。
     case toolUpdated(ToolCall)
+    /// P6.0②: 扩展 fire-and-forget 通知 (pi extension_ui_request / notify)。
+    /// type = notifyType (info/warning/error)。
+    case extensionNotify(type: String, message: String)
+    /// P6.1.1: 流式期用量 tick (message_update 顶层累计 usage, 500ms 节流)。
+    case usageTick(SessionStats)
+    /// P6.1.2: 回合过程态 (agent_start/auto_retry/compaction/queue/summarization 驱动)。
+    case phaseChanged(RuntimePhase)
     case streamEnded
 }
 
@@ -64,6 +71,15 @@ protocol AgentTransport: AnyObject {
     func updateSessionBinding(_ sessionId: UUID?)
     /// App 退出时调用: 终止在途引擎进程 (per-turn 架构下孤儿 pi 会继续烧 token 跑完回合)。
     func shutdown()
+    /// P6.2.3: 导出会话 HTML (pi export_html; 进程不活则临时拉起)。
+    /// 完成后经 delegate didFinishExportHTMLPath 上报 (path nil = 失败)。
+    func exportHTML(outputPath: String)
+    /// P6.3.1: 显式会话文件路径绑定 (优先于 UUID 派生路径; 侧问 fork 产物专用,
+    /// 产物文件名 = <时间戳>_<uuid>.jsonl, 无法派生, 只能回读)。
+    func updateSessionFilePath(_ path: String?)
+    /// P6.3.1: 下一回合 spawn 带 --fork <sourceFile> (--session 互斥, 不可同传)。
+    /// spawn 后经 get_state.sessionFile 回读产物路径, 走 delegate didReadSessionFile。
+    func startForkSession(sourceFile: String)
 }
 
 /// P3.5: 对端上报的可用模型 (pi modelRegistry 条目的保守投影)。
@@ -101,6 +117,12 @@ protocol AgentTransportDelegate: AnyObject {
                    didUpdateModelState provider: String, modelId: String, thinkingLevel: String)
     /// P3.5: 可用模型清单上报 (get_available_models)。
     func transport(_ transport: any AgentTransport, didReportModels: [AgentModelInfo])
+    /// P6.1.1: 会话统计上报 (get_session_stats; spawn 期 + settled 拆进程前各拉一次)。
+    func transport(_ transport: any AgentTransport, didReportSessionStats stats: SessionStats)
+    /// P6.2.3: HTML 导出完成上报。path = 产物路径 (nil = 失败/超时)。
+    func transport(_ transport: any AgentTransport, didFinishExportHTMLPath path: String?)
+    /// P6.3.1: fork 产物路径回读 (get_state.sessionFile)。nil = 回读失败 (进程退出前未拿到)。
+    func transport(_ transport: any AgentTransport, didReadSessionFile path: String?)
 }
 
 extension AgentTransportDelegate {
@@ -108,6 +130,9 @@ extension AgentTransportDelegate {
     func transport(_ transport: any AgentTransport,
                    didUpdateModelState provider: String, modelId: String, thinkingLevel: String) {}
     func transport(_ transport: any AgentTransport, didReportModels: [AgentModelInfo]) {}
+    func transport(_ transport: any AgentTransport, didReportSessionStats stats: SessionStats) {}
+    func transport(_ transport: any AgentTransport, didFinishExportHTMLPath path: String?) {}
+    func transport(_ transport: any AgentTransport, didReadSessionFile path: String?) {}
 }
 
 extension AgentTransport {
@@ -122,4 +147,10 @@ extension AgentTransport {
     func updateSessionBinding(_ sessionId: UUID?) {}
     /// 退出清理 (Mock 无进程, 空实现)。
     func shutdown() {}
+    /// HTML 导出 (Mock 无进程, 空实现; 真实路径由 PiRpcTransport 实现)。
+    func exportHTML(outputPath: String) {}
+    /// P6.3.1: 显式会话文件绑定 (Mock 无进程, 空实现)。
+    func updateSessionFilePath(_ path: String?) {}
+    /// P6.3.1: fork 会话 (Mock 无进程, 空实现)。
+    func startForkSession(sourceFile: String) {}
 }

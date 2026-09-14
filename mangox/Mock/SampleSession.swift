@@ -14,17 +14,4 @@ enum SampleSession {
 
     /// 兼容旧签名: 永远 nil (启动不选中任何会话)。
     static var initialSelectedId: UUID? { nil }
-
-    // MARK: - Status bar
-    static let status = AgentStatus(
-        modelName: "deepseek/deepseek-v4-flash",
-        effort: .xhigh,
-        turnCount: 49,
-        contextPercent: 13.9,
-        tokenUp: 7400,
-        tokenDown: 311,
-        cachePercent: 95,
-        costCNY: 0.0107,
-        autoMode: true
-    )
 }

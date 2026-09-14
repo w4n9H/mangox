@@ -5,6 +5,35 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [0.1.4] - 2026-09-14
+
+### Added
+
+- **状态栏（P6.1）**：底部常驻 4 项纯展示——过程态胶囊（重试 `重试 1/3 · 2s 后` / 压缩中（threshold）/ 排队 N 条，空闲灰 / 流式主色 / 重试压缩琥珀）、上下文占用 %（压缩后无上报显示 `--`）、Token ↑↓ 实时 tick（流式期 500ms 节流；`get_session_stats` 在 spawn 期与回合落定前各拉一次，落定响应到达才拆进程，2s 兜底）、`当前会话 N 轮`；压缩完成/中止复用通知横幅一次性提示
+- **Trace v2（P6.2）**：轨迹视图三段式 `Messages / Turns / Details` + 导出 HTML 按钮（`pi export_html` → 自动在 Finder 显示）
+  - Messages：回合折叠（最近一回合默认展开，点回合头切换）+ 摘要行（事件数 + 输出首句）；连续同类工具自动分组（`bash × 3`，展开看逐个调用）；`toolcall_start` 提前出卡（参数未知时先显示工具名，执行开始整卡升级不重复）
+  - Turns：回合卡片流（点击跳回 Messages 对应回合）
+  - Details：按 LLM 调用粒度列出（时间 · 模型 · total tok，展开看 input/output/cacheRead/cacheWrite/reasoning + responseId + 时长估计），未上报调用数单列
+  - 消息正文与用户气泡支持划选复制（跨段落仍不可选，整段复制走每条消息的复制按钮）
+- **Side chat 侧问（P6.3.1）**：对任意有持久记忆的会话开"侧问"——`pi --fork` 快照携带源会话上下文开新会话，独立作答不污染主线；入口 = 侧栏行 `...` 菜单「由此侧问」+ Trace 回合右键「由此侧问（含 Turn N 及之前）」；新会话标题 `Side · <原标题>` + 分叉徽章 + 顶部快照提示条（含轮数、fork 时刻、一键跳回源会话）；快照为单向时间点拷贝，主线新消息不同步
+- **离开摘要（P6.3.2）**：切走会话或 App 失焦期间后台完成的回合，回来时在输入框上方出现胶囊「离开期间完成 N 轮 · 最近：<回复首句>」——点击滚到底部并消失，× 只关不滚；零 LLM 成本（本地消息投影），并发任务按会话分键隔离，手动停止不计入
+- **会话自动命名**：首条消息发送后，仍叫 `New chat` 的会话自动改用该消息首行前 10 字符命名（此后不再自动改，手动重命名优先）
+
+### Changed
+
+- 会话绑定支持显式文件路径（`--session <path>`）：fork 产物文件名带时间戳前缀无法由 UUID 派生，改为 spawn 后回读 `get_state.sessionFile` 落库，后续回合按记录路径续接
+- 会话首次输入后侧栏即显示有意义的名字（不再一排 `New chat`）
+
+### Fixed
+
+- **回合结束判定（P6.0）**：从 `agent_end` 改为 `agent_settled`——前者在一次底层 run 结束即触发，此时 pi 可能还在自动重试 / 压缩重试 / 投递排队消息，按它拆进程会腰斩后续
+- 扩展 fire-and-forget 方法（`notify` / `setStatus` / `setWidget` / `setTitle`）不再回 response（协议语义：这些请求无响应）
+- 工具标签补全：`grep` / `find` / `ls` 不再错显为 read，`powershell` 归入 bash 族
+- 应用图标模糊：弃 asset catalog 编译链路（Xcode 16.2 actool 对 mac appiconset 只产出 ≤256 尺寸，1024/512 静默丢失），改由 `scripts/gen-icon.sh` 用 `iconutil` 直出全尺寸 icns
+- Trace 视图展开任意行时列表跳到底部（`defaultScrollAnchor(.bottom)` 会在内容尺寸变化时重新锚底）→ 改初屏定位 + 流式跟随
+- Details 段在空会话下崩溃（`0..<(n-1)` 区间越界）
+- Away 摘要胶囊遮挡正文（浮层改独立占位行）
+
 ## [0.1.3] - 2026-09-11
 
 ### Added

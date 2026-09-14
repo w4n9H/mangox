@@ -2,7 +2,9 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-	<!-- App 图标: asset catalog 在本工程未被构建系统收录, 改用 Resources/AppIcon.icns -->
+	<!-- App 图标: Resources/AppIcon.icns (iconutil 从 icon_work/AppIcon.png 全 10 档生成)。
+	     坑: 本机 actool/Xcode 16.2 无论单尺寸还是传统 appiconset 都只给 icns 塞 ≤256 的档,
+	     Dock 放大即糊 (2026-09-14 实证), 故绕开 actool 走 CFBundleIconFile。 -->
 	<key>CFBundleIconFile</key>
 	<string>AppIcon</string>
 </dict>

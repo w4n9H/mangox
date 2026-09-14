@@ -28,6 +28,8 @@ struct MessageUsage: Hashable, Codable {
     var cacheWrite: Int = 0
     var reasoning: Int = 0
     var totalTokens: Int = 0
+    /// P6.0③: pi 按 model registry 单价算好的本次调用成本 (USD); nil = 无上报/旧数据。
+    var costUSD: Double?
     /// 消息级模型 (中途切模型不串)。
     var model: String?
     /// 本次调用的 call id (pi responseId)。

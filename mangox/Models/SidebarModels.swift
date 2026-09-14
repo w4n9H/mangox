@@ -25,16 +25,30 @@ struct ConversationItem: Identifiable, Hashable {
     var title: String
     let updatedAt: Date
     let unreadCount: Int
+    /// P6.3.1: 侧问会话标记 — 非 nil = 由该会话 fork 而来 (UI 侧栏徽章 + 快照提示条判定)。
+    let sideOf: UUID?
 
     init(id: UUID = UUID(),
          title: String,
          updatedAt: Date = .now,
-         unreadCount: Int = 0) {
+         unreadCount: Int = 0,
+         sideOf: UUID? = nil) {
         self.id = id
         self.title = title
         self.updatedAt = updatedAt
         self.unreadCount = unreadCount
+        self.sideOf = sideOf
     }
+}
+
+/// P6.3.1: 当前选中会话的侧问快照信息 (提示条数据源; fork 时刻定格, 不随后续轮次变化)。
+struct SideChatInfo: Equatable {
+    /// 源会话 id (nil-safe 使用: 源可能已被删除)。
+    let parent: UUID
+    let parentTitle: String
+    /// fork 时源会话已完成的轮数 (提示条 "含 N 轮源会话上下文")。
+    let turns: Int
+    let at: Date
 }
 
 extension Date {

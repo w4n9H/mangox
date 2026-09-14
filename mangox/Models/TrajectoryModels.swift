@@ -55,6 +55,52 @@ struct TrajectorySummary: Hashable {
     let calls: Int
 }
 
+// MARK: - P6.2 Trace v2 模型
+
+/// P6.2.1: 工具行分组 (同回合内连续同类工具折叠为一行「bash × 5」)。
+struct TrajectoryToolGroup: Identifiable, Hashable {
+    let id: UUID            // 首个工具事件 id (展开态 key)
+    let kind: ToolKind
+    let events: [TrajectoryEvent]
+
+    var count: Int { events.count }
+    /// 合计时长 (任一工具无时长则整体视为未知的口径: 只合计已上报部分)。
+    var totalDurationMs: Int? {
+        let ms = events.compactMap { $0.tool?.durationMs }
+        return ms.isEmpty ? nil : ms.reduce(0, +)
+    }
+    var hasError: Bool { events.contains { if case .error = $0.tool?.phase { return true }; return false } }
+}
+
+/// P6.2.1: 回合内展示行 (工具分组折叠后的行序列)。
+enum TrajectoryRow: Identifiable, Hashable {
+    case single(TrajectoryEvent)
+    case group(TrajectoryToolGroup)
+
+    var id: UUID {
+        switch self {
+        case .single(let e): return e.id
+        case .group(let g): return g.id
+        }
+    }
+}
+
+/// P6.2.2: Details 视图行 = 一次 LLM 调用 (usage.responseId 有值的消息)。
+struct TrajectoryDetail: Identifiable, Hashable {
+    let id: UUID
+    let timestamp: Date
+    let usage: MessageUsage
+    /// 时长估计 (与下一条 LLM 调用的时间差; 末条未知)。
+    var heuristicMs: Int? = nil
+}
+
+/// P6.2.2: Details 全集 (rows + 无 responseId 旧消息的归并数)。
+struct TrajectoryDetails: Hashable {
+    let rows: [TrajectoryDetail]
+    /// usage 有值但无 responseId 的旧消息数 (归并展示"未上报")。
+    let unreported: Int
+}
+
 enum TrajectoryBuilder {
 
     /// messages → 回合分组事件流。
@@ -154,6 +200,87 @@ enum TrajectoryBuilder {
         TrajectorySummary(durationMs: turns.compactMap(\.durationMs).reduce(0, +),
                           turns: turns.count,
                           calls: turns.reduce(0) { $0 + $1.toolCalls })
+    }
+
+    // MARK: P6.2.1 工具行分组
+
+    /// 回合事件 → 展示行: 连续同类工具折叠为 group (跨段/隔行不合并, 保持时序语义)。
+    static func rows(for turn: TrajectoryTurn) -> [TrajectoryRow] {
+        var rows: [TrajectoryRow] = []
+        var pending: [TrajectoryEvent] = []   // 连续同类工具缓冲
+
+        func flushGroup() {
+            guard !pending.isEmpty else { return }
+            if pending.count == 1, let e = pending.first {
+                rows.append(.single(e))
+            } else if let first = pending.first?.tool {
+                rows.append(.group(TrajectoryToolGroup(id: pending[0].id, kind: first.kind,
+                                                       events: pending)))
+            }
+            pending = []
+        }
+
+        for event in turn.events {
+            if let tool = event.tool {
+                if let last = pending.last?.tool, last.kind == tool.kind {
+                    pending.append(event)
+                } else {
+                    flushGroup()
+                    pending = [event]
+                }
+            } else {
+                flushGroup()
+                rows.append(.single(event))
+            }
+        }
+        flushGroup()
+        return rows
+    }
+
+    /// P6.2.1: 回合折叠态 (纯函数): 用户点过的以 override 为准; 否则默认仅展开最近一回合。
+    static func isTurnExpanded(_ turn: TrajectoryTurn, lastTurnId: UUID?,
+                               overrides: [UUID: Bool]) -> Bool {
+        return overrides[turn.id] ?? (turn.id == lastTurnId)
+    }
+
+    // MARK: P6.2.2 Turns 卡片摘要
+
+    /// 回合输出首句 = 首条 assistant 事件的首句 (nil = 纯工具回合)。
+    static func turnOutput(_ turn: TrajectoryTurn) -> String? {
+        guard let a = turn.events.first(where: { $0.kind == .assistant }) else { return nil }
+        return firstSentence(a.fullText)
+    }
+
+    /// 回合 tokens = 各 assistant 事件 usage.totalTokens 合计 (无 usage → nil)。
+    static func turnTokens(_ turn: TrajectoryTurn) -> Int? {
+        let tokens = turn.events.compactMap { $0.usage?.totalTokens }
+        return tokens.isEmpty ? nil : tokens.reduce(0, +)
+    }
+
+    // MARK: P6.2.2 Details 派生
+
+    /// messages → LLM 调用明细: usage.responseId 有值的消息各一行;
+    /// usage 有值但无 responseId 的旧消息计 unreported (归并"未上报")。
+    static func details(from messages: [ChatMessage]) -> TrajectoryDetails {
+        var rows: [TrajectoryDetail] = []
+        var unreported = 0
+        for msg in messages where msg.role == .assistant {
+            guard let usage = msg.usage, usage.totalTokens > 0 else { continue }
+            if usage.responseId == nil || usage.responseId?.isEmpty == true {
+                unreported += 1
+            } else {
+                rows.append(TrajectoryDetail(id: msg.id, timestamp: msg.timestamp, usage: usage))
+            }
+        }
+        // 时长估计: 与下一条调用的时间差 (空/单行直接返回, 防 0..<(-1) range trap)
+        guard rows.count > 1 else {
+            return TrajectoryDetails(rows: rows, unreported: unreported)
+        }
+        for i in 0..<(rows.count - 1) {
+            let ms = Int(rows[i + 1].timestamp.timeIntervalSince(rows[i].timestamp) * 1000)
+            if ms > 0 { rows[i].heuristicMs = ms }
+        }
+        return TrajectoryDetails(rows: rows, unreported: unreported)
     }
 
     /// ASSISTANT 折叠预览: 首句。句号类终止符保留在预览里 (干净收尾不加省略号);

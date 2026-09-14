@@ -136,8 +136,9 @@ final class MemoryDistiller {
             } else {
                 send(["type": "extension_ui_response", "id": reqId, "value": "Deny"])
             }
-        case "agent_end", "agent_settled":
-            if collected.isEmpty { print("[MemoryDistiller] agent_end 但无文本产出 (检查 --model 参数与 LLM 配置)") }
+        case "agent_settled":
+            // P6.0①: 只认彻底落定 — agent_end(willRetry) 后面还有重试, 提前收会腰斩提炼。
+            if collected.isEmpty { print("[MemoryDistiller] agent_settled 但无文本产出 (检查 --model 参数与 LLM 配置)") }
             complete(collected.isEmpty ? nil : collected)
         default:
             break

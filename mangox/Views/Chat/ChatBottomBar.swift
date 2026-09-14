@@ -22,6 +22,9 @@ struct ChatBottomBar: View {
         if let notice = store.turnLimitNotice {
             noticeBanner(notice, clear: { store.turnLimitNotice = nil })
         }
+        if let notice = store.extensionNotice {
+            noticeBanner(notice, clear: { store.extensionNotice = nil })
+        }
         ChatComposer(store: store)
     }
 

@@ -104,6 +104,13 @@ final class PersistenceStore {
         addColumnIfMissing("scheduled_tasks", "completed_at", "REAL")
         addColumnIfMissing("scheduled_tasks", "run_count", "INTEGER NOT NULL DEFAULT 0")
         addColumnIfMissing("scheduled_tasks", "created_at", "REAL")
+        // P6.3.1: 侧问会话 (side_of = 源会话; fork 溯源/轮数/时刻; session_file = 显式绑定路径,
+        // fork 产物文件名带时间戳前缀, 无法从 UUID 派生, 只能 get_state.sessionFile 回读)
+        addColumnIfMissing("sessions", "side_of", "TEXT")
+        addColumnIfMissing("sessions", "fork_source_file", "TEXT")
+        addColumnIfMissing("sessions", "fork_turns", "INTEGER")
+        addColumnIfMissing("sessions", "fork_at", "REAL")
+        addColumnIfMissing("sessions", "session_file", "TEXT")
         // P3.10: created_at 一次性重算——上一版把存量统一回填成迁移时刻导致排序乱;
         // 真实创建时间不可考, 用日志会话时间 (≈首次 fire) 近似, 无日志的用 rowid 兜底沉底。
         let backfilled = ((try? db.query("SELECT value FROM settings WHERE key = 'sched_created_backfill'")) ?? []).isEmpty == false
@@ -243,7 +250,7 @@ final class PersistenceStore {
 
     private func loadItems(projectId: UUID?) -> [ConversationItem] {
         let sql = """
-            SELECT id, title, updated_at FROM sessions
+            SELECT id, title, updated_at, side_of FROM sessions
             \(projectId == nil ? "WHERE project_id IS NULL" : "WHERE project_id = ?")
             ORDER BY position DESC
             """
@@ -252,8 +259,49 @@ final class PersistenceStore {
         return rows.map {
             ConversationItem(id: UUID(uuidString: text($0, "id")) ?? UUID(),
                              title: text($0, "title"),
-                             updatedAt: Date(timeIntervalSince1970: double($0, "updated_at")))
+                             updatedAt: Date(timeIntervalSince1970: double($0, "updated_at")),
+                             sideOf: UUID(uuidString: text($0, "side_of")))
         }
+    }
+
+    // MARK: - Side chat (P6.3.1 侧问会话)
+
+    /// 侧问会话落库标记 (建会话后追加写侧问专属列; insertSession 保持通用)。
+    func markSideChat(id: UUID, sideOf: UUID, sourceFile: String, turns: Int, at: Date) throws {
+        try db.run("""
+            UPDATE sessions SET side_of = ?, fork_source_file = ?, fork_turns = ?, fork_at = ?
+            WHERE id = ?
+            """, [.text(sideOf.uuidString),
+                  .text(sourceFile),
+                  .int(Int64(turns)),
+                  .real(at.timeIntervalSince1970),
+                  .text(id.uuidString)])
+    }
+
+    /// 显式绑定路径写入 (fork 产物 get_state.sessionFile 回读后落库)。
+    func setSessionFile(id: UUID, path: String) throws {
+        try db.run("UPDATE sessions SET session_file = ? WHERE id = ?",
+                   [.text(path), .text(id.uuidString)])
+    }
+
+    /// 显式绑定路径 (nil = 未回读过; 普通会话恒 nil, 走 UUID 派生路径)。
+    func loadSessionFile(id: UUID) -> String? {
+        let rows = (try? db.query("SELECT session_file FROM sessions WHERE id = ?",
+                                  [.text(id.uuidString)])) ?? []
+        return optionalText(rows.first ?? [:], "session_file")
+    }
+
+    /// 侧问信息 (nil = 非侧问会话)。
+    func sideChatInfo(id: UUID) -> (sideOf: UUID, sourceFile: String, turns: Int, at: Date)? {
+        let rows = (try? db.query("""
+            SELECT side_of, fork_source_file, fork_turns, fork_at FROM sessions WHERE id = ?
+            """, [.text(id.uuidString)])) ?? []
+        guard let row = rows.first,
+              let sideOf = UUID(uuidString: text(row, "side_of")),
+              let src = optionalText(row, "fork_source_file") else { return nil }
+        let turns = Int(int(row["fork_turns"] ?? .null))
+        let at = optionalDate(row, "fork_at") ?? .distantPast
+        return (sideOf, src, turns, at)
     }
 
     // MARK: - Events (append-only trajectory)

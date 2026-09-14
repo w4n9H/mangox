@@ -238,11 +238,16 @@ struct SidebarView: View {
         ConversationRow(item: item,
                         isSelected: item.id == store.selectedConversationId,
                         indent: indent,
-                        badge: store.scheduledBadge(for: item.id) ?? "bubble.left",   // 普通会话 = 对话气泡
+                        // P6.3.1: 侧问会话 = fork 徽章; 普通会话 = 定时任务标 or 对话气泡
+                        badge: item.sideOf != nil
+                            ? "arrow.triangle.branch"
+                            : (store.scheduledBadge(for: item.id) ?? "bubble.left"),
                         isRunning: store.runningTurns.contains(item.id),   // P4.0.2: 并发在途各自转圈
                         onSelect: { store.selectConversation(item.id) },
                         onRename: { store.renameConversation(item.id, to: $0) },
-                        onDelete: { confirmDeleteTarget = item })
+                        onDelete: { confirmDeleteTarget = item },
+                        canSideChat: store.canStartSideChat(for: item.id),
+                        onSideChat: { store.startSideChat(from: item.id) })
     }
 }
 
@@ -259,6 +264,9 @@ struct ConversationRow: View {
     var onSelect: () -> Void
     var onRename: (String) -> Void
     var onDelete: () -> Void
+    /// P6.3.1: "..." 菜单里的侧问入口 (无持久记忆/侧问自身时禁用)
+    var canSideChat: Bool = false
+    var onSideChat: () -> Void = {}
     @State private var hovering: Bool = false
     @State private var isEditing: Bool = false
     @State private var editTitle: String = ""
@@ -306,25 +314,23 @@ struct ConversationRow: View {
             }
 
             if hovering && !isEditing {
-                HStack(spacing: 2) {
-                    Button(action: startRename) {
-                        Image(systemName: "pencil")
-                            .font(.system(size: 9))
-                            .foregroundStyle(CodexTheme.textTertiary)
-                            .frame(width: 18, height: 18)
-                    }
-                    .buttonStyle(.plain)
-                    .help("重命名")
-
-                    Button(action: onDelete) {
-                        Image(systemName: "trash")
-                            .font(.system(size: 9))
-                            .foregroundStyle(CodexTheme.textTertiary)
-                            .frame(width: 18, height: 18)
-                    }
-                    .buttonStyle(.plain)
-                    .help("删除会话")
+                // P6.3.1: 行操作收敛为 "..." 菜单 (改名 / 由此侧问 / 删除) — 原双小标过碎
+                Menu {
+                    Button("重命名") { startRename() }
+                    Button("由此侧问") { onSideChat() }
+                        .disabled(!canSideChat)
+                    Divider()
+                    Button("删除会话…", role: .destructive) { onDelete() }
+                } label: {
+                    Image(systemName: "ellipsis")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(CodexTheme.textTertiary)
+                        .frame(width: 18, height: 18)
+                        .contentShape(Rectangle())
                 }
+                .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
+                .fixedSize()
             } else {
                 Text(item.updatedAt.relativeTag)
                     .font(CodexTheme.fontTiny)

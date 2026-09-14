@@ -13,8 +13,20 @@ enum CapsuleMode: Hashable {
     case chat, trajectory
 }
 
+/// P6.3.2: 离开摘要横幅数据 (结算后的展示态; 纯内存, App 重启即弃 — 库里消息列表才是权威)。
+struct AwaySummary: Equatable {
+    let sid: UUID
+    /// 离开期间完成的回合数。
+    let turns: Int
+    /// 最近一轮回复的首行前 60 字。
+    let preview: String
+}
+
 @MainActor
 final class ChatStore: ObservableObject {
+
+    /// 会话默认标题 (首条 user 消息发送后自动替换为消息前 10 字符)。
+    static let defaultConversationTitle = "New chat"
 
     /// P4.0.2 Transport 池: sessionId -> 实例 (每会话一个; 内部仍 per-turn 进程, spawn 即跑完即退)。
     private var transports: [UUID: any AgentTransport] = [:]
@@ -104,6 +116,19 @@ final class ChatStore: ObservableObject {
         }
     }
 
+    // P6.0②: 扩展 fire-and-forget 通知横幅 (pi extension notify; 同 8s 自清模式)。
+    @Published var extensionNotice: (text: String, isError: Bool)?
+    private var extensionNoticeTask: Task<Void, Never>?
+
+    func setExtensionNotice(_ text: String, isError: Bool) {
+        extensionNotice = (text, isError)
+        extensionNoticeTask?.cancel()
+        extensionNoticeTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 8_000_000_000)
+            if !Task.isCancelled { extensionNotice = nil }
+        }
+    }
+
     /// 在途回合数是否已达上限。
     var atTurnLimit: Bool { runningTurns.count >= maxConcurrentTurns }
 
@@ -138,24 +163,47 @@ final class ChatStore: ObservableObject {
 
     /// 顶栏标题: 当前会话名, 无选中则 "New chat"。
     var selectedTitle: String {
-        allConversations.first { $0.id == selectedConversationId }?.title ?? "New chat"
+        allConversations.first { $0.id == selectedConversationId }?.title ?? Self.defaultConversationTitle
     }
 
     // Workspace (第三栏, 文件树): 真实目录扫描 (P3.4), 无项目时为空
     @Published var fileTree: [FileNode] = []
 
-    // Status bar
-    @Published var status: AgentStatus = SampleSession.status
+    // P6.1.1: 当前选中会话的状态栏统计 (上下文/Token/缓存)。
+    // 归并源: usageTick (流式期) + didReportSessionStats (spawn 期/settled 前的 get_session_stats)。
+    @Published var sessionStats: SessionStats?
+    /// P6.1.2: 当前选中会话的回合过程态 (phaseChanged 归并; 仅前台会话生效)。
+    @Published var runtimePhase: RuntimePhase = .idle
+    /// P6.2.3: Trace HTML 导出——临时 transport + 超时兜底 + 在途开关。
+    private var exportTransport: (any AgentTransport)?
+    private var exportTimeout: Task<Void, Never>?
+    @Published var isExportingHTML = false
+
+    // P6.3.1: 侧问会话
+    /// 当前选中会话的快照信息 (提示条数据源; selectConversation 刷新, 普通会话 nil)。
+    @Published private(set) var activeSideChat: SideChatInfo?
+    /// 在途回合的 fork 临时快照 (sid → 截断快照文件; 回读后清理磁盘)。
+    private var pendingForkTemp: [UUID: String] = [:]
+
+    // P6.3.2: 离开摘要 (Away summary)
+    /// 当前选中会话的离开摘要 (悬浮胶囊; 点击/×/新回合清除)。
+    @Published private(set) var awaySummary: AwaySummary?
+    /// 不在场完成的回合积累器 (sid 分键, 天然隔离并发任务; 结算即摘除)。
+    /// 冒烟直读断言, 故 internal。
+    private(set) var pendingAway: [UUID: (turns: Int, preview: String)] = [:]
+
+    /// P6.1.2: 状态栏"当前会话 N 轮" = 视图内 user 消息数。
+    var currentTurnCount: Int { messages.filter { $0.role == .user }.count }
 
     // P3.5: 对端能力上报
     /// 可用模型清单 (pi get_available_models; 空 = 尚未上报, 菜单只显示当前模型)。
     @Published var availableModels: [AgentModelInfo] = []
     /// P5.1: 自定义模型条目 (菜单自主 — 与 pi 目录展示名解耦; 同名时覆盖 pi 条目)。
     @Published var customModels: [CustomModel] = []
-    /// 当前模型 (provider/id 分量), 与 status.modelName 同步更新。
+    /// 当前模型 (provider/id 分量), composer 模型菜单的数据源。
     @Published var currentProvider: String = ""
     @Published var currentModelId: String = ""
-    /// 当前思考级别 (pi 状态; UI 用 ReasoningEffort 映射)。
+    /// 当前思考级别 (pi 状态)。
     @Published var thinkingLevel: ThinkingLevel = .high
     /// 用户是否已在 UI 选过模型/级别 (选过 = 期望值钉死, 探测上报不再回写)。
     @Published var userThinkingLevelPinned: Bool = false
@@ -349,12 +397,21 @@ final class ChatStore: ObservableObject {
                 self?.transports.values.forEach { $0.shutdown() }
             }
         }
+        // P6.3.2: 回到前台 → 结算选中会话的离开摘要 (切走期间落定的回合)
+        NotificationCenter.default.addObserver(
+            forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.settleAwaySummary() }
+        }
     }
 
     /// SQLite WAL → 主文件落盘 (供退出钩子与冒烟测试调用)。
     func flushPersistence() {
         persistence?.checkpoint()
     }
+
+    /// 冒烟: 持久层直访 (persistence 私有; T18 需直写 session_file 行模拟"有记忆")。
+    var persistenceDebug: PersistenceStore? { persistence }
 
     /// 记录"上一次作业会话" (启动恢复用)。选中会话变化的所有入口都要调。
     private func markLastSession() {
@@ -367,7 +424,7 @@ final class ChatStore: ObservableObject {
 
     /// Codex 式新建会话：插入 Chats 平铺区顶部并选中, 消息清空。
     func newConversation() {
-        let item = ConversationItem(title: "New chat")
+        let item = ConversationItem(title: Self.defaultConversationTitle)
         chats.insert(item, at: 0)
         selectedConversationId = item.id
         messages = []
@@ -386,18 +443,21 @@ final class ChatStore: ObservableObject {
         guard !trimmed.isEmpty else { return }
         for g in projects.indices {
             if let idx = projects[g].items.firstIndex(where: { $0.id == id }) {
-                projects[g].items[idx].title = trimmed
+                let old = projects[g].items[idx]
                 projects[g].items[idx] = ConversationItem(
-                    id: projects[g].items[idx].id, title: trimmed,
+                    id: old.id, title: trimmed,
                     updatedAt: .now,
-                    unreadCount: projects[g].items[idx].unreadCount)
+                    unreadCount: old.unreadCount,
+                    sideOf: old.sideOf)   // P6.3.1: 侧问标记保留 (重建构造防丢)
                 return
             }
         }
         if let idx = chats.firstIndex(where: { $0.id == id }) {
-            chats[idx] = ConversationItem(id: chats[idx].id, title: trimmed,
+            let old = chats[idx]
+            chats[idx] = ConversationItem(id: old.id, title: trimmed,
                                           updatedAt: .now,
-                                          unreadCount: chats[idx].unreadCount)
+                                          unreadCount: old.unreadCount,
+                                          sideOf: old.sideOf)
         }
         try? persistence?.renameSession(id: id, title: trimmed, updatedAt: .now)
     }
@@ -407,9 +467,15 @@ final class ChatStore: ObservableObject {
     /// 默认保留: 文件是 agent 的对话记忆, 误删不可恢复 (UI 二次确认里让用户选)。
     func deleteConversation(_ id: UUID, deleteTranscript: Bool = false) {
         evictTransport(id)   // P4.0.2: 逐出池实例 (终止在途 pi + 清回合状态), 无论是否当前选中
+        // P6.3.1: 侧问会话的 transcript 是 fork 产物 (路径显式存库) — 必须在删行前读出
+        let explicitFile = persistence?.loadSessionFile(id: id)
         try? persistence?.deleteSession(id: id) // 连带清 events
         if deleteTranscript {
-            PiRpcTransport.removeSessionFile(for: id)   // pi 持久 transcript
+            if let explicit = explicitFile {
+                PiRpcTransport.removeSessionFile(atPath: explicit)   // fork 产物 (文件名不可派生)
+            } else {
+                PiRpcTransport.removeSessionFile(for: id)   // pi 持久 transcript (派生路径)
+            }
         }
         for g in projects.indices {
             projects[g].items.removeAll { $0.id == id }
@@ -506,7 +572,7 @@ final class ChatStore: ObservableObject {
     /// 在指定项目下新建会话并选中 (项目行 "..." 菜单 / 新建项目共用)。
     func createSession(in projectId: UUID) {
         guard projects.contains(where: { $0.id == projectId }) else { return }
-        let item = ConversationItem(title: "New chat")
+        let item = ConversationItem(title: Self.defaultConversationTitle)
         if let g = projects.firstIndex(where: { $0.id == projectId }) {
             projects[g].items.insert(item, at: 0)
         }
@@ -636,7 +702,11 @@ final class ChatStore: ObservableObject {
                 liveTurns[previous] = live
             }
         }
-        guard let id else { return }
+        guard let id else {
+            activeSideChat = nil   // P6.3.1: 空选中清提示条
+            awaySummary = nil      // P6.3.2: 空选中清离开摘要
+            return
+        }
         messages = replayMessages(for: id)
         // 会话回合在途 → 合并实时镜像 (库快照 + 在途产出), 切回不缺半截;
         // 已落库的 finalized 块 replay 已含 → 按 id 去重
@@ -647,6 +717,158 @@ final class ChatStore: ObservableObject {
         }
         markLastSession()
         syncWorkspaceContext()   // 选中会话变化 → 工作区上下文跟随 (P3.4)
+        // P6.1.2: 过程态跟随选中会话 (在途 = streaming 粗粒度; 精细相位仅前台会话事件归并)
+        runtimePhase = runningTurns.contains(id) ? .streaming : .idle
+        refreshSideChatBanner(for: id)
+        settleAwaySummary()   // P6.3.2: 切入会话即结算其离开积累 (无则清显示)
+    }
+
+    // MARK: - Side chat (P6.3.1 侧问会话)
+
+    /// 提示条数据刷新 (选中会话变化时调用; 普通会话/空选中清 nil)。
+    private func refreshSideChatBanner(for id: UUID?) {
+        guard let id, let info = persistence?.sideChatInfo(id: id) else {
+            activeSideChat = nil
+            return
+        }
+        let parentTitle = allConversations.first { $0.id == info.sideOf }?.title ?? "已删除的会话"
+        activeSideChat = SideChatInfo(parent: info.sideOf, parentTitle: parentTitle,
+                                      turns: info.turns, at: info.at)
+    }
+
+    /// 侧问入口可用性 (按会话): 非侧问自身 (不嵌套 fork) 且有持久 transcript。
+    func canStartSideChat(for sid: UUID) -> Bool {
+        guard let item = allConversations.first(where: { $0.id == sid }),
+              item.sideOf == nil else { return false }
+        return hasSessionFile(for: sid)
+    }
+
+    /// 侧问入口可用性 (当前选中会话; 顶栏按钮置灰判定)。
+    var canStartSideChat: Bool {
+        selectedConversationId.map { canStartSideChat(for: $0) } ?? false
+    }
+
+    /// 会话是否有 pi 持久 transcript (显式绑定优先, 否则查派生路径文件)。
+    func hasSessionFile(for sid: UUID) -> Bool {
+        if let f = persistence?.loadSessionFile(id: sid), !f.isEmpty { return true }
+        return FileManager.default.fileExists(atPath: PiRpcTransport.sessionFilePath(for: sid))
+    }
+
+    /// 派生绑定动作 (beginTurn 下发 + 冒烟断言): 侧问首回合 fork → 后续回合显式文件 → 普通派生。
+    enum SideChatBinding: Equatable {
+        case fork(sourceFile: String)
+        case explicitFile(path: String)
+        case derived
+    }
+
+    /// 会话绑定决策 (纯逻辑, 冒烟直测): session_file 已回读 = fork 已完成, 后续走显式文件。
+    func sideChatBinding(for sid: UUID) -> SideChatBinding {
+        guard let info = persistence?.sideChatInfo(id: sid) else { return .derived }
+        if let f = persistence?.loadSessionFile(id: sid), !f.isEmpty {
+            return .explicitFile(path: f)
+        }
+        return .fork(sourceFile: info.sourceFile)
+    }
+
+    /// 发起侧问: 快照 fork 源会话 (turns = nil 整文件最新态; 指定 = 截断到该轮)。
+    /// 新会话进入侧栏 (与源同容器), 首回合 send 时才真正 spawn --fork (per-turn 惯例)。
+    func startSideChat(from sourceId: UUID, upTo turns: Int? = nil) {
+        guard let item = allConversations.first(where: { $0.id == sourceId }),
+              item.sideOf == nil else {
+            setTurnLimitNotice("无法侧问：源会话无效或已是侧问会话")
+            return
+        }
+        guard !runningTurns.contains(sourceId) else {
+            setTurnLimitNotice("源会话回合进行中，结束后再发起侧问")
+            return
+        }
+        guard let sourceFile = sideChatSourceFile(for: sourceId) else {
+            setTurnLimitNotice("无法侧问：该会话没有持久记忆文件 (如临时任务会话)")
+            return
+        }
+        // 截断快照 (轮级入口); 整文件入口直接用源文件, 零拷贝
+        var tempSnapshot: String?
+        let forkSource: String
+        if let turns {
+            guard let snap = Self.prepareForkSnapshot(sourcePath: sourceFile, turns: turns) else {
+                setTurnLimitNotice("侧问快照创建失败：无法读取源会话记忆文件")
+                return
+            }
+            tempSnapshot = snap
+            forkSource = snap
+        } else {
+            forkSource = sourceFile
+        }
+        // fork 时源会话的轮数 (提示条 "含 N 轮源会话上下文")
+        let sourceTurns = turns ?? replayMessages(for: sourceId).filter { $0.role == .user }.count
+        // 新会话进源会话所在容器 (project 组 or Chats 平铺区)
+        let side = ConversationItem(title: "Side · \(item.title)", sideOf: sourceId)
+        var inProject: UUID?
+        if let g = projects.firstIndex(where: { $0.items.contains(where: { $0.id == sourceId }) }) {
+            projects[g].items.insert(side, at: 0)
+            inProject = projects[g].id
+        } else {
+            chats.insert(side, at: 0)
+        }
+        try? persistence?.insertChatSession(side, projectId: inProject)
+        try? persistence?.markSideChat(id: side.id, sideOf: sourceId,
+                                       sourceFile: forkSource, turns: sourceTurns, at: .now)
+        if let tempSnapshot { pendingForkTemp[side.id] = tempSnapshot }
+        selectConversation(side.id)
+    }
+
+    /// 侧问源文件: 显式绑定 (历史侧问做源的场景禁了, 这里兜底) → 派生路径存在性校验。
+    private func sideChatSourceFile(for sid: UUID) -> String? {
+        if let f = persistence?.loadSessionFile(id: sid), !f.isEmpty { return f }
+        let derived = PiRpcTransport.sessionFilePath(for: sid)
+        return FileManager.default.fileExists(atPath: derived) ? derived : nil
+    }
+
+    /// 从源 session 文件截取前 N 轮快照, 写入临时文件供 --fork。
+    /// N = nil 直接返回源路径 (零拷贝); 失败 (源不可读) 返回 nil。
+    static func prepareForkSnapshot(sourcePath: String, turns: Int) -> String? {
+        guard let lines = try? String(contentsOfFile: sourcePath, encoding: .utf8)
+            .components(separatedBy: .newlines) else { return nil }
+        // 过滤末尾空行 (components 按分隔符拆分会产生尾空串)
+        let content = lines.filter { !$0.isEmpty }
+        let prefix = snapshotLinePrefix(content, turns: turns)
+        let out = content.prefix(prefix).joined(separator: "\n") + "\n"
+        let dir = PiRpcTransport.sessionDirectory
+        try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+        let path = dir + "/side-snapshot-" + UUID().uuidString + ".jsonl"
+        guard FileManager.default.createFile(atPath: path, contents: out.data(using: .utf8)) else {
+            return nil
+        }
+        return path
+    }
+
+    /// 截断点计算 (纯函数, 冒烟直测): 保留到第 turns 轮结束 = 丢弃第 turns+1 条 user 消息起的所有行。
+    /// user 消息判定: type=message 且 message.role=user (pi JSONL 语义)。
+    /// 注意: 线性前缀截断, 分支树的旁支条目随前缀丢弃 (parentIds 仍自洽)。
+    static func snapshotLinePrefix(_ lines: [String], turns: Int) -> Int {
+        var userSeen = 0
+        for (i, line) in lines.enumerated() {
+            if Self.isUserEntry(line) {
+                if userSeen == turns { return i }   // 第 turns+1 条 user 起 = 下一轮, 从这里截断
+                userSeen += 1
+            }
+        }
+        return lines.count   // turns ≥ 源轮数: 整文件
+    }
+
+    private static func isUserEntry(_ line: String) -> Bool {
+        guard let data = line.data(using: .utf8),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              obj["type"] as? String == "message",
+              let msg = obj["message"] as? [String: Any] else { return false }
+        return msg["role"] as? String == "user"
+    }
+
+    /// fork 回读收尾 (成功/失败共用): 临时快照清理。
+    private func cleanupForkTemp(sid: UUID) {
+        if let tmp = pendingForkTemp.removeValue(forKey: sid) {
+            try? FileManager.default.removeItem(atPath: tmp)
+        }
     }
 
     // MARK: - Send (只做入参整理, 生成逻辑在 transport)
@@ -673,9 +895,20 @@ final class ChatStore: ObservableObject {
         messages.append(msg)
         draft = ""
         persistMessage(msg, sid: sid)
+        autoTitleIfNeeded(sid: sid, text: trimmed)   // P6.4: 默认标题会话按首条消息自动命名
         // 任务 fire 轮次保持 ephemeral (交接文件注入模板不得滚进持久 transcript)
         beginTurn(sid: sid, prompt: trimmed, ephemeral: ephemeral,
                   cwd: activeProjectPath, unattended: false)
+    }
+
+    /// 首条消息自动命名: 仍是默认标题 → 取首行前 10 字符 (一次性, 之后用户可随意重命名)。
+    private func autoTitleIfNeeded(sid: UUID, text: String) {
+        guard let item = allConversations.first(where: { $0.id == sid }),
+              item.title == Self.defaultConversationTitle else { return }
+        let firstLine = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            .split(separator: "\n").first.map(String.init) ?? ""
+        guard !firstLine.isEmpty else { return }
+        renameConversation(sid, to: String(firstLine.prefix(10)))
     }
 
     /// P4.0.2: 回合启动公共路径 (用户会话与定时 fire 共用)。
@@ -683,13 +916,24 @@ final class ChatStore: ObservableObject {
     private func beginTurn(sid: UUID, prompt: String, ephemeral: Bool,
                            cwd: String?, unattended: Bool) {
         let t = transportFor(sid)
-        t.updateSessionBinding(ephemeral ? nil : sid)   // nil = --no-session (fire 轮次, P3.9 拍板)
+        if ephemeral {
+            t.updateSessionBinding(nil)   // nil = --no-session (fire 轮次, P3.9 拍板)
+        } else {
+            t.updateSessionBinding(sid)
+            // P6.3.1: 侧问绑定 (决策见 sideChatBinding; 普通会话 = derived, 无额外下发)
+            switch sideChatBinding(for: sid) {
+            case .fork(let src):          t.startForkSession(sourceFile: src)
+            case .explicitFile(let path): t.updateSessionFilePath(path)
+            case .derived:                break
+            }
+        }
         t.updateWorkingDirectory(cwd)
         // 无人值守 fire 关审批 (弹卡 = 任务死锁); 其余跟随全局开关
         t.updateApprovalPolicy(askApproval: unattended ? false : askApproval)
         liveTurns[sid] = liveTurns[sid] ?? []   // 镜像容器就位 (视图会话事件直进 messages)
         runningTurns.insert(sid)
         turnStartAt[sid] = Date()   // P4.1: 回合计时起点
+        if sid == selectedConversationId { awaySummary = nil }   // P6.3.2: 新回合开始清过期摘要
         if injectedTransport != nil { injectedTurnSid = sid }   // 注入实例: 记录串行回合归属
         t.send(prompt: prompt)
     }
@@ -698,7 +942,7 @@ final class ChatStore: ObservableObject {
     /// 选了 project 则新会话归入该 project (工作区/cwd 绑定的前提)。
     private func ensureConversationForSend() {
         guard selectedConversationId == nil else { return }
-        let item = ConversationItem(title: "New chat")
+        let item = ConversationItem(title: Self.defaultConversationTitle)
         if let pid = selectedProjectId,
            let g = projects.firstIndex(where: { $0.id == pid }) {
             projects[g].items.insert(item, at: 0)
@@ -825,7 +1069,7 @@ final class ChatStore: ObservableObject {
         if !currentModelId.isEmpty {
             return currentModelId.components(separatedBy: "/").last ?? currentModelId
         }
-        return status.modelName.components(separatedBy: "/").last ?? status.modelName
+        return "model"
     }
 
     /// 新增/覆盖自定义模型 (落库 + 刷菜单)。返回 false = provider 不在 pi 目录中。
@@ -1511,6 +1755,20 @@ extension ChatStore: AgentTransportDelegate {
             }
             try? persistence?.appendToolUpdateEvent(sessionId: sid, toolId: toolId, phase: phase)
 
+        case .extensionNotify(let type, let message):
+            // P6.0②: 扩展 fire-and-forget 通知 → 底栏横幅 (8s 自清; error/warning 用错误样式)。
+            setExtensionNotice(message, isError: type == "error" || type == "warning")
+
+        case .usageTick(let stats):
+            // P6.1.1: 流式期用量 tick (仅前台会话; context% 缺省沿用最近一次上报)
+            guard inView else { break }
+            applySessionStats(stats)
+
+        case .phaseChanged(let phase):
+            // P6.1.2: 过程态胶囊 (仅前台会话; 切会话由 selectConversation 重置)
+            guard inView else { break }
+            runtimePhase = phase
+
         case .streamEnded:
             runningTurns.remove(sid)
             if inView {
@@ -1522,21 +1780,28 @@ extension ChatStore: AgentTransportDelegate {
             // P4.1/P4.2: 回合完成 —— 前台闪显迷你条完成卡 / 非前台发系统通知。
             // elapsed 取自 turnStartAt 且只能取一次 (手动停过的回合已被清 → 不通知)。
             let elapsed = turnStartAt.removeValue(forKey: sid).map { Date().timeIntervalSince($0) }
-            if let elapsed, elapsed >= 1 {
+            if let elapsed {
                 // 回复预览须在镜像清除前取
                 let proj = sid == selectedConversationId ? messages : (liveTurns[sid] ?? [])
-                let title = allConversations.first { $0.id == sid }?.title ?? "任务"
-                let mins = Int(elapsed) / 60, secs = Int(elapsed) % 60
-                if appIsForeground {
-                    // P4.2: mini 台完成闪显数据 (显示 5s 后自清, mini 窗口保持不自动还原)
-                    lastCompleted = (sid, title, String(format: "✓ 完成 · 耗时 %02d:%02d", mins, secs))
-                    lastCompletedTask?.cancel()
-                    lastCompletedTask = Task { @MainActor in
-                        try? await Task.sleep(nanoseconds: 5_000_000_000)
-                        if !Task.isCancelled { lastCompleted = nil }
+                // P6.3.2: 不在场完成 → 积累 (手动停止 elapsed=nil 已被排除; 摘要独立于通知,
+                // 已发系统通知的完成回到前台仍会出横幅 —— 拍板 2026-09-14)
+                if sid != selectedConversationId || !appIsActive {
+                    accumulateAway(sid: sid, projection: proj)
+                }
+                if elapsed >= 1 {
+                    let title = allConversations.first { $0.id == sid }?.title ?? "任务"
+                    let mins = Int(elapsed) / 60, secs = Int(elapsed) % 60
+                    if appIsForeground {
+                        // P4.2: mini 台完成闪显数据 (显示 5s 后自清, mini 窗口保持不自动还原)
+                        lastCompleted = (sid, title, String(format: "✓ 完成 · 耗时 %02d:%02d", mins, secs))
+                        lastCompletedTask?.cancel()
+                        lastCompletedTask = Task { @MainActor in
+                            try? await Task.sleep(nanoseconds: 5_000_000_000)
+                            if !Task.isCancelled { lastCompleted = nil }
+                        }
+                    } else if completionNotificationsEnabled {
+                        notifyCompletion(sid: sid, title: title, elapsed: elapsed, projection: proj)
                     }
-                } else if completionNotificationsEnabled {
-                    notifyCompletion(sid: sid, title: title, elapsed: elapsed, projection: proj)
                 }
             }
             liveTurns[sid] = nil   // 产出已落库, 镜像即弃 (库为准)
@@ -1551,21 +1816,61 @@ extension ChatStore: AgentTransportDelegate {
         return NSApp.isActive
     }
 
+    // MARK: - P6.3.2: 离开摘要 (Away summary)
+
+    /// 不在场完成 → 积累 (sid 分键; preview 取该轮最后一条 assistant 首行前 60 字)。
+    /// 调用点保证 projection 在镜像清除前传入。
+    private func accumulateAway(sid: UUID, projection: [ChatMessage]) {
+        let preview = Self.assistantPreviewLine(projection)
+        var entry = pendingAway[sid] ?? (turns: 0, preview: "")
+        entry.turns += 1
+        if !preview.isEmpty { entry.preview = preview }
+        pendingAway[sid] = entry
+    }
+
+    /// 结算选中会话的积累 → 展示态 (selectConversation / didBecomeActive 调用)。
+    /// 只消费当前 key, 其余会话的积累原封留着等各自被选中。
+    private func settleAwaySummary() {
+        guard let sid = selectedConversationId else { awaySummary = nil; return }
+        if let p = pendingAway.removeValue(forKey: sid) {
+            awaySummary = AwaySummary(sid: sid, turns: p.turns, preview: p.preview)
+        } else {
+            awaySummary = nil
+        }
+    }
+
+    /// × 按钮: 只关不滚。点击滚底路径由视图调同一方法 (滚动在视图层做)。
+    func dismissAwaySummary() {
+        awaySummary = nil
+    }
+
+    /// P6.3.2: App 是否激活 (在场判定, 语义与 appIsForeground 相反方向的兜底:
+    /// 冒烟/CLI 无 NSApp → 视为在场, 否则冒烟里一切完成都会被算成"离开")。
+    private var appIsActive: Bool {
+        guard Bundle.main.bundleIdentifier != nil else { return true }
+        return NSApp.isActive
+    }
+
     /// P4.1: 组装完成通知 (标题 = 会话/任务名, 正文 = 耗时 + 回复首行 60 字)。
     private func notifyCompletion(sid: UUID, title: String, elapsed: TimeInterval,
                                   projection: [ChatMessage]) {
-        let preview = projection.reversed().compactMap { msg -> String? in
+        let preview = Self.assistantPreviewLine(projection)
+        let mins = Int(elapsed) / 60, secs = Int(elapsed) % 60
+        let body = preview.isEmpty
+            ? String(format: "回合完成 · 耗时 %02d:%02d", mins, secs)
+            : String(format: "回合完成 · 耗时 %02d:%02d\n%@", mins, secs, preview)
+        Task { await CompletionNotifier.shared.post(sessionId: sid, title: title, body: body) }
+    }
+
+    /// 投影里最后一条 assistant 文本的首行前 60 字 (P4.1 通知与 P6.3.2 摘要共用)。
+    static func assistantPreviewLine(_ proj: [ChatMessage]) -> String {
+        proj.reversed().compactMap { msg -> String? in
             guard msg.role == .assistant, case .text(let s) = msg.content, !s.isEmpty else { return nil }
             return s
         }.first.map { line -> String in
             let first = line.split(separator: "\n").first.map(String.init) ?? line
             return first.count > 60 ? String(first.prefix(60)) + "…" : first
         } ?? ""
-        let mins = Int(elapsed) / 60, secs = Int(elapsed) % 60
-        let body = preview.isEmpty
-            ? String(format: "回合完成 · 耗时 %02d:%02d", mins, secs)
-            : String(format: "回合完成 · 耗时 %02d:%02d\n%@", mins, secs, preview)
-        Task { await CompletionNotifier.shared.post(sessionId: sid, title: title, body: body) }
     }
 
     // MARK: - P4.2 迷你条数据投影
@@ -1684,15 +1989,91 @@ extension ChatStore: AgentTransportDelegate {
         guard transport === capabilityProbe else { return }
         if currentProvider.isEmpty { currentProvider = provider }
         if currentModelId.isEmpty { currentModelId = modelId }
-        status.modelName = "\(currentProvider)/\(currentModelId)"
         if let level = ThinkingLevel(rawValue: thinkingLevel), !userThinkingLevelPinned {
             self.thinkingLevel = level
-            status.effort = ReasoningEffort(rawValue: thinkingLevel) ?? status.effort
         }
     }
 
     func transport(_ transport: any AgentTransport, didReportModels: [AgentModelInfo]) {
         guard transport === capabilityProbe else { return }
         availableModels = didReportModels
+    }
+
+    /// P6.1.1: get_session_stats 上报 (spawn 期 / settled 拆进程前)。仅当前选中会话生效
+    /// (探测实例无归属 → sessionOf 为 nil, 天然丢弃其空统计)。
+    func transport(_ transport: any AgentTransport, didReportSessionStats stats: SessionStats) {
+        guard let sid = sessionOf(transport), sid == selectedConversationId else { return }
+        applySessionStats(stats)
+    }
+
+    private func applySessionStats(_ s: SessionStats) {
+        var merged = s
+        if merged.contextPercent == nil { merged.contextPercent = sessionStats?.contextPercent }
+        sessionStats = merged
+    }
+
+    // MARK: - P6.2.3: Trace HTML 导出
+    // (存储属性 exportTransport/exportTimeout/isExportingHTML 在类体; 此处只放编排方法)
+
+    /// 导出文件路径: ~/.mangox/exports/<sessionId>-<yyyyMMdd-HHmmss>.html (internal 供冒烟)。
+    static func exportHTMLPath(sessionId: UUID, now: Date = Date()) -> String {
+        let df = DateFormatter()
+        df.dateFormat = "yyyyMMdd-HHmmss"
+        return NSHomeDirectory() + "/.mangox/exports/"
+            + sessionId.uuidString + "-" + df.string(from: now) + ".html"
+    }
+
+    /// Trace 头导出按钮 → 临时拉起会话绑定进程 → export_html → Finder reveal。
+    func exportTraceHTML() {
+        guard let sid = selectedConversationId, exportTransport == nil else { return }
+        let path = Self.exportHTMLPath(sessionId: sid)
+        try? FileManager.default.createDirectory(
+            atPath: NSHomeDirectory() + "/.mangox/exports", withIntermediateDirectories: true)
+        let t = Self.makeTransport()
+        t.updateWorkingDirectory(activeProjectPath)
+        t.updateSessionBinding(sid)   // pi 载入该会话 transcript 再导出
+        exportTransport = t
+        isExportingHTML = true
+        exportTimeout = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 20_000_000_000)
+            guard let self, self.exportTransport === t else { return }
+            self.finishExport(transport: t, path: nil, timeout: true)
+        }
+        t.exportHTML(outputPath: path)
+    }
+
+    private func finishExport(transport t: any AgentTransport, path: String?, timeout: Bool = false) {
+        exportTimeout?.cancel()
+        exportTimeout = nil
+        exportTransport = nil
+        isExportingHTML = false
+        t.shutdown()
+        if let path {
+            setExtensionNotice("HTML 已导出 · 已在 Finder 显示", isError: false)
+            NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)])
+        } else {
+            setExtensionNotice(timeout ? "导出超时" : "导出失败", isError: true)
+        }
+    }
+
+    func transport(_ transport: any AgentTransport, didFinishExportHTMLPath path: String?) {
+        guard exportTransport === transport else { return }
+        finishExport(transport: transport, path: path)
+    }
+
+    // MARK: - P6.3.1: fork 产物回读归并
+
+    /// 成功: 产物路径落库 (后续回合 --session 显式绑定) + 临时快照清理。
+    /// 失败: 首回合已失败 (孤儿快照语义) → 删除空的侧问会话 + 横幅。
+    func transport(_ transport: any AgentTransport, didReadSessionFile path: String?) {
+        guard let sid = sessionOf(transport) else { return }
+        defer { cleanupForkTemp(sid: sid) }
+        if let path {
+            try? persistence?.setSessionFile(id: sid, path: path)
+            transport.updateSessionFilePath(path)
+        } else {
+            setExtensionNotice("侧问创建失败：快照回读未完成 (回合未成功)", isError: true)
+            deleteConversation(sid)
+        }
     }
 }

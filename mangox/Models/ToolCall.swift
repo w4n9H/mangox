@@ -8,6 +8,9 @@ import SwiftUI
 enum ToolKind: String, Hashable, Codable {
     case bash
     case read
+    case grep
+    case find
+    case ls
     case edit
     case write
     case fetch
@@ -21,7 +24,7 @@ enum ToolKind: String, Hashable, Codable {
     var defaultColor: Color {
         switch self {
         case .bash, .delegate: return CodexTheme.accent
-        case .read, .fetch, .search: return CodexTheme.info
+        case .read, .grep, .find, .ls, .fetch, .search: return CodexTheme.info
         case .edit, .write: return CodexTheme.toolDone
         case .image: return CodexTheme.thinking
         }

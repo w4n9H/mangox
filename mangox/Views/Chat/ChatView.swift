@@ -10,6 +10,12 @@ struct ChatView: View {
 
     var body: some View {
         VStack(spacing: 0) {
+            if let side = store.activeSideChat {
+                SideChatBanner(info: side,
+                               canJump: store.allConversations.contains { $0.id == side.parent }) {
+                    store.selectConversation(side.parent)
+                }
+            }
             messageList
             ChatBottomBar(store: store)   // P5.0.3: 横幅 + 输入区抽共享组件 (轨迹视图同用)
         }
@@ -17,10 +23,15 @@ struct ChatView: View {
 
     private var messageList: some View {
         ScrollViewReader { proxy in
-            ScrollView {
+            VStack(spacing: 0) {
+                ScrollView {
                 if store.messages.isEmpty {
-                    WelcomeView()
-                        .padding(.top, Tune.welcomeTopPadding)
+                    if store.activeSideChat != nil {
+                        sideEmptyState
+                    } else {
+                        WelcomeView()
+                            .padding(.top, Tune.welcomeTopPadding)
+                    }
                 } else {
                     VStack(alignment: .leading, spacing: Tune.chatMessageSpacing) {
                         ForEach(store.messages) { msg in
@@ -67,7 +78,155 @@ struct ChatView: View {
                     }
                 }
             }
+            // P6.3.2: 离开摘要胶囊 — 独立占位行 (浮层会盖住最该读的最新内容, 2026-09-14 否决)
+            if store.awaySummary != nil {
+                HStack {
+                    Spacer()
+                    if let away = store.awaySummary {
+                        AwaySummaryPill(
+                            turns: away.turns,
+                            preview: away.preview,
+                            onJump: {
+                                store.dismissAwaySummary()
+                                withAnimation(CodexTheme.animMed) {
+                                    proxy.scrollTo(store.messages.last?.id ?? UUID(), anchor: .bottom)
+                                }
+                            },
+                            onDismiss: { store.dismissAwaySummary() })
+                            .frame(maxWidth: Tune.chatColumnWidth)
+                    }
+                    Spacer()
+                }
+                .padding(.vertical, 8)
+                .transition(.opacity.combined(with: .move(edge: .bottom)))
+            }
+            }
+            .animation(CodexTheme.animMed, value: store.awaySummary)
         }
+    }
+}
+
+// MARK: - Side chat (P6.3.1)
+
+/// 离开摘要悬浮胶囊 (P6.3.2): 点击任意处 = 滚底 + 消失; × = 只关不滚。
+struct AwaySummaryPill: View {
+    let turns: Int
+    let preview: String
+    var onJump: () -> Void
+    var onDismiss: () -> Void
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Button(action: onJump) {
+                HStack(spacing: 6) {
+                    Image(systemName: "arrow.down.circle")
+                        .font(.system(size: 10))
+                        .foregroundStyle(CodexTheme.textMuted)
+                    Text(turns == 1 ? "离开期间完成 1 轮" : "离开期间完成 \(turns) 轮")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(CodexTheme.textPrimary)
+                    if !preview.isEmpty {
+                        Text("· 最近：" + preview)
+                            .font(.system(size: 12))
+                            .foregroundStyle(CodexTheme.textSecondary)
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                    }
+                }
+            }
+            .buttonStyle(.plain)
+            Spacer(minLength: 6)
+            Button(action: onDismiss) {
+                Image(systemName: "xmark")
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(CodexTheme.textMuted)
+                    .frame(width: 16, height: 16)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help("关闭")
+        }
+        .padding(.leading, 14)
+        .padding(.trailing, 8)
+        .padding(.vertical, 8)
+        .background(CodexTheme.bgElevated)
+        .clipShape(Capsule())
+        .overlay(Capsule().stroke(CodexTheme.divider, lineWidth: 1))
+        .shadow(color: .black.opacity(0.06), radius: 4, y: 2)
+    }
+}
+
+/// 快照提示条: 侧问会话常驻顶部 — 中性 chrome 条 (非告警样式), 右端唯一 accent = 跳回源会话。
+struct SideChatBanner: View {
+    let info: SideChatInfo
+    var canJump: Bool
+    var onJump: () -> Void
+    @State private var hovering = false
+
+    /// fork 时刻紧凑格式: 今天只报时间, 跨天报 M/d HH:mm。
+    private var timeText: String {
+        let f = DateFormatter()
+        if Calendar.current.isDateInToday(info.at) {
+            f.dateFormat = "HH:mm"
+        } else {
+            f.dateFormat = "M/d HH:mm"
+        }
+        return f.string(from: info.at)
+    }
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "arrow.triangle.branch")
+                .font(.system(size: 10, weight: .medium))
+                .foregroundStyle(CodexTheme.textMuted)
+            Text("源会话快照 · 含 \(info.turns) 轮上下文 · \(timeText) fork · 主线新消息不同步")
+                .font(.system(size: 11))
+                .foregroundStyle(CodexTheme.textSecondary)
+                .lineLimit(1)
+                .truncationMode(.tail)
+            Spacer(minLength: 12)
+            Button(action: onJump) {
+                Text("前往源会话")
+                    .font(.system(size: 11, weight: canJump ? .medium : .regular))
+                    .foregroundStyle(hovering && canJump ? CodexTheme.accent : CodexTheme.textSecondary)
+            }
+            .buttonStyle(.plain)
+            .onHover { hovering = $0 }
+            .disabled(!canJump)
+            .opacity(canJump ? 1 : 0.4)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 7)
+        .background(CodexTheme.bgSidebar)
+        .overlay(alignment: .bottom) {
+            Rectangle().fill(CodexTheme.divider).frame(height: 1)
+        }
+    }
+}
+
+extension ChatView {
+    /// 侧问空态 (DB 空消息起步 — 模型有记忆, 界面无历史): 引导文案替代 WelcomeView。
+    var sideEmptyState: some View {
+        VStack(spacing: 12) {
+            ZStack {
+                Circle()
+                    .fill(CodexTheme.bgElevated)
+                Image(systemName: "arrow.triangle.branch")
+                    .font(.system(size: 17, weight: .medium))
+                    .foregroundStyle(CodexTheme.textSecondary)
+            }
+            .frame(width: 46, height: 46)
+            Text("直接提问，模型已了解源会话上下文")
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(CodexTheme.textPrimary)
+            if let side = store.activeSideChat {
+                Text("来自「\(side.parentTitle)」的快照 · 含 \(side.turns) 轮上下文")
+                    .font(.system(size: 11))
+                    .foregroundStyle(CodexTheme.textMuted)
+            }
+        }
+        .padding(.top, Tune.welcomeTopPadding + 40)
+        .frame(maxWidth: .infinity, alignment: .center)
     }
 }
 
@@ -185,6 +344,7 @@ struct MessageBlockView: View {
                 .padding(.vertical, 7)
                 .background(CodexTheme.bgElevated)
                 .clipShape(RoundedRectangle(cornerRadius: CodexTheme.radius))
+                .textSelection(.enabled)   // 用户气泡正文同样可选中复制
         }
     }
 }

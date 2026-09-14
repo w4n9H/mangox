@@ -34,6 +34,7 @@ struct MarkdownView: View {
                 .font(CodexTheme.fontBody)
                 .foregroundStyle(CodexTheme.textPrimary)
                 .lineSpacing(Tune.mdLineSpacing)
+                .textSelection(.enabled)   // 与思考卡/代码块对齐: 气泡正文可选中复制
         case .codeBlock(let language, let code):
             CodeBlockView(language: language, code: code)
         case .listItem(let indent, let ordered, let index, let text):
@@ -57,6 +58,7 @@ struct MarkdownView: View {
             .font(.system(size: size, weight: level <= 2 ? .bold : .semibold))
             .foregroundStyle(CodexTheme.textPrimary)
             .padding(.top, level <= 2 ? 8 : 5)
+            .textSelection(.enabled)
     }
 
     private func listItemView(indent: Int, ordered: Bool, index: Int, text: String) -> some View {
@@ -69,6 +71,7 @@ struct MarkdownView: View {
                 .font(CodexTheme.fontBody)
                 .foregroundStyle(CodexTheme.textPrimary)
                 .lineSpacing(Tune.mdLineSpacing)
+                .textSelection(.enabled)
         }
         .padding(.leading, CGFloat(indent) * Tune.mdListIndentStep)
     }
@@ -82,6 +85,7 @@ struct MarkdownView: View {
                 .font(CodexTheme.fontBody)
                 .foregroundStyle(CodexTheme.textSecondary)
                 .lineSpacing(Tune.mdLineSpacing)
+                .textSelection(.enabled)
         }
         .fixedSize(horizontal: false, vertical: true)
     }
@@ -97,6 +101,7 @@ struct MarkdownView: View {
                         .padding(.horizontal, Tune.mdTableCellHPadding)
                         .padding(.vertical, Tune.mdTableHeaderVPadding)
                         .background(CodexTheme.bgElevated)
+                        .textSelection(.enabled)
                 }
             }
             ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
@@ -113,6 +118,7 @@ struct MarkdownView: View {
                                     .fill(CodexTheme.divider)
                                     .frame(height: 1)
                             }
+                            .textSelection(.enabled)
                     }
                 }
             }
