@@ -45,6 +45,7 @@ enum CodexTheme {
     static let toolError    = adaptive(light: 0xD1242F, dark: 0xE5484D) // red
     static let toolQueued   = adaptive(light: 0x6B6B78, dark: 0x6B6B78) // gray-blue for queued
     static let info         = adaptive(light: 0x0969DA, dark: 0x7DA3F0)
+    static let blocked      = adaptive(light: 0xB07A12, dark: 0xE0A030) // amber awaiting-approval (P8-T26)
 
     // MARK: - Text
     static let textPrimary   = adaptive(light: 0x24292F, dark: 0xEDEDED) // 柔和近黑 (0x1F2328 太硬)

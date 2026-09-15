@@ -1209,6 +1209,36 @@ struct SmokeMain {
             check(store24b.messages.last?.attachments?.first?.byteSize ?? 0 > 0
                   && FileManager.default.fileExists(atPath: store24b.messages.last!.attachments!.first!.path),
                   "T24b 附件原图落盘留档")
+
+            // ---- T25 P8.0: 侧栏日分组 (今天/昨天/本周/更早) ----
+            print("== T25 P8.0: 侧栏日分组 ==")
+            var cal25 = Calendar(identifier: .gregorian)
+            cal25.timeZone = TimeZone(identifier: "Asia/Shanghai")!
+            let now25 = cal25.date(from: DateComponents(year: 2026, month: 9, day: 16, hour: 12))!   // 周三
+            let d25 = { (day: Int) in cal25.date(from: DateComponents(year: 2026, month: 9, day: day, hour: 9))! }
+            check(DayBucket.bucket(for: d25(16), now: now25, calendar: cal25) == .today
+                  && DayBucket.bucket(for: d25(15), now: now25, calendar: cal25) == .yesterday
+                  && DayBucket.bucket(for: d25(13), now: now25, calendar: cal25) == .thisWeek
+                  && DayBucket.bucket(for: d25(8), now: now25, calendar: cal25) == .earlier,
+                  "T25 日桶四段划分 (今天/昨天/本周/更早)")
+
+            // ---- T26 P8: 侧栏审批阻塞提示 (置位/响应清/兜底清/删除清) ----
+            print("== T26 P8: 审批阻塞侧栏提示 ==")
+            store.newConversation()
+            guard let sid26 = store.selectedConversationId else { check(false, "T26 建会话"); report() }
+            let tool26 = ToolCall(kind: .bash, title: "deploy.sh", phase: .awaitingApproval)
+            store.transport(mock, didEmit: .toolUpdated(tool26))
+            check(store.approvalBlocked.contains(sid26), "T26 toolUpdated(awaitingApproval) 置位")
+            store.approveTool(tool26.id)
+            check(!store.approvalBlocked.contains(sid26), "T26 审批响应即清")
+            store.transport(mock, didEmit: .toolPhaseChanged(toolId: tool26.id, phase: .awaitingApproval))
+            check(store.approvalBlocked.contains(sid26), "T26 toolPhaseChanged 置位")
+            store.transport(mock, didEmit: .streamEnded)
+            check(!store.approvalBlocked.contains(sid26), "T26 streamEnded 兜底清除")
+            store.transport(mock, didEmit: .toolUpdated(ToolCall(kind: .bash, title: "x", phase: .awaitingApproval)))
+            check(store.approvalBlocked.contains(sid26), "T26 重新置位 (删除用例前置)")
+            store.deleteConversation(sid26, deleteTranscript: false)
+            check(!store.approvalBlocked.contains(sid26), "T26 删除会话清除")
         }
 
         report()    }

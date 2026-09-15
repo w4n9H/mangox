@@ -45,6 +45,9 @@ final class ChatStore: ObservableObject {
     var isStreaming: Bool {
         selectedConversationId.map { runningTurns.contains($0) } ?? false
     }
+    /// P8-T26: 审批阻塞会话集合 (会话级信号) —— awaitingApproval 事件置位,
+    /// 审批响应 / streamEnded / 手动停止 / 会话删除清除。
+    @Published private(set) var approvalBlocked: Set<UUID> = []
     /// P3.1: SQLite 持久化; 打不开时降级为纯内存 (原 mock 行为)。
     private let persistence: PersistenceStore?
     /// P7-M3: 模型 key 存储 (真源 Keychain; 冒烟注入内存实现)。
@@ -722,6 +725,7 @@ final class ChatStore: ObservableObject {
         fireTurnTask[sid] = nil
         fireDoneHit.remove(sid)
         turnStartAt[sid] = nil
+        approvalBlocked.remove(sid)   // P8-T26: 会话删除即清
     }
 
     #if DEBUG
@@ -1092,6 +1096,7 @@ final class ChatStore: ObservableObject {
         runningTurns.remove(sid)
         liveTurns[sid] = nil
         turnStartAt[sid] = nil
+        approvalBlocked.remove(sid)   // P8-T26: 手动停 → 在途审批一并死掉
         if injectedTurnSid == sid { injectedTurnSid = nil }
         finishWaitingFireIfNeeded(sid: sid)
     }
@@ -1824,6 +1829,7 @@ final class ChatStore: ObservableObject {
     private func routeToolDecision(_ toolId: UUID, _ decision: PermissionDecision) {
         guard let sid = selectedConversationId else { return }
         transportFor(sid).respondToPermission(toolId: toolId, decision: decision)
+        approvalBlocked.remove(sid)   // P8-T26: 审批已响应, phase 流转即清
     }
 
     private func currentToolCard(_ toolId: UUID) -> ToolCall? {
@@ -1909,6 +1915,7 @@ extension ChatStore: AgentTransportDelegate {
             if terminal {
                 persistMessage(msg, sid: sid)   // 终态落库 (trajectory 只存终态事件)
             }
+            if case .awaitingApproval = tool.phase { approvalBlocked.insert(sid) }   // P8-T26
 
         case .messageFinalized(let id, let usage):
             if inView {
@@ -1924,6 +1931,7 @@ extension ChatStore: AgentTransportDelegate {
                 setToolPhaseIn(&liveTurns[sid, default: []], toolId, phase)
             }
             try? persistence?.appendToolUpdateEvent(sessionId: sid, toolId: toolId, phase: phase)
+            if case .awaitingApproval = phase { approvalBlocked.insert(sid) }   // P8-T26
 
         case .extensionNotify(let type, let message):
             // P6.0②: 扩展 fire-and-forget 通知 → 底栏横幅 (8s 自清; error/warning 用错误样式)。
@@ -1941,6 +1949,7 @@ extension ChatStore: AgentTransportDelegate {
 
         case .streamEnded:
             runningTurns.remove(sid)
+            approvalBlocked.remove(sid)   // P8-T26: 回合落定兜底清 (防审批泄漏常亮)
             if inView {
                 // 安全网: 收尾视图内所有在途流式块 (text + think 可能同时各有一条)
                 for i in messages.indices where messages[i].isStreaming {

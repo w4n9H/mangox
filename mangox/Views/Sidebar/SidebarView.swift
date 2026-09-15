@@ -134,7 +134,7 @@ struct SidebarView: View {
         .buttonStyle(.plain)
     }
 
-    // MARK: - Projects (嵌套会话)
+    // MARK: - Projects (嵌套会话, 行内同带活动徽章)
 
     private var projectsSection: some View {
         VStack(alignment: .leading, spacing: 1) {
@@ -142,8 +142,8 @@ struct SidebarView: View {
             ForEach(store.projects) { group in
                 projectRow(group)
                 if expandedProjects.contains(group.id) {
-                    ForEach(group.items) { item in
-                        sessionRow(item, indent: true)
+                    ForEach(group.items.sorted { $0.updatedAt > $1.updatedAt }) { item in
+                        sessionRow(item)
                     }
                 }
             }
@@ -165,6 +165,7 @@ struct SidebarView: View {
             Text(group.title)
                 .font(.system(size: 13, weight: .medium))
                 .foregroundStyle(CodexTheme.textPrimary)
+                .lineLimit(1)
             Spacer()
             // 行操作菜单: 新建会话 / 删除项目 (二次确认)
             Menu {
@@ -211,15 +212,37 @@ struct SidebarView: View {
         }
     }
 
-    // MARK: - Chats (平铺)
+    // MARK: - Chats (P8.0: 非项目会话按 今天/昨天/本周/更早 分桶)
 
     private var chatsSection: some View {
-        VStack(alignment: .leading, spacing: 1) {
+        let sessions = store.chats.sorted { $0.updatedAt > $1.updatedAt }
+        let grouped = Dictionary(grouping: sessions) { DayBucket.bucket(for: $0.updatedAt, now: .now) }
+        return VStack(alignment: .leading, spacing: 1) {
             sectionHeader("Chats")
-            ForEach(store.chats) { item in
-                sessionRow(item, indent: false)
+            ForEach(DayBucket.allCases, id: \.rawValue) { bucket in
+                if let items = grouped[bucket], !items.isEmpty {
+                    dayHeader(bucket, count: items.count)
+                    ForEach(items) { item in
+                        sessionRow(item)
+                    }
+                }
             }
         }
+    }
+
+    private func dayHeader(_ bucket: DayBucket, count: Int) -> some View {
+        HStack {
+            Text(bucket.rawValue)
+                .font(.system(size: 10, weight: .medium))
+                .tracking(0.5)
+            Spacer()
+            Text("\(count)")
+                .font(CodexTheme.fontTiny)
+        }
+        .foregroundStyle(CodexTheme.textMuted)
+        .padding(.horizontal, 10)
+        .padding(.top, 8)
+        .padding(.bottom, 2)
     }
 
     private func sectionHeader(_ title: String) -> some View {
@@ -234,10 +257,10 @@ struct SidebarView: View {
 
     // MARK: - Session row (含重命名/删除)
 
-    private func sessionRow(_ item: ConversationItem, indent: Bool) -> some View {
+    private func sessionRow(_ item: ConversationItem) -> some View {
         ConversationRow(item: item,
                         isSelected: item.id == store.selectedConversationId,
-                        indent: indent,
+                        indent: false,
                         // P6.3.1: 侧问会话 = fork 徽章; 普通会话 = 定时任务标 or 对话气泡
                         badge: item.sideOf != nil
                             ? "arrow.triangle.branch"
@@ -261,6 +284,8 @@ struct ConversationRow: View {
     var badge: String? = nil
     /// 会话回合运行中 → 绿色脉冲圈
     var isRunning: Bool = false
+    /// P8-T26: 有工具卡停在待审批 → hand.raised 琥珀标 (与 running 互斥, 阻塞优先)
+    var isBlocked: Bool = false
     var onSelect: () -> Void
     var onRename: (String) -> Void
     var onDelete: () -> Void
@@ -294,7 +319,13 @@ struct ConversationRow: View {
 
             Spacer(minLength: 2)
 
-            if isRunning {
+            if isBlocked {
+                // P8-T26: 阻塞指示 (优先于运行圈 —— 审批没人点是更紧急的状态)
+                Image(systemName: "hand.raised")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(CodexTheme.blocked)
+                    .help("等待审批")
+            } else if isRunning {
                 // 运行指示 (行尾): 经典旋转弧 (TimelineView 逐帧驱动, 0.8s/圈, 同隐式动画教训)
                 TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { ctx in
                     let t = ctx.date.timeIntervalSinceReferenceDate
