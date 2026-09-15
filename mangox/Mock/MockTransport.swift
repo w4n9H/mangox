@@ -54,8 +54,12 @@ final class MockTransport: AgentTransport {
     }
 
     func updateApprovalPolicy(askApproval: Bool) {
-        // mock 无审批策略概念 (审批卡行为固定)
+        // mock 无审批策略概念 (审批卡行为固定); 记录最近一次下发供 smoke 断言 (P8-T27)
+        lastAskApproval = askApproval
     }
+
+    /// P8-T27 smoke 断言用: 最近一次审批策略下发
+    private(set) var lastAskApproval: Bool?
 
     func updateWorkingDirectory(_ path: String?) {
         // mock 无进程, 无 cwd 概念

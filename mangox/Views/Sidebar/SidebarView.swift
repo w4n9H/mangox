@@ -266,6 +266,7 @@ struct SidebarView: View {
                             ? "arrow.triangle.branch"
                             : (store.scheduledBadge(for: item.id) ?? "bubble.left"),
                         isRunning: store.runningTurns.contains(item.id),   // P4.0.2: 并发在途各自转圈
+                        isBlocked: store.approvalBlocked.contains(item.id), // P8-T26: 待审批琥珀标
                         onSelect: { store.selectConversation(item.id) },
                         onRename: { store.renameConversation(item.id, to: $0) },
                         onDelete: { confirmDeleteTarget = item },

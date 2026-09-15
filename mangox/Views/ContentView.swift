@@ -38,6 +38,7 @@ struct ContentView: View {
         .onAppear {
             // P4.2: mini 台窗口挂接; P4.1: 开关已开时启动期请求通知授权
             MiniWindowController.shared.attach(store: store)
+            QuickCaptureController.shared.install(store: store)   // P8-T27: 全局热键 + 捕获条
             CompletionNotifier.shared.onOpen = { sid in
                 store.selectConversation(sid)
                 if store.miniMode { store.miniMode = false }   // 通知跳转 → 还原主窗口

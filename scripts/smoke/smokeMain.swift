@@ -1239,6 +1239,157 @@ struct SmokeMain {
             check(store.approvalBlocked.contains(sid26), "T26 重新置位 (删除用例前置)")
             store.deleteConversation(sid26, deleteTranscript: false)
             check(!store.approvalBlocked.contains(sid26), "T26 删除会话清除")
+
+            // ---- T26b P8: 审批真链路 (PiRpcTransport 实解析 → store, 复刻实机事件序) ----
+            print("== T26b P8: 审批真链路 ==")
+            let dir26b = NSHomeDirectory() + "/.mangox/smoke-t26b-\(UUID().uuidString.prefix(8))"
+            try? FileManager.default.createDirectory(atPath: dir26b, withIntermediateDirectories: true)
+            let pi26 = PiRpcTransport()
+            let store26 = ChatStore(transport: pi26, dbPath: dir26b + "/t26b.db",
+                                    managedExtensionsDir: dir26b + "/ext")
+            store26.newConversation()
+            guard let sid26b = store26.selectedConversationId else { check(false, "T26b 建会话"); report() }
+            pi26.handleRPCLine(#"{"type":"agent_start"}"#)
+            pi26.handleRPCLine(#"{"type":"tool_execution_start","toolCallId":"c26b","toolName":"bash","args":{"command":"cat > t.txt"}}"#)
+            pi26.handleRPCLine(#"{"type":"extension_ui_request","id":"u26b","method":"select","title":"MANGOX|APPROVE|c26b|bash|cat > t.txt"}"#)
+            check(store26.approvalBlocked.contains(sid26b), "T26b 真链路 extension_ui_request 置位")
+            // 审批响应 → 白名单判定外真实响应命令发出 + 集合清除
+            store26.approveTool(store26.messages.compactMap { msg -> UUID? in
+                if case .tool(let t) = msg.content, t.phase == .awaitingApproval { return t.id }
+                return nil
+            }.first ?? UUID())
+            check(!store26.approvalBlocked.contains(sid26b), "T26b 审批响应清除 (真链路)")
+            check(pi26.sentCommands.contains { ($0["type"] as? String) == "extension_ui_response" },
+                  "T26b extension_ui_response 已回给 pi")
+
+            // ---- T25b P8.0: 会话活跃刷新 updatedAt (日分组数据源, 防"昨天"误显) ----
+            print("== T25b P8.0: updatedAt 活跃刷新 ==")
+            let dir25b = NSHomeDirectory() + "/.mangox/smoke-t25b-\(UUID().uuidString.prefix(8))"
+            try? FileManager.default.createDirectory(atPath: dir25b, withIntermediateDirectories: true)
+            let store25b = ChatStore(transport: MockTransport(), dbPath: dir25b + "/t25b.db",
+                                     managedExtensionsDir: dir25b + "/ext")
+            store25b.newConversation()
+            guard let sid25b = store25b.selectedConversationId else { check(false, "T25b 建会话"); report() }
+            let before25b = store25b.chats.first { $0.id == sid25b }?.updatedAt ?? .distantPast
+            store25b.draft = "活跃刷新测试"
+            store25b.sendDraft()
+            check(await waitUntil { store25b.runningTurns.isEmpty }, "T25b 回合结束")
+            check((store25b.chats.first { $0.id == sid25b }?.updatedAt ?? .distantPast) > before25b,
+                  "T25b 回合落库刷新 updatedAt (内存)")
+            let reload25b = ChatStore(transport: MockTransport(), dbPath: dir25b + "/t25b.db",
+                                      managedExtensionsDir: dir25b + "/ext")
+            let reloaded25b = reload25b.chats.first { $0.id == sid25b }?.updatedAt ?? .distantPast
+            check(reloaded25b > before25b && abs(reloaded25b.timeIntervalSinceNow) < 60,
+                  "T25b updatedAt 落库 roundtrip (重启不回退)")
+
+            // ---- T28 P8: 手动备份 (checkpoint→拷贝→时间戳目录; 缺目录容错) ----
+            print("== T28 P8: 手动备份 ==")
+            let dir28 = NSHomeDirectory() + "/.mangox/smoke-t28-\(UUID().uuidString.prefix(8))"
+            let src28 = dir28 + "/src", dest28 = dir28 + "/dest"
+            try! FileManager.default.createDirectory(atPath: src28 + "/attachments", withIntermediateDirectories: true)
+            try! FileManager.default.createDirectory(atPath: src28 + "/sessions", withIntermediateDirectories: true)
+            try! Data("DBDATA-28".utf8).write(to: URL(fileURLWithPath: src28 + "/mangox.db"))
+            try! Data("PNG".utf8).write(to: URL(fileURLWithPath: src28 + "/attachments/a1.png"))
+            try! Data("JSONL".utf8).write(to: URL(fileURLWithPath: src28 + "/sessions/s1.jsonl"))
+            var checkpoint28 = 0
+            let now28 = Date(timeIntervalSince1970: 1789500000)   // 固定时刻 → 时间戳目录名可断言
+            let out28 = BackupEngine.backup(dbPath: src28 + "/mangox.db",
+                                            attachmentsDir: src28 + "/attachments",
+                                            sessionsDir: src28 + "/sessions",
+                                            destRoot: dest28,
+                                            checkpoint: { checkpoint28 += 1 },
+                                            now: now28)
+            check(checkpoint28 == 1, "T28 checkpoint 先行调用")
+            check(out28.ok && out28.dbCopied && out28.attachmentsCopied && out28.sessionsCopied,
+                  "T28 三项齐 + ok")
+            check(out28.destPath.hasSuffix("mangox-backup-\(BackupEngine.stampFormatter.string(from: now28))"),
+                  "T28 时间戳子目录命名")
+            check(FileManager.default.fileExists(atPath: out28.destPath + "/mangox.db")
+                  && FileManager.default.fileExists(atPath: out28.destPath + "/attachments/a1.png")
+                  && FileManager.default.fileExists(atPath: out28.destPath + "/sessions/s1.jsonl"),
+                  "T28 拷贝产物就位")
+            check(out28.totalBytes > 0, "T28 大小汇总")
+            // 容错: 附件/会话源缺失不算失败
+            let out28b = BackupEngine.backup(dbPath: src28 + "/mangox.db",
+                                             attachmentsDir: nil, sessionsDir: "/nonexistent-28",
+                                             destRoot: dest28, checkpoint: nil, now: now28.addingTimeInterval(1))
+            check(out28b.ok && !out28b.attachmentsCopied && !out28b.sessionsCopied && out28b.errors.isEmpty,
+                  "T28 缺目录容错跳过 (非失败)")
+            // 硬失败: db 缺失 → 报错不 ok
+            let out28c = BackupEngine.backup(dbPath: "/nonexistent-28/x.db",
+                                             attachmentsDir: nil, sessionsDir: nil,
+                                             destRoot: dest28, checkpoint: nil, now: now28.addingTimeInterval(2))
+            check(!out28c.ok && !out28c.errors.isEmpty, "T28 db 缺失 = 硬失败")
+
+            // ---- T27 P8: 快速捕获 (热键配置 + 无人值守发送链路) ----
+            print("== T27 P8: 快速捕获 ==")
+            let dir27 = NSHomeDirectory() + "/.mangox/smoke-t27-\(UUID().uuidString.prefix(8))"
+            try! FileManager.default.createDirectory(atPath: dir27, withIntermediateDirectories: true)
+            let mock27 = MockTransport()
+            let store27 = ChatStore(transport: mock27, dbPath: dir27 + "/t27.db",
+                                    managedExtensionsDir: dir27 + "/ext")
+            // ① 热键: 默认 ⌥X / KV roundtrip / 展示名
+            check(store27.captureHotkey == .fallback && store27.captureHotkey.display == "⌃⌥X",
+                  "T27 默认热键 ⌃⌥X")
+            let hk27 = CaptureHotkey(keyCode: 46, modifiers: CaptureHotkey.option | CaptureHotkey.shift)
+            store27.setCaptureHotkey(hk27)
+            check(CaptureHotkey.load(persistence: store27.persistenceDebug) == hk27,
+                  "T27 热键 KV roundtrip")
+            check(hk27.display == "⌥⇧M" && !hk27.hasModifier == false, "T27 修饰键掩码/键名")
+            // ② 发送链路: 建会话 + 自动命名 + 无人值守 + Minimal 强制
+            let sid27 = store27.submitCapture(text: "修复登录页超时", target: .newSession(projectId: nil))
+            check(sid27 != nil && store27.chats.first { $0.id == sid27 }?.title == "修复登录页超时",
+                  "T27 建会话 + 首条自动命名")
+            check(mock27.lastMode == .minimal, "T27 Minimal 档强制下发 (全局档位不动)")
+            check(mock27.lastAskApproval == false, "T27 无人值守关审批")
+            check(mock27.boundSessionId == sid27, "T27 常规会话绑定 (非 ephemeral)")
+            check(store27.selectedConversationId == sid27, "T27 主窗口跟随选中")
+            check(await waitUntil { store27.runningTurns.isEmpty }, "T27 捕获回合收尾")
+            // ③ 边界: 空文本拒绝 / 项目归属
+            check(store27.submitCapture(text: "   ", target: .newSession(projectId: nil)) == nil,
+                  "T27 空文本拒绝")
+            store27.addProject(title: "T27 项目", path: "/tmp/t27")
+            let pid27 = store27.projects[0].id
+            let sid27b = store27.submitCapture(text: "项目内任务", target: .newSession(projectId: pid27))
+            check(sid27b != nil && store27.projects[0].items.contains { $0.id == sid27b },
+                  "T27 会话归入选定项目")
+            check(mock27.lastAskApproval == false, "T27 第二次捕获仍无人值守")
+            check(await waitUntil { store27.runningTurns.isEmpty }, "T27 追加前置收尾")
+
+            // ④ 追加既有会话: 同 id / 无人值守 / 档位跟随不强改
+            let sid27c = store27.submitCapture(text: "再追一条", target: .append(sessionId: sid27!))
+            check(sid27c == sid27, "T27 追加落既有会话 (同 id)")
+            check(mock27.lastAskApproval == false, "T27 追加仍无人值守")
+            check(store27.messages.contains { msg in
+                if case .text(let s) = msg.content { return s == "再追一条" }
+                return false
+            }, "T27 追加消息上屏 (replay 带全量历史)")
+            check(await waitUntil { store27.runningTurns.isEmpty }, "T27 追加回合收尾")
+            // 追加不强制 Minimal: 普通会话 (standard 实例) 追加后仍 standard
+            store27.newConversation()
+            let sid27d = store27.selectedConversationId!
+            store27.draft = "普通会话"
+            store27.sendDraft()
+            check(await waitUntil { store27.runningTurns.isEmpty }, "T27 普通会话回合收尾")
+            // 追加不强制 Minimal: 先显式推 .full 作实例基线 (真实池化路径 = 新实例建时带全局档位),
+            // 追加后档位应保持 full 而非被改写 minimal
+            store27.agentMode = .full
+            check(mock27.lastMode == .full, "T27 前置: 实例档位基线 full")
+            let sid27e = store27.submitCapture(text: "追加到普通", target: .append(sessionId: sid27d))
+            check(sid27e == sid27d && mock27.lastMode == .full,
+                  "T27 追加档位跟随会话 (不强改 Minimal)")
+            check(await waitUntil { store27.runningTurns.isEmpty }, "T27 普通追加收尾")
+            // ⑤ 拒绝路径: 在途 / 已删除
+            mock27.scriptedReply = { _ in String(repeating: "慢回复。", count: 200) }
+            store27.draft = "占用中"
+            store27.sendDraft()
+            check(store27.submitCapture(text: "此时追加", target: .append(sessionId: sid27d)) == nil,
+                  "T27 在途会话追加拒绝")
+            check(await waitUntil { store27.runningTurns.isEmpty }, "T27 占用回合收尾")
+            store27.deleteConversation(sid27b!, deleteTranscript: false)
+            check(store27.submitCapture(text: "x", target: .append(sessionId: sid27b!)) == nil,
+                  "T27 已删会话追加拒绝")
+            mock27.scriptedReply = nil
         }
 
         report()    }

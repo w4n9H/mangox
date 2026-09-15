@@ -13,8 +13,11 @@ final class PersistenceStore {
     private let db: Database
     private let encoder = JSONEncoder()
     private let decoder = JSONDecoder()
+    /// 库文件路径 (P8-T28 备份拷贝源; 默认 ~/.mangox/mangox.db)
+    let path: String
 
     init(path: String = NSHomeDirectory() + "/.mangox/mangox.db") throws {
+        self.path = path
         db = try Database(path: path)
     }
 
@@ -249,6 +252,12 @@ final class PersistenceStore {
     func renameSession(id: UUID, title: String, updatedAt: Date) throws {
         try db.run("UPDATE sessions SET title = ?, updated_at = ? WHERE id = ?",
                    [.text(title), .real(updatedAt.timeIntervalSince1970), .text(id.uuidString)])
+    }
+
+    /// P8.0: 会话活跃即刷新 updated_at (侧栏日分组/排序/相对时间的数据源)。
+    func touchSession(id: UUID, updatedAt: Date) throws {
+        try db.run("UPDATE sessions SET updated_at = ? WHERE id = ?",
+                   [.real(updatedAt.timeIntervalSince1970), .text(id.uuidString)])
     }
 
     func deleteSession(id: UUID) throws {
@@ -667,6 +676,18 @@ final class PersistenceStore {
         case .int(let i):  return Int(i)   // 容错: 若列曾存过原生整数
         default:           return defaultValue
         }
+    }
+
+    /// P8-T28: 文本 KV (备份目录/上次备份结果)。
+    func saveSettingText(key: String, value: String) {
+        try? db.run("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)",
+                    [.text(key), .text(value)])
+    }
+
+    func loadSettingText(key: String) -> String? {
+        let rows = (try? db.query("SELECT value FROM settings WHERE key = ?", [.text(key)])) ?? []
+        guard let v = rows.first?["value"], case .text(let s) = v else { return nil }
+        return s
     }
 
     // MARK: - Row helpers

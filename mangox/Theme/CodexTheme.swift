@@ -98,9 +98,11 @@ enum Tune {
 
     // 迷你条 (P4.2, 主窗口变形为任务台)
     static let miniBarWidth: CGFloat      = 300   // mini 台窗口宽
-    static let miniWindowChrome: CGFloat  = 44    // 标题栏区 + 内边距
+    // 窗口高预算: 标题栏安全区 28 (fullSizeContentView, SwiftUI 自动下推内容) + 顶行 20
+    // + 内边距 10×2 + 首行 spacing 8 —— 旧值 44 漏算安全区, 卡片被底缘裁掉一刀 (2026-09-15 实证)
+    static let miniWindowChrome: CGFloat  = 76    // 安全区 + 顶行 + 内边距 + spacing
     static let miniCardRowHeight: CGFloat = 52    // 每张任务卡占高 (卡 44 + 间距)
-    static let miniWindowEmptyHeight: CGFloat = 100  // 空态高 (顶行 + 一句轻提示)
+    static let miniWindowEmptyHeight: CGFloat = 116  // 空态高 (安全区 + 顶行 + 一句轻提示)
 
     // 中间列 · 消息
     static let chatContentWidth: CGFloat   = 800   // 消息/输入卡内容宽 (唯一源头)

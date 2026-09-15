@@ -48,6 +48,11 @@ final class ChatStore: ObservableObject {
     /// P8-T26: 审批阻塞会话集合 (会话级信号) —— awaitingApproval 事件置位,
     /// 审批响应 / streamEnded / 手动停止 / 会话删除清除。
     @Published private(set) var approvalBlocked: Set<UUID> = []
+    /// P8-T28: 备份目录 (settings KV backup_dir) 与上次备份摘要 (backup_last)。
+    @Published private(set) var backupDirectory: String?
+    @Published private(set) var lastBackupSummary: String?
+    /// P8-T28: 备份执行中 (按钮防重入)。
+    @Published private(set) var backupRunning = false
     /// P3.1: SQLite 持久化; 打不开时降级为纯内存 (原 mock 行为)。
     private let persistence: PersistenceStore?
     /// P7-M3: 模型 key 存储 (真源 Keychain; 冒烟注入内存实现)。
@@ -408,6 +413,9 @@ final class ChatStore: ObservableObject {
             maxConcurrentTurns = store.loadSetting(key: "max_concurrent_turns", defaultValue: 10)   // P4.0.4
             completionNotificationsEnabled =
                 store.loadSetting(key: "completion_notifications", defaultValue: 1) == 1   // P4.1
+            backupDirectory = store.loadSettingText(key: "backup_dir")   // P8-T28
+            lastBackupSummary = store.loadSettingText(key: "backup_last")
+            captureHotkey = CaptureHotkey.load(persistence: store)   // P8-T27
         }
         scanExtensions()   // P3.11: 扫描 + 快照托管扩展列表 (池实例 spawn 期加载)
         syncWorkspaceContext()   // 文件树扫描 (P3.4); cwd 在每次 send 前按实例下发
@@ -443,6 +451,45 @@ final class ChatStore: ObservableObject {
         persistence?.checkpoint()
     }
 
+    // MARK: - P8-T28 手动备份
+
+    /// 记忆备份目录 (Settings 选择时调用)。
+    func setBackupDirectory(_ path: String) {
+        backupDirectory = path
+        persistence?.saveSettingText(key: "backup_dir", value: path)
+    }
+
+    /// 手动备份: checkpoint → db + attachments + sessions 直拷到
+    /// <destRoot>/mangox-backup-<时间戳>/; 结果摘要落 KV 供重启后展示。
+    /// 同步执行 (v1 数据量小; 附件库变大后再考虑后台化)。
+    @discardableResult
+    func performManualBackup(destRoot: String, now: Date = .now) -> BackupOutcome {
+        guard !backupRunning else {
+            return BackupOutcome(errors: ["备份已在进行中"])
+        }
+        backupRunning = true
+        defer { backupRunning = false }
+        let outcome = BackupEngine.backup(
+            dbPath: persistence?.path ?? BackupEngine.defaultDBPath,
+            attachmentsDir: BackupEngine.defaultAttachmentsDir,
+            sessionsDir: BackupEngine.defaultSessionsDir,
+            destRoot: destRoot,
+            checkpoint: { [weak self] in self?.persistence?.checkpoint() },
+            now: now)
+        let summary: String
+        if outcome.ok {
+            let size = ByteCountFormatter.string(fromByteCount: outcome.totalBytes, countStyle: .file)
+            let f = DateFormatter()
+            f.dateFormat = "M/d HH:mm"
+            summary = "✓ \(f.string(from: now)) · \(size)"
+        } else {
+            summary = "✗ " + (outcome.errors.first ?? "未知失败")
+        }
+        lastBackupSummary = summary
+        persistence?.saveSettingText(key: "backup_last", value: summary)
+        return outcome
+    }
+
     /// 冒烟: 持久层直访 (persistence 私有; T18 需直写 session_file 行模拟"有记忆")。
     var persistenceDebug: PersistenceStore? { persistence }
 
@@ -450,6 +497,109 @@ final class ChatStore: ObservableObject {
     private func markLastSession() {
         if let sid = selectedConversationId {
             try? persistence?.saveLastSession(id: sid)
+        }
+    }
+
+    // MARK: - P8-T27 快速捕获 (⌃⌥X 即发即跑)
+
+    /// P8-T27: 捕获目标 —— 新会话(归项目) 或 追加到既有会话。
+    enum CaptureTarget: Equatable {
+        case newSession(projectId: UUID?)
+        case append(sessionId: UUID)
+
+        /// KV 记忆编码 ("new:<pid|->" / "session:<sid>")
+        var memoRaw: String {
+            switch self {
+            case .newSession(let p): "new:\(p?.uuidString ?? "-")"
+            case .append(let s):     "session:\(s.uuidString)"
+            }
+        }
+
+        static func from(memoRaw raw: String?) -> CaptureTarget {
+            guard let raw else { return .newSession(projectId: nil) }
+            if raw.hasPrefix("session:"), let sid = UUID(uuidString: String(raw.dropFirst(8))) {
+                return .append(sessionId: sid)
+            }
+            if raw.hasPrefix("new:") {
+                let part = String(raw.dropFirst(4))
+                return .newSession(projectId: part == "-" ? nil : UUID(uuidString: part))
+            }
+            return .newSession(projectId: nil)
+        }
+    }
+
+    /// P8-T27: 捕获热键配置 (settings KV; 默认 ⌃⌥X)。
+    @Published private(set) var captureHotkey: CaptureHotkey = .fallback
+
+    /// P8-T27: 改键 (Settings 录制后调用; 重注册由 Settings 层调 Controller)。
+    func setCaptureHotkey(_ hk: CaptureHotkey) {
+        captureHotkey = hk
+        hk.save(persistence: persistence)
+    }
+
+    /// P8-T27: 上次捕获目标 (pill 记忆; KV 文本)。
+    var captureMemo: String? {
+        persistence?.loadSettingText(key: "capture_target")
+    }
+
+    func setCaptureMemo(_ raw: String?) {
+        persistence?.saveSettingText(key: "capture_target", value: raw ?? "")
+    }
+
+    /// 捕获条发送: 即发即跑 (无人值守关审批)。新会话 = Minimal 档强制 (全新上下文收窄风险面);
+    /// 追加 = 档位跟随该会话实例 (既有上下文不强改)。主窗口跟随选中目标会话。
+    /// 返回目标会话 id; nil = 拒绝 (空文本/引擎缺失/并发满/目标无效, 原因走横幅)。
+    @discardableResult
+    func submitCapture(text: String, target: CaptureTarget) -> UUID? {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        guard !engineMissing else {
+            setExtensionNotice("未找到 pi CLI, 捕获未发送", isError: true)
+            return nil
+        }
+        guard !atTurnLimit else {
+            setExtensionNotice("并发已达上限 (\(maxConcurrentTurns)), 捕获未发送", isError: true)
+            return nil
+        }
+        switch target {
+        case .newSession(let projectId):
+            // 建会话 (ensureConversationForSend 同构, 归属捕获时选定的项目)
+            let item = ConversationItem(title: Self.defaultConversationTitle)
+            if let pid = projectId, let g = projects.firstIndex(where: { $0.id == pid }) {
+                projects[g].items.insert(item, at: 0)
+                try? persistence?.insertChatSession(item, projectId: pid)
+            } else {
+                chats.insert(item, at: 0)
+                try? persistence?.insertChatSession(item)
+            }
+            let sid = item.id
+            let msg = ChatMessage(role: .user, content: .text(trimmed))
+            try? persistence?.appendMessageEvent(sessionId: sid, msg)   // 先落库再选中 (replay 能取到)
+            selectConversation(sid)
+            messages = [msg]
+            autoTitleIfNeeded(sid: sid, text: trimmed)
+            let cwd = projectId.flatMap { pid in projects.first(where: { $0.id == pid })?.path }
+            beginTurn(sid: sid, prompt: trimmed, ephemeral: false,
+                      cwd: cwd, unattended: true, modeOverride: .minimal)
+            return sid
+
+        case .append(let sid):
+            guard allConversations.contains(where: { $0.id == sid }) else {
+                setExtensionNotice("目标会话已不存在, 捕获未发送", isError: true)
+                return nil
+            }
+            guard !runningTurns.contains(sid) else {
+                setExtensionNotice("该会话回合在途, 捕获未发送", isError: true)
+                return nil
+            }
+            let msg = ChatMessage(role: .user, content: .text(trimmed))
+            try? persistence?.appendMessageEvent(sessionId: sid, msg)
+            selectConversation(sid)   // replay 带全量历史 + 新消息
+            autoTitleIfNeeded(sid: sid, text: trimmed)   // 空标题会话首次追加即命名
+            let cwd = projects.first(where: { $0.items.contains { $0.id == sid } })?.path
+            beginTurn(sid: sid, prompt: trimmed, ephemeral: false,
+                      cwd: cwd, unattended: true)   // 档位跟随会话实例, 不强改
+            return sid
         }
     }
 
@@ -1027,8 +1177,11 @@ final class ChatStore: ObservableObject {
 
     /// P4.0.2: 回合启动公共路径 (用户会话与定时 fire 共用)。
     /// spawn 期配置在 send 前逐实例下发 (会话绑定/cwd/审批策略)。
+    /// modeOverride (P8-T27): 捕获轮强制 Minimal —— 只覆盖该会话实例,
+    /// 全局 agentMode 不动 (主窗口其余会话档位不受污染)。
     private func beginTurn(sid: UUID, prompt: String, ephemeral: Bool,
-                           cwd: String?, unattended: Bool, images: [OutgoingImage] = []) {
+                           cwd: String?, unattended: Bool, images: [OutgoingImage] = [],
+                           modeOverride: AgentMode? = nil) {
         let t = transportFor(sid)
         if ephemeral {
             t.updateSessionBinding(nil)   // nil = --no-session (fire 轮次, P3.9 拍板)
@@ -1044,6 +1197,7 @@ final class ChatStore: ObservableObject {
         t.updateWorkingDirectory(cwd)
         // 无人值守 fire 关审批 (弹卡 = 任务死锁); 其余跟随全局开关
         t.updateApprovalPolicy(askApproval: unattended ? false : askApproval)
+        if let modeOverride { t.updateMode(modeOverride) }
         liveTurns[sid] = liveTurns[sid] ?? []   // 镜像容器就位 (视图会话事件直进 messages)
         runningTurns.insert(sid)
         turnStartAt[sid] = Date()   // P4.1: 回合计时起点
@@ -1073,6 +1227,24 @@ final class ChatStore: ObservableObject {
     private func persistMessage(_ m: ChatMessage, sid: UUID? = nil) {
         guard let sid = sid ?? selectedConversationId else { return }
         try? persistence?.appendMessageEvent(sessionId: sid, m)
+        touchConversation(sid)   // P8.0: 消息落库即刷新侧栏活跃时间
+    }
+
+    /// P8.0: 会话活跃 → 侧栏 updatedAt 同步刷新 (日分组/排序/相对时间的数据源)。
+    /// 旧实现只在创建/重命名时定格, 日分组把陈旧值暴露成"昨天"误显; db 同刷保重启后仍准。
+    private func touchConversation(_ sid: UUID, at date: Date = .now) {
+        if let idx = chats.firstIndex(where: { $0.id == sid }) {
+            let old = chats[idx]
+            chats[idx] = ConversationItem(id: sid, title: old.title, updatedAt: date,
+                                          unreadCount: old.unreadCount, sideOf: old.sideOf)
+        }
+        if let pidx = projects.firstIndex(where: { $0.items.contains { $0.id == sid } }),
+           let iidx = projects[pidx].items.firstIndex(where: { $0.id == sid }) {
+            let old = projects[pidx].items[iidx]
+            projects[pidx].items[iidx] = ConversationItem(id: sid, title: old.title, updatedAt: date,
+                                                          unreadCount: old.unreadCount, sideOf: old.sideOf)
+        }
+        try? persistence?.touchSession(id: sid, updatedAt: date)
     }
 
     /// 停止选中会话的在途回合 (Composer 停止按钮入口)。

@@ -23,6 +23,8 @@ struct SettingsView: View {
     @State private var testState: TestState = .idle
     @State private var formError: String?
     @State private var showMorePresets = false
+    @State private var recording = false          // P8-T27: 热键录制中
+    @State private var keyMonitor: Any?           // P8-T27: 录制用 keyDown 监听
 
     enum TestState: Equatable { case idle, testing, done }
 
@@ -47,6 +49,8 @@ struct SettingsView: View {
                     modelSection
                     concurrencySection
                     notificationSection
+                    captureSection
+                    backupSection
                 }
                 .padding(.horizontal, 24)
                 .padding(.vertical, 20)
@@ -530,6 +534,124 @@ struct SettingsView: View {
             Text(hint)
                 .font(.system(size: 11))
                 .foregroundStyle(CodexTheme.textMuted)
+        }
+    }
+
+    // MARK: - P8-T27 快速捕获热键
+
+    private var captureSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            settingRow(title: "快速捕获热键",
+                       detail: "全局唤起捕获输入条: 输入后回车即以无人值守模式开跑 (关审批 + Minimal 档); Esc 或点击外部关闭") {
+                HStack(spacing: 8) {
+                    if recording {
+                        Text("按下新组合键…")
+                            .font(.system(size: 12))
+                            .foregroundStyle(CodexTheme.accent)
+                    } else {
+                        Button(store.captureHotkey.display) { startHotkeyRecording() }
+                            .font(CodexFonts.monoFont(12, weight: .medium))
+                            .fixedSize()
+                    }
+                    if recording {
+                        Button("取消") { stopHotkeyRecording() }
+                            .fixedSize()
+                    }
+                }
+            }
+            if store.captureHotkey != QuickCaptureController.shared.registeredHotkey {
+                Divider().overlay(CodexTheme.divider)
+                Text("⚠️ 当前热键被其他 App 占用 (注册失败), 请换一个组合键")
+                    .font(.system(size: 11))
+                    .foregroundStyle(CodexTheme.toolError)
+            }
+        }
+        .settingsCard()
+    }
+
+    /// 录制: App 内 keyDown 监听 (设置页打开时 App 必在前台, 不需全局监听)。
+    /// 无修饰键的按键忽略 (防误吞普通输入); 录到即存 KV + 重注册 + 退出录制态。
+    private func startHotkeyRecording() {
+        guard keyMonitor == nil else { return }
+        recording = true
+        keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { ev in
+            var m: UInt32 = 0
+            let f = ev.modifierFlags
+            if f.contains(.command) { m |= CaptureHotkey.command }
+            if f.contains(.shift)   { m |= CaptureHotkey.shift }
+            if f.contains(.option)  { m |= CaptureHotkey.option }
+            if f.contains(.control) { m |= CaptureHotkey.control }
+            let hk = CaptureHotkey(keyCode: UInt32(ev.keyCode), modifiers: m)
+            guard hk.hasModifier else { return ev }   // 忽略无修饰键按键 (继续录制)
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    self.store.setCaptureHotkey(hk)
+                    QuickCaptureController.shared.register(hk)
+                    self.stopHotkeyRecording()
+                }
+            }
+            return nil   // 吞键
+        }
+    }
+
+    private func stopHotkeyRecording() {
+        if let keyMonitor { NSEvent.removeMonitor(keyMonitor) }
+        keyMonitor = nil
+        recording = false
+    }
+
+    // MARK: - P8-T28 手动备份
+
+    private var backupSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            settingRow(title: "手动备份",
+                       detail: "把会话数据库 (含知识库) 与图片附件、会话记录完整拷贝到目标目录的 mangox-backup-<时间戳>/ 子目录, 供人工保管") {
+                HStack(spacing: 8) {
+                    Button(store.backupRunning ? "备份中…" : "立即备份") { runBackup() }
+                        .fixedSize()
+                        .disabled(store.backupRunning || store.backupDirectory == nil)
+                    Button("选择目录…") { pickBackupDir() }
+                        .fixedSize()
+                }
+            }
+            Divider().overlay(CodexTheme.divider)
+            HStack {
+                Text(store.backupDirectory ?? "未选择备份目录")
+                    .font(CodexTheme.fontMonoXs)
+                    .foregroundStyle(CodexTheme.textSecondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                Spacer()
+                Text(store.lastBackupSummary ?? "尚未备份")
+                    .font(.system(size: 11))
+                    .foregroundStyle(store.lastBackupSummary?.hasPrefix("✓") == true
+                                     ? CodexTheme.toolDone : CodexTheme.toolError)
+            }
+        }
+        .settingsCard()
+    }
+
+    private func pickBackupDir() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.canCreateDirectories = true
+        panel.prompt = "选择"
+        if panel.runModal() == .OK, let url = panel.url {
+            store.setBackupDirectory(url.path)
+        }
+    }
+
+    private func runBackup() {
+        guard let root = store.backupDirectory else { return }
+        let outcome = store.performManualBackup(destRoot: root)
+        if !outcome.ok {
+            // 失败细节逐项弹窗 (摘要只显示首条)
+            let alert = NSAlert()
+            alert.messageText = "备份失败"
+            alert.informativeText = outcome.errors.joined(separator: "\n")
+            alert.alertStyle = .warning
+            alert.runModal()
         }
     }
 }
