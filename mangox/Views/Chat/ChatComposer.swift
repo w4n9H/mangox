@@ -7,11 +7,13 @@
 
 import SwiftUI
 import AppKit
+import UniformTypeIdentifiers
 
 struct ChatComposer: View {
     @ObservedObject var store: ChatStore
     /// CompactTextEditor 实测内容高度回调 (SwiftUI 外部 frame 才是权威布局)。
     @State private var editorHeight: CGFloat = Tune.editorMinHeight
+    @State private var showModeMenu = false   // P7-M4: 档位 popover (原生 Menu 剥富 label)
 
     var body: some View {
         VStack(spacing: Tune.composerStackSpacing) {
@@ -81,13 +83,19 @@ struct ChatComposer: View {
 
     private var inputCard: some View {
         VStack(alignment: .leading, spacing: 0) {
+            if !store.pendingImages.isEmpty {
+                attachmentChips
+                    .padding(.horizontal, Tune.cardHPadding)
+                    .padding(.top, 10)
+            }
             ZStack(alignment: .topLeading) {
                 CompactTextEditor(
                     text: $store.draft,
                     minHeight: Tune.editorMinHeight,
                     maxHeight: Tune.editorMaxHeight,
                     onSubmit: { store.sendDraft() },
-                    onHeightChange: { editorHeight = $0 }
+                    onHeightChange: { editorHeight = $0 },
+                    onImagePaste: { data, ext in store.addPendingImage(data, suggestedExtension: ext) }
                 )
                 .frame(height: editorHeight)
 
@@ -104,6 +112,7 @@ struct ChatComposer: View {
             HStack(spacing: 4) {
                 plusMenu
                 approvalToggle
+                modeMenu
                 knowledgePill
                 Spacer()
                 modelMenu
@@ -120,6 +129,65 @@ struct ChatComposer: View {
                 .stroke(CodexTheme.border.opacity(0.45), lineWidth: 1)
         )
         .shadow(color: .black.opacity(0.05), radius: 5, x: 0, y: 2)  // Codex 式柔和投影, 卡片在白底上不再隐形
+        .onDrop(of: [UTType.image], isTargeted: nil) { providers in
+            // P7-M6b 拖拽入口: 图片落卡 → 附件通道 (文本文件拖拽不接, @语义仍走文本)
+            guard !providers.isEmpty else { return false }
+            for provider in providers {
+                _ = provider.loadDataRepresentation(forTypeIdentifier: UTType.image.identifier) { data, _ in
+                    guard let data else { return }
+                    let ext = ImagePipeline.sniffExtension(data) ?? "png"
+                    Task { @MainActor in store.addPendingImage(data, suggestedExtension: ext) }
+                }
+            }
+            return true
+        }
+    }
+
+    // MARK: - 附件暂存 chips (P7-M6b: 64pt 缩略 + ×, 随 draft 生命周期)
+
+    private var attachmentChips: some View {
+        HStack(spacing: 8) {
+            ForEach(store.pendingImages) { p in
+                chip(p)
+            }
+            if store.pendingImages.count >= ImagePipeline.maxPerMessage {
+                Text("最多 \(ImagePipeline.maxPerMessage) 张")
+                    .font(CodexTheme.fontTiny)
+                    .foregroundStyle(CodexTheme.toolError)
+            }
+            Spacer()
+        }
+    }
+
+    private func chip(_ p: PendingImage) -> some View {
+        ZStack(alignment: .topTrailing) {
+            Group {
+                if let img = NSImage(data: p.data) {
+                    Image(nsImage: img)
+                        .resizable()
+                        .scaledToFill()
+                } else {
+                    Rectangle().fill(CodexTheme.bgSidebar)
+                }
+            }
+            .frame(width: 64, height: 64)
+            .clipped()
+            .cornerRadius(6)
+            .overlay(RoundedRectangle(cornerRadius: 6)
+                .stroke(CodexTheme.border.opacity(0.4), lineWidth: 1))
+
+            Button {
+                store.removePendingImage(p.id)
+            } label: {
+                Image(systemName: "xmark.circle.fill")
+                    .font(.system(size: 13))
+                    .foregroundStyle(CodexTheme.textPrimary)
+                    .background(Circle().fill(CodexTheme.bgBase))
+                    .offset(x: 5, y: -5)
+            }
+            .buttonStyle(.plain)
+            .help("移除")
+        }
     }
 
     // MARK: - Bottom-left: + / Ask for approval
@@ -160,6 +228,71 @@ struct ChatComposer: View {
         }
         .buttonStyle(.plain)
         .help(store.askApproval ? "审批流开启, 点击关闭" : "审批流关闭, 点击开启")
+    }
+
+    // MARK: - 模式档位 pill (P7-M4: 极简/常规/完整, per-turn spawn 生效)
+
+    private var modeMenu: some View {
+        Button {
+            showModeMenu.toggle()
+        } label: {
+            (Text(Image(systemName: "slider.horizontal.3"))
+                .font(.system(size: 10)).foregroundColor(store.agentMode == .standard ? CodexTheme.textTertiary : CodexTheme.accent)
+             + Text(" \(store.agentMode.displayName)")
+                .font(CodexTheme.fontSmall).foregroundColor(store.agentMode == .standard ? CodexTheme.textTertiary : CodexTheme.accent))
+                .padding(.horizontal, 8)
+                .padding(.vertical, 3)
+                .background(store.agentMode == .standard ? Color.clear : CodexTheme.accentSoft)
+                .clipShape(Capsule())
+                .overlay(Capsule().stroke(CodexTheme.border.opacity(0.4), lineWidth: 1))
+                .frame(height: Tune.pillHeight)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .popover(isPresented: $showModeMenu, arrowEdge: .bottom) {
+            // 原生 Menu 会把富 label 剥成纯文本 (NSMenu title 机制), 富版式必须 popover 自绘
+            VStack(alignment: .leading, spacing: 0) {
+                ForEach(AgentMode.allCases) { m in
+                    modeRow(m)
+                }
+            }
+            .padding(.vertical, 5)
+            .frame(width: 320)
+        }
+        .help("模式档位: 决定 agent 可用的工具与扩展 (下回合生效)")
+    }
+
+    /// 参考版式菜单行: 标题 + 多行描述 + 选中勾。
+    private func modeRow(_ m: AgentMode) -> some View {
+        let selected = m == store.agentMode
+        return Button {
+            store.agentMode = m
+            showModeMenu = false
+        } label: {
+            HStack(alignment: .top, spacing: 10) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(m.displayName)
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(CodexTheme.textPrimary)
+                    Text(m.subtitle)
+                        .font(.system(size: 11))
+                        .foregroundStyle(CodexTheme.textMuted)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer(minLength: 12)
+                if selected {
+                    Image(systemName: "checkmark")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(CodexTheme.textPrimary)
+                }
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 9)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
+            .background(selected ? CodexTheme.bgSidebar : Color.clear)
+        }
+        .buttonStyle(.plain)
     }
 
     // MARK: - 知识注入 pill (P3.7: 生效条数 + 重启引擎入口)
@@ -203,27 +336,17 @@ struct ChatComposer: View {
     }
 
     private var modelMenu: some View {
-        let customEntries = store.menuEntries(for: store.customModelInfos)
-        let catalogEntries = store.menuEntries(for: store.catalogModels)
+        // P7-M3: 菜单只认 settings 配置的自管模型 (无自管时 menuModels 回落 pi 目录);
+        // 不再自行拼 customModelInfos + catalogModels (曾绕过 menuModels 导致全量目录泄漏)。
+        let entries = store.modelMenuEntries
         return Menu {
-            // P3.5: 条目 = 每个模型 × 其支持的思考级别 (thinkingLevelMap 过滤, 用户拍板样式
-            // "DeepSeek V4 Flash（high）"); 未上报时只显示当前项。
-            // P5.1: 自定义条目单独分区 (带 custom 标记), 与 pi 目录条目并存 (同名时覆盖)。
-            if customEntries.isEmpty && catalogEntries.isEmpty {
+            // 条目 = 每个模型 × 其支持的思考级别; 未上报时只显示当前项。
+            if entries.isEmpty {
                 Button(shortModelName) {}
             } else {
-                ForEach(catalogEntries) { entry in
-                    Button(menuTitle(entry, custom: false)) {
+                ForEach(entries) { entry in
+                    Button(menuTitle(entry)) {
                         store.selectModel(entry.model, level: entry.level)
-                    }
-                }
-                if !customEntries.isEmpty {
-                    Section("自定义") {
-                        ForEach(customEntries) { entry in
-                            Button(menuTitle(entry, custom: true)) {
-                                store.selectModel(entry.model, level: entry.level)
-                            }
-                        }
                     }
                 }
             }
@@ -247,11 +370,10 @@ struct ChatComposer: View {
         .help("模型与思考强度 (选中即期望, 下一回合生效)")
     }
 
-    /// 菜单项标题 (✓ = 当前选中组合; custom 条目带标记)。
-    private func menuTitle(_ entry: ModelMenuEntry, custom: Bool) -> String {
+    /// 菜单项标题 (✓ = 当前选中组合)。
+    private func menuTitle(_ entry: ModelMenuEntry) -> String {
         let base = entry.level.map { "\(entry.model.label)（\($0.rawValue)）" } ?? entry.model.label
-        let title = custom ? base + " · custom" : base
-        return store.isCurrent(entry) ? "✓ " + title : title
+        return store.isCurrent(entry) ? "✓ " + base : base
     }
 
     @ViewBuilder
@@ -270,6 +392,7 @@ struct ChatComposer: View {
             .help("停止 (⌘.)")
         } else {
             let canSend = !store.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                          || !store.pendingImages.isEmpty
             Button(action: { store.sendDraft() }) {
                 Image(systemName: "arrow.up")
                     .font(.system(size: 11, weight: .semibold))
@@ -306,7 +429,12 @@ struct ChatComposer: View {
         panel.allowsMultipleSelection = false
         panel.message = Copy.attachPanelMessage
         if panel.runModal() == .OK, let url = panel.url {
-            store.draft += Copy.attachment(url.path)
+            // P7-M6b: 图片走附件通道 (base64 进 RPC), 非图片保留 @路径 文本语义 (@file 模型自己 read)
+            if ImagePipeline.isImageExtension(url.pathExtension) {
+                store.addPendingImage(at: url)
+            } else {
+                store.draft += Copy.attachment(url.path)
+            }
         }
     }
 
@@ -425,16 +553,43 @@ struct CompactTextEditor: NSViewRepresentable {
     var font: NSFont = NSFont.systemFont(ofSize: 14)
     var onSubmit: () -> Void = {}
     var onHeightChange: (CGFloat) -> Void = { _ in }
+    /// P7-M6b: ⌘V 拦截 — 剪贴板是图片时不进文本, 走附件通道 (data, ext)。
+    var onImagePaste: (Data, String) -> Void = { _, _ in }
+
+    /// P7-M6b: 剪贴板图片拦截 — 双路由 (⌘V 可能经菜单 paste: 或 key equivalent 派发,
+    /// 两条路都拦; 剪贴板无图时放行常规文本粘贴)。
+    private final class PasteInterceptTextView: NSTextView {
+        var onImagePaste: ((Data, String) -> Void)?
+
+        override func paste(_ sender: Any?) {
+            if let img = ImagePipeline.pasteboardImage() {
+                onImagePaste?(img.data, img.ext)
+                return
+            }
+            super.paste(sender)
+        }
+
+        override func performKeyEquivalent(with event: NSEvent) -> Bool {
+            if event.type == .keyDown,
+               event.modifierFlags.intersection([.command, .shift, .option, .control]) == .command,
+               event.charactersIgnoringModifiers?.lowercased() == "v",
+               let img = ImagePipeline.pasteboardImage() {
+                onImagePaste?(img.data, img.ext)
+                return true   // 窗口级先于菜单派发, 直接吃掉 ⌘V
+            }
+            return super.performKeyEquivalent(with: event)
+        }
+    }
 
     func makeNSView(context: Context) -> NSScrollView {
-        let scrollView = NSTextView.scrollableTextView()
+        let scrollView = NSScrollView()
         scrollView.hasVerticalScroller = true
         scrollView.autohidesScrollers = true
         scrollView.borderType = .noBorder
         scrollView.drawsBackground = false
 
-        guard let textView = scrollView.documentView as? NSTextView else { return scrollView }
-
+        // 手动组装: documentView 必须是拦截子类 (scrollableTextView() 造的是原生类)
+        let textView = PasteInterceptTextView()
         textView.isRichText = false
         textView.isEditable = true
         textView.isSelectable = true
@@ -446,8 +601,11 @@ struct CompactTextEditor: NSViewRepresentable {
         textView.isVerticallyResizable = true
         textView.isHorizontallyResizable = false
         textView.autoresizingMask = [.width]
+        textView.textContainer?.widthTracksTextView = true
         textView.string = text
+        textView.onImagePaste = onImagePaste
         textView.delegate = context.coordinator
+        scrollView.documentView = textView
 
         return scrollView
     }

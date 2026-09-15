@@ -87,9 +87,34 @@ final class PersistenceStore {
             PRIMARY KEY (provider, model_id)
         )
         """)
+        // P7-M2: 模型自管真源 (settings 页管理, 物化给 pi; 见 docs/P7-functional-design.md §1.1)
+        try db.run("""
+        CREATE TABLE IF NOT EXISTS models (
+            provider           TEXT NOT NULL,
+            model_id           TEXT NOT NULL,
+            display_name       TEXT,
+            api_type           TEXT NOT NULL,
+            reasoning          INTEGER NOT NULL DEFAULT 0,
+            base_url           TEXT,
+            key_ref            TEXT,
+            context_window     INTEGER,
+            max_tokens         INTEGER,
+            input_modalities   TEXT,
+            cost_json          TEXT,
+            thinking_level_map TEXT,
+            compat             TEXT,
+            sampling_params    TEXT,
+            enabled            INTEGER NOT NULL DEFAULT 1,
+            source             TEXT NOT NULL DEFAULT 'custom',
+            created_at         REAL NOT NULL,
+            PRIMARY KEY (provider, model_id)
+        )
+        """)
         // 旧库补列: 先查 PRAGMA table_info, 列已存在就不发 ALTER
         // (无条件 ALTER 会被 try? 吞掉异常, 但 SQLite 自己仍往 stderr 吐 duplicate column 日志)
         addColumnIfMissing("projects", "path", "TEXT")
+        // P7-M3: models 表补 reasoning 显式列 (M2 首版靠 map 有无推导, MiniMax 系 map=null 误判)
+        addColumnIfMissing("models", "reasoning", "INTEGER NOT NULL DEFAULT 0")
         // 记忆提炼: 候选条目待审核状态 (pending 不注入)
         addColumnIfMissing("knowledge_items", "status", "TEXT NOT NULL DEFAULT 'active'")
         addColumnIfMissing("knowledge_items", "note", "TEXT")
@@ -449,6 +474,110 @@ final class PersistenceStore {
     func deleteCustomModel(provider: String, modelId: String) throws {
         try db.run("DELETE FROM custom_models WHERE provider = ? AND model_id = ?",
                    [.text(provider), .text(modelId)])
+    }
+
+    // MARK: - Managed models (P7-M2 模型自管真源)
+
+    func loadManagedModels() throws -> [ManagedModel] {
+        let rows = try db.query("""
+            SELECT provider, model_id, display_name, api_type, reasoning, base_url, key_ref,
+                   context_window, max_tokens, input_modalities, cost_json,
+                   thinking_level_map, compat, sampling_params, enabled, source, created_at
+            FROM models ORDER BY created_at DESC
+            """)
+        return rows.map { row in
+            ManagedModel(
+                provider: text(row, "provider"),
+                modelId: text(row, "model_id"),
+                displayName: text(row, "display_name"),
+                apiType: text(row, "api_type"),
+                reasoning: int(row["reasoning"] ?? .null) != 0,
+                baseURL: optionalText(row, "base_url"),
+                keyRef: optionalText(row, "key_ref"),
+                contextWindow: optionalInt(row, "context_window"),
+                maxTokens: optionalInt(row, "max_tokens"),
+                inputModalities: decodeJSON([String].self, optionalText(row, "input_modalities")) ?? ["text"],
+                cost: decodeJSON(ModelCost.self, optionalText(row, "cost_json")),
+                thinkingLevelMapJSON: optionalText(row, "thinking_level_map"),
+                compatJSON: optionalText(row, "compat"),
+                samplingParamsJSON: optionalText(row, "sampling_params"),
+                enabled: int(row["enabled"] ?? .null) != 0,
+                source: ManagedModelSource(rawValue: text(row, "source")) ?? .custom,
+                createdAt: optionalDate(row, "created_at") ?? .distantPast)
+        }
+    }
+
+    func upsertManagedModel(_ m: ManagedModel) throws {
+        try db.run("""
+            INSERT OR REPLACE INTO models
+            (provider, model_id, display_name, api_type, reasoning, base_url, key_ref,
+             context_window, max_tokens, input_modalities, cost_json,
+             thinking_level_map, compat, sampling_params, enabled, source, created_at)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            """, [.text(m.provider),
+                  .text(m.modelId),
+                  m.displayName.isEmpty ? .null : .text(m.displayName),
+                  .text(m.apiType),
+                  .int(m.reasoning ? 1 : 0),
+                  m.baseURL.map { .text($0) } ?? .null,
+                  m.keyRef.map { .text($0) } ?? .null,
+                  m.contextWindow.map { .int(Int64($0)) } ?? .null,
+                  m.maxTokens.map { .int(Int64($0)) } ?? .null,
+                  encodeJSON(m.inputModalities).map { .text($0) } ?? .null,
+                  encodeJSON(m.cost).map { .text($0) } ?? .null,
+                  m.thinkingLevelMapJSON.map { .text($0) } ?? .null,
+                  m.compatJSON.map { .text($0) } ?? .null,
+                  m.samplingParamsJSON.map { .text($0) } ?? .null,
+                  .int(m.enabled ? 1 : 0),
+                  .text(m.source.rawValue),
+                  .real(m.createdAt.timeIntervalSince1970)])
+    }
+
+    func deleteManagedModel(provider: String, modelId: String) throws {
+        try db.run("DELETE FROM models WHERE provider = ? AND model_id = ?",
+                   [.text(provider), .text(modelId)])
+    }
+
+    /// P7-M2: custom_models 三字段表一次性迁入 (source=legacy, api_type 借壳默认值);
+    /// 同 PK 不覆盖; 旧表保留不删。返回迁移条数 (幂等, 重跑 = 0)。
+    func migrateLegacyCustomModels() throws -> Int {
+        let rows = try db.query("SELECT provider, model_id, label, created_at FROM custom_models")
+        var migrated = 0
+        for row in rows {
+            let provider = text(row, "provider")
+            let modelId = text(row, "model_id")
+            let exists = try db.query(
+                "SELECT 1 FROM models WHERE provider = ? AND model_id = ?",
+                [.text(provider), .text(modelId)])
+            guard exists.isEmpty else { continue }
+            try db.run("""
+                INSERT INTO models
+                (provider, model_id, display_name, api_type, enabled, source, created_at)
+                VALUES (?,?,?,?,1,'legacy',?)
+                """, [.text(provider),
+                      .text(modelId),
+                      optionalText(row, "label").map { .text($0) } ?? .null,
+                      .text("openai-completions"),   // legacy 借壳语义: 走 pi 内置 provider 定义, api 多为 openai 兼容
+                      .real(double(row, "created_at"))])
+            migrated += 1
+        }
+        return migrated
+    }
+
+    private func encodeJSON<T: Encodable>(_ value: T) -> String? {
+        guard let data = try? encoder.encode(value) else { return nil }
+        return String(data: data, encoding: .utf8)
+    }
+
+    private func decodeJSON<T: Decodable>(_ type: T.Type, _ raw: String?) -> T? {
+        guard let raw, let data = raw.data(using: .utf8) else { return nil }
+        return try? decoder.decode(type, from: data)
+    }
+
+    private func optionalInt(_ row: [String: DBValue], _ col: String) -> Int? {
+        if case .int(let n) = row[col] ?? .null { return Int(n) }
+        if case .real(let d) = row[col] ?? .null { return Int(d) }
+        return nil
     }
 
     // MARK: - Scheduled tasks (P3.6 本地定时任务)

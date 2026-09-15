@@ -2,7 +2,7 @@
 
 macOS 原生 AI Agent 客户端（SwiftUI），对标 Codex Desktop 的交互形态，底层对接 [pi CLI](https://github.com/earendil-works/pi) 作为推理引擎。
 
-![version](https://img.shields.io/badge/version-0.1.4-orange)
+![version](https://img.shields.io/badge/version-0.1.5-orange)
 
 ## 功能
 
@@ -13,10 +13,13 @@ macOS 原生 AI Agent 客户端（SwiftUI），对标 Codex Desktop 的交互形
 - **状态栏与过程态**：底部 4 项纯展示（重试/压缩/排队过程态胶囊、上下文 %、Token ↑↓、会话轮数）+ 压缩完成横幅
 - **Side chat（侧问）**：一键 fork 当前会话快照开新会话（`pi --fork`，截到指定轮也可）——模型带着源会话上下文独立作答，主线不受污染；快照提示条常驻说明边界
 - **离开摘要**：切走会话 / 失焦期间后台完成的回合，回来时底部悬浮胶囊一句话带过（完成 N 轮 · 最近回复首句），点击滚底；零 LLM 成本
+- **模型自管**：设置页选预设填 Key 即接入（Keychain 存储），测试连接直拉 provider `/models`，勾选启用；SQLite 真源，spawn 物化 `models.json`/`auth.json` 注入 `PI_CODING_AGENT_DIR`，全程不碰 `~/.pi/agent`
+- **模型元数据目录**：models.dev 三层自有化（bundled 快照 > 7 天 TTL 缓存 > 裸默认），思考强度/上下文窗口/价格自动补全，`thinkingLevelMap` 按 pi 语义收敛思考档位
+- **模式选择器**：Minimal / Standard / Full 三档能力预设（工具集 + 业务扩展挂载），按项目记忆，与审批开关正交；下回合 spawn 生效
 - 会话持久化：`--session` 挂载 `<uuid>.jsonl`，重启 App / 切会话 / 切项目不失忆
 - 审批流：bash 只读白名单静默放行，edit/write 审批卡带红绿块对照 diff 预览；无人值守任务自动关审批
 - 工具卡：bash / read / edit / write / fetch 全事件上屏，含真实执行时长（审批等待不计入）
-- **自定义模型**：设置页管理「显示名 ↔ API 名」映射（用于目录条目名与服务端 API 名错位的场景），菜单带 custom 标记分区；运行时仍按 `provider/model id` 透传给 pi
+- **多模态传图**：⌘V / 拖拽 / 附件按钮三入口，暂存 chips ≤4 张；原图落盘留档、发送带压缩副本（png/gif/webp 未超限透传保动图，其余 ≤1536px JPEG）；text-only 模型发送时拦截提示；用户消息缩略图行 + 大图预览，重开同源渲染
 
 **项目模式**
 - 项目绑定工作目录，pi cwd 跟随切换
@@ -30,7 +33,7 @@ macOS 原生 AI Agent 客户端（SwiftUI），对标 Codex Desktop 的交互形
 
 **工程化**
 - SQLite 持久化（WAL），事件流重放式加载；退出时 WAL checkpoint + 终止在途 pi 进程
-- 冒烟门禁：`scripts/smoke/run.sh` 一条命令跑 194 项语义冒烟（事件归并/并发路由/fire 后台化/上限拒绝/落库对拍/轨迹派生/自定义模型/settled 语义/状态栏数据链/过程态胶囊/Trace v2/侧问 fork/离开摘要/自动命名）
+- 冒烟门禁：`scripts/smoke/run.sh` 一条命令跑 276 项语义冒烟（事件归并/并发路由/fire 后台化/上限拒绝/落库对拍/轨迹派生/settled 语义/状态栏数据链/过程态胶囊/Trace v2/侧问 fork/离开摘要/自动命名/模型物化/元数据目录/模式矩阵/附件管线/发送门控）
 - 扩展管理：内置 mangox-approval（源码内嵌, 每次 spawn 自动校验重建，换机器零影响），托管扩展启停/导入/删除
 - 内置 JetBrains Mono（SIL OFL），等宽三级字体链
 - 深/浅色自适应主题
@@ -48,13 +51,15 @@ macOS 原生 AI Agent 客户端（SwiftUI），对标 Codex Desktop 的交互形
 open mangox.xcodeproj   # Xcode 里 Cmd+R
 ```
 
-## 已知限制 (v0.1.4)
+## 已知限制 (v0.1.5)
 
 - **长会话上下文线性增长**：pi transcript 无 compaction，单会话建议控制在几十轮内，过长后每次拉起的 token 成本与延迟都会上升
 - **并发资源占用**：每个在途任务是一个独立 pi 进程（约 50MB）+ 一路 LLM 流，满并发 10 个任务时请留意机器负载（设置页可调上限）
 - **agent 改文件后文件树不自动刷新**：工作区栏有手动刷新按钮；自动增量刷新在路线图上
 - **fire 冲突跳过**：同一任务日志会话已有回合在途、或并发已满时跳过本轮（cron 到期不重排），跳过记录写进任务日志会话
-- **自定义模型继承目录默认条目参数**：清单外的 model id 由 pi 克隆该 provider 默认条目元数据，`contextWindow` / compaction 时机 / 成本价可能不准；轨迹视图的 token 数是真实值，可据此将来自算成本
+- **图片发送需模型多模态支持**：当前选中模型在设置页配置为 text-only 时图片消息被拦截（附件保留，换模型后可发）；目录外模型无法判定能力，默认放行
+- **图片消息的 token 成本**：base64 随 RPC 发送（≤4 张/条），侧问 fork 快照会原样携带历史图片（token 含图）
+- **工具执行中产生的图片暂不上屏**：工具产图在路线图中冻结，工具输出的 content 图片块当前不展示
 - **轨迹视图的回合时长是估计值**：按事件时间差计算（低估最后一个块的流式时长）；手动停止的回合可能没有 usage（显示 token 缺省）
 
 > 注：App 图标源图在 `icon_work/AppIcon.png`（1024），`scripts/gen-icon.sh` 展开为全 10 档 `mangox/Resources/AppIcon.icns`，经 Info.plist `CFBundleIconFile` 挂载。

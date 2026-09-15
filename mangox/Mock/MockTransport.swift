@@ -17,9 +17,23 @@ final class MockTransport: AgentTransport {
     private(set) var bindingChangeCount = 0
     /// smoke 断言用: 当前绑定
     private(set) var boundSessionId: UUID?
+    /// P7-M3 smoke 断言用: 最近一次物化产物下发
+    private(set) var lastPIConfig: ModelMaterializer.Output?
+    /// P7-M4 smoke 断言用: 最近一次模式档位下发
+    private(set) var lastMode: AgentMode?
+    /// P7-M6b smoke 断言用: 最近一次发送的图片数
+    private(set) var lastSentImages: [OutgoingImage] = []
 
     func updateExtensions(_ paths: [String]) {
         lastDesiredExtensions = paths
+    }
+
+    func updatePIConfig(_ output: ModelMaterializer.Output?) {
+        lastPIConfig = output
+    }
+
+    func updateMode(_ mode: AgentMode) {
+        lastMode = mode
     }
 
     func updateSessionBinding(_ sessionId: UUID?) {
@@ -28,8 +42,9 @@ final class MockTransport: AgentTransport {
         bindingChangeCount += 1
     }
 
-    func send(prompt: String) {
+    func send(prompt: String, images: [OutgoingImage]) {
         cancelled = false
+        lastSentImages = images
         delegate?.transport(self, didEmit: .streamStarted)
         Task { await simulateReply(prompt: prompt) }
     }

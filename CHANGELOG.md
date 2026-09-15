@@ -5,6 +5,23 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [0.1.5] - 2026-09-15
+
+### Added
+
+- **模型管理自管**：设置页内置预设（DeepSeek / Kimi / GLM / MiniMax / OpenAI / Anthropic / Ollama / Qwen）→ 填 API Key（Keychain 存储）→ 测试连接（直连 provider `/models`，不经 pi）→ 勾选保存；SQLite `models` 表为真源，spawn 时物化 `models.json` + `auth.json`（0600，内容指纹不变跳写）并注入 `PI_CODING_AGENT_DIR=~/.mangox/pi-config`——**全程不读不写 `~/.pi/agent`**
+- **模型元数据目录（models.dev 三层自有化）**：bundled 快照（精选 15 providers / 773 models，含思考强度/上下文窗口/价格）> `~/.mangox/catalog/modelsdev.json` 远端缓存（7 天 TTL，静默刷新）> 裸默认兜底；候选元数据优先级 = 种子（不漂移）> 目录 > 默认；思考强度显式 `reasoning` 字段 + `thinkingLevelMap` 按 pi 语义收敛菜单档位（MiniMax 系 map=null 不再误判）
+- **模式选择器**：composer 档位 pill——Minimal（read/bash/write/edit + 不挂扩展）/ Standard（内置全量 + 不挂扩展）/ Full（全量 + 业务扩展）；按项目记忆（切项目自动恢复该档位），与审批开关正交组合；下回合 spawn 生效；业务扩展仅 Full 档挂载，系统审批扩展三档恒挂
+- **多模态传图**：⌘V 粘贴（截图 / 浏览器复制图 / Finder 图片文件）/ 拖拽 / 附件按钮三入口，暂存 chips ≤4 张（超出提示拆条）；发送时原图落盘 `~/.mangox/attachments/<会话>/`，RPC `prompt` 携带发送副本——png/gif/webp 未超长边 1536px 原样透传（保动图/透明通道），其余压 JPEG（q0.8）；text-only 模型发送时拦截提示（附件保留，换多模态模型后可发）
+- **气泡图片**：用户消息缩略图行（88×66）+ 点开大图 sheet（Esc/点击关闭）；重开会话从事件流同源渲染；删除会话连带清理附件目录（先读后删）
+- 旧「自定义模型」（三字段表）一次性迁移为自管模型条目（`迁移` 徽章，旧表保留回滚余地）
+
+### Changed
+
+- 输入框模型菜单只认设置页配置的自管模型（不再展示 pi 全量目录）；每条目带思考强度档位
+- 设置页铺满窗口宽度；预设芯片收敛为主推 4 家（DeepSeek/MiniMax/GLM/Kimi）+「其他」展开 + 自定义
+- 未超限小图原样透传，不再无脑转码（保留 GIF 动效与 PNG 透明）
+
 ## [0.1.4] - 2026-09-14
 
 ### Added

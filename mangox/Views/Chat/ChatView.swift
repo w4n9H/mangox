@@ -236,9 +236,14 @@ struct MessageBlockView: View {
     let message: ChatMessage
     @ObservedObject var store: ChatStore
     @State private var hovering: Bool = false
+    /// P7-M6c: 大图预览 (sheet, 不开独立 NSWindow — P4.2 尺寸控制坑)。
+    @State private var previewAttachment: Attachment?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 3) {
+            if let atts = message.attachments, !atts.isEmpty {
+                attachmentRow(atts)
+            }
             content
             if let raw = rawText {
                 footerToolbar(raw: raw)
@@ -249,6 +254,72 @@ struct MessageBlockView: View {
             }
         }
         .onHover { hovering = $0 }
+        .sheet(item: $previewAttachment) { att in
+            attachmentPreview(att)
+        }
+    }
+
+    // MARK: - 附件 (P7-M6c: 缩略图行 + 大图预览; replay 从 events 同源渲染)
+
+    private func attachmentRow(_ atts: [Attachment]) -> some View {
+        HStack(spacing: 6) {
+            Spacer()   // 用户消息靠右
+            ForEach(atts) { att in
+                thumbnail(att)
+                    .onTapGesture { previewAttachment = att }
+            }
+        }
+        .padding(.bottom, 2)
+    }
+
+    /// 88×66 圆角缩略 (scaledToFill 裁切; 点击开大图)。
+    private func thumbnail(_ att: Attachment) -> some View {
+        Group {
+            if let img = NSImage(contentsOfFile: att.path) {
+                Image(nsImage: img)
+                    .resizable()
+                    .scaledToFill()
+            } else {
+                Rectangle().fill(CodexTheme.bgSidebar)
+                    .overlay(Image(systemName: "photo")
+                        .foregroundStyle(CodexTheme.textMuted))
+            }
+        }
+        .frame(width: 88, height: 66)
+        .clipped()
+        .cornerRadius(6)
+        .overlay(RoundedRectangle(cornerRadius: 6)
+            .stroke(CodexTheme.border.opacity(0.4), lineWidth: 1))
+        .contentShape(Rectangle())
+        .help("点击查看大图")
+    }
+
+    /// 大图 sheet: 原图 scaledToFit + 点击背景/Esc/按钮关闭 (Esc 为 sheet 默认)。
+    private func attachmentPreview(_ att: Attachment) -> some View {
+        VStack(spacing: 10) {
+            if let img = NSImage(contentsOfFile: att.path) {
+                Image(nsImage: img)
+                    .resizable()
+                    .scaledToFit()
+                    .frame(maxWidth: 900, maxHeight: 620)
+            } else {
+                Text("图片已不存在 (附件文件被移动或删除)")
+                    .font(CodexTheme.fontSmall)
+                    .foregroundStyle(CodexTheme.textMuted)
+                    .padding(40)
+            }
+            Text("\(att.fileName) · \(att.pixelWidth)×\(att.pixelHeight)")
+                .font(CodexTheme.fontTiny)
+                .foregroundStyle(CodexTheme.textMuted)
+            Button("关闭") { previewAttachment = nil }
+                .buttonStyle(.plain)
+                .keyboardShortcut(.escape, modifiers: [])
+        }
+        .padding(20)
+        .frame(maxWidth: .infinity, alignment: .center)
+        .background(CodexTheme.bgBase)
+        .contentShape(Rectangle())
+        .onTapGesture { previewAttachment = nil }
     }
 
     @ViewBuilder

@@ -37,6 +37,8 @@ final class ChatStore: ObservableObject {
     /// spawn 期配置快照: 新实例创建时与每次 send 前下发 (P3.7 注入 / P3.11 扩展)。
     private var currentKnowledgeBlock: String?
     private var currentExtensionPaths: [String] = []
+    /// P7-M3: 自管模型物化产物快照 (transportFor 补发新实例; init 先于探测拉目录)。
+    private var currentPIConfig: ModelMaterializer.Output?
     /// P4.0.2 会话化流式状态: 在途回合的会话集合 (并发数 = 集合大小; 上限治理在 P4.0.4)。
     @Published private(set) var runningTurns: Set<UUID> = []
     /// 兼容视图: 当前选中会话是否有回合在途。
@@ -45,10 +47,20 @@ final class ChatStore: ObservableObject {
     }
     /// P3.1: SQLite 持久化; 打不开时降级为纯内存 (原 mock 行为)。
     private let persistence: PersistenceStore?
+    /// P7-M3: 模型 key 存储 (真源 Keychain; 冒烟注入内存实现)。
+    let modelKeyStore: any ModelKeyStore
 
     // Chat
     @Published var messages: [ChatMessage] = []
     @Published var draft: String = ""
+    /// P7-M6b: 图片附件暂存区 (随 draft 生命周期, 发送即清; ≤4 张)。
+    @Published var pendingImages: [PendingImage] = []
+    /// P7-M6b: 当前选中模型是否支持图片输入 (managed 有 inputModalities; 无法判定 → 不拦)。
+    var currentModelSupportsImages: Bool {
+        guard let m = managedModels.first(where: { $0.provider == currentProvider && $0.modelId == currentModelId })
+        else { return true }
+        return m.inputModalities.contains("image")
+    }
     /// 引擎不可用 (pi CLI 缺失): Release 下不静默降级, UI 横幅明示 + 发送守卫。
     @Published var engineMissing: Bool = false
 
@@ -65,6 +77,15 @@ final class ChatStore: ObservableObject {
         didSet {
             injectedTransport?.updateApprovalPolicy(askApproval: askApproval)
             transports.values.forEach { $0.updateApprovalPolicy(askApproval: askApproval) }
+        }
+    }
+    /// P7-M4 模式档位 (能力预设, 与审批开关正交; 按项目记忆, settings KV)。
+    @Published var agentMode: AgentMode = .standard {
+        didSet {
+            guard oldValue != agentMode else { return }
+            injectedTransport?.updateMode(agentMode)
+            transports.values.forEach { $0.updateMode(agentMode) }
+            saveAgentMode()
         }
     }
 
@@ -200,6 +221,8 @@ final class ChatStore: ObservableObject {
     @Published var availableModels: [AgentModelInfo] = []
     /// P5.1: 自定义模型条目 (菜单自主 — 与 pi 目录展示名解耦; 同名时覆盖 pi 条目)。
     @Published var customModels: [CustomModel] = []
+    /// P7-M3: 自管模型条目 (settings 页管理, 物化给 pi; 真源 models 表)。
+    @Published var managedModels: [ManagedModel] = []
     /// 当前模型 (provider/id 分量), composer 模型菜单的数据源。
     @Published var currentProvider: String = ""
     @Published var currentModelId: String = ""
@@ -326,7 +349,7 @@ final class ChatStore: ObservableObject {
     @Published var sidebarCollapsed: Bool = false
 
     init(transport: (any AgentTransport)? = nil, dbPath: String? = nil,
-         managedExtensionsDir: String? = nil) {
+         managedExtensionsDir: String? = nil, modelKeyStore: (any ModelKeyStore)? = nil) {
         // 默认参数表达式是非隔离上下文, transport 的创建放进来。
         // P3.2: 检测到 pi 二进制 → 真引擎; 缺失时 Release 下不再静默降级 Mock
         // (假数据演戏是发布事故), 置 engineMissing 由 UI 报错; DEBUG 保留 mock 回归基线。
@@ -338,6 +361,7 @@ final class ChatStore: ObservableObject {
         // 无默认值的 let 需最先初始化 (两阶段: 赋值前不可访问 self)
         self.injectedTransport = transport
         self.managedExtensionsDir = managedExtensionsDir ?? (NSHomeDirectory() + "/.mangox/extensions")
+        self.modelKeyStore = modelKeyStore ?? KeychainModelKeyStore()
 
         // P3.1: 首启播种 SampleSession, 之后全部从 SQLite 加载; 打不开库则回退纯 mock
         // dbPath: smoke 注入独立库文件用 (默认 ~/.mangox/mangox.db)
@@ -356,6 +380,9 @@ final class ChatStore: ObservableObject {
             knowledgeItems = (try? store.loadKnowledge()) ?? []
             scheduledTasks = (try? store.loadScheduled()) ?? []
             customModels = (try? store.loadCustomModels()) ?? []   // P5.1
+            // P7-M3: custom_models 一次性迁入 models 表 (幂等), 再加载自管真源
+            _ = (try? store.migrateLegacyCustomModels()) ?? 0
+            managedModels = (try? store.loadManagedModels()) ?? []
             // 启动恢复: 打开上一次作业会话 (settings.last_session_id);
             // 无记录或会话已删除 → 欢迎空态, 发送时才隐式建会话。
             if let last = store.loadLastSession(),
@@ -383,6 +410,9 @@ final class ChatStore: ObservableObject {
         syncWorkspaceContext()   // 文件树扫描 (P3.4); cwd 在每次 send 前按实例下发
         // P3.7: 注入块快照 (池实例 spawn 期消费)
         currentKnowledgeBlock = buildKnowledgeBlock()
+        // P7-M3: 物化产物先于探测拉目录 — probe 首次 spawn 带上 PI_CODING_AGENT_DIR,
+        // get_available_models 只报自管模型 (顺序反了会先拉到全量目录)
+        refreshPIConfig()
         probe.refreshCapabilities()   // P3.5: 模型/effort 上报 (pi 拉起 + get_state/models)
         startScheduler()   // P3.6: 每秒 tick, 分钟对齐检查到期任务
 
@@ -469,6 +499,9 @@ final class ChatStore: ObservableObject {
         evictTransport(id)   // P4.0.2: 逐出池实例 (终止在途 pi + 清回合状态), 无论是否当前选中
         // P6.3.1: 侧问会话的 transcript 是 fork 产物 (路径显式存库) — 必须在删行前读出
         let explicitFile = persistence?.loadSessionFile(id: id)
+        // P7-M6: 附件目录同理先读后删 (路径在删 messages 行前从 events 收集)
+        let hasAttachments = (((try? persistence?.loadMessages(sessionId: id)) ?? [])
+            .flatMap { $0.attachments ?? [] }.isEmpty) == false
         try? persistence?.deleteSession(id: id) // 连带清 events
         if deleteTranscript {
             if let explicit = explicitFile {
@@ -476,6 +509,9 @@ final class ChatStore: ObservableObject {
             } else {
                 PiRpcTransport.removeSessionFile(for: id)   // pi 持久 transcript (派生路径)
             }
+        }
+        if hasAttachments {
+            ImagePipeline.removeSessionAttachments(sessionID: id)
         }
         for g in projects.indices {
             projects[g].items.removeAll { $0.id == id }
@@ -511,6 +547,25 @@ final class ChatStore: ObservableObject {
         }
         // P3.11: 项目区扩展跟随 cwd, 目录变了重扫 (托管/全局区结果不变, 幂等)
         scanExtensions()
+        // P7-M4: 档位按项目记忆, 切项目即恢复该项目档位 (默认 standard)
+        restoreAgentMode()
+    }
+
+    // MARK: - P7-M4 模式档位持久化 (settings KV, Int = allCases 序号)
+
+    private var agentModeKey: String {
+        if let pid = selectedProjectId { return "agent_mode.\(pid.uuidString)" }
+        return "agent_mode"
+    }
+
+    private func saveAgentMode() {
+        persistence?.saveSetting(key: agentModeKey, value: agentMode.storageIndex)
+    }
+
+    func restoreAgentMode() {
+        let idx = persistence?.loadSetting(key: agentModeKey, defaultValue: AgentMode.standard.storageIndex)
+            ?? AgentMode.standard.storageIndex
+        agentMode = AgentMode(storageIndex: idx)
     }
 
     /// 工作区列手动刷新入口: 只重扫文件树 (不动 cwd 绑定与扩展)。
@@ -648,6 +703,8 @@ final class ChatStore: ObservableObject {
         t.updateBashWhitelist(bashWhitelist)
         t.updateExtensions(currentExtensionPaths)
         t.updateKnowledgeContext(currentKnowledgeBlock)
+        t.updateMode(agentMode)   // P7-M4: 档位快照 (新实例补发)
+        t.updatePIConfig(currentPIConfig)   // P7-M3: 物化产物快照 (缺失 = 会话 spawn 读 ~/.pi/agent → 全量目录泄漏)
         if !currentProvider.isEmpty {
             t.setModel(provider: currentProvider, modelId: currentModelId)
             t.setThinkingLevel(thinkingLevel.rawValue)
@@ -875,7 +932,7 @@ final class ChatStore: ObservableObject {
 
     func sendDraft(ephemeral: Bool = false) {
         let trimmed = draft.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return }
+        guard !trimmed.isEmpty || !pendingImages.isEmpty else { return }
         // 引擎缺失: 不发请求, 本地给一条说明 (engineMissing 横幅常驻在聊天顶部)
         if engineMissing {
             messages.append(ChatMessage(role: .assistant,
@@ -891,14 +948,67 @@ final class ChatStore: ObservableObject {
             setTurnLimitNotice("并发已达上限 (\(maxConcurrentTurns)), 请等待任务结束或在设置中调高")
             return
         }
-        let msg = ChatMessage(role: .user, content: .text(trimmed))
+        // P7-M6b 门控: 附件随时可挂, 发送时才拦 (模型不支持图片 → 提示换模型, 附件不白挂)
+        var attachments: [Attachment] = []
+        var outgoing: [OutgoingImage] = []
+        if !pendingImages.isEmpty {
+            guard currentModelSupportsImages else {
+                setTurnLimitNotice("当前模型不支持图片输入, 请在设置中改用多模态模型后再发")
+                return
+            }
+            for p in pendingImages {
+                guard let saved = try? ImagePipeline.saveOriginal(p.data, fileExtension: p.fileExtension,
+                                                                  sessionID: sid) else { continue }
+                attachments.append(Attachment(path: saved.path, pixelWidth: p.pixelWidth,
+                                              pixelHeight: p.pixelHeight, mimeType: p.mimeType,
+                                              byteSize: saved.byteSize))
+                // 发送字节: png/gif/webp 未超限透传 (保动图), 其余压 JPEG 副本
+                if let payload = ImagePipeline.outgoingPayload(data: p.data, ext: p.fileExtension,
+                                                               pixelWidth: p.pixelWidth,
+                                                               pixelHeight: p.pixelHeight) {
+                    outgoing.append(OutgoingImage(data: payload.data, mimeType: payload.mimeType))
+                }
+            }
+        }
+        let msg = ChatMessage(role: .user, content: .text(trimmed),
+                              attachments: attachments.isEmpty ? nil : attachments)
         messages.append(msg)
         draft = ""
+        pendingImages = []
         persistMessage(msg, sid: sid)
         autoTitleIfNeeded(sid: sid, text: trimmed)   // P6.4: 默认标题会话按首条消息自动命名
         // 任务 fire 轮次保持 ephemeral (交接文件注入模板不得滚进持久 transcript)
-        beginTurn(sid: sid, prompt: trimmed, ephemeral: ephemeral,
-                  cwd: activeProjectPath, unattended: false)
+        beginTurn(sid: sid, prompt: trimmed.isEmpty ? "请看图" : trimmed, ephemeral: ephemeral,
+                  cwd: activeProjectPath, unattended: false, images: outgoing)
+    }
+
+    // MARK: - P7-M6b 图片附件暂存 (三入口: 附件按钮/⌘V/拖拽)
+
+    func addPendingImage(_ data: Data, suggestedExtension ext: String) {
+        guard ImagePipeline.isImageExtension(ext) || ext.isEmpty else { return }
+        guard pendingImages.count < ImagePipeline.maxPerMessage else {
+            setTurnLimitNotice("单条消息最多 \(ImagePipeline.maxPerMessage) 张图片, 超出请拆条发送")
+            return
+        }
+        guard let size = ImagePipeline.pixelSize(of: data) else {
+            setTurnLimitNotice("无法识别的图片数据")
+            return
+        }
+        pendingImages.append(PendingImage(id: UUID(), data: data,
+                                          fileExtension: ext.isEmpty ? "png" : ext.lowercased(),
+                                          pixelWidth: size.width, pixelHeight: size.height))
+    }
+
+    func addPendingImage(at url: URL) {
+        guard let data = try? Data(contentsOf: url) else {
+            setTurnLimitNotice("无法读取图片文件")
+            return
+        }
+        addPendingImage(data, suggestedExtension: url.pathExtension)
+    }
+
+    func removePendingImage(_ id: UUID) {
+        pendingImages.removeAll { $0.id == id }
     }
 
     /// 首条消息自动命名: 仍是默认标题 → 取首行前 10 字符 (一次性, 之后用户可随意重命名)。
@@ -914,7 +1024,7 @@ final class ChatStore: ObservableObject {
     /// P4.0.2: 回合启动公共路径 (用户会话与定时 fire 共用)。
     /// spawn 期配置在 send 前逐实例下发 (会话绑定/cwd/审批策略)。
     private func beginTurn(sid: UUID, prompt: String, ephemeral: Bool,
-                           cwd: String?, unattended: Bool) {
+                           cwd: String?, unattended: Bool, images: [OutgoingImage] = []) {
         let t = transportFor(sid)
         if ephemeral {
             t.updateSessionBinding(nil)   // nil = --no-session (fire 轮次, P3.9 拍板)
@@ -935,7 +1045,7 @@ final class ChatStore: ObservableObject {
         turnStartAt[sid] = Date()   // P4.1: 回合计时起点
         if sid == selectedConversationId { awaySummary = nil }   // P6.3.2: 新回合开始清过期摘要
         if injectedTransport != nil { injectedTurnSid = sid }   // 注入实例: 记录串行回合归属
-        t.send(prompt: prompt)
+        t.send(prompt: prompt, images: images)
     }
 
     /// 无选中会话时隐式创建 (持久化要求每条消息都有 session 归属)。
@@ -1022,9 +1132,12 @@ final class ChatStore: ObservableObject {
         return availableModels.filter { !overridden.contains("\($0.provider)/\($0.id)") }
     }
 
-    /// 菜单全集 (自定义置顶)。
+    /// 菜单全集 (P7-M3 拍板: 有自管模型时只显示 enabled 自管条目, pi 上报目录退出菜单;
+    /// 一个都没配时回落 pi 目录 + P5.1 自定义, 保证可用性)。
     var menuModels: [AgentModelInfo] {
-        customModelInfos + catalogModels
+        let managed = managedModels.filter(\.enabled).map(\.asAgentModelInfo)
+        if !managed.isEmpty { return managed }
+        return customModelInfos + catalogModels
     }
 
     /// 指定模型集的菜单条目展开 (模型 × 级别)。
@@ -1058,7 +1171,10 @@ final class ChatStore: ObservableObject {
 
     /// 自定义条目显示名 (药丸优先显示自定义 label; 设计 §3.3 拍板)。
     func customLabel(provider: String, modelId: String) -> String? {
-        customModels.first { $0.provider == provider && $0.modelId == modelId }?.displayName
+        if let m = managedModels.first(where: { $0.provider == provider && $0.modelId == modelId }) {
+            return m.displayNameOrId   // P7-M3: 自管条目优先 (含 legacy 迁移)
+        }
+        return customModels.first { $0.provider == provider && $0.modelId == modelId }?.displayName
     }
 
     /// 当前选中模型的显示名: 自定义 label 优先, 回落 id 末段。
@@ -1093,6 +1209,60 @@ final class ChatStore: ObservableObject {
     func removeCustomModel(_ model: CustomModel) {
         try? persistence?.deleteCustomModel(provider: model.provider, modelId: model.modelId)
         customModels.removeAll { $0.id == model.id }
+    }
+
+    // MARK: - P7-M3 模型自管 (settings 页真源 + 物化推送)
+
+    /// 物化产物下发 (探测实例 + 注入实例 + 全部会话实例; 模型变更/启动时调用)。
+    func refreshPIConfig() {
+        let output: ModelMaterializer.Output? = managedModels.isEmpty ? nil :
+            ModelMaterializer.materialize(managedModels, keyProvider: { [weak self] account in
+                self?.modelKeyStore.key(account: account)
+            })
+        currentPIConfig = output
+        injectedTransport?.updatePIConfig(output)
+        capabilityProbe?.updatePIConfig(output)
+        transports.values.forEach { $0.updatePIConfig(output) }
+    }
+
+    /// 新增/更新自管模型 (落库 + 刷物化)。
+    func upsertManagedModel(_ m: ManagedModel) {
+        try? persistence?.upsertManagedModel(m)
+        if let idx = managedModels.firstIndex(where: { $0.id == m.id }) {
+            managedModels[idx] = m
+        } else {
+            managedModels.insert(m, at: 0)
+        }
+        refreshPIConfig()
+    }
+
+    /// 删除自管模型 (落库 + 刷物化)。
+    func deleteManagedModel(_ m: ManagedModel) {
+        try? persistence?.deleteManagedModel(provider: m.provider, modelId: m.modelId)
+        managedModels.removeAll { $0.id == m.id }
+        refreshPIConfig()
+    }
+
+    /// 启停开关 (enabled 决定进不进物化清单)。
+    func setManagedModelEnabled(_ id: String, _ enabled: Bool) {
+        guard var m = managedModels.first(where: { $0.id == id }) else { return }
+        m.enabled = enabled
+        upsertManagedModel(m)
+    }
+
+    /// provider 级 key 存取 (Keychain; account = provider, 物化进 auth.json)。
+    func setProviderKey(_ key: String, provider: String) {
+        try? modelKeyStore.setKey(key, account: provider)
+        refreshPIConfig()
+    }
+
+    func providerKey(provider: String) -> String? {
+        modelKeyStore.key(account: provider)
+    }
+
+    /// 选中自管模型 (settings 行"启用"; thinking 级别放开全级别, pi 侧 clamp 收敛)。
+    func selectManagedModel(_ m: ManagedModel) {
+        selectModel(m.asAgentModelInfo, level: nil)
     }
 
     /// 选中组合: 全局期望更新 (新实例由 transportFor 补发) + 选中会话实例即时下发

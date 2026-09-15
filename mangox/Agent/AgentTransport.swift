@@ -37,11 +37,17 @@ enum AgentEvent {
     case streamEnded
 }
 
+/// P7-M6b: 随 prompt 发送的图片 (原始字节 + mime; pi 侧 RPC 编码 base64)。
+struct OutgoingImage: Hashable {
+    let data: Data
+    let mimeType: String
+}
+
 @MainActor
 protocol AgentTransport: AnyObject {
     var delegate: (any AgentTransportDelegate)? { get set }
-    /// 发送一轮 prompt (regenerate 复用同一入口)。
-    func send(prompt: String)
+    /// 发送一轮 prompt (regenerate 复用同一入口; images = P7-M6b 图片附件, 编码进 RPC images 数组)。
+    func send(prompt: String, images: [OutgoingImage])
     /// 取消在途生成。
     func cancel()
     /// 对审批卡作出决定。
@@ -80,6 +86,10 @@ protocol AgentTransport: AnyObject {
     /// P6.3.1: 下一回合 spawn 带 --fork <sourceFile> (--session 互斥, 不可同传)。
     /// spawn 后经 get_state.sessionFile 回读产物路径, 走 delegate didReadSessionFile。
     func startForkSession(sourceFile: String)
+    /// P7-M3: 下发自管模型物化产物 (nil = 无自管模型; spawn 注 PI_CODING_AGENT_DIR + 落盘)。
+    func updatePIConfig(_ output: ModelMaterializer.Output?)
+    /// P7-M4: 下发模式档位 (spawn 期 --tools / 扩展挂载矩阵; per-turn 语义, 下回合生效)。
+    func updateMode(_ mode: AgentMode)
 }
 
 /// P3.5: 对端上报的可用模型 (pi modelRegistry 条目的保守投影)。
@@ -153,4 +163,8 @@ extension AgentTransport {
     func updateSessionFilePath(_ path: String?) {}
     /// P6.3.1: fork 会话 (Mock 无进程, 空实现)。
     func startForkSession(sourceFile: String) {}
+    /// P7-M3: 物化产物下发 (Mock 无进程, 空实现)。
+    func updatePIConfig(_ output: ModelMaterializer.Output?) {}
+    /// P7-M4: 模式档位下发 (Mock 无进程, 空实现)。
+    func updateMode(_ mode: AgentMode) {}
 }

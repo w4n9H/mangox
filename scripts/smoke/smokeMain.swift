@@ -6,6 +6,9 @@
 
 import Foundation
 import SwiftUI
+import ImageIO
+import CoreGraphics
+import UniformTypeIdentifiers
 
 @main
 struct SmokeMain {
@@ -848,6 +851,364 @@ struct SmokeMain {
             store.sendDraft()
             check(store.chats.first { $0.id == t20b }?.title == "自定义", "T20 手动重命名不被覆盖")
             check(await waitUntil { store.runningTurns.isEmpty }, "T20 回合C结束")
+        }
+
+        // ---- T21 P7-M2: models 表 + legacy 迁移 + 物化 ----
+        do {
+            print("== T21 P7-M2: 模型自管真源 + 物化 ==")
+            guard let mdb = try? PersistenceStore(path: dir + "/t21.db") else {
+                check(false, "T21 建 DB"); report()
+            }
+            try? mdb.migrate()
+
+            let cost = ModelCost(input: 1, output: 2, cacheRead: 0.1, cacheWrite: 0.2,
+                                 tiers: [ModelCost.Tier(inputTokensAbove: 200_000, input: 2, output: 4, cacheRead: 0.2, cacheWrite: 0.4)])
+            let mA = ManagedModel(provider: "mangox-gw", modelId: "mangox-mini", displayName: "MangoX Mini",
+                                  apiType: "openai-completions", baseURL: "https://gw.invalid/v1",
+                                  keyRef: "mangox-gw", contextWindow: 131_072, maxTokens: 8_192,
+                                  inputModalities: ["text", "image"], cost: cost,
+                                  thinkingLevelMapJSON: "{\"high\":\"default\",\"low\":null}",
+                                  compatJSON: "{\"supportsDeveloperRole\":false}",
+                                  source: .preset)
+            let mB = ManagedModel(provider: "mangox-gw", modelId: "mangox-max", displayName: "MangoX Max",
+                                  apiType: "openai-completions", baseURL: "https://gw.invalid/v1",
+                                  keyRef: "mangox-gw", source: .preset)
+            let mC = ManagedModel(provider: "fake-anthropic", modelId: "fake-sonnet", displayName: "Fake Sonnet",
+                                  apiType: "anthropic-messages", baseURL: "https://fake.invalid/v1",
+                                  enabled: false, source: .custom)
+            try? mdb.upsertManagedModel(mA)
+            try? mdb.upsertManagedModel(mB)
+            try? mdb.upsertManagedModel(mC)
+
+            let loaded = (try? mdb.loadManagedModels()) ?? []
+            check(loaded.count == 3, "T21 CRUD 往返 3 条")
+            let la = loaded.first { $0.modelId == "mangox-mini" }
+            check(la?.cost?.tiers?.first?.inputTokensAbove == 200_000, "T21 cost+tiers 往返")
+            check(la?.inputModalities == ["text", "image"], "T21 input_modalities 往返")
+            check(la?.thinkingLevelMapJSON == "{\"high\":\"default\",\"low\":null}", "T21 原样 JSON 透传 (thinkingLevelMap)")
+            check(la?.compatJSON == "{\"supportsDeveloperRole\":false}", "T21 compat 透传")
+
+            var mA2 = mA; mA2.displayName = "Mini v2"; mA2.enabled = false
+            try? mdb.upsertManagedModel(mA2)
+            check(((try? mdb.loadManagedModels()) ?? []).count == 3, "T21 同 PK 覆盖不新增")
+            try? mdb.upsertManagedModel(mA)
+            try? mdb.deleteManagedModel(provider: "fake-anthropic", modelId: "fake-sonnet")
+            check(((try? mdb.loadManagedModels()) ?? []).count == 2, "T21 delete 生效")
+            try? mdb.upsertManagedModel(mC)
+
+            try? mdb.upsertCustomModel(CustomModel(provider: "deepseek", modelId: "deepseek-chat", label: "DeepSeek Chat"))
+            try? mdb.upsertCustomModel(CustomModel(provider: "kimi", modelId: "kimi-k2"))
+            let migrated = (try? mdb.migrateLegacyCustomModels()) ?? -1
+            check(migrated == 2, "T21 legacy 迁移 2 条")
+            let afterMig = (try? mdb.loadManagedModels()) ?? []
+            let legacy = afterMig.first { $0.source == .legacy && $0.provider == "deepseek" }
+            check(legacy != nil && legacy?.apiType == "openai-completions" && legacy?.baseURL == nil,
+                  "T21 legacy 条目 source/apiType/无 baseURL")
+            check(((try? mdb.migrateLegacyCustomModels()) ?? -1) == 0, "T21 迁移幂等 (重跑 0)")
+            check(((try? mdb.loadCustomModels()) ?? []).count == 2, "T21 旧表保留")
+
+            let keys = InMemoryModelKeyStore()
+            try? keys.setKey("sk-test-123", account: "mangox-gw")
+            let all = (try? mdb.loadManagedModels()) ?? []
+            let out = ModelMaterializer.materialize(all, keyProvider: { keys.key(account: $0) })
+            guard let providersObj = (try? JSONSerialization.jsonObject(with: out.modelsJSON)) as? [String: Any],
+                  let providers = providersObj["providers"] as? [String: Any] else {
+                check(false, "T21 物化 JSON 可解析"); report()
+            }
+            check(providers.count == 3, "T21 disabled 排除 + legacy 进物化 (3 providers)")
+            let gw = providers["mangox-gw"] as? [String: Any]
+            check(gw?["baseUrl"] as? String == "https://gw.invalid/v1" && gw?["api"] as? String == "openai-completions",
+                  "T21 provider 级 baseUrl/api")
+            let gwModels = gw?["models"] as? [[String: Any]] ?? []
+            let mini = gwModels.first { ($0["id"] as? String) == "mangox-mini" }
+            check(mini?["input"] as? [String] == ["text", "image"] && mini?["cost"] != nil
+                  && (mini?["contextWindow"] as? Int) == 131_072, "T21 model 级元数据 (input/cost/contextWindow)")
+            check(mini?["thinkingLevelMap"] != nil, "T21 thinkingLevelMap 片段透传")
+            let dsProv = providers["deepseek"] as? [String: Any]
+            check(dsProv?["baseUrl"] == nil && (dsProv?["models"] as? [[String: Any]])?.isEmpty == false,
+                  "T21 legacy 无 baseUrl 省略")
+            guard let authObj = (try? JSONSerialization.jsonObject(with: out.authJSON)) as? [String: Any] else {
+                check(false, "T21 auth JSON 可解析"); report()
+            }
+            check((authObj["mangox-gw"] as? [String: Any])?["type"] as? String == "api_key"
+                  && authObj["deepseek"] == nil, "T21 auth.json 按 provider 且无 key 不进")
+
+            let out2 = ModelMaterializer.materialize(all, keyProvider: { keys.key(account: $0) })
+            check(out.fingerprint == out2.fingerprint, "T21 fingerprint 确定性")
+            var mA3 = mA; mA3.maxTokens = 4_096
+            let out3 = ModelMaterializer.materialize(all.map { $0.modelId == "mangox-mini" ? mA3 : $0 },
+                                                     keyProvider: { keys.key(account: $0) })
+            check(out3.fingerprint != out.fingerprint, "T21 fingerprint 变更敏感")
+
+            let cfgDir = URL(fileURLWithPath: dir).appendingPathComponent("pi-config", isDirectory: true)
+            check(((try? ModelMaterializer.writeIfNeeded(out, to: cfgDir)) ?? false) == true, "T21 首次物化写入")
+            let authAttrs = (try? FileManager.default.attributesOfItem(
+                atPath: cfgDir.appendingPathComponent("auth.json").path)) ?? [:]
+            check((authAttrs[.posixPermissions] as? NSNumber)?.uint16Value == 0o600, "T21 auth.json 0600 权限")
+            check(((try? ModelMaterializer.writeIfNeeded(out, to: cfgDir)) ?? true) == false, "T21 指纹不变跳写")
+            check(((try? ModelMaterializer.writeIfNeeded(out3, to: cfgDir)) ?? false) == true, "T21 变更后重写")
+        }
+
+        // ---- T22 P7-M3: 模型管理链路 (ChatStore CRUD + 物化推送 + /models 解析) ----
+        do {
+            print("== T22 P7-M3: 模型自管管理链路 ==")
+            let keys22 = InMemoryModelKeyStore()
+            try? keys22.setKey("sk-t22", account: "t22prov")
+            let store22 = ChatStore(transport: mock, dbPath: dir + "/t22.db", modelKeyStore: keys22)
+            check(store22.managedModels.isEmpty && mock.lastPIConfig == nil, "T22 初始无自管模型 (物化为 nil)")
+
+            let m1 = ManagedModel(provider: "t22prov", modelId: "m1", displayName: "M1",
+                                  apiType: "openai-completions", baseURL: "https://t22.invalid/v1",
+                                  keyRef: "t22prov", source: .preset)
+            let m2 = ManagedModel(provider: "t22prov", modelId: "m2", displayName: "",
+                                  apiType: "openai-completions", baseURL: "https://t22.invalid/v1",
+                                  keyRef: "t22prov")
+            store22.upsertManagedModel(m1)
+            store22.upsertManagedModel(m2)
+            check(mock.lastPIConfig?.modelCount == 2, "T22 upsert 推送物化 (2)")
+            let authObj22 = (try? JSONSerialization.jsonObject(with: mock.lastPIConfig!.authJSON)) as? [String: Any]
+            check((authObj22?["t22prov"] as? [String: Any])?["key"] as? String == "sk-t22",
+                  "T22 Keychain key 进 auth.json")
+            store22.setManagedModelEnabled(m1.id, false)
+            check(mock.lastPIConfig?.modelCount == 1, "T22 disable 后物化 (1)")
+            check(store22.managedModels.count == 2, "T22 disable 不删条目")
+            store22.deleteManagedModel(m1)
+            store22.deleteManagedModel(m2)
+            check(mock.lastPIConfig == nil && store22.managedModels.isEmpty, "T22 全删后物化为 nil")
+            // 菜单只认自管 (P7-M3 拍板): 有自管 → 只显示 enabled 自管; 清空 → 回落 pi 目录
+            store22.upsertManagedModel(m1)
+            store22.upsertManagedModel(m2)
+            check(Set(store22.menuModels.map(\.id)) == ["m1", "m2"] && store22.menuModels.count == 2,
+                  "T22 有自管时菜单只显示自管条目")
+            check(store22.menuModels.allSatisfy { $0.supportedLevels == [.off] },
+                  "T22 无 thinkingLevelMap 的 chat 模型菜单只给 off")
+            var mReason = m2; mReason.reasoning = true; mReason.thinkingLevelMapJSON = "{\"minimal\":null,\"low\":null,\"high\":\"high\",\"max\":\"max\"}"
+            store22.upsertManagedModel(mReason)
+            check(store22.menuModels.first { $0.id == "m2" }?.supportedLevels == [.off, .high],
+                  "T22 有 map 按非 null 项收敛 (off/high)")
+            let mDefault = ManagedModel(provider: "t22prov", modelId: "m3", displayName: "M3",
+                                        apiType: "openai-completions", reasoning: true,
+                                        baseURL: "https://t22.invalid/v1", keyRef: "t22prov")
+            store22.upsertManagedModel(mDefault)
+            check(store22.menuModels.first { $0.id == "m3" }?.supportedLevels == [.off, .minimal, .low, .medium, .high],
+                  "T22 reasoning 无 map = pi 默认 off..high")
+            store22.deleteManagedModel(m1)
+            store22.deleteManagedModel(mReason)
+            store22.deleteManagedModel(mDefault)
+            check(store22.menuModels.contains { $0.provider == "deepseek" },
+                  "T22 清空后菜单回落 pi 目录")
+
+            if let legacyStore = try? PersistenceStore(path: dir + "/t22legacy.db") {
+                try? legacyStore.migrate()
+                try? legacyStore.upsertCustomModel(CustomModel(provider: "legprov", modelId: "legmodel", label: "Legacy"))
+            }
+            let store22b = ChatStore(transport: mock, dbPath: dir + "/t22legacy.db", modelKeyStore: keys22)
+            check(store22b.managedModels.contains { $0.source == .legacy && $0.provider == "legprov" },
+                  "T22 init 自动迁移 legacy 条目")
+            check(store22b.customModels.contains { $0.provider == "legprov" }, "T22 旧表仍保留")
+
+            let openaiJSON = Data("{\"data\":[{\"id\":\"a\"},{\"id\":\"b\"}]}".utf8)
+            check(ModelCatalogFetcher.parseModelIds(openaiJSON) == ["a", "b"], "T22 OpenAI /models 解析")
+            let ollamaJSON = Data("{\"models\":[{\"name\":\"l1\"},{\"id\":\"x\"}]}".utf8)
+            check(ModelCatalogFetcher.parseModelIds(ollamaJSON) == ["l1", "x"], "T22 Ollama tags 解析 (name 优先, id 兜底)")
+            check(ModelCatalogFetcher.parseModelIds(Data("not json".utf8)) == nil, "T22 垃圾输入返回 nil")
+            check(ProviderPresets.all.count == 8 && Set(ProviderPresets.all.map(\.id)).count == 8,
+                  "T22 预设库 8 家且 id 唯一")
+            check(ProviderPresets.preset(id: "deepseek")?.seedModels.isEmpty == false
+                  && ProviderPresets.preset(id: "ollama")?.needsKey == false, "T22 预设种子/Ollama 无 key")
+
+            // ---- T22b P7-M3.5: models.dev 元数据目录 (三层自有化, 零依赖 ~/.pi/agent) ----
+            print("== T22b P7-M3.5: 模型元数据目录 ==")
+            // smoke 直编无 app bundle, 用 #filePath 定位仓库内 bundled 快照
+            let repoCatalog = URL(fileURLWithPath: #filePath)          // scripts/smoke/smokeMain.swift
+                .deletingLastPathComponent().deletingLastPathComponent()   // scripts/
+                .deletingLastPathComponent()                               // 仓库根
+                .appendingPathComponent("mangox/Resources/model-catalog.json")
+            let bundledIndex = ModelCatalogStore.parse(try? Data(contentsOf: repoCatalog))
+            check(bundledIndex != nil && bundledIndex!.count >= 10, "T22b bundled 快照解析 (10+ providers)")
+            if let idx = bundledIndex {
+                let flash = idx["deepseek"]?["deepseek-flash"]
+                check(flash?.reasoning == true && (flash?.cost?.input ?? 0) > 0,
+                      "T22b 目录条目元数据完整 (deepseek-flash)")
+                let store22c = ModelCatalogStore(providers: idx)
+                check(store22c.entry(provider: "deepseek", modelId: "deepseek-flash") != nil,
+                      "T22b 精确命中")
+                check(store22c.entry(provider: "kimi", modelId: "kimi-k3") != nil
+                      && store22c.entry(provider: "zhipu", modelId: "glm-4.6") != nil,
+                      "T22b 别名命中 (kimi→moonshotai, zhipu→zai)")
+                check(store22c.entry(provider: "unknown-x", modelId: "deepseek-flash") != nil,
+                      "T22b 模糊扫全目录唯一命中")
+                check(store22c.entry(provider: "unknown-x", modelId: "glm") == nil,
+                      "T22b 模糊多义/未命中返回 nil")
+                check(store22c.entries(provider: "kimi").count == idx["moonshotai"]?.count,
+                      "T22b entries(provider:) 走别名")
+                // encode→parse roundtrip 保元数据
+                if let round = ModelCatalogStore.parse(ModelCatalogStore.encode(idx)) {
+                    check(round["deepseek"]?["deepseek-flash"]?.contextWindow == flash?.contextWindow
+                          && round["deepseek"]?["deepseek-flash"]?.cost == flash?.cost,
+                          "T22b encode/parse roundtrip 保真")
+                } else {
+                    check(false, "T22b encode/parse roundtrip 保真")
+                }
+            }
+            let synthetic = ModelCatalogStore.parse(Data(#"""
+{"prov":{"models":{"m1":{"name":"M One","reasoning":true,"input":["text","image"],"contextWindow":200000,"maxTokens":32768,"cost":{"input":1.5,"output":3.0,"cacheRead":0.1,"cacheWrite":0.2}}}}}
+"""#.utf8))
+            let catM1 = synthetic?["prov"]?["m1"]
+            check(catM1?.input == ["text", "image"] && catM1?.contextWindow == 200_000
+                  && catM1?.cost?.output == 3.0, "T22b 合成 JSON 解析字段映射")
+
+            // ---- T23 P7-M4: 模式选择器 (三档矩阵 + 池下发 + 按项目记忆) ----
+            print("== T23 P7-M4: 模式选择器 ==")
+            check(AgentMode.spawnArguments(for: .minimal, businessExtensions: ["/x/e.ts"])
+                  == ["--tools", "read,bash,write,edit"], "T23 极简档 --tools 白名单, 不挂扩展")
+            check(AgentMode.spawnArguments(for: .standard, businessExtensions: ["/x/e.ts"]).isEmpty,
+                  "T23 常规档零参数 (pi 默认全量内置)")
+            check(AgentMode.spawnArguments(for: .full, businessExtensions: ["/x/e.ts"])
+                  == ["--extension", "/x/e.ts"], "T23 完整档挂业务扩展, 不带 --tools")
+            check(AgentMode.minimal.storageIndex == 0 && AgentMode.full.storageIndex == 2
+                  && AgentMode(storageIndex: 2) == .full && AgentMode(storageIndex: 99) == .standard,
+                  "T23 存储序号 roundtrip + 越界回落 standard")
+
+            let store23 = ChatStore(transport: mock, dbPath: dir + "/t23mode.db", modelKeyStore: keys22)
+            store23.addProject(title: "P7M4", path: dir + "/t23proj")
+            let proj23 = store23.projects.first?.id
+            check(proj23 != nil, "T23 前置: smoke 库内真实建项目")
+            store23.selectedProjectId = proj23
+            check(store23.agentMode == .standard, "T23 默认档 standard")
+            store23.agentMode = .minimal
+            check(mock.lastMode == .minimal, "T23 切档全池下发 (minimal)")
+            store23.agentMode = .full
+            check(mock.lastMode == .full, "T23 切档全池下发 (full)")
+
+            let store23b = ChatStore(transport: mock, dbPath: dir + "/t23mode.db", modelKeyStore: keys22)
+            check(store23b.agentMode == .standard, "T23 新实例未选项目 = 默认档")
+            store23b.selectedProjectId = proj23
+            check(store23b.agentMode == .full && mock.lastMode == .full,
+                  "T23 选项目恢复该项目档位 (按项目记忆)")
+
+            // ---- T24 P7-M6a: 图片附件管线 (压缩/落盘/兼容/删会话先读后删) ----
+            print("== T24 P7-M6a: 图片附件管线 ==")
+            func makePNG(width: Int, height: Int) -> Data {
+                let ctx = CGContext(data: nil, width: width, height: height,
+                                    bitsPerComponent: 8, bytesPerRow: 0,
+                                    space: CGColorSpaceCreateDeviceRGB(),
+                                    bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue)!
+                ctx.setFillColor(CGColor(red: 0.9, green: 0.3, blue: 0.2, alpha: 1))
+                ctx.fill(CGRect(x: 0, y: 0, width: width, height: height))
+                let img = ctx.makeImage()!
+                let buf = NSMutableData()
+                let dest = CGImageDestinationCreateWithData(buf, UTType.png.identifier as CFString, 1, nil)!
+                CGImageDestinationAddImage(dest, img, nil)
+                CGImageDestinationFinalize(dest)
+                return buf as Data
+            }
+            let bigPNG = makePNG(width: 2000, height: 1000)
+            let size24 = ImagePipeline.pixelSize(of: bigPNG)
+            check(size24?.width == 2000 && size24?.height == 1000,
+                  "T24 pixelSize 读元数据")
+            if let c = ImagePipeline.compressForSend(bigPNG) {
+                check(c.width == 1536 && c.height == 768 && c.mimeType == "image/jpeg" && !c.data.isEmpty,
+                      "T24 压缩长边 1536 / 比例保持 / JPEG mime")
+            } else {
+                check(false, "T24 压缩长边 1536 / 比例保持 / JPEG mime")
+            }
+            let smallPNG = makePNG(width: 800, height: 600)
+            if let c2 = ImagePipeline.compressForSend(smallPNG) {
+                check(c2.width == 800 && c2.height == 600, "T24 小图不放大 (仅转 JPEG 压体积)")
+            } else {
+                check(false, "T24 小图不放大 (仅转 JPEG 压体积)")
+            }
+            check(ImagePipeline.compressForSend(Data("junk".utf8)) == nil, "T24 垃圾输入返回 nil")
+            check(ImagePipeline.isImageExtension("PNG") && !ImagePipeline.isImageExtension("pdf")
+                  && ImagePipeline.mimeType(forExtension: "jpg") == "image/jpeg",
+                  "T24 扩展名识别/mime 映射")
+            check(ImagePipeline.maxPerMessage == 4, "T24 单条上限 4 张")
+
+            let msg24 = ChatMessage(role: .user, content: .text("看图"),
+                                    attachments: [Attachment(path: "/tmp/x.png", pixelWidth: 10,
+                                                             pixelHeight: 10, mimeType: "image/png", byteSize: 5)])
+            let round24 = try? JSONDecoder().decode(ChatMessage.self, from: JSONEncoder().encode(msg24))
+            check(round24?.attachments?.count == 1, "T24 ChatMessage 附件 JSON roundtrip")
+            let legacy24 = try? JSONDecoder().decode(ChatMessage.self, from: Data(#"""
+{"id":"C69D4E9C-9A1B-4C0E-9D2B-111111111111","role":"user","content":{"text":{"_0":"旧消息"}},"timestamp":0,"isStreaming":false}
+"""#.utf8))
+            check(legacy24?.attachments == nil && legacy24 != nil, "T24 旧 payload (无 attachments key) 解码兼容")
+
+            let sid24 = UUID()
+            let store24ps = try! PersistenceStore(path: dir + "/t24attach.db")
+            try! store24ps.migrate()
+            try! store24ps.insertChatSession(ConversationItem(id: sid24, title: "T24"))
+            let saved24 = try! ImagePipeline.saveOriginal(makePNG(width: 60, height: 40),
+                                                     fileExtension: "png", sessionID: sid24)
+            check(saved24.byteSize > 0 && FileManager.default.fileExists(atPath: saved24.path),
+                  "T24 saveOriginal 落盘 (原图留档)")
+            try! store24ps.appendMessageEvent(sessionId: sid24, ChatMessage(
+                role: .user, content: .text("带图消息"),
+                attachments: [Attachment(path: saved24.path, pixelWidth: 60, pixelHeight: 40,
+                                         mimeType: "image/png", byteSize: saved24.byteSize)]))
+            let store24 = ChatStore(transport: mock, dbPath: dir + "/t24attach.db", modelKeyStore: keys22)
+            store24.selectConversation(sid24)
+            check(store24.messages.first?.attachments?.first?.path == saved24.path,
+                  "T24 replay 从 events 渲染附件 (与实时同源)")
+            store24.deleteConversation(sid24)
+            // 沙箱执行环境对 ~/.mangox 目录 unlink 拒绝 (513), 真实 App 无此限制;
+            // 目录清理的确定性断言走 baseDirectory 注入 (临时目录内 unlink 可行)。
+            check(store24.messages.isEmpty, "T24 删会话清 events (先读后删路径已走)")
+            let base24 = URL(fileURLWithPath: dir + "/t24attach-fs")
+            let saved24b = try! ImagePipeline.saveOriginal(makePNG(width: 60, height: 40),
+                                                           fileExtension: "png", sessionID: sid24,
+                                                           baseDirectory: base24)
+            check(FileManager.default.fileExists(atPath: saved24b.path),
+                  "T24 baseDirectory 注入落盘")
+            let rmErr = ImagePipeline.removeSessionAttachments(sessionID: sid24, baseDirectory: base24)
+            check(rmErr == nil && !FileManager.default.fileExists(atPath: saved24b.path),
+                  "T24 删会话清附件目录 (注入基目录)")
+
+            // ---- T24b P7-M6b: 三入口暂存 + 发送 images + 门控 ----
+            print("== T24b P7-M6b: 附件发送链路 ==")
+            let store24b = ChatStore(transport: mock, dbPath: dir + "/t24send.db", modelKeyStore: keys22)
+            let png24b = makePNG(width: 300, height: 200)
+            store24b.addPendingImage(png24b, suggestedExtension: "png")
+            check(store24b.pendingImages.count == 1 && store24b.pendingImages[0].pixelWidth == 300,
+                  "T24b addPendingImage 暂存 (像素尺寸就位)")
+            store24b.addPendingImage(Data("junk".utf8), suggestedExtension: "png")
+            check(store24b.pendingImages.count == 1, "T24b 垃圾数据不入暂存区")
+            for _ in 0..<5 { store24b.addPendingImage(png24b, suggestedExtension: "png") }
+            check(store24b.pendingImages.count == 4, "T24b 上限 4 张 (第 5 张拒收)")
+            store24b.removePendingImage(store24b.pendingImages[0].id)
+            check(store24b.pendingImages.count == 3, "T24b chips × 移除")
+
+            // 门控: 当前模型 text-only → 发送拦截
+            let textOnly = ManagedModel(provider: "p1", modelId: "textonly",
+                                        apiType: "openai-completions", inputModalities: ["text"])
+            store24b.upsertManagedModel(textOnly)
+            store24b.selectManagedModel(textOnly)
+            store24b.draft = "看图"
+            let msgsBefore = store24b.messages.count
+            store24b.sendDraft()
+            check(store24b.messages.count == msgsBefore && store24b.pendingImages.count == 3
+                  && store24b.turnLimitNotice != nil,
+                  "T24b text-only 模型发送拦截 (附件保留可换模型后发)")
+
+            // 换多模态模型 → 落盘 + 压缩 + RPC images
+            let vision = ManagedModel(provider: "p1", modelId: "vision",
+                                      apiType: "openai-completions", inputModalities: ["text", "image"])
+            store24b.upsertManagedModel(vision)
+            store24b.selectManagedModel(vision)
+            store24b.sendDraft()
+            // png 300×200 未超限 → 原样透传 (设计拍板: 小 png/gif/webp 保原样/动图)
+            check(mock.lastSentImages.count == 3 && mock.lastSentImages.allSatisfy { $0.mimeType == "image/png" },
+                  "T24b 发送 images 数组 (未超限 png 透传)")
+            let bigOut = ImagePipeline.outgoingPayload(data: bigPNG, ext: "png",
+                                                       pixelWidth: 2000, pixelHeight: 1000)
+            check(bigOut?.mimeType == "image/jpeg" && (bigOut?.data.count ?? 0) > 0,
+                  "T24b 超限位图转 JPEG 副本")
+            check(store24b.pendingImages.isEmpty && store24b.messages.last?.attachments?.count == 3,
+                  "T24b 发送后暂存清空 + 消息带附件 (落盘原图)")
+            check(store24b.messages.last?.attachments?.first?.byteSize ?? 0 > 0
+                  && FileManager.default.fileExists(atPath: store24b.messages.last!.attachments!.first!.path),
+                  "T24b 附件原图落盘留档")
         }
 
         report()    }

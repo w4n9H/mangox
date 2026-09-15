@@ -73,6 +73,20 @@ final class PiRpcTransport: AgentTransport {
     /// per-turn: spawn 期模型/思考级别 (--model provider/id, --thinking), 下回合生效。
     private var desiredModel: String?
     private var desiredThinking: ThinkingLevel = .high
+    /// P7-M4: 模式档位 (spawn 期 --tools / 业务扩展挂载), 下回合生效。
+    private var desiredMode: AgentMode = .standard
+    /// P7-M3: 自管模型物化产物 (nil/空 = 不注入; spawn 期落盘 + 环境变量)。
+    private var piConfig: ModelMaterializer.Output?
+
+    /// P7-M3: 接收自管模型物化产物 (ChatStore 在模型变更时推送)。
+    func updatePIConfig(_ output: ModelMaterializer.Output?) {
+        piConfig = output
+    }
+
+    /// P7-M4: 模式档位下发 (spawn 期消费, 下回合生效)。
+    func updateMode(_ mode: AgentMode) {
+        desiredMode = mode
+    }
 
     // MARK: - 可用性探测
 
@@ -194,7 +208,7 @@ final class PiRpcTransport: AgentTransport {
 
     // MARK: - AgentTransport
 
-    func send(prompt: String) {
+    func send(prompt: String, images: [OutgoingImage]) {
         ensureProcessForCwd()
         guard process != nil else { return } // 启动失败: 本回合静默, UI 由 ChatStore 层守卫
         turnActive = true
@@ -203,7 +217,15 @@ final class PiRpcTransport: AgentTransport {
         toolCards.removeAll()
         toolStartAt.removeAll()
         emit(.streamStarted)
-        sendCommand(["id": "req-\(nextRequestId())", "type": "prompt", "message": prompt])
+        // P7-M6b: images:[{type,data(base64),mimeType}] — autoResize 不覆盖 RPC base64,
+        // 进这里的已由 ImagePipeline.compressForSend 压过 (≤1536px JPEG)。
+        var cmd: [String: Any] = ["id": "req-\(nextRequestId())", "type": "prompt", "message": prompt]
+        if !images.isEmpty {
+            cmd["images"] = images.map { ["type": "image",
+                                          "data": $0.data.base64EncodedString(),
+                                          "mimeType": $0.mimeType] }
+        }
+        sendCommand(cmd)
     }
 
     func cancel() {
@@ -402,6 +424,15 @@ final class PiRpcTransport: AgentTransport {
         let extPath = Self.ensureExtensionFile()
         let p = Process()
         p.executableURL = URL(fileURLWithPath: spec.executable)
+        // P7-M3: 自管模型物化 — 有自管模型才注入 (覆盖整个配置目录, 与 ~/.pi/agent 互不相干);
+        // 指纹不变由 writeIfNeeded 跳写, 避免 spawn 期磁盘搅动。
+        if let cfg = piConfig, cfg.modelCount > 0 {
+            let dir = ModelMaterializer.configDirectory()
+            if (try? ModelMaterializer.writeIfNeeded(cfg, to: dir)) != nil {
+                p.environment = ProcessInfo.processInfo.environment
+                p.environment?["PI_CODING_AGENT_DIR"] = dir.path
+            }
+        }
         var args = spec.scriptArgs + ["--mode", "rpc",
                                       "--no-extensions", "--extension", extPath]
         if let fork = desiredForkSource {
@@ -434,10 +465,15 @@ final class PiRpcTransport: AgentTransport {
             // ephemeral: 任务 fire 轮次等, transcript 仅存进程内存
             args += ["--no-session"]
         }
-        // P3.11: 托管扩展按启用列表逐个 --extension 追加 (--no-extensions 已关自动发现)
-        for extPath in desiredExtensions {
-            args += ["--extension", extPath]
+        // P3.11: 托管扩展按启用列表逐个 --extension 追加 (--no-extensions 已关自动发现);
+        // P7-M4: 业务扩展仅完整档挂载 (极简/常规不挂, 系统扩展已固定内置不受影响)。
+        if desiredMode.mountsBusinessExtensions {
+            for extPath in desiredExtensions {
+                args += ["--extension", extPath]
+            }
         }
+        // P7-M4: 极简档 --tools 白名单裁内置工具 (常规/完整不传, pi 默认即全量)
+        args += AgentMode.spawnArguments(for: desiredMode, businessExtensions: [])
         // P3.7: 知识注入块挂在 spawn 参数上 (--append-system-prompt 可重复传; 会话内不可改)
         if let knowledge = desiredKnowledge, !knowledge.isEmpty {
             args += ["--append-system-prompt", knowledge]

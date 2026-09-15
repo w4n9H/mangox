@@ -44,18 +44,22 @@ struct ChatMessage: Identifiable, Hashable, Codable {
     var isStreaming: Bool
     /// 该消息产出的 LLM 用量 (assistant 专属; nil = 未上报/旧数据)。
     var usage: MessageUsage?
+    /// P7-M6: 用户消息图片附件 (路径+尺寸+mime, 磁盘存原图; nil = 无/旧数据)。
+    var attachments: [Attachment]?
 
     init(id: UUID = UUID(),
          role: MessageRole,
          content: MessageContent,
          timestamp: Date = .now,
          isStreaming: Bool = false,
-         usage: MessageUsage? = nil) {
+         usage: MessageUsage? = nil,
+         attachments: [Attachment]? = nil) {
         self.id = id
         self.role = role
         self.content = content
         self.timestamp = timestamp
         self.isStreaming = isStreaming
         self.usage = usage
+        self.attachments = attachments
     }
 }
