@@ -19,6 +19,7 @@ SRC=$(find mangox -name "*.swift" ! -name "mangoxApp.swift" | sort)
 xcrun swiftc \
     -sdk "$SDK" \
     -target arm64-apple-macos14.0 \
+    -D DEBUG \
     -o "$OUT/smoke" \
     "$SMOKE_DIR/smokeStubs.swift" \
     "$SMOKE_DIR/smokeMain.swift" \

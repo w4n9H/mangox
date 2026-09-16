@@ -5,8 +5,24 @@
 
 import SwiftUI
 
+// MARK: - P9-#9 滚动探针 key (内容底距视口底 <140pt = 跟随区, 上滑阅读不拽回)
+
+private struct ChatContentBottomKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
+}
+
+private struct ChatViewportHeightKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
+}
+
 struct ChatView: View {
     @ObservedObject var store: ChatStore
+    @State private var viewportHeight: CGFloat = 0
+    @State private var nearBottom = true   // 初始视为在底部 (defaultScrollAnchor 锚底)
+    /// 自动滚动同帧合并标记: 流式期同帧多个 chunk 只调度一次滚动 (防 "update multiple times per frame")。
+    @State private var scrollScheduled = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -21,63 +37,43 @@ struct ChatView: View {
         }
     }
 
+    // MARK: - P9-#9 滚动探针 (独立成员: 拆小表达式避免类型检查超时)
+
+    private var contentBottomProbe: some View {
+        GeometryReader { g in
+            Color.clear.preference(key: ChatContentBottomKey.self,
+                                   value: g.frame(in: .named("chatScroll")).maxY)
+        }
+    }
+
+    private var viewportHeightProbe: some View {
+        GeometryReader { g in
+            Color.clear.preference(key: ChatViewportHeightKey.self,
+                                   value: g.frame(in: .named("chatScroll")).height)
+        }
+    }
+
+    /// 视口高度只在布局/窗口变化时更新 (滚动中恒定)。
+    private func handleViewportHeight(_ h: CGFloat) {
+        viewportHeight = h
+    }
+
+    /// 内容底进入视口底 140pt 内 = 跟随区 (Bool 去重, 不随滚动帧重渲染)。
+    private func handleContentBottom(_ bottomY: CGFloat) {
+        let v = viewportHeight == 0 ? true : bottomY > viewportHeight - 140
+        if nearBottom != v { nearBottom = v }   // 等值不写, 防 PreferenceKey 高频触发失效性更新
+    }
+
     private var messageList: some View {
         ScrollViewReader { proxy in
-            VStack(spacing: 0) {
-                ScrollView {
-                if store.messages.isEmpty {
-                    if store.activeSideChat != nil {
-                        sideEmptyState
-                    } else {
-                        WelcomeView()
-                            .padding(.top, Tune.welcomeTopPadding)
-                    }
-                } else {
-                    VStack(alignment: .leading, spacing: Tune.chatMessageSpacing) {
-                        ForEach(store.messages) { msg in
-                            MessageBlockView(message: msg, store: store)
-                                .id(msg.id)
-                                .transition(.opacity.combined(with: .move(edge: .bottom)))
-                        }
+            scrollColumn(proxy)
+        }
+    }
 
-                        if store.isStreaming {
-                            HStack(spacing: 6) {
-                                ProgressView().controlSize(.small).scaleEffect(0.7)
-                                    .tint(CodexTheme.accent)
-                                Text(Copy.streamingIndicator)
-                                    .font(CodexTheme.fontSmall)
-                                    .foregroundStyle(CodexTheme.textTertiary)
-                            }
-                            .padding(.leading, 4)
-                            .id("streaming-tail")
-                        }
-                    }
-                    .padding(.horizontal, Tune.chatHPadding)
-                    .padding(.vertical, Tune.chatVPadding)
-                    .frame(maxWidth: Tune.chatColumnWidth, alignment: .leading)  // 内容 + 2×水平内边距, 与 Composer 内容宽同源 (Tune.chatContentWidth)
-                    .frame(maxWidth: .infinity, alignment: .center)
-                    .animation(CodexTheme.animMessage, value: store.messages.count)
-                }
-            }
-            .defaultScrollAnchor(.bottom)   // 默认锚底: 打开会话即看最新内容 (否则停在最老一条)
-            .onChange(of: store.selectedConversationId) { _, _ in
-                // 换会话: replay 内容整批替换, 兜底滚到最新 (首帧锚点之外的双保险)
-                DispatchQueue.main.async {
-                    withAnimation(nil) {
-                        proxy.scrollTo(store.messages.last?.id ?? UUID(), anchor: .bottom)
-                    }
-                }
-            }
-            .onChange(of: store.messages) { _, _ in
-                // 流式 chunk 高频到达, 同帧多次触发会报 "update multiple times per frame";
-                // 滚动推出当前帧, 同帧合并为一次。
-                DispatchQueue.main.async {
-                    let anchor: AnyHashable = store.isStreaming ? "streaming-tail" : (store.messages.last?.id ?? UUID())
-                    withAnimation(CodexTheme.animMed) {
-                        proxy.scrollTo(anchor, anchor: .bottom)
-                    }
-                }
-            }
+    /// 滚动列 = ScrollView + 摘要胶囊占位行 (拆子表达式, 防 type-check 超时)。
+    private func scrollColumn(_ proxy: ScrollViewProxy) -> some View {
+        VStack(spacing: 0) {
+            scrollContent(proxy)
             // P6.3.2: 离开摘要胶囊 — 独立占位行 (浮层会盖住最该读的最新内容, 2026-09-14 否决)
             if store.awaySummary != nil {
                 HStack {
@@ -100,9 +96,80 @@ struct ChatView: View {
                 .padding(.vertical, 8)
                 .transition(.opacity.combined(with: .move(edge: .bottom)))
             }
-            }
-            .animation(CodexTheme.animMed, value: store.awaySummary)
         }
+        .animation(CodexTheme.animMed, value: store.awaySummary)
+    }
+
+    /// ScrollView + 探针/锚底/滚动响应 (P9-#9)。
+    private func scrollContent(_ proxy: ScrollViewProxy) -> some View {
+        ScrollView {
+            if store.messages.isEmpty {
+                if store.activeSideChat != nil {
+                    sideEmptyState
+                } else {
+                    WelcomeView()
+                        .padding(.top, Tune.welcomeTopPadding)
+                }
+            } else {
+                messageBlocks
+                    .background(contentBottomProbe)   // P9-#9: 内容底部探针 (视口坐标系, 随滚动实时变化)
+            }
+        }
+        .background(viewportHeightProbe)      // P9-#9: 视口高度探针 (挂 ScrollView 自身, 不随内容滚动)
+        .coordinateSpace(name: "chatScroll")
+        .onPreferenceChange(ChatViewportHeightKey.self) { handleViewportHeight($0) }
+        .onPreferenceChange(ChatContentBottomKey.self) { handleContentBottom($0) }
+        .defaultScrollAnchor(.bottom)   // 默认锚底: 打开会话即看最新内容 (否则停在最老一条)
+        .onChange(of: store.selectedConversationId) { _, _ in
+            // 换会话: replay 内容整批替换, 兜底滚到最新 (首帧锚点之外的双保险)
+            DispatchQueue.main.async {
+                withAnimation(nil) {
+                    proxy.scrollTo(store.messages.last?.id ?? UUID(), anchor: .bottom)
+                }
+            }
+        }
+        .onChange(of: store.messages) { _, _ in
+            // 流式 chunk 高频到达, 同帧多次触发会报 "update multiple times per frame";
+            // scrollScheduled 同帧合并为一次滚动调度, 双跳异步复位 (滚动执行完的下一拍才放行)。
+            // P9-#9: 用户上滑阅读历史时不再强制拽回 (距视口底 <140pt 才跟随)
+            guard nearBottom, !scrollScheduled else { return }
+            scrollScheduled = true
+            DispatchQueue.main.async {
+                let anchor: AnyHashable = store.isStreaming ? "streaming-tail" : (store.messages.last?.id ?? UUID())
+                withAnimation(CodexTheme.animMed) {
+                    proxy.scrollTo(anchor, anchor: .bottom)
+                }
+                DispatchQueue.main.async { scrollScheduled = false }
+            }
+        }
+    }
+
+    /// 消息块列 (空态分流在 scrollContent)。
+    private var messageBlocks: some View {
+        VStack(alignment: .leading, spacing: Tune.chatMessageSpacing) {
+            ForEach(store.messages) { msg in
+                MessageBlockView(message: msg, store: store)
+                    .id(msg.id)
+                    .transition(.opacity.combined(with: .move(edge: .bottom)))
+            }
+
+            if store.isStreaming {
+                HStack(spacing: 6) {
+                    ProgressView().controlSize(.small).scaleEffect(0.7)
+                        .tint(CodexTheme.accent)
+                    Text(Copy.streamingIndicator)
+                        .font(CodexTheme.fontSmall)
+                        .foregroundStyle(CodexTheme.textTertiary)
+                }
+                .padding(.leading, 4)
+                .id("streaming-tail")
+            }
+        }
+        .padding(.horizontal, Tune.chatHPadding)
+        .padding(.vertical, Tune.chatVPadding)
+        .frame(maxWidth: Tune.chatColumnWidth, alignment: .leading)  // 内容 + 2×水平内边距, 与 Composer 内容宽同源 (Tune.chatContentWidth)
+        .frame(maxWidth: .infinity, alignment: .center)
+        .animation(CodexTheme.animMessage, value: store.messages.count)
     }
 }
 
@@ -275,7 +342,8 @@ struct MessageBlockView: View {
     /// 88×66 圆角缩略 (scaledToFill 裁切; 点击开大图)。
     private func thumbnail(_ att: Attachment) -> some View {
         Group {
-            if let img = NSImage(contentsOfFile: att.path) {
+            // P9-#12: 解码结果按路径缓存, 滚动/流式重算不再重复 IO
+            if let img = ImagePipeline.cachedImage(atPath: att.path) {
                 Image(nsImage: img)
                     .resizable()
                     .scaledToFill()
@@ -297,7 +365,7 @@ struct MessageBlockView: View {
     /// 大图 sheet: 原图 scaledToFit + 点击背景/Esc/按钮关闭 (Esc 为 sheet 默认)。
     private func attachmentPreview(_ att: Attachment) -> some View {
         VStack(spacing: 10) {
-            if let img = NSImage(contentsOfFile: att.path) {
+            if let img = ImagePipeline.cachedImage(atPath: att.path) {
                 Image(nsImage: img)
                     .resizable()
                     .scaledToFit()

@@ -145,4 +145,22 @@ enum ImagePipeline {
             return error
         }
     }
+
+    // MARK: - P9-#12 缩略图缓存
+    // NSImage(contentsOfFile:) 每次渲染全图解码 + 磁盘 IO; 历史消息滚动/流式重算反复付这笔钱。
+    // NSCache 按路径缓存解码结果, 内存压力下自动逐出 (countLimit 100)。
+
+    private static let thumbCache: NSCache<NSString, NSImage> = {
+        let c = NSCache<NSString, NSImage>()
+        c.countLimit = 100
+        return c
+    }()
+
+    /// 解码并缓存图片; nil = 文件不存在/非图。命中后同一路径不再重复 IO。
+    static func cachedImage(atPath path: String) -> NSImage? {
+        if let hit = thumbCache.object(forKey: path as NSString) { return hit }
+        guard let img = NSImage(contentsOfFile: path) else { return nil }
+        thumbCache.setObject(img, forKey: path as NSString)
+        return img
+    }
 }

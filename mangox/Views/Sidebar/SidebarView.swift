@@ -6,11 +6,19 @@
 import SwiftUI
 
 struct SidebarView: View {
-    @ObservedObject var store: ChatStore
+    /// P9.1e (#8): 仅动作入口, 不订阅 ChatStore —— 流式每 chunk 的 messages 变更不再重算侧栏。
+    let store: ChatStore
+    /// 数据源 = chats/projects 投影 (订阅域状态, 不含流式热路径)。
+    @StateObject private var model: SidebarModel
     @ObservedObject private var appearance = AppearanceModel.shared
     @State private var expandedProjects: Set<UUID> = []
     // 删除会话二次确认 (两种粒度: 仅 db / db+pi 记忆文件)
     @State private var confirmDeleteTarget: ConversationItem?
+
+    init(store: ChatStore) {
+        self.store = store
+        _model = StateObject(wrappedValue: SidebarModel(store: store))
+    }
 
     var body: some View {
         ScrollView {
@@ -43,7 +51,7 @@ struct SidebarView: View {
         }
         .onAppear {
             // 默认展开全部项目
-            expandedProjects = Set(store.projects.map(\.id))
+            expandedProjects = Set(model.projects.map(\.id))
         }
     }
 
@@ -80,22 +88,22 @@ struct SidebarView: View {
             }
             // P3.7: 原 Plugins 槽位复用为知识库/记忆入口 (nav 保持英文, 与 New chat/Scheduled 一致)
             navRow(icon: "book", title: "Knowledge",
-                   active: store.showKnowledgePanel,
-                   badge: store.pendingKnowledge.count) {
+                   active: model.showKnowledgePanel,
+                   badge: model.knowledgePendingCount) {
                 store.toggleKnowledgePanel()
             }
             navRow(icon: "clock.badge", title: "Scheduled",
-                   active: store.showScheduledPanel) {
+                   active: model.showScheduledPanel) {
                 store.toggleScheduledPanel()
             }
             // P3.11: 插件管理 (pi 扩展托管/启停/导入)
             navRow(icon: "puzzlepiece", title: "Plugins",
-                   active: store.showExtensionsPanel) {
+                   active: model.showExtensionsPanel) {
                 store.toggleExtensionsPanel()
             }
             // P4.0.4: 最小设置页 (并发上限; 通知开关随 P4.1)
             navRow(icon: "gearshape", title: "Settings",
-                   active: store.showSettingsPanel) {
+                   active: model.showSettingsPanel) {
                 store.toggleSettingsPanel()
             }
         }
@@ -139,7 +147,7 @@ struct SidebarView: View {
     private var projectsSection: some View {
         VStack(alignment: .leading, spacing: 1) {
             sectionHeader("Projects")
-            ForEach(store.projects) { group in
+            ForEach(model.projects) { group in
                 projectRow(group)
                 if expandedProjects.contains(group.id) {
                     ForEach(group.items.sorted { $0.updatedAt > $1.updatedAt }) { item in
@@ -215,7 +223,7 @@ struct SidebarView: View {
     // MARK: - Chats (P8.0: 非项目会话按 今天/昨天/本周/更早 分桶)
 
     private var chatsSection: some View {
-        let sessions = store.chats.sorted { $0.updatedAt > $1.updatedAt }
+        let sessions = model.chats.sorted { $0.updatedAt > $1.updatedAt }
         let grouped = Dictionary(grouping: sessions) { DayBucket.bucket(for: $0.updatedAt, now: .now) }
         return VStack(alignment: .leading, spacing: 1) {
             sectionHeader("Chats")
@@ -259,14 +267,14 @@ struct SidebarView: View {
 
     private func sessionRow(_ item: ConversationItem) -> some View {
         ConversationRow(item: item,
-                        isSelected: item.id == store.selectedConversationId,
+                        isSelected: item.id == model.selectedConversationId,
                         indent: false,
                         // P6.3.1: 侧问会话 = fork 徽章; 普通会话 = 定时任务标 or 对话气泡
                         badge: item.sideOf != nil
                             ? "arrow.triangle.branch"
                             : (store.scheduledBadge(for: item.id) ?? "bubble.left"),
-                        isRunning: store.runningTurns.contains(item.id),   // P4.0.2: 并发在途各自转圈
-                        isBlocked: store.approvalBlocked.contains(item.id), // P8-T26: 待审批琥珀标
+                        isRunning: model.runningTurns.contains(item.id),   // P4.0.2: 并发在途各自转圈
+                        isBlocked: model.approvalBlocked.contains(item.id), // P8-T26: 待审批琥珀标
                         onSelect: { store.selectConversation(item.id) },
                         onRename: { store.renameConversation(item.id, to: $0) },
                         onDelete: { confirmDeleteTarget = item },
@@ -327,22 +335,9 @@ struct ConversationRow: View {
                     .foregroundStyle(CodexTheme.blocked)
                     .help("等待审批")
             } else if isRunning {
-                // 运行指示 (行尾): 经典旋转弧 (TimelineView 逐帧驱动, 0.8s/圈, 同隐式动画教训)
-                TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { ctx in
-                    let t = ctx.date.timeIntervalSinceReferenceDate
-                    let angle = Angle.degrees(t.truncatingRemainder(dividingBy: 0.8) / 0.8 * 360)
-                    ZStack {
-                        Circle()
-                            .stroke(CodexTheme.textMuted.opacity(0.22), lineWidth: 1.5)
-                        Circle()
-                            .trim(from: 0, to: 0.3)
-                            .stroke(CodexTheme.toolDone,
-                                    style: StrokeStyle(lineWidth: 1.5, lineCap: .round))
-                            .rotationEffect(angle)
-                    }
-                    .frame(width: 12, height: 12)
-                }
-                .help("Agent 正在运行…")
+                // 运行指示 (行尾): 经典旋转弧 (P9 实机: 低频 tick + CA 插值, 流式期不掉帧)
+                CodexSpinner()
+                    .help("Agent 正在运行…")
             }
 
             if hovering && !isEditing {

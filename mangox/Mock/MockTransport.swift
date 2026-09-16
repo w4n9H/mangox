@@ -65,6 +65,17 @@ final class MockTransport: AgentTransport {
         // mock 无进程, 无 cwd 概念
     }
 
+    // MARK: - P9-#1 smoke: 导出 delegate 链路
+    // 回 nil (失败分支) = 只验证 delegate 挂接与 finishExport 收尾, 不触发 Finder reveal
+
+    /// P9-#1 smoke 断言用: 最近一次导出路径下发
+    private(set) var lastExportPath: String?
+
+    func exportHTML(outputPath: String) {
+        lastExportPath = outputPath
+        delegate?.transport(self, didFinishExportHTMLPath: nil)
+    }
+
     // MARK: - P3.5: 能力上报 (mock 固定清单, 保持 UI 行为回归基线)
 
     private let mockModels: [AgentModelInfo] = [

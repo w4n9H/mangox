@@ -19,12 +19,11 @@ struct ScheduledView: View {
     @State private var draftProjectId: UUID?
     @State private var draftContinuous: Bool = false
     @State private var hoveringId: UUID?
-    // P3.10 哨兵任务: 类型段选 / 触发条件 / 无人值守 / 检查频率三档
+    // P3.10 哨兵任务: 类型段选 / 触发条件 / 检查频率三档
+    // P9-#17: 无人值守恒开 (fire 不再读 task.unattended), 开关与确认弹窗已移除
     @State private var draftIsWaiting: Bool = false
     @State private var draftCondition: String = ""
-    @State private var draftUnattended: Bool = true
     @State private var draftFrequency: FrequencyKind = .low
-    @State private var showUnattendedConfirm: Bool = false
     // cron 四档录入器: 控件态 → 生成 cron; 编辑时 classifyCron 反解析回填 (解析不出落高级档)
     @State private var cronMode: CronMode = .daily
     @State private var cronHour: Int = 9
@@ -197,7 +196,7 @@ struct ScheduledView: View {
             parts.append("无项目")
         }
         parts.append(task.condition?.isEmpty == false ? FrequencyKind.from(cron: task.cron).cron : task.cron)
-        if task.unattended { parts.append("无人值守") }
+        parts.append("无人值守")   // P9-#17: fire 恒 unattended, 展示与运行时行为对齐
         return parts.joined(separator: " · ")
     }
 
@@ -222,11 +221,6 @@ struct ScheduledView: View {
             .padding(.vertical, 24)
             .frame(maxWidth: Tune.knowledgeEditorMaxWidth, alignment: .leading)
             .frame(maxWidth: .infinity, alignment: .center)
-        }
-        .confirmationDialog("开启无人值守？", isPresented: $showUnattendedConfirm) {
-            Button("开启无人值守") { draftUnattended = true }
-        } message: {
-            Text("无人值守下 Agent 将不经确认执行文件写入与命令（含 bash）。任务执行过程可在任务日志中审计。")
         }
     }
 
@@ -305,33 +299,23 @@ struct ScheduledView: View {
         .buttonStyle(.plain)
     }
 
-    /// P3.10 无人值守开关 (默认开): 开启时弹风险确认
+    /// P9-#17: 无人值守恒开徽章 (原开关 + 风险确认弹窗已移除——
+    /// fire 恒 unattended, 开关已无语义; 后台日志会话无审批 UI 入口, 弹卡会卡死到超时)。
     private var unattendedPill: some View {
-        Button(action: {
-            if draftUnattended {
-                draftUnattended = false
-            } else {
-                showUnattendedConfirm = true
-            }
-        }) {
-            HStack(spacing: 4) {
-                Image(systemName: "shield.lefthalf.filled")
-                    .font(.system(size: 10))
-                    .foregroundStyle(draftUnattended ? CodexTheme.accent : CodexTheme.textMuted)
-                Text("无人值守")
-                    .font(CodexTheme.fontSmall)
-                    .foregroundStyle(draftUnattended ? CodexTheme.textPrimary : CodexTheme.textTertiary)
-            }
-            .padding(.horizontal, 8)
-            .padding(.vertical, 3)
-            .frame(height: 24)
-            .background(draftUnattended ? CodexTheme.accentSoft : Color.clear)
-            .clipShape(Capsule())
-            .overlay(Capsule().stroke(CodexTheme.border.opacity(0.4), lineWidth: 1))
-            .contentShape(Rectangle())
+        HStack(spacing: 4) {
+            Image(systemName: "shield.lefthalf.filled")
+                .font(.system(size: 10))
+                .foregroundStyle(CodexTheme.accent)
+            Text("无人值守 · 恒开")
+                .font(CodexTheme.fontSmall)
+                .foregroundStyle(CodexTheme.textPrimary)
         }
-        .buttonStyle(.plain)
-        .help("无人值守: fire 回合不经确认执行工具调用 (含 bash), 执行过程见任务日志")
+        .padding(.horizontal, 8)
+        .padding(.vertical, 3)
+        .frame(height: 24)
+        .background(CodexTheme.accentSoft)
+        .clipShape(Capsule())
+        .help("fire 回合恒不经确认执行工具调用 (含 bash)——后台任务无审批入口, 关闭会卡死任务; 执行过程见任务日志")
     }
 
     /// P3.10 触发条件卡 (等待型): 条件=看什么 / 动作=干什么, 两卡分开
@@ -738,7 +722,6 @@ struct ScheduledView: View {
         draftContinuous = false
         draftIsWaiting = false
         draftCondition = ""
-        draftUnattended = true
         draftLog = ""
         handoffUpdatedAt = nil
         showWorkLog = false
@@ -841,7 +824,6 @@ struct ScheduledView: View {
         draftContinuous = task.continuous
         draftIsWaiting = task.condition?.isEmpty == false
         draftCondition = task.condition ?? ""
-        draftUnattended = task.unattended
         draftFrequency = FrequencyKind.from(cron: task.cron)
         if !draftIsWaiting { syncCronControls(task.cron) }
         let h = store.readHandoff(for: task)
@@ -866,7 +848,7 @@ struct ScheduledView: View {
             existing.continuous = draftContinuous
             existing.condition = draftIsWaiting && !draftCondition.trimmingCharacters(in: .whitespaces).isEmpty
                 ? draftCondition : nil
-            existing.unattended = draftUnattended
+            existing.unattended = true   // P9-#17: 恒无人值守, 字段仅作记录
             store.updateScheduled(existing)
         } else {
             let cron = effectiveCron
@@ -877,7 +859,7 @@ struct ScheduledView: View {
             if let idx = store.scheduledTasks.indices.last {
                 store.scheduledTasks[idx].condition = draftIsWaiting && !draftCondition.trimmingCharacters(in: .whitespaces).isEmpty
                     ? draftCondition : nil
-                store.scheduledTasks[idx].unattended = draftUnattended
+                store.scheduledTasks[idx].unattended = true   // P9-#17: 恒无人值守
                 store.updateScheduled(store.scheduledTasks[idx])
             }
         }

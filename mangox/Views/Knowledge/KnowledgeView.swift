@@ -241,7 +241,7 @@ struct KnowledgeView: View {
                     kind: savedFlash ? .success : .primary,
                     disabled: !draftReady))
                 .disabled(!draftReady || savedFlash)
-                .help("保存 (⌘S)")
+                .help("保存 (⌘S); 标题可留空, 自动取正文首行")
         }
     }
 
@@ -300,9 +300,17 @@ struct KnowledgeView: View {
         )
     }
 
+    /// 正文必填; 标题可留空 (保存时自动取正文首行, 与"保存为记忆"/Scheduled 命名同规则)。
     private var draftReady: Bool {
-        !draftTitle.trimmingCharacters(in: .whitespaces).isEmpty
-        && !draftContent.trimmingCharacters(in: .whitespaces).isEmpty
+        !draftContent.trimmingCharacters(in: .whitespaces).isEmpty
+    }
+
+    /// 标题留空 → 自动取正文首行前 24 字 (与 saveAsMemory 命名规则一致)。
+    private func resolvedTitle() -> String {
+        let t = draftTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !t.isEmpty { return t }
+        return String(draftContent.trimmingCharacters(in: .whitespacesAndNewlines)
+            .split(separator: "\n").first?.prefix(24) ?? "知识")
     }
 
     // MARK: - 草稿动作
@@ -325,7 +333,7 @@ struct KnowledgeView: View {
 
     private func saveEditing() {
         guard draftReady else { return }
-        let title = draftTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        let title = resolvedTitle()
         if let id = editingId,
            let existing = store.knowledgeItems.first(where: { $0.id == id }) {
             store.updateKnowledge(existing.withUpdated(
@@ -335,6 +343,7 @@ struct KnowledgeView: View {
                                scope: draftScope, projectId: draftProjectId)
             editingId = store.knowledgeItems.last?.id   // 新建后进入编辑态, 保存键语义延续
         }
+        draftTitle = title   // 标题留空被自动命名后回填, 字段与库内一致
         // "✓ 已保存"短闪 (与代码块"已复制"同模式)
         savedFlash = true
         Task { @MainActor in

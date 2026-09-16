@@ -1390,6 +1390,60 @@ struct SmokeMain {
             check(store27.submitCapture(text: "x", target: .append(sessionId: sid27b!)) == nil,
                   "T27 已删会话追加拒绝")
             mock27.scriptedReply = nil
+
+            // ---- T-P9 Batch1: P9-#1 导出 delegate 链路 (注入实例) ----
+            // 修复前: exportTraceHTML 未挂 delegate → 回调被丢 → 永远 20s 超时;
+            // 修复后: MockTransport 同步回调 (nil = 失败分支, 避免冒烟弹 Finder) → 立即收尾
+            print("== T-P9 Batch1: 导出 delegate 链路 ==")
+            let dir9 = NSHomeDirectory() + "/.mangox/smoke-tp9-\(UUID().uuidString.prefix(8))"
+            try! FileManager.default.createDirectory(atPath: dir9, withIntermediateDirectories: true)
+            let store9 = ChatStore(transport: mock27, dbPath: dir9 + "/t9.db",
+                                   managedExtensionsDir: dir9 + "/ext")
+            store9.newConversation()
+            store9.exportTraceHTML()
+            check(!store9.isExportingHTML, "T-P9 导出回调即收尾 (不再卡 20s 超时)")
+            check(mock27.lastExportPath?.contains("/.mangox/exports/") == true,
+                  "T-P9 导出路径已下发 (delegate 挂接生效)")
+            check(store9.extensionNotice?.text == "导出失败",
+                  "T-P9 失败分支通知 (Mock 回 nil 的预期语义)")
+
+            // ---- T-P9b Batch2: regenerate 清库 (P9-#2) + fire 强制无人值守 (P9-#17) ----
+            print("== T-P9b Batch2: regenerate 清库 + fire 无人值守 ==")
+            let dir9b = NSHomeDirectory() + "/.mangox/smoke-tp9b-\(UUID().uuidString.prefix(8))"
+            try! FileManager.default.createDirectory(atPath: dir9b, withIntermediateDirectories: true)
+            let mock9b = MockTransport()
+            let store9b = ChatStore(transport: mock9b, dbPath: dir9b + "/t.db",
+                                    managedExtensionsDir: dir9b + "/ext")
+            store9b.draft = "第一问"
+            store9b.sendDraft()
+            check(await waitUntil { store9b.runningTurns.isEmpty }, "T-P9b 首回合收尾")
+            let sid9b = store9b.selectedConversationId!
+            let dbBefore = (try? store9b.persistenceDebug?.loadMessages(sessionId: sid9b))?.count ?? -1
+            check(dbBefore == 2, "T-P9b 前置: 库内 user+assistant 两条")
+            store9b.regenerate()
+            check(await waitUntil { store9b.runningTurns.isEmpty }, "T-P9b 重生成收尾")
+            let dbAfter = (try? store9b.persistenceDebug?.loadMessages(sessionId: sid9b)) ?? []
+            check(dbAfter.count == 2, "T-P9b 库内仍两条 (旧 assistant 已删, 重启不复活)")
+            check(dbAfter.filter { $0.role == .user }.count == 1, "T-P9b user 消息保留一份")
+            check(store9b.messages.last?.role == .assistant, "T-P9b 重生成回复上屏")
+            // P9-#17: attended 定时任务 fire 恒无人值守 (后台审批卡不可达, 弹卡 = 卡死到超时)
+            var task9b = ScheduledTask(id: UUID(), name: "P9 哨兵", prompt: "检查", cron: "0 0 1 1 *",
+                                       projectId: nil)
+            task9b.unattended = false
+            store9b.runScheduledFire(task9b)
+            check(mock9b.lastAskApproval == false, "T-P9b attended fire 强制无人值守 (P9-#17)")
+            check(await waitUntil { store9b.runningTurns.isEmpty }, "T-P9b fire 收尾")
+
+            // ---- T-P9c Batch3: 重放缓存 + seq 游标一致性 (P9-#10) ----
+            print("== T-P9c Batch3: 重放缓存一致性 ==")
+            let once9c = (try? store9b.persistenceDebug?.loadMessages(sessionId: sid9b)) ?? []
+            let twice9c = (try? store9b.persistenceDebug?.loadMessages(sessionId: sid9b)) ?? []
+            check(once9c.count == 2 && twice9c.count == 2, "T-P9c 缓存命中与直读一致 (regenerate 后仍 2 条)")
+            // fire 日志会话: append 路径走 seq 游标 + 缓存失效, 新会话消息必须可重放
+            let fireLogId9c = store9b.chats.first { $0.title == "P9 哨兵" }?.id
+            let fireMsgs9c = fireLogId9c.flatMap { try? store9b.persistenceDebug?.loadMessages(sessionId: $0) } ?? []
+            check(fireMsgs9c.count >= 2 && fireMsgs9c.contains(where: { $0.role == .user }),
+                  "T-P9c fire 日志落库可重放 (seq 游标连续 + 缓存失效正确)")
         }
 
         report()    }

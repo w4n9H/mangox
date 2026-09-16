@@ -46,7 +46,7 @@ struct CodeBlockView: View {
                 .frame(height: 1)
 
             ScrollView(.horizontal, showsIndicators: false) {
-                Text(CodeHighlighter.highlight(code, language: language))
+                Text(CodeHighlighter.highlightCached(code, language: language))
                     .font(CodexTheme.fontMono)
                     .foregroundStyle(CodexTheme.textPrimary)
                     .lineSpacing(Tune.mdCodeLineSpacing)

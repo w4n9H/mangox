@@ -2,7 +2,7 @@
 
 macOS 原生 AI Agent 客户端（SwiftUI），对标 Codex Desktop 的交互形态，底层对接 [pi CLI](https://github.com/earendil-works/pi) 作为推理引擎。
 
-![version](https://img.shields.io/badge/version-0.1.6-orange)
+![version](https://img.shields.io/badge/version-0.1.7-orange)
 
 ## 功能
 
@@ -36,7 +36,7 @@ macOS 原生 AI Agent 客户端（SwiftUI），对标 Codex Desktop 的交互形
 
 **工程化**
 - SQLite 持久化（WAL），事件流重放式加载；退出时 WAL checkpoint + 终止在途 pi 进程
-- 冒烟门禁：`scripts/smoke/run.sh` 一条命令跑 320 项语义冒烟（事件归并/并发路由/fire 后台化/上限拒绝/落库对拍/轨迹派生/settled 语义/状态栏数据链/过程态胶囊/Trace v2/侧问 fork/离开摘要/自动命名/模型物化/元数据目录/模式矩阵/附件管线/发送门控/日分组/审批阻塞/热键配置/捕获链路/备份引擎）
+- 冒烟门禁：`scripts/smoke/run.sh` 一条命令跑 333 项语义冒烟（事件归并/并发路由/fire 后台化/上限拒绝/落库对拍/轨迹派生/settled 语义/状态栏数据链/过程态胶囊/Trace v2/侧问 fork/离开摘要/自动命名/模型物化/元数据目录/模式矩阵/附件管线/发送门控/日分组/审批阻塞/热键配置/捕获链路/备份引擎/重放缓存/无人值守 fire）
 - 扩展管理：内置 mangox-approval（源码内嵌, 每次 spawn 自动校验重建，换机器零影响），托管扩展启停/导入/删除
 - 内置 JetBrains Mono（SIL OFL），等宽三级字体链
 - 深/浅色自适应主题
@@ -54,7 +54,7 @@ macOS 原生 AI Agent 客户端（SwiftUI），对标 Codex Desktop 的交互形
 open mangox.xcodeproj   # Xcode 里 Cmd+R
 ```
 
-## 已知限制 (v0.1.6)
+## 已知限制 (v0.1.7)
 
 - **长会话上下文线性增长**：pi transcript 无 compaction，单会话建议控制在几十轮内，过长后每次拉起的 token 成本与延迟都会上升
 - **并发资源占用**：每个在途任务是一个独立 pi 进程（约 50MB）+ 一路 LLM 流，满并发 10 个任务时请留意机器负载（设置页可调上限）

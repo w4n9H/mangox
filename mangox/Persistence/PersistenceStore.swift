@@ -15,6 +15,11 @@ final class PersistenceStore {
     private let decoder = JSONDecoder()
     /// 库文件路径 (P8-T28 备份拷贝源; 默认 ~/.mangox/mangox.db)
     let path: String
+    /// P9-#10: 事件重放缓存 (sid → 消息列表)。任何写路径失效; 值类型拷贝, 调用方改不动缓存。
+    /// 侧栏每次点击会话都全量重放 events (逐行 JSON decode), 事件多时可感卡顿。
+    private var replayCache: [UUID: [ChatMessage]] = [:]
+    /// P9-#10: seq 游标 (sid → 下一个 seq)。删除路径清空回落 SELECT MAX(seq)。
+    private var seqCursor: [UUID: Int64] = [:]
 
     init(path: String = NSHomeDirectory() + "/.mangox/mangox.db") throws {
         self.path = path
@@ -263,6 +268,8 @@ final class PersistenceStore {
     func deleteSession(id: UUID) throws {
         try db.run("DELETE FROM sessions WHERE id = ?", [.text(id.uuidString)])
         try db.run("DELETE FROM events WHERE session_id = ?", [.text(id.uuidString)])
+        replayCache[id] = nil   // P9-#10: 写路径失效
+        seqCursor[id] = nil
     }
 
     func loadProjects() throws -> [ProjectGroup] {
@@ -341,13 +348,22 @@ final class PersistenceStore {
     // MARK: - Events (append-only trajectory)
 
     private func appendEvent(_ sessionId: UUID, type: String, payload: Data) throws {
-        let rows = try db.query(
-            "SELECT COALESCE(MAX(seq),0)+1 AS next FROM events WHERE session_id = ?",
-            [.text(sessionId.uuidString)])
+        // P9-#10: seq 游标免每次 SELECT MAX; 写路径同时失效重放缓存
+        let next: Int64
+        if let cursor = seqCursor[sessionId] {
+            next = cursor
+        } else {
+            let rows = try db.query(
+                "SELECT COALESCE(MAX(seq),0)+1 AS next FROM events WHERE session_id = ?",
+                [.text(sessionId.uuidString)])
+            next = int(rows.first?["next"] ?? .null)
+        }
+        seqCursor[sessionId] = next + 1
+        replayCache[sessionId] = nil
         try db.run("""
             INSERT INTO events (session_id, seq, type, payload, ts) VALUES (?,?,?,?,?)
             """, [.text(sessionId.uuidString),
-                  .int(int(rows.first?["next"] ?? .null)),
+                  .int(next),
                   .text(type),
                   .text(String(data: payload, encoding: .utf8) ?? ""),
                   .real(Date.now.timeIntervalSince1970)])
@@ -367,6 +383,7 @@ final class PersistenceStore {
 
     /// 重放事件流重建消息列表 (流式 chunk 不落库, 只有终态事件)。
     func loadMessages(sessionId: UUID) throws -> [ChatMessage] {
+        if let hit = replayCache[sessionId] { return hit }   // P9-#10: 写路径已失效, 命中即最新
         let rows = try db.query(
             "SELECT type, payload FROM events WHERE session_id = ? ORDER BY seq ASC",
             [.text(sessionId.uuidString)])
@@ -400,7 +417,38 @@ final class PersistenceStore {
                 return a.offset < b.offset
             }
             .map(\.element)
+        replayCache[sessionId] = out   // P9-#10
         return out
+    }
+
+    /// P9-#2: 删除最后一条 user 消息事件之后的所有事件 (regenerate 的库侧对账 —
+    /// 内存截断后旧 assistant 回复/tool_update 不清, 重启重放即复活)。
+    /// 无 user 事件时不删 (防御)。返回删除事件数。
+    @discardableResult
+    func deleteEventsAfterLastUser(sessionId: UUID) throws -> Int {
+        let rows = try db.query(
+            "SELECT id, type, payload FROM events WHERE session_id = ? ORDER BY seq DESC",
+            [.text(sessionId.uuidString)])
+        var cutoff: Int64?
+        for row in rows {
+            guard case .text(let type) = row["type"] ?? .null, type == "message",
+                  case .text(let json) = row["payload"] ?? .null,
+                  let data = json.data(using: .utf8),
+                  let msg = try? decoder.decode(ChatMessage.self, from: data),
+                  msg.role == .user else { continue }
+            if case .int(let id) = row["id"] ?? .null { cutoff = id }
+            break
+        }
+        guard let cutoff else { return 0 }
+        var deleted = 0
+        for row in rows {
+            if case .int(let id) = row["id"] ?? .null, id > cutoff { deleted += 1 }
+        }
+        try db.run("DELETE FROM events WHERE session_id = ? AND id > ?",
+                   [.text(sessionId.uuidString), .int(cutoff)])
+        replayCache[sessionId] = nil   // P9-#10: 截断后失效 (seq 游标一并清, 回落 SELECT MAX 防游标越界)
+        seqCursor[sessionId] = nil
+        return deleted
     }
 
     // MARK: - Knowledge items (P3.7 知识库/记忆)

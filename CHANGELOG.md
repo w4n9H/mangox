@@ -5,6 +5,33 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [0.1.7] - 2026-09-16
+
+### Fixed
+
+P9 质量大扫除（全库 code review 出的 17 项，本版修 15 项，其余 2 项随结构手术完成）：
+
+- **Trace 导出 HTML** 正常生成并在 Finder 显示（导出实例 delegate 断链）
+- **regenerate 不再残留旧回复**：库侧按最后一条 user 事件截断，重启后不复活旧副本
+- **捕获条**：点击主窗口/外部即关闭（菜单弹层放行）；空文本/引擎缺失/并发满被拒时面板与输入保留
+- **热键录制**中途切页自动停止，不再误吞后续按键
+- 引擎 stdin 写入换 throwing 版，写失败落日志
+- **定时任务 fire 恒无人值守**（后台日志会话审批卡无 UI 入口，弹卡=任务卡死到超时）；Scheduled 编辑器开关改"无人值守 · 恒开"徽章，语义与运行时行为对齐
+- **长回复流式掉帧**：Markdown 解析 / 代码高亮 LRU 缓存（历史消息不再每 chunk 全量重解析）+ 运行指示器换低频 tick + CA 插值合成
+- **上滑阅读不拽回**：距视口底 <140pt 才自动跟随；自动滚动同帧合并（消除 `onChange multiple times per frame`）
+- regenerate / 删除会话后重放一致（重放缓存 + seq 游标失效）
+- **手动备份转后台线程**，大附件库不再冻结主线程；失败细节弹窗（"备份失败"alert）
+- 知识编辑器标题留空自动取正文首行前 24 字（与"保存为记忆"命名规则对齐），正文必填即可保存
+- 图片附件 NSCache 缓存，缩略图/大图不再重复解码
+- 全量冒烟 333 项 + xcodebuild 零 warning 双门禁
+
+### Changed
+
+- **ChatStore 结构手术（P9.1）**：2430 → 1948 行，按职责拆出 5 个子 store——SchedulerService（定时任务全链路）/ KnowledgeStore（知识库+蒸馏）/ ModelStore（模型状态+菜单+自管物化）/ CaptureService（快速捕获）/ BackupService（手动备份）+ SidebarModel 侧栏投影；ChatStore 留同名 facade 转发，事件归并留核心
+- **流式期局部重算**：侧栏（chats/projects 投影直订）与模型菜单（直订 ModelStore）不再随消息 chunk 全 UI 重算
+- **运行指示器 CodexSpinner**：四形态（星芒慢旋 / 星芒呼吸 / 呼吸环 / 旋转弧），默认星芒慢旋 + 微呼吸；规避 repeatForever 行复用丢事务与逐帧驱动掉帧两代教训
+- 文档收敛：docs/ 只保留 Px 系列设计文档（roadmap 与 research 参照移除，git 历史可查）
+
 ## [0.1.6] - 2026-09-15
 
 ### Added

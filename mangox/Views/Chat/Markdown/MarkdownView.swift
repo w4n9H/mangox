@@ -11,7 +11,7 @@ struct MarkdownView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: Tune.mdBlockSpacing) {
-            ForEach(Array(MarkdownParser.parse(text).enumerated()),
+            ForEach(Array(MarkdownParser.parseCached(text).enumerated()),
                     id: \.offset) { _, block in
                 blockView(block)
             }

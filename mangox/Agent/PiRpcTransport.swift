@@ -539,11 +539,23 @@ final class PiRpcTransport: AgentTransport {
     }
 
     private func sendCommand(_ dict: [String: Any]) {
-        sentCommands.append(dict)   // P6.0②冒烟: 无进程时 no-op, 日志可断言"未回 response"
+        #if DEBUG
+        // P9-#6: 冒烟断言副本 — 只存 type/id 元信息 (剥离 prompt 全文与 images base64,
+        // 原实现整条 append 永不清理, 多图会话内存无界增长且 Release 同样生效)
+        var meta: [String: Any] = [:]
+        if let t = dict["type"] { meta["type"] = t }
+        if let id = dict["id"] { meta["id"] = id }
+        sentCommands.append(meta)
+        #endif
         guard let stdinHandle,
               var data = try? JSONSerialization.data(withJSONObject: dict) else { return }
         data.append(0x0A)
-        stdinHandle.write(data)
+        // P9-#5: throwing 版 write — 管道断裂走 Error 而非 ObjC 异常 (进程死亡竞态不崩 App)
+        do {
+            try stdinHandle.write(contentsOf: data)
+        } catch {
+            print("[PiRpcTransport] stdin write failed (进程已退出?): \(error)")
+        }
     }
 
     // MARK: - 上行 (pi → UI): 线程安全的行分帧

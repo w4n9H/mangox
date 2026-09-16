@@ -677,20 +677,7 @@ struct TrajectoryView: View {
     private var liveRow: some View {
         HStack(spacing: 10) {
             kindChip("ASSISTANT", CodexTheme.info)
-            TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { ctx in
-                let t = ctx.date.timeIntervalSinceReferenceDate
-                let angle = Angle.degrees(t.truncatingRemainder(dividingBy: 0.8) / 0.8 * 360)
-                ZStack {
-                    Circle()
-                        .stroke(CodexTheme.textMuted.opacity(0.22), lineWidth: 1.5)
-                    Circle()
-                        .trim(from: 0, to: 0.3)
-                        .stroke(CodexTheme.toolDone,
-                                style: StrokeStyle(lineWidth: 1.5, lineCap: .round))
-                        .rotationEffect(angle)
-                }
-                .frame(width: 12, height: 12)
-            }
+            CodexSpinner()
             Text("AI 回复生成中…")
                 .font(CodexTheme.fontSmall)
                 .foregroundStyle(CodexTheme.textSecondary)

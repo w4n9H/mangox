@@ -58,6 +58,18 @@ struct SettingsView: View {
             }
         }
         .background(CodexTheme.bgChat)
+        .onDisappear {
+            // P9-#4: 录制 monitor 必须随视图销毁清理 — 否则录制中切走后 monitor 永久存活,
+            // 吞掉全 App 修饰键且再次录制因 guard no-op 假死
+            stopHotkeyRecording()
+        }
+        .alert("备份失败",   // P9-#11: 后台备份失败细节弹窗 (主线程不再被拷贝阻塞)
+               isPresented: Binding(get: { store.backupFailureMessage != nil },
+                                    set: { if !$0 { store.backupFailureMessage = nil } })) {
+            Button("好", role: .cancel) {}
+        } message: {
+            Text(store.backupFailureMessage ?? "")
+        }
     }
 
     private var header: some View {
@@ -644,15 +656,8 @@ struct SettingsView: View {
 
     private func runBackup() {
         guard let root = store.backupDirectory else { return }
-        let outcome = store.performManualBackup(destRoot: root)
-        if !outcome.ok {
-            // 失败细节逐项弹窗 (摘要只显示首条)
-            let alert = NSAlert()
-            alert.messageText = "备份失败"
-            alert.informativeText = outcome.errors.joined(separator: "\n")
-            alert.alertStyle = .warning
-            alert.runModal()
-        }
+        // P9-#11: 后台执行 (原同步版大附件库会冻结 UI); 失败经 backupFailureMessage 弹窗
+        store.performManualBackupInBackground(destRoot: root)
     }
 }
 

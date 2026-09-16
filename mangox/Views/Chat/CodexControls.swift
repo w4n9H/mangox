@@ -185,3 +185,79 @@ struct CodexActionButtonStyle: ButtonStyle {
         }
     }
 }
+
+// MARK: - 运行中指示 (P9 实机反馈: TimelineView 逐帧驱动在流式期主线程拥堵时掉帧)
+// 旧实现 .animation(minimumInterval: 1/30) 每帧在主线程重算子树, 流式 chunk 处理挤占主线程
+// 时 tick 迟到 → 角度大步跳变 (掉帧感)。新实现: 低频 tick + .animation 让 CA
+// 在渲染服务端插值 —— 主线程繁忙不再影响帧率 (逐帧合成成本在 CA 侧, 恒定)。
+// tick 越短, 主线程拥堵导致 commit 迟到时的停顿-追赶窗口越短; 每次 tick 只是微秒级子树
+// diff, 2Hz 开销可忽略 (真坑是旧的逐帧 SwiftUI 重算)。
+// 注意: 不用 .repeatForever 隐式动画 (侧栏行复用/重建丢事务, 动画不启动 —— 见 MEMORY 教训);
+// 本方案 value 驱动 (k 离散递增), 行重建时同值重算不重提交动画, 无事务丢失问题。
+// 四种形态: .asteriskSpin 星芒慢旋+微呼吸 (默认, 对齐 Claude loading 标) / .asterisk 星芒纯呼吸 /
+// .spin 旋转弧 / .breathe 呼吸环。呼吸类相位抖动感知免疫; 星芒加慢旋后转动的连续性由 CA 插值,
+// 停顿感进一步被"辐条对称性 + 呼吸"掩盖。
+struct CodexSpinner: View {
+    enum Style { case asteriskSpin, asterisk, breathe, spin }
+    var style: Style = .asteriskSpin
+    var color: Color = CodexTheme.toolDone
+    /// tick 周期 (秒)。spin/asteriskSpin 态角速度恒定 450°/s: 步长 = 450°/s × tick; 呼吸态 = 半个呼吸周期。
+    var tick: Double = 0.5
+    /// 周期锚点: @State 初值只在行生命周期内取一次, TimelineView schedule 稳定不重启。
+    @State private var start = Date.now
+
+    var body: some View {
+        TimelineView(.periodic(from: start, by: tick)) { ctx in
+            let k = Int((ctx.date.timeIntervalSince(start) / tick).rounded(.down))
+            switch style {
+            case .asteriskSpin:
+                // 内层呼吸 (easeInOut) / 外层慢旋 (linear): 嵌套 .animation(value:) 各管各的属性
+                asteriskGlyph
+                    .opacity(k % 2 == 0 ? 1.0 : 0.55)
+                    .scaleEffect(k % 2 == 0 ? 1.0 : 0.9)
+                    .animation(.easeInOut(duration: tick), value: k)
+                    .rotationEffect(.degrees(Double(k) * 450.0 * tick))
+                    .animation(.linear(duration: tick), value: k)
+            case .asterisk:
+                asteriskGlyph
+                    .opacity(k % 2 == 0 ? 1.0 : 0.35)
+                    .scaleEffect(k % 2 == 0 ? 1.0 : 0.75)
+                    .animation(.easeInOut(duration: tick), value: k)
+            case .breathe:
+                Circle()
+                    .stroke(color, style: StrokeStyle(lineWidth: 1.5, lineCap: .round))
+                    .opacity(k % 2 == 0 ? 1.0 : 0.3)
+                    .scaleEffect(k % 2 == 0 ? 1.0 : 0.78)
+                    .animation(.easeInOut(duration: tick), value: k)
+            case .spin:
+                ZStack {
+                    Circle()
+                        .stroke(CodexTheme.textMuted.opacity(0.22), lineWidth: 1.5)
+                    Circle()
+                        .trim(from: 0, to: 0.3)
+                        .stroke(color, style: StrokeStyle(lineWidth: 1.5, lineCap: .round))
+                        .rotationEffect(.degrees(Double(k) * 450.0 * tick))
+                        .animation(.linear(duration: tick), value: k)
+                }
+            }
+        }
+        .frame(width: 12, height: 12)
+    }
+
+    /// 星芒字形: 6 根圆头辐条从内径向外辐射, 中心留空 (对齐参考图, 不糊心)。
+    /// 12pt 槽位: 内径 1.8 / 外径 5.4, 辐条长 3.6。
+    private var asteriskGlyph: some View {
+        let inner: CGFloat = 1.8
+        let outer: CGFloat = 5.4
+        let h = outer - inner
+        return ZStack {
+            ForEach(0..<6, id: \.self) { i in
+                Capsule()
+                    .fill(color)
+                    .frame(width: 1.4, height: h)
+                    .offset(y: -(inner + h / 2))
+                    .rotationEffect(.degrees(Double(i) * 60))
+            }
+        }
+    }
+}

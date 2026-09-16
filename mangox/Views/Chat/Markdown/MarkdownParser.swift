@@ -22,6 +22,29 @@ enum MarkdownBlock: Equatable {
 
 enum MarkdownParser {
 
+    // MARK: - P9-#7 解析缓存 (LRU)
+    // 流式期 messages 数组每 chunk 变更 → 全部 MarkdownView 重渲染;
+    // 历史消息文本不变 → 命中缓存, 每 chunk 只重解析流式中那一条 (其余全量重解析是 O(n²) 根因)。
+
+    private static let cacheLock = NSLock()
+    private static var cache: [String: [MarkdownBlock]] = [:]
+    private static var order: [String] = []
+    private static let cacheLimit = 64
+
+    static func parseCached(_ raw: String) -> [MarkdownBlock] {
+        if raw.count > 200_000 { return parse(raw) }   // 超长不进缓存, 限内存
+        cacheLock.lock(); defer { cacheLock.unlock() }
+        if let hit = cache[raw] { return hit }
+        let blocks = parse(raw)
+        cache[raw] = blocks
+        order.append(raw)
+        if order.count > cacheLimit, let evict = order.first {
+            order.removeFirst()
+            cache.removeValue(forKey: evict)
+        }
+        return blocks
+    }
+
     static func parse(_ raw: String) -> [MarkdownBlock] {
         var blocks: [MarkdownBlock] = []
         let lines = raw.components(separatedBy: "\n")

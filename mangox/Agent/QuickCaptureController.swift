@@ -21,7 +21,7 @@ final class QuickCaptureController {
     private weak var store: ChatStore?
     private var panel: NSPanel?
     private var hotkeyRef: EventHotKeyRef?
-    private var clickMonitor: Any?
+    private var clickMonitors: [Any] = []
     private var handlerInstalled = false
     private(set) var registeredHotkey: CaptureHotkey?
 
@@ -115,20 +115,46 @@ final class QuickCaptureController {
         return p
     }
 
-    /// 点击面板外部 → 隐藏 (设计 3.1; 全局鼠标监听不需辅助功能权限,
-    /// 且自身 App 内点击不回调 —— 面板内交互不受影响)。
+    /// 点击面板外部 → 隐藏 (设计 3.1)。双路监听:
+    /// global monitor 只回调"其他 App"的点击; 捕获条唤起时本 App 已激活,
+    /// 点主窗口/侧栏必须走 local monitor 才能关 (P9-#3)。
+    /// 面板自身点击 (event.window === panel) 与 pill 菜单弹层 (NSMenu 系窗口) 放行。
     private func installClickMonitor() {
-        guard clickMonitor == nil else { return }
-        clickMonitor = NSEvent.addGlobalMonitorForEvents(matching: .leftMouseDown) { _ in
+        guard clickMonitors.isEmpty else { return }
+        // 两个 monitor 注册都返回 Any?, if-let 显式解包 (消除 Any?→Any 隐式强转 warning)
+        if let m = NSEvent.addGlobalMonitorForEvents(matching: .leftMouseDown, handler: { _ in
             DispatchQueue.main.async {
                 MainActor.assumeIsolated { QuickCaptureController.shared.hide() }
             }
+        }) {
+            clickMonitors.append(m)
+        }
+        // 局部闭包直传 (尾闭包紧随 if-let 会被判 confusable)
+        let localHandler: (NSEvent) -> NSEvent? = { [weak panel] event in
+            if Self.shouldDismiss(clickWindow: event.window, panel: panel) {
+                DispatchQueue.main.async {
+                    MainActor.assumeIsolated { QuickCaptureController.shared.hide() }
+                }
+            }
+            return event
+        }
+        if let m = NSEvent.addLocalMonitorForEvents(matching: .leftMouseDown, handler: localHandler) {
+            clickMonitors.append(m)
         }
     }
 
     private func removeClickMonitor() {
-        if let clickMonitor { NSEvent.removeMonitor(clickMonitor) }
-        clickMonitor = nil
+        for m in clickMonitors { NSEvent.removeMonitor(m) }
+        clickMonitors = []
+    }
+
+    /// 关闭判定 (纯函数, 冒烟直测): 点击窗口 nil = 点击了桌面; 面板自身放行;
+    /// NSMenu 弹层窗口 (pill 目标菜单) 放行 —— 菜单选择期间不能把捕获条关掉。
+    nonisolated static func shouldDismiss(clickWindow: NSWindow?, panel: NSPanel?) -> Bool {
+        guard let panel else { return false }
+        if clickWindow === panel { return false }
+        let name = String(describing: type(of: clickWindow))
+        return !name.contains("Menu")
     }
 }
 
@@ -219,7 +245,9 @@ struct QuickCaptureView: View {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
         store.setCaptureMemo(target.memoRaw)
-        store.submitCapture(text: trimmed, target: target)
+        // P9-#13: 拒绝路径 (并发满/目标失效/引擎缺失) 保留面板与输入, 横幅已提示原因;
+        // 原实现无条件 hide + 清空, 用户打的字直接丢
+        guard store.submitCapture(text: trimmed, target: target) != nil else { return }
         text = ""
         target = .newSession(projectId: nil)   // 发送后回默认 (下次 onAppear 再读记忆)
         QuickCaptureController.shared.hide()   // 发送即隐藏 (反馈 = 侧栏转圈 → 完成通知)

@@ -36,6 +36,30 @@ enum CodeHighlighter {
         return attr
     }
 
+    // MARK: - P9-#7 高亮缓存 (LRU)
+
+    // 流式期 messages 数组每 chunk 变更 → 全部 CodeBlockView 重渲染;
+    // 已完成代码块命中缓存后只剩流式中那一个块重算。
+    private static let cacheLock = NSLock()
+    private static var cache: [String: AttributedString] = [:]
+    private static var order: [String] = []
+    private static let cacheLimit = 32
+
+    static func highlightCached(_ code: String, language: String?) -> AttributedString {
+        if code.count > 100_000 { return highlight(code, language: language) }   // 超长不进缓存
+        let key = "\(language ?? "-")\u{1}\(code)"
+        cacheLock.lock(); defer { cacheLock.unlock() }
+        if let hit = cache[key] { return hit }
+        let attr = highlight(code, language: language)
+        cache[key] = attr
+        order.append(key)
+        if order.count > cacheLimit, let evict = order.first {
+            order.removeFirst()
+            cache.removeValue(forKey: evict)
+        }
+        return attr
+    }
+
     // MARK: - Pattern
 
     private static func masterPattern(for language: String?) -> String {

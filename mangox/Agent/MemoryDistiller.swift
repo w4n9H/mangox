@@ -176,6 +176,11 @@ final class MemoryDistiller {
         guard let stdinHandle,
               var data = try? JSONSerialization.data(withJSONObject: dict) else { return }
         data.append(0x0A)
-        stdinHandle.write(data)
+        // P9-#5: 同 PiRpcTransport — throwing 版 write, 管道断裂不抛 ObjC 异常
+        do {
+            try stdinHandle.write(contentsOf: data)
+        } catch {
+            print("[MemoryDistiller] stdin write failed (进程已退出?): \(error)")
+        }
     }
 }

@@ -1,12 +1,14 @@
 //
-//  MockData.swift
+//  ChatStore.swift
 //  Centralized in-memory state driving the UI.
 //  P3.0: Agent 生成/审批逻辑已下沉到 AgentTransport, 这里只做事件归并 + UI 状态。
+//  P9.1a: 自 Mock/MockData.swift 物理迁移改名 (零代码改动)。
 //
 
 import Foundation
 import SwiftUI
 import AppKit
+import Combine
 
 /// P5.0.2: 主区底档 (TopBar 胶囊二选一)。
 enum CapsuleMode: Hashable {
@@ -35,10 +37,7 @@ final class ChatStore: ObservableObject {
     /// 冒烟/测试注入的单实例: 注入时全会话共用 (串行语义, 保持回归基线)。
     private let injectedTransport: (any AgentTransport)?
     /// spawn 期配置快照: 新实例创建时与每次 send 前下发 (P3.7 注入 / P3.11 扩展)。
-    private var currentKnowledgeBlock: String?
     private var currentExtensionPaths: [String] = []
-    /// P7-M3: 自管模型物化产物快照 (transportFor 补发新实例; init 先于探测拉目录)。
-    private var currentPIConfig: ModelMaterializer.Output?
     /// P4.0.2 会话化流式状态: 在途回合的会话集合 (并发数 = 集合大小; 上限治理在 P4.0.4)。
     @Published private(set) var runningTurns: Set<UUID> = []
     /// 兼容视图: 当前选中会话是否有回合在途。
@@ -48,13 +47,23 @@ final class ChatStore: ObservableObject {
     /// P8-T26: 审批阻塞会话集合 (会话级信号) —— awaitingApproval 事件置位,
     /// 审批响应 / streamEnded / 手动停止 / 会话删除清除。
     @Published private(set) var approvalBlocked: Set<UUID> = []
-    /// P8-T28: 备份目录 (settings KV backup_dir) 与上次备份摘要 (backup_last)。
-    @Published private(set) var backupDirectory: String?
-    @Published private(set) var lastBackupSummary: String?
-    /// P8-T28: 备份执行中 (按钮防重入)。
-    @Published private(set) var backupRunning = false
+    // P9.1d: 备份域抽离至 BackupService, 同名 facade 转发 (冒烟/视图零改动)
+    let backup = BackupService()
+    var backupDirectory: String? {
+        get { backup.backupDirectory }
+        set { backup.backupDirectory = newValue }
+    }
+    var lastBackupSummary: String? {
+        get { backup.lastBackupSummary }
+        set { backup.lastBackupSummary = newValue }
+    }
+    var backupRunning: Bool { backup.backupRunning }
+    var backupFailureMessage: String? {
+        get { backup.backupFailureMessage }
+        set { backup.backupFailureMessage = newValue }
+    }
     /// P3.1: SQLite 持久化; 打不开时降级为纯内存 (原 mock 行为)。
-    private let persistence: PersistenceStore?
+    let persistence: PersistenceStore?   // P9.1b: internal — SchedulerService 定时域落库回调
     /// P7-M3: 模型 key 存储 (真源 Keychain; 冒烟注入内存实现)。
     let modelKeyStore: any ModelKeyStore
 
@@ -63,12 +72,6 @@ final class ChatStore: ObservableObject {
     @Published var draft: String = ""
     /// P7-M6b: 图片附件暂存区 (随 draft 生命周期, 发送即清; ≤4 张)。
     @Published var pendingImages: [PendingImage] = []
-    /// P7-M6b: 当前选中模型是否支持图片输入 (managed 有 inputModalities; 无法判定 → 不拦)。
-    var currentModelSupportsImages: Bool {
-        guard let m = managedModels.first(where: { $0.provider == currentProvider && $0.modelId == currentModelId })
-        else { return true }
-        return m.inputModalities.contains("image")
-    }
     /// 引擎不可用 (pi CLI 缺失): Release 下不静默降级, UI 横幅明示 + 发送守卫。
     @Published var engineMissing: Bool = false
 
@@ -224,39 +227,78 @@ final class ChatStore: ObservableObject {
     /// P6.1.2: 状态栏"当前会话 N 轮" = 视图内 user 消息数。
     var currentTurnCount: Int { messages.filter { $0.role == .user }.count }
 
-    // P3.5: 对端能力上报
-    /// 可用模型清单 (pi get_available_models; 空 = 尚未上报, 菜单只显示当前模型)。
-    @Published var availableModels: [AgentModelInfo] = []
-    /// P5.1: 自定义模型条目 (菜单自主 — 与 pi 目录展示名解耦; 同名时覆盖 pi 条目)。
-    @Published var customModels: [CustomModel] = []
-    /// P7-M3: 自管模型条目 (settings 页管理, 物化给 pi; 真源 models 表)。
-    @Published var managedModels: [ManagedModel] = []
-    /// 当前模型 (provider/id 分量), composer 模型菜单的数据源。
-    @Published var currentProvider: String = ""
-    @Published var currentModelId: String = ""
-    /// 当前思考级别 (pi 状态)。
-    @Published var thinkingLevel: ThinkingLevel = .high
-    /// 用户是否已在 UI 选过模型/级别 (选过 = 期望值钉死, 探测上报不再回写)。
-    @Published var userThinkingLevelPinned: Bool = false
+    // P9.1c: 模型域抽离至 ModelStore, 同名 facade 转发 (冒烟/视图零改动)
+    let model = ModelStore()
+    var availableModels: [AgentModelInfo] {
+        get { model.availableModels }
+        set { model.availableModels = newValue }
+    }
+    var customModels: [CustomModel] {
+        get { model.customModels }
+        set { model.customModels = newValue }
+    }
+    var managedModels: [ManagedModel] {
+        get { model.managedModels }
+        set { model.managedModels = newValue }
+    }
+    var currentProvider: String {
+        get { model.currentProvider }
+        set { model.currentProvider = newValue }
+    }
+    var currentModelId: String {
+        get { model.currentModelId }
+        set { model.currentModelId = newValue }
+    }
+    var thinkingLevel: ThinkingLevel {
+        get { model.thinkingLevel }
+        set { model.thinkingLevel = newValue }
+    }
+    var userThinkingLevelPinned: Bool {
+        get { model.userThinkingLevelPinned }
+        set { model.userThinkingLevelPinned = newValue }
+    }
+    var currentModelSupportsImages: Bool { model.currentModelSupportsImages }
 
-    // P3.7: 知识库/记忆 (统一模型, 记忆 = source=session 条目)
-    @Published var knowledgeItems: [KnowledgeItem] = []
-    /// 主区切换: false = 会话视图, true = 知识面板 (侧栏 book 入口)。
-    @Published var showKnowledgePanel: Bool = false
+    // P9.1c: 知识域抽离至 KnowledgeStore, 同名 facade 转发
+    let knowledge = KnowledgeStore()
+    var knowledgeItems: [KnowledgeItem] {
+        get { knowledge.knowledgeItems }
+        set { knowledge.knowledgeItems = newValue }
+    }
+    var showKnowledgePanel: Bool {
+        get { knowledge.showKnowledgePanel }
+        set { knowledge.showKnowledgePanel = newValue }
+    }
+    var distillRunning: Bool {
+        get { knowledge.distillRunning }
+        set { knowledge.distillRunning = newValue }
+    }
+    var distillOutcome: (text: String, isError: Bool)? {
+        get { knowledge.distillOutcome }
+        set { knowledge.distillOutcome = newValue }
+    }
     /// 知识有改动但引擎尚未重启 (注入块仍旧, 需 Composer pill "重启引擎生效")。
+    /// 留守 ChatStore: 与 extensionsDirty 同在 restartEngine 清零 (P9.1c)。
     @Published var knowledgeDirty: Bool = false
 
-    // P3.6: 本地定时任务 (仅 App 运行期生效, launchd 后置)
-    @Published var scheduledTasks: [ScheduledTask] = []
-    @Published var showScheduledPanel: Bool = false
-    private var schedulerTimer: Timer?
-    private var lastSchedulerMinute: Int = 0
-    // P3.10: 等待型任务 fire 的回合追踪 (P4.0.2 会话化: 日志会话 sid -> 任务 id)
     private var bashWhitelist: Set<String> = []
-    private var fireTurnTask: [UUID: UUID] = [:]   // 在途 fire: 日志会话 -> 任务 id
-    private var fireDoneHit: Set<UUID> = []        // 本轮日志会话已命中 done 标记
-    /// 等待型任务完成标记 (HTML 注释: Markdown 渲染不可见, 客户端可解析)
-    static let doneMarker = "<!--task: done-->"
+
+    // P9.1b: 定时任务域抽离至 SchedulerService, 同名 facade 转发 (冒烟/视图零改动)
+    let scheduler = SchedulerService()
+    var scheduledTasks: [ScheduledTask] {
+        get { scheduler.scheduledTasks }
+        set { scheduler.scheduledTasks = newValue }
+    }
+    var showScheduledPanel: Bool {
+        get { scheduler.showScheduledPanel }
+        set { scheduler.showScheduledPanel = newValue }
+    }
+    /// 子 store 变更转发 (视图仍只订阅 ChatStore)
+    private var schedulerCancellable: AnyCancellable?
+    private var knowledgeCancellable: AnyCancellable?
+    private var modelCancellable: AnyCancellable?
+    private var captureCancellable: AnyCancellable?
+    private var backupCancellable: AnyCancellable?
 
     // MARK: - P3.11 扩展管理
     @Published var extensions: [ExtensionItem] = []
@@ -415,17 +457,28 @@ final class ChatStore: ObservableObject {
                 store.loadSetting(key: "completion_notifications", defaultValue: 1) == 1   // P4.1
             backupDirectory = store.loadSettingText(key: "backup_dir")   // P8-T28
             lastBackupSummary = store.loadSettingText(key: "backup_last")
-            captureHotkey = CaptureHotkey.load(persistence: store)   // P8-T27
+            capture.restore(CaptureHotkey.load(persistence: store))   // P8-T27 (P9.1d: 状态随 CaptureService)
         }
+        // P9.1b/c/d: 子 store 挂接 + objectWillChange 转发 (两阶段初始化完成后才可引用 self)
+        scheduler.attach(self)
+        knowledge.attach(self)
+        model.attach(self)
+        capture.attach(self)
+        backup.attach(self)
+        schedulerCancellable = scheduler.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }
+        knowledgeCancellable = knowledge.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }
+        modelCancellable = model.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }
+        captureCancellable = capture.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }
+        backupCancellable = backup.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }
         scanExtensions()   // P3.11: 扫描 + 快照托管扩展列表 (池实例 spawn 期加载)
         syncWorkspaceContext()   // 文件树扫描 (P3.4); cwd 在每次 send 前按实例下发
         // P3.7: 注入块快照 (池实例 spawn 期消费)
-        currentKnowledgeBlock = buildKnowledgeBlock()
+        knowledge.refreshSnapshot()
         // P7-M3: 物化产物先于探测拉目录 — probe 首次 spawn 带上 PI_CODING_AGENT_DIR,
         // get_available_models 只报自管模型 (顺序反了会先拉到全量目录)
         refreshPIConfig()
         probe.refreshCapabilities()   // P3.5: 模型/effort 上报 (pi 拉起 + get_state/models)
-        startScheduler()   // P3.6: 每秒 tick, 分钟对齐检查到期任务
+        scheduler.startScheduler()   // P3.6: 每秒 tick, 分钟对齐检查到期任务
 
         // WAL 落盘 + 杀在途 pi: 强杀/exit 不跑 deinit, 数据滞留 -wal 会在下次清库时全丢;
         // 在途回合的 pi 若不终止会变孤儿进程继续烧 LLM token
@@ -451,43 +504,22 @@ final class ChatStore: ObservableObject {
         persistence?.checkpoint()
     }
 
-    // MARK: - P8-T28 手动备份
+    // MARK: - P8-T28 手动备份 (P9.1d 起逻辑在 BackupService, 此处仅转发)
 
     /// 记忆备份目录 (Settings 选择时调用)。
     func setBackupDirectory(_ path: String) {
-        backupDirectory = path
-        persistence?.saveSettingText(key: "backup_dir", value: path)
+        backup.setBackupDirectory(path)
     }
 
-    /// 手动备份: checkpoint → db + attachments + sessions 直拷到
-    /// <destRoot>/mangox-backup-<时间戳>/; 结果摘要落 KV 供重启后展示。
-    /// 同步执行 (v1 数据量小; 附件库变大后再考虑后台化)。
+    /// 手动备份同步版 (冒烟 T28 直测; UI 走 performManualBackupInBackground)。
     @discardableResult
     func performManualBackup(destRoot: String, now: Date = .now) -> BackupOutcome {
-        guard !backupRunning else {
-            return BackupOutcome(errors: ["备份已在进行中"])
-        }
-        backupRunning = true
-        defer { backupRunning = false }
-        let outcome = BackupEngine.backup(
-            dbPath: persistence?.path ?? BackupEngine.defaultDBPath,
-            attachmentsDir: BackupEngine.defaultAttachmentsDir,
-            sessionsDir: BackupEngine.defaultSessionsDir,
-            destRoot: destRoot,
-            checkpoint: { [weak self] in self?.persistence?.checkpoint() },
-            now: now)
-        let summary: String
-        if outcome.ok {
-            let size = ByteCountFormatter.string(fromByteCount: outcome.totalBytes, countStyle: .file)
-            let f = DateFormatter()
-            f.dateFormat = "M/d HH:mm"
-            summary = "✓ \(f.string(from: now)) · \(size)"
-        } else {
-            summary = "✗ " + (outcome.errors.first ?? "未知失败")
-        }
-        lastBackupSummary = summary
-        persistence?.saveSettingText(key: "backup_last", value: summary)
-        return outcome
+        backup.performManualBackup(destRoot: destRoot, now: now)
+    }
+
+    /// P9-#11: UI 入口 — checkpoint 后在后台线程拷贝, 大附件库不再冻结主线程。
+    func performManualBackupInBackground(destRoot: String, now: Date = .now) {
+        backup.performManualBackupInBackground(destRoot: destRoot, now: now)
     }
 
     /// 冒烟: 持久层直访 (persistence 私有; T18 需直写 session_file 行模拟"有记忆")。
@@ -500,107 +532,31 @@ final class ChatStore: ObservableObject {
         }
     }
 
-    // MARK: - P8-T27 快速捕获 (⌃⌥X 即发即跑)
+    // MARK: - P8-T27 快速捕获 (P9.1d 起逻辑在 CaptureService, 此处仅转发)
 
     /// P8-T27: 捕获目标 —— 新会话(归项目) 或 追加到既有会话。
-    enum CaptureTarget: Equatable {
-        case newSession(projectId: UUID?)
-        case append(sessionId: UUID)
+    typealias CaptureTarget = CaptureService.CaptureTarget
 
-        /// KV 记忆编码 ("new:<pid|->" / "session:<sid>")
-        var memoRaw: String {
-            switch self {
-            case .newSession(let p): "new:\(p?.uuidString ?? "-")"
-            case .append(let s):     "session:\(s.uuidString)"
-            }
-        }
-
-        static func from(memoRaw raw: String?) -> CaptureTarget {
-            guard let raw else { return .newSession(projectId: nil) }
-            if raw.hasPrefix("session:"), let sid = UUID(uuidString: String(raw.dropFirst(8))) {
-                return .append(sessionId: sid)
-            }
-            if raw.hasPrefix("new:") {
-                let part = String(raw.dropFirst(4))
-                return .newSession(projectId: part == "-" ? nil : UUID(uuidString: part))
-            }
-            return .newSession(projectId: nil)
-        }
-    }
-
-    /// P8-T27: 捕获热键配置 (settings KV; 默认 ⌃⌥X)。
-    @Published private(set) var captureHotkey: CaptureHotkey = .fallback
+    let capture = CaptureService()
+    var captureHotkey: CaptureHotkey { capture.captureHotkey }
 
     /// P8-T27: 改键 (Settings 录制后调用; 重注册由 Settings 层调 Controller)。
     func setCaptureHotkey(_ hk: CaptureHotkey) {
-        captureHotkey = hk
-        hk.save(persistence: persistence)
+        capture.setCaptureHotkey(hk)
     }
 
     /// P8-T27: 上次捕获目标 (pill 记忆; KV 文本)。
-    var captureMemo: String? {
-        persistence?.loadSettingText(key: "capture_target")
-    }
+    var captureMemo: String? { capture.captureMemo }
 
     func setCaptureMemo(_ raw: String?) {
-        persistence?.saveSettingText(key: "capture_target", value: raw ?? "")
+        capture.setCaptureMemo(raw)
     }
 
-    /// 捕获条发送: 即发即跑 (无人值守关审批)。新会话 = Minimal 档强制 (全新上下文收窄风险面);
-    /// 追加 = 档位跟随该会话实例 (既有上下文不强改)。主窗口跟随选中目标会话。
+    /// 捕获条发送: 即发即跑 (无人值守关审批)。
     /// 返回目标会话 id; nil = 拒绝 (空文本/引擎缺失/并发满/目标无效, 原因走横幅)。
     @discardableResult
     func submitCapture(text: String, target: CaptureTarget) -> UUID? {
-        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return nil }
-        guard !engineMissing else {
-            setExtensionNotice("未找到 pi CLI, 捕获未发送", isError: true)
-            return nil
-        }
-        guard !atTurnLimit else {
-            setExtensionNotice("并发已达上限 (\(maxConcurrentTurns)), 捕获未发送", isError: true)
-            return nil
-        }
-        switch target {
-        case .newSession(let projectId):
-            // 建会话 (ensureConversationForSend 同构, 归属捕获时选定的项目)
-            let item = ConversationItem(title: Self.defaultConversationTitle)
-            if let pid = projectId, let g = projects.firstIndex(where: { $0.id == pid }) {
-                projects[g].items.insert(item, at: 0)
-                try? persistence?.insertChatSession(item, projectId: pid)
-            } else {
-                chats.insert(item, at: 0)
-                try? persistence?.insertChatSession(item)
-            }
-            let sid = item.id
-            let msg = ChatMessage(role: .user, content: .text(trimmed))
-            try? persistence?.appendMessageEvent(sessionId: sid, msg)   // 先落库再选中 (replay 能取到)
-            selectConversation(sid)
-            messages = [msg]
-            autoTitleIfNeeded(sid: sid, text: trimmed)
-            let cwd = projectId.flatMap { pid in projects.first(where: { $0.id == pid })?.path }
-            beginTurn(sid: sid, prompt: trimmed, ephemeral: false,
-                      cwd: cwd, unattended: true, modeOverride: .minimal)
-            return sid
-
-        case .append(let sid):
-            guard allConversations.contains(where: { $0.id == sid }) else {
-                setExtensionNotice("目标会话已不存在, 捕获未发送", isError: true)
-                return nil
-            }
-            guard !runningTurns.contains(sid) else {
-                setExtensionNotice("该会话回合在途, 捕获未发送", isError: true)
-                return nil
-            }
-            let msg = ChatMessage(role: .user, content: .text(trimmed))
-            try? persistence?.appendMessageEvent(sessionId: sid, msg)
-            selectConversation(sid)   // replay 带全量历史 + 新消息
-            autoTitleIfNeeded(sid: sid, text: trimmed)   // 空标题会话首次追加即命名
-            let cwd = projects.first(where: { $0.items.contains { $0.id == sid } })?.path
-            beginTurn(sid: sid, prompt: trimmed, ephemeral: false,
-                      cwd: cwd, unattended: true)   // 档位跟随会话实例, 不强改
-            return sid
-        }
+        capture.submitCapture(text: text, target: target)
     }
 
     // MARK: - Sidebar interactions
@@ -684,7 +640,7 @@ final class ChatStore: ObservableObject {
     }
 
     /// 从 SQLite 重放事件流; 库不可用时降级空态 (mock 演示数据已移除)。
-    private func replayMessages(for id: UUID) -> [ChatMessage] {
+    func replayMessages(for id: UUID) -> [ChatMessage] {   // P9.1b: internal — SchedulerService 交接文件重建
         guard let persistence else { return [] }
         return (try? persistence.loadMessages(sessionId: id)) ?? []
     }
@@ -847,7 +803,7 @@ final class ChatStore: ObservableObject {
 
     /// 取会话实例 (get-or-create): 新实例补发全套 spawn 期配置快照
     /// (审批策略/白名单/扩展/注入块/模型期望)。
-    private func transportFor(_ sid: UUID) -> any AgentTransport {
+    func transportFor(_ sid: UUID) -> any AgentTransport {   // P9.1c: internal — ModelStore.selectModel 回调
         if let injectedTransport { return injectedTransport }   // 冒烟: 全会话共用单实例 (串行基线)
         if let t = transports[sid] { return t }
         let t = Self.makeTransport()
@@ -855,9 +811,9 @@ final class ChatStore: ObservableObject {
         t.updateApprovalPolicy(askApproval: askApproval)
         t.updateBashWhitelist(bashWhitelist)
         t.updateExtensions(currentExtensionPaths)
-        t.updateKnowledgeContext(currentKnowledgeBlock)
+        t.updateKnowledgeContext(knowledge.currentKnowledgeBlock)
         t.updateMode(agentMode)   // P7-M4: 档位快照 (新实例补发)
-        t.updatePIConfig(currentPIConfig)   // P7-M3: 物化产物快照 (缺失 = 会话 spawn 读 ~/.pi/agent → 全量目录泄漏)
+        t.updatePIConfig(model.currentPIConfig)   // P7-M3: 物化产物快照 (缺失 = 会话 spawn 读 ~/.pi/agent → 全量目录泄漏)
         if !currentProvider.isEmpty {
             t.setModel(provider: currentProvider, modelId: currentModelId)
             t.setThinkingLevel(thinkingLevel.rawValue)
@@ -872,10 +828,21 @@ final class ChatStore: ObservableObject {
         transports[sid] = nil
         runningTurns.remove(sid)
         liveTurns[sid] = nil
-        fireTurnTask[sid] = nil
-        fireDoneHit.remove(sid)
+        scheduler.clearFireTracking(sid: sid)   // P9.1b: 在途 fire 追踪随会话逐出清理
         turnStartAt[sid] = nil
         approvalBlocked.remove(sid)   // P8-T26: 会话删除即清
+    }
+
+    /// P9.1c: 物化产物全池下发 (ModelStore.refreshPIConfig 回调)。
+    func pushPIConfig(_ output: ModelMaterializer.Output?) {
+        injectedTransport?.updatePIConfig(output)
+        capabilityProbe?.updatePIConfig(output)
+        transports.values.forEach { $0.updatePIConfig(output) }
+    }
+
+    /// P9.1c: 注入块全池下发 (KnowledgeStore.applyKnowledgeChange 回调)。
+    func pushKnowledgeContext(_ block: String?) {
+        transports.values.forEach { $0.updateKnowledgeContext(block) }
     }
 
     #if DEBUG
@@ -1166,7 +1133,7 @@ final class ChatStore: ObservableObject {
     }
 
     /// 首条消息自动命名: 仍是默认标题 → 取首行前 10 字符 (一次性, 之后用户可随意重命名)。
-    private func autoTitleIfNeeded(sid: UUID, text: String) {
+    func autoTitleIfNeeded(sid: UUID, text: String) {   // P9.1d: internal — CaptureService 回调
         guard let item = allConversations.first(where: { $0.id == sid }),
               item.title == Self.defaultConversationTitle else { return }
         let firstLine = text.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1179,9 +1146,9 @@ final class ChatStore: ObservableObject {
     /// spawn 期配置在 send 前逐实例下发 (会话绑定/cwd/审批策略)。
     /// modeOverride (P8-T27): 捕获轮强制 Minimal —— 只覆盖该会话实例,
     /// 全局 agentMode 不动 (主窗口其余会话档位不受污染)。
-    private func beginTurn(sid: UUID, prompt: String, ephemeral: Bool,
-                           cwd: String?, unattended: Bool, images: [OutgoingImage] = [],
-                           modeOverride: AgentMode? = nil) {
+    func beginTurn(sid: UUID, prompt: String, ephemeral: Bool,   // P9.1b: internal — SchedulerService fire 回调
+                   cwd: String?, unattended: Bool, images: [OutgoingImage] = [],
+                   modeOverride: AgentMode? = nil) {
         let t = transportFor(sid)
         if ephemeral {
             t.updateSessionBinding(nil)   // nil = --no-session (fire 轮次, P3.9 拍板)
@@ -1223,10 +1190,19 @@ final class ChatStore: ObservableObject {
         markLastSession()
     }
 
+    /// P9-#16: 核心数据路径统一落库入口 — 失败打日志 + 一次性横幅 (原 try? 全静默:
+    /// 磁盘满/库损坏时消息"只活到下次重放"而无任何信号)。其余 try? 调用点随 P9.1 拆分收敛。
+    func persistOrNotify(_ op: String, _ body: () throws -> Void) {   // P9.1d: internal — CaptureService 落库回调
+        do { try body() } catch {
+            print("[Persistence] \(op) 失败: \(error)")
+            setTurnLimitNotice("⚠️ 本地库写入失败 (\(op)), 数据可能未保存", isError: true)
+        }
+    }
+
     /// 落库: 显式 sid 优先 (回合归属), 缺省回落当前选中会话。
-    private func persistMessage(_ m: ChatMessage, sid: UUID? = nil) {
+    func persistMessage(_ m: ChatMessage, sid: UUID? = nil) {   // P9.1b: internal — SchedulerService fire 落库
         guard let sid = sid ?? selectedConversationId else { return }
-        try? persistence?.appendMessageEvent(sessionId: sid, m)
+        persistOrNotify("消息落库") { try persistence?.appendMessageEvent(sessionId: sid, m) }
         touchConversation(sid)   // P8.0: 消息落库即刷新侧栏活跃时间
     }
 
@@ -1286,290 +1262,154 @@ final class ChatStore: ObservableObject {
             messages.removeSubrange((lastUserIdx + 1)...)
         }
         guard case .text(let prompt) = messages[lastUserIdx].content else { return }
+        // P9-#2: 库侧同步截断 — 只删内存不删 events, 重启重放后旧回复会复活并与新回复并存
+        _ = try? persistence?.deleteEventsAfterLastUser(sessionId: sid)   // 返回 Int, 显式弃 (消 unused warning)
         beginTurn(sid: sid, prompt: prompt, ephemeral: false,
                   cwd: activeProjectPath, unattended: false)
     }
 
-    // MARK: - Model / effort (P3.5: 透传给 transport, 状态以对端上报为准)
+    // MARK: - Model / effort (P9.1c: 状态/菜单/物化在 ModelStore, 此处仅转发)
 
-    /// 菜单条目 = 每个模型 × 其支持的思考级别 (无级别的模型单条)。
-    /// 条目 id 含级别分量, 笛卡尔积下同模型多条不会 ForEach 撞 id。
-    var modelMenuEntries: [ModelMenuEntry] {
-        menuEntries(for: menuModels)
-    }
+    /// 菜单条目 (模型 × 思考级别)。
+    var modelMenuEntries: [ModelMenuEntry] { model.modelMenuEntries }
 
     /// 自定义条目对应的 AgentModelInfo (全级别)。
-    var customModelInfos: [AgentModelInfo] {
-        customModels.map(\.asAgentModelInfo)
-    }
+    var customModelInfos: [AgentModelInfo] { model.customModelInfos }
 
-    /// pi 目录条目 (排除被自定义条目覆盖者 —— P5.1 拍板: 同名 provider/id 时 custom 覆盖)。
-    var catalogModels: [AgentModelInfo] {
-        let overridden = Set(customModels.map(\.id))
-        return availableModels.filter { !overridden.contains("\($0.provider)/\($0.id)") }
-    }
+    /// pi 目录条目 (排除被自定义条目覆盖者)。
+    var catalogModels: [AgentModelInfo] { model.catalogModels }
 
-    /// 菜单全集 (P7-M3 拍板: 有自管模型时只显示 enabled 自管条目, pi 上报目录退出菜单;
-    /// 一个都没配时回落 pi 目录 + P5.1 自定义, 保证可用性)。
-    var menuModels: [AgentModelInfo] {
-        let managed = managedModels.filter(\.enabled).map(\.asAgentModelInfo)
-        if !managed.isEmpty { return managed }
-        return customModelInfos + catalogModels
-    }
+    /// 菜单全集 (自管优先, 回落 pi 目录 + 自定义)。
+    var menuModels: [AgentModelInfo] { model.menuModels }
 
     /// 指定模型集的菜单条目展开 (模型 × 级别)。
     func menuEntries(for models: [AgentModelInfo]) -> [ModelMenuEntry] {
-        models.flatMap { m in
-            let levels: [ThinkingLevel?] = m.supportedLevels.isEmpty ? [nil] : m.supportedLevels
-            return levels.map { ModelMenuEntry(id: "\(m.provider)/\(m.id)#\($0?.rawValue ?? "-")",
-                                               model: m, level: $0) }
-        }
+        model.menuEntries(for: models)
     }
 
     /// 菜单条目是否为当前选中组合。
     func isCurrent(_ entry: ModelMenuEntry) -> Bool {
-        entry.model.provider == currentProvider && entry.model.id == currentModelId &&
-        (entry.level == nil || entry.level == thinkingLevel)
+        model.isCurrent(entry)
     }
-
-    // MARK: - P5.1 自定义模型 (菜单自主, 运行时借壳)
 
     /// pi 目录中存在的 provider 集合 (从能力上报推导)。
-    var validProviders: Set<String> {
-        Set(availableModels.map(\.provider))
-    }
+    var validProviders: Set<String> { model.validProviders }
 
     /// provider 校验: 上报未到达时不做拦截 (无法判定), 否则必须命中目录。
     func isValidProvider(_ provider: String) -> Bool {
-        let p = provider.trimmingCharacters(in: .whitespaces)
-        guard !p.isEmpty else { return false }
-        return availableModels.isEmpty || validProviders.contains(p)
+        model.isValidProvider(provider)
     }
 
     /// 自定义条目显示名 (药丸优先显示自定义 label; 设计 §3.3 拍板)。
     func customLabel(provider: String, modelId: String) -> String? {
-        if let m = managedModels.first(where: { $0.provider == provider && $0.modelId == modelId }) {
-            return m.displayNameOrId   // P7-M3: 自管条目优先 (含 legacy 迁移)
-        }
-        return customModels.first { $0.provider == provider && $0.modelId == modelId }?.displayName
+        model.customLabel(provider: provider, modelId: modelId)
     }
 
     /// 当前选中模型的显示名: 自定义 label 优先, 回落 id 末段。
-    var currentModelDisplayName: String {
-        if let label = customLabel(provider: currentProvider, modelId: currentModelId) {
-            return label
-        }
-        if !currentModelId.isEmpty {
-            return currentModelId.components(separatedBy: "/").last ?? currentModelId
-        }
-        return "model"
-    }
+    var currentModelDisplayName: String { model.currentModelDisplayName }
 
     /// 新增/覆盖自定义模型 (落库 + 刷菜单)。返回 false = provider 不在 pi 目录中。
     @discardableResult
     func addCustomModel(provider: String, modelId: String, label: String = "") -> Bool {
-        let p = provider.trimmingCharacters(in: .whitespaces)
-        let m = modelId.trimmingCharacters(in: .whitespaces)
-        guard isValidProvider(p), !m.isEmpty else { return false }
-        let item = CustomModel(provider: p, modelId: m,
-                               label: label.trimmingCharacters(in: .whitespaces))
-        try? persistence?.upsertCustomModel(item)
-        if let idx = customModels.firstIndex(where: { $0.id == item.id }) {
-            customModels[idx] = item          // 覆盖: label 更新
-        } else {
-            customModels.insert(item, at: 0)
-        }
-        return true
+        model.addCustomModel(provider: provider, modelId: modelId, label: label)
     }
 
     /// 删除自定义模型 (落库 + 刷菜单; 当前选中项不强制切回, 仅不再出现在菜单)。
     func removeCustomModel(_ model: CustomModel) {
-        try? persistence?.deleteCustomModel(provider: model.provider, modelId: model.modelId)
-        customModels.removeAll { $0.id == model.id }
+        self.model.removeCustomModel(model)
     }
-
-    // MARK: - P7-M3 模型自管 (settings 页真源 + 物化推送)
 
     /// 物化产物下发 (探测实例 + 注入实例 + 全部会话实例; 模型变更/启动时调用)。
     func refreshPIConfig() {
-        let output: ModelMaterializer.Output? = managedModels.isEmpty ? nil :
-            ModelMaterializer.materialize(managedModels, keyProvider: { [weak self] account in
-                self?.modelKeyStore.key(account: account)
-            })
-        currentPIConfig = output
-        injectedTransport?.updatePIConfig(output)
-        capabilityProbe?.updatePIConfig(output)
-        transports.values.forEach { $0.updatePIConfig(output) }
+        model.refreshPIConfig()
     }
 
     /// 新增/更新自管模型 (落库 + 刷物化)。
     func upsertManagedModel(_ m: ManagedModel) {
-        try? persistence?.upsertManagedModel(m)
-        if let idx = managedModels.firstIndex(where: { $0.id == m.id }) {
-            managedModels[idx] = m
-        } else {
-            managedModels.insert(m, at: 0)
-        }
-        refreshPIConfig()
+        model.upsertManagedModel(m)
     }
 
     /// 删除自管模型 (落库 + 刷物化)。
     func deleteManagedModel(_ m: ManagedModel) {
-        try? persistence?.deleteManagedModel(provider: m.provider, modelId: m.modelId)
-        managedModels.removeAll { $0.id == m.id }
-        refreshPIConfig()
+        model.deleteManagedModel(m)
     }
 
     /// 启停开关 (enabled 决定进不进物化清单)。
     func setManagedModelEnabled(_ id: String, _ enabled: Bool) {
-        guard var m = managedModels.first(where: { $0.id == id }) else { return }
-        m.enabled = enabled
-        upsertManagedModel(m)
+        model.setManagedModelEnabled(id, enabled)
     }
 
     /// provider 级 key 存取 (Keychain; account = provider, 物化进 auth.json)。
     func setProviderKey(_ key: String, provider: String) {
-        try? modelKeyStore.setKey(key, account: provider)
-        refreshPIConfig()
+        model.setProviderKey(key, provider: provider)
     }
 
     func providerKey(provider: String) -> String? {
-        modelKeyStore.key(account: provider)
+        model.providerKey(provider: provider)
     }
 
     /// 选中自管模型 (settings 行"启用"; thinking 级别放开全级别, pi 侧 clamp 收敛)。
     func selectManagedModel(_ m: ManagedModel) {
-        selectModel(m.asAgentModelInfo, level: nil)
+        model.selectManagedModel(m)
     }
 
     /// 选中组合: 全局期望更新 (新实例由 transportFor 补发) + 选中会话实例即时下发
     /// (pi 侧各自动回读 get_state 同步 UI; P4.0.2 spawn 期参数随该会话下回合生效)。
     func selectModel(_ model: AgentModelInfo, level: ThinkingLevel?) {
-        currentProvider = model.provider
-        currentModelId = model.id
-        userThinkingLevelPinned = true   // 期望钉死: 探测上报不再回写级别
-        if let level { thinkingLevel = level }
-        guard let sid = selectedConversationId else { return }
-        let t = transportFor(sid)
-        t.setModel(provider: model.provider, modelId: model.id)
-        if let level { t.setThinkingLevel(level.rawValue) }
+        self.model.selectModel(model, level: level)
     }
 
-    // MARK: - Knowledge (P3.7 知识库/记忆, 设计见 docs §3.7)
+    // MARK: - Knowledge (P3.7; P9.1c 起状态与逻辑在 KnowledgeStore, 此处仅转发)
 
-    /// 当前生效条数 (已审核 + 启用 + 全局/当前 project)——Composer pill 显示用。
-    var activeKnowledgeCount: Int {
-        let pid = activeProject?.id
-        return knowledgeItems.filter { item in
-            guard item.enabled, item.status == .active else { return false }
-            return item.scope == .global || item.projectId == pid
-        }.count
-    }
+    /// 当前生效条数 (Composer pill 显示用)。
+    var activeKnowledgeCount: Int { knowledge.activeKnowledgeCount }
 
     /// 提炼候选 (待审核)。
-    var pendingKnowledge: [KnowledgeItem] {
-        knowledgeItems.filter { $0.status == .pending }
-    }
+    var pendingKnowledge: [KnowledgeItem] { knowledge.pendingKnowledge }
 
-    /// 组装注入块: 全局 + 当前 project 的启用条目, 带 token 预算 (单条截断/总量丢弃)。
-    /// pending 候选永不注入 (审核闸门)。nil = 无可注入内容。
+    /// 组装注入块 (nil = 无可注入内容)。
     func buildKnowledgeBlock() -> String? {
-        let pid = activeProject?.id
-        let enabled = knowledgeItems.filter { item in
-            guard item.enabled, item.status == .active else { return false }
-            return item.scope == .global || item.projectId == pid
-        }
-        guard !enabled.isEmpty else { return nil }
-        // 单条上限截断
-        let clipped = enabled.map { item -> KnowledgeItem in
-            var c = item
-            if c.content.count > Tune.knowledgeItemCharLimit {
-                c.content = String(c.content.prefix(Tune.knowledgeItemCharLimit))
-                    + "\n…(超出单条上限已截断)"
-            }
-            return c
-        }
-        // 总量预算: 优先保留最新 (updatedAt 降序), 超限的条目直接不入块
-        var kept: [KnowledgeItem] = []
-        var total = 0
-        for item in clipped.sorted(by: { $0.updatedAt > $1.updatedAt }) {
-            let cost = item.title.count + item.content.count
-            guard total + cost <= Tune.knowledgeTotalCharLimit else { continue }
-            kept.append(item)
-            total += cost
-        }
-        guard !kept.isEmpty else { return nil }
-        var lines = ["以下是 MangoX 客户端注入的知识库/记忆, 回答时请参考:"]
-        let globals = kept.filter { $0.scope == .global }
-        let projectScoped = kept.filter { $0.scope == .project }
-        if !globals.isEmpty {
-            lines.append("\n## 全局")
-            globals.forEach { lines.append("- \($0.title): \($0.content)") }
-        }
-        if !projectScoped.isEmpty {
-            lines.append("\n## 项目")
-            projectScoped.forEach { lines.append("- \($0.title): \($0.content)") }
-        }
-        return lines.joined(separator: "\n")
+        knowledge.buildKnowledgeBlock()
     }
 
     func addKnowledge(title: String, content: String, scope: KnowledgeScope, projectId: UUID?) {
-        let item = KnowledgeItem(id: UUID(), scope: scope,
-                                 projectId: scope == .project ? projectId : nil,
-                                 title: title, content: content, source: .manual)
-        knowledgeItems.insert(item, at: 0)
-        try? persistence?.upsertKnowledge(item)
-        applyKnowledgeChange()
+        knowledge.addKnowledge(title: title, content: content, scope: scope, projectId: projectId)
     }
 
     func updateKnowledge(_ item: KnowledgeItem) {
-        guard let idx = knowledgeItems.firstIndex(where: { $0.id == item.id }) else { return }
-        knowledgeItems[idx] = item
-        try? persistence?.upsertKnowledge(item)
-        applyKnowledgeChange()
+        knowledge.updateKnowledge(item)
     }
 
     func deleteKnowledge(id: UUID) {
-        knowledgeItems.removeAll { $0.id == id }
-        try? persistence?.deleteKnowledge(id: id)
-        applyKnowledgeChange()
+        knowledge.deleteKnowledge(id: id)
     }
 
     func toggleKnowledge(id: UUID) {
-        guard let idx = knowledgeItems.firstIndex(where: { $0.id == id }) else { return }
-        knowledgeItems[idx].enabled.toggle()
-        knowledgeItems[idx].updatedAt = .now
-        try? persistence?.upsertKnowledge(knowledgeItems[idx])
-        applyKnowledgeChange()
+        knowledge.toggleKnowledge(id: id)
     }
 
     /// 会话内"保存为记忆": 文本沉淀为全局知识条目, 带 origin_session_id 溯源。
     func saveAsMemory(_ text: String, sessionId: UUID?) {
-        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return }
-        let title = String(trimmed.split(separator: "\n").first?.prefix(24) ?? "记忆")
-        let item = KnowledgeItem(id: UUID(), scope: .global, projectId: nil,
-                                 title: String(title), content: trimmed,
-                                 source: .session, originSessionId: sessionId)
-        knowledgeItems.insert(item, at: 0)
-        try? persistence?.upsertKnowledge(item)
-        applyKnowledgeChange()
+        knowledge.saveAsMemory(text, sessionId: sessionId)
     }
 
-    // MARK: - Memory distillation (P3.7 记忆自动提炼; v1 人工触发, 自动门槛留 v1.2)
-
-    @Published var distillRunning: Bool = false
-    /// 提炼结果提示 (Composer 上方横幅, 8s 自清)。isError = 红/绿两种横幅。
-    @Published var distillOutcome: (text: String, isError: Bool)?
-    private var distillOutcomeTask: Task<Void, Never>?
-
     func setDistillOutcome(_ text: String, isError: Bool) {
-        distillOutcome = (text, isError)
-        distillOutcomeTask?.cancel()
-        distillOutcomeTask = Task { @MainActor in
-            try? await Task.sleep(nanoseconds: 8_000_000_000)
-            if !Task.isCancelled { distillOutcome = nil }
-        }
+        knowledge.setDistillOutcome(text, isError: isError)
+    }
+
+    /// 手动触发: 提炼当前会话 → 候选落 pending (审核在知识面板)。
+    func distillMemoryFromCurrentSession() {
+        knowledge.distillMemoryFromCurrentSession()
+    }
+
+    /// 审核采纳: pending → active。
+    func adoptKnowledge(id: UUID) {
+        knowledge.adoptKnowledge(id: id)
+    }
+
+    /// 审核丢弃。
+    func discardKnowledge(id: UUID) {
+        knowledge.discardKnowledge(id: id)
     }
 
     /// 打开知识面板 (面板互斥, 与 toggle 同语言但强制打开)。
@@ -1578,120 +1418,6 @@ final class ChatStore: ObservableObject {
         showScheduledPanel = false
         showExtensionsPanel = false
         showSettingsPanel = false
-    }
-
-    /// 提炼模板 (业务语义 = TODO 占位脚手架: 边界示例与反例措辞待首个真实提炼轮后人工打磨)。
-    private static func buildDistillPrompt(material: String, existing: [KnowledgeItem]) -> String {
-        let list = existing.isEmpty ? "无" :
-            existing.map { "- [\( $0.scope == .global ? "全局" : "项目")] \($0.title)" }.joined(separator: "\n")
-        return """
-        【任务: 记忆提炼】
-        下面给你一段人机对话记录与现有知识条目清单。请判断对话中是否出现了值得跨会话长期记住的信息, 只输出 JSON, 不要输出任何其他文字, 不要使用任何工具。
-
-        值得记录的只有三类:
-        1. 环境/技术栈事实 —— 机器、项目结构、服务地址、数据规模等稳定事实
-        2. 用户偏好与约定 —— 沟通/代码/流程上用户明确表达的偏好与规矩
-        3. 决策及理由 —— 对话中拍板的技术或业务决策 (记结论和为什么)
-
-        不要记录: 一次性任务的过程细节、代码片段本身、未验证的推测、与现有条目重复的内容 (见下方清单)。
-        TODO(人工打磨): 补充边界示例与反例, 待首轮真实提炼后定稿。
-
-        【现有知识条目】
-        \(list)
-
-        【对话记录】
-        \(material)
-
-        【输出格式】
-        {"items": [{"title": "简短标题", "content": "事实本体, 精炼成独立可读的一句话或几句话", "scope": "global", "reason": "为什么值得记"}]}
-        scope 只有 "global" 或 "project" 两种。没有值得记录的内容时输出 {"items": []} —— 宁可空, 不要凑数。
-        """
-    }
-
-    /// 手动触发: 提炼当前会话 → 候选落 pending (审核在知识面板)。
-    /// 失败静默 (解析失败/超时直接放弃, 不打扰)。
-    func distillMemoryFromCurrentSession() {
-        guard !distillRunning, !isStreaming else { return }
-        guard let sid = selectedConversationId else { return }
-        // 材料: 最近 12 条 text 消息 (user+assistant), 总量截断
-        var texts = replayMessages(for: sid).compactMap { msg -> String? in
-            guard case .text(let s) = msg.content, !s.isEmpty else { return nil }
-            return "\(msg.role == .user ? "用户" : "助手"): \(s)"
-        }
-        guard texts.count > 2 else { return }   // 太短不值得提炼
-        texts = Array(texts.suffix(12))
-        var material = texts.joined(separator: "\n\n")
-        if material.count > Tune.distillMaterialCharLimit {
-            material = "…(更早的已省略)\n" + String(material.suffix(Tune.distillMaterialCharLimit))
-        }
-        let existing = knowledgeItems.filter { $0.status == .active }
-        let prompt = Self.buildDistillPrompt(material: material, existing: existing)
-        // 归属 = 会话所在的项目分组 (selectedProjectId 只在点项目/建会话时设置,
-        // 从侧栏直接点开会话不同步它——用会话反查才是 source of truth)
-        let projectId = projects.first(where: { $0.items.contains(where: { $0.id == sid }) })?.id
-        let model = currentProvider.isEmpty ? nil : "\(currentProvider)/\(currentModelId)"
-        let thinking = thinkingLevel.rawValue
-        distillRunning = true
-        MemoryDistiller.shared.run(prompt: prompt, model: model, thinking: thinking) { [weak self] raw in
-            guard let self else { return }
-            self.distillRunning = false
-            guard let raw else {
-                self.setDistillOutcome("提炼失败: 超时或引擎无响应 (见控制台日志)", isError: true)
-                return
-            }
-            print("[MemoryDistiller] 原始输出 \(raw.count) 字符: \(raw.prefix(400))")
-            let candidates = MemoryDistiller.parseOutput(raw)
-            guard !candidates.isEmpty else {
-                // 区分"模型认为没什么可记"与"输出解析失败" (都有 items 字段 = 正常应答)
-                if raw.contains("\"items\"") {
-                    self.setDistillOutcome("提炼完成: 本轮没有值得沉淀的内容", isError: false)
-                } else {
-                    self.setDistillOutcome("提炼失败: 输出无法解析 (见控制台日志)", isError: true)
-                }
-                return
-            }
-            self.addPendingKnowledge(candidates, sessionId: sid, projectId: projectId)
-            self.setDistillOutcome("提炼完成: \(candidates.count) 条候选待审核", isError: false)
-        }
-    }
-
-    /// 候选落 pending: 插入列表 + 落库。注入块未变 (pending 不注入) → 不标 dirty。
-    /// 净化: scope=project 但无项目归属 → 降级 global (绝不建"未知项目"条目)。
-    private func addPendingKnowledge(_ candidates: [MemoryDistiller.Candidate],
-                                     sessionId: UUID, projectId: UUID?) {
-        for c in candidates {
-            let scope: KnowledgeScope = c.scope == .project && projectId != nil ? .project : .global
-            let item = KnowledgeItem(id: UUID(), scope: scope,
-                                     projectId: scope == .project ? projectId : nil,
-                                     title: c.title, content: c.content,
-                                     source: .session, originSessionId: sessionId,
-                                     enabled: true, status: .pending, note: c.reason)
-            knowledgeItems.insert(item, at: 0)
-            try? persistence?.upsertKnowledge(item)
-        }
-    }
-
-    /// 审核采纳: pending → active, 清 note, 注入块变更 → 标 dirty (重启引擎生效)。
-    func adoptKnowledge(id: UUID) {
-        guard let idx = knowledgeItems.firstIndex(where: { $0.id == id }),
-              knowledgeItems[idx].status == .pending else { return }
-        knowledgeItems[idx].status = .active
-        knowledgeItems[idx].note = nil
-        knowledgeItems[idx].updatedAt = .now
-        try? persistence?.upsertKnowledge(knowledgeItems[idx])
-        applyKnowledgeChange()
-    }
-
-    /// 审核丢弃。
-    func discardKnowledge(id: UUID) {
-        deleteKnowledge(id: id)
-    }
-
-    /// 知识变动后: 快照注入块 + 池内实例同步下发 + 标记引擎待重启。
-    private func applyKnowledgeChange() {
-        currentKnowledgeBlock = buildKnowledgeBlock()
-        transports.values.forEach { $0.updateKnowledgeContext(currentKnowledgeBlock) }
-        knowledgeDirty = true
     }
 
     /// Composer pill "重启引擎生效": 重启池内全部实例使最新注入块生效 (丢进程内对话记忆, 用户显式触发)。
@@ -1726,246 +1452,51 @@ final class ChatStore: ObservableObject {
         if showScheduledPanel { showKnowledgePanel = false; showSettingsPanel = false }
     }
 
+    // MARK: - Scheduled (P3.6 本地定时任务; P9.1b 起由 SchedulerService 承载, 此处仅转发)
+
     func addScheduled(name: String, prompt: String, cron: String,
                       projectId: UUID?, continuous: Bool = false) {
-        let t = ScheduledTask(id: UUID(), name: name, prompt: prompt, cron: cron,
-                              projectId: projectId, continuous: continuous)
-        scheduledTasks.append(t)
-        try? persistence?.upsertScheduled(t)
+        scheduler.addScheduled(name: name, prompt: prompt, cron: cron,
+                               projectId: projectId, continuous: continuous)
     }
 
     func updateScheduled(_ t: ScheduledTask) {
-        guard let idx = scheduledTasks.firstIndex(where: { $0.id == t.id }) else { return }
-        scheduledTasks[idx] = t
-        try? persistence?.upsertScheduled(t)
+        scheduler.updateScheduled(t)
     }
 
     /// 删除任务; deleteSessions = 连带删除日志会话 (开放问题 12: 默认保留, 用户可选删)。
     func deleteScheduled(id: UUID, deleteSessions: Bool = false) {
-        let sessionIds = scheduledTasks.first { $0.id == id }?.logSessionId.map { [$0] } ?? []
-        scheduledTasks.removeAll { $0.id == id }
-        try? persistence?.deleteScheduled(id: id)
-        if deleteSessions {
-            for sid in sessionIds { deleteConversation(sid) }
-        }
+        scheduler.deleteScheduled(id: id, deleteSessions: deleteSessions)
     }
 
     func toggleScheduled(id: UUID) {
-        guard let idx = scheduledTasks.firstIndex(where: { $0.id == id }) else { return }
-        scheduledTasks[idx].enabled.toggle()
-        try? persistence?.upsertScheduled(scheduledTasks[idx])
+        scheduler.toggleScheduled(id: id)
     }
 
-    /// 调度器: 每秒 tick, 分钟变化时才检查 (对齐 cron 的最小粒度; 睡眠唤醒后靠分钟差兜底)。
-    private func startScheduler() {
-        schedulerTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
-            MainActor.assumeIsolated { self?.schedulerTick() }
-        }
-    }
-
-    private func schedulerTick() {
-        let now = Date()
-        let minute = Int(now.timeIntervalSince1970 / 60)
-        guard minute != lastSchedulerMinute else { return }
-        lastSchedulerMinute = minute
-        for task in scheduledTasks where task.enabled {
-            guard let cron = task.cronExpr, cron.matches(now) else { continue }
-            runScheduledFire(task, at: now)
-        }
-    }
-
-    /// 到点投递 (P3.9 单日志会话): 任务的全部运行追加进同一个日志会话 (首次 fire 建立)。
-    /// P4.0.2: 完全后台化 —— 不劫持选中会话/UI, 直接往日志会话投递回合;
-    /// 该任务日志会话已有回合在途则跳过 (cron 到期不重排)。
-    /// 持续模式 (continuous): 注入交接文件 (工作日志, agent 写用户可改) + 近期运行摘录,
-    /// 并指令 agent 把关键进展写回交接文件——连续性靠文件携带, 磁盘为准零缓存。
+    /// 到点投递 (P3.9): 全链路在 SchedulerService, ChatStore 转发 (冒烟直访入口)。
     func runScheduledFire(_ task: ScheduledTask, at now: Date = Date()) {
-        if let pid = task.projectId {
-            guard projects.contains(where: { $0.id == pid }) else {
-                recordFireSkip(task, at: now, reason: "项目已删除")
-                return
-            }
-        }
-        // 定位/建立日志会话 (有项目归 project, 无项目落平铺 Chats)
-        let fmt = DateFormatter()
-        fmt.dateFormat = "HH:mm"
-        var logId = task.logSessionId
-        let logExists = logId.map { id in allConversations.contains(where: { $0.id == id }) } ?? false
-        if !logExists {
-            let item = ConversationItem(title: task.name)
-            if let pid = task.projectId {
-                if let g = projects.firstIndex(where: { $0.id == pid }) {
-                    projects[g].items.insert(item, at: 0)
-                }
-                try? persistence?.insertChatSession(item, projectId: pid)
-            } else {
-                chats.insert(item, at: 0)
-                try? persistence?.insertChatSession(item)
-            }
-            logId = item.id
-        }
-        guard let logId else { return }
-        guard !runningTurns.contains(logId) else {
-            recordFireSkip(task, at: now, reason: "该任务回合在途")
-            return
-        }
-        // P4.0.4: 并发已满 → 落痕跳过 (与"冲突跳过"同语义, cron 到期不重排)
-        if runningTurns.count >= maxConcurrentTurns {
-            recordFireSkip(task, at: now, reason: "并发已满 (\(maxConcurrentTurns))")
-            return
-        }
-        // 时间线锚点 + prompt 落库 (用户正看着日志会话则同步上屏)
-        let viewing = selectedConversationId == logId
-        let sep = ChatMessage(role: .user, content: .text("── \(fmt.string(from: now)) 运行 ──"))
-        persistMessage(sep, sid: logId)
-        if viewing { messages.append(sep) }
-        let prompt = buildScheduledPrompt(task)
-        let promptMsg = ChatMessage(role: .user, content: .text(prompt))
-        persistMessage(promptMsg, sid: logId)
-        if viewing { messages.append(promptMsg) }
-        // fire 是独立轮次: ephemeral (--no-session), 连续性靠交接文件 (P3.9 拍板);
-        // cwd 用任务项目路径 (无项目回落 home); unattended 关审批 (弹卡 = 死锁)
-        let cwd = task.projectId.flatMap { pid in projects.first(where: { $0.id == pid })?.path }
-        beginTurn(sid: logId, prompt: prompt, ephemeral: true,
-                  cwd: cwd, unattended: task.unattended)
-        if let c = task.condition, !c.isEmpty {
-            fireTurnTask[logId] = task.id   // 等待型: 本回合结束扫 done 标记
-        }
-        if let idx = scheduledTasks.firstIndex(where: { $0.id == task.id }) {
-            scheduledTasks[idx].lastRunAt = now
-            scheduledTasks[idx].logSessionId = logId
-            scheduledTasks[idx].runCount += 1   // P3.10: 执行次数
-            try? persistence?.upsertScheduled(scheduledTasks[idx])
-        }
+        scheduler.runScheduledFire(task, at: now)
     }
 
-    /// fire 被跳过时往日志会话追加一条时间线记录 (只落库, 不动 UI 状态——
-    /// 跳过发生在别的回合进行中, 不能打断当前会话)。
-    /// 日志会话尚未建立则放弃: 纯跳过不值得为它建会话, 任务真正跑起来时自然会建。
-    private func recordFireSkip(_ task: ScheduledTask, at now: Date, reason: String) {
-        guard let logId = task.logSessionId,
-              allConversations.contains(where: { $0.id == logId }) else { return }
-        let fmt = DateFormatter()
-        fmt.dateFormat = "HH:mm"
-        let note = ChatMessage(role: .user,
-                               content: .text("── \(fmt.string(from: now)) 因冲突跳过 (\(reason)) ──"))
-        try? persistence?.appendMessageEvent(sessionId: logId, note)
-    }
-
-    /// 交接文件路径: 项目任务 → <项目>/.mangox/tasks/<taskId>.md (进文件树/可 @ 引用);
-    /// 无项目任务 → ~/.mangox/task-memory/<taskId>.md。
+    /// 交接文件路径 (ScheduledView 经 facade 访问)。
     func handoffPath(for task: ScheduledTask) -> String {
-        let dir: String
-        if let pid = task.projectId, let p = projects.first(where: { $0.id == pid })?.path {
-            dir = p + "/.mangox/tasks"
-        } else {
-            dir = NSHomeDirectory() + "/.mangox/task-memory"
-        }
-        return dir + "/\(task.id.uuidString).md"
+        scheduler.handoffPath(for: task)
     }
 
-    /// 读交接文件 (磁盘为准, 零缓存)。返回 nil = 文件不存在。
+    /// 读交接文件 (ScheduledView 经 facade 访问)。
     func readHandoff(for task: ScheduledTask) -> (content: String, updatedAt: Date?)? {
-        let path = handoffPath(for: task)
-        guard let attr = try? FileManager.default.attributesOfItem(atPath: path) else { return nil }
-        guard let content = try? String(contentsOfFile: path, encoding: .utf8) else { return nil }
-        return (content, attr[.modificationDate] as? Date)
+        scheduler.readHandoff(for: task)
     }
 
-    /// 写交接文件 (编辑器保存 / 兜底重建共用)。
+    /// 写交接文件 (ScheduledView 经 facade 访问)。
     @discardableResult
     func saveHandoff(for task: ScheduledTask, content: String) -> Bool {
-        let path = handoffPath(for: task)
-        let dir = (path as NSString).deletingLastPathComponent
-        try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
-        return (try? content.write(toFile: path, atomically: true, encoding: .utf8)) != nil
+        scheduler.saveHandoff(for: task, content: content)
     }
 
-    /// P3.10 等待型 prompt: 两分支协议 (未成立→一句观察轻检查; 成立→查防重复记录→执行动作→done 标记)。
-    /// 轻检查轮不注入近期摘录 (token 经济); 交接文件保持极短且必注入 (含"已触发"防重复记录)。
-    private func buildWaitingPrompt(_ task: ScheduledTask, condition: String) -> String {
-        var sections: [String] = []
-        sections.append("""
-        【等待任务 · 本轮检查】
-        触发条件: \(condition)
-        要求: 用工具实际核实当前状态, 不要凭此前记忆推断; 不确定是否成立时按"未成立"处理。
-        - 若条件未成立: 只用一句话报告观察结果 (如"截至当前尚未…"), 不要执行任何其他动作。
-        - 若条件成立: 先读下方交接文件确认此前未触发过, 然后执行【触发后动作】, 完成后在回复最后单独一行输出: \(Self.doneMarker)
-        """)
-        var handoff = readHandoff(for: task)?.content
-        if (handoff ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            if let rebuilt = rebuildHandoff(from: task.logSessionId) {
-                saveHandoff(for: task, content: rebuilt)
-                handoff = rebuilt
-            }
-        }
-        if let h = handoff?.trimmingCharacters(in: .whitespacesAndNewlines), !h.isEmpty {
-            sections.append("【交接文件】\n\(h)")
-        }
-        sections.append("【触发后动作】\n\(task.prompt)")
-        return sections.joined(separator: "\n\n")
-    }
-
-    /// 持续模式 prompt 组装 (P3.9): 交接文件全文 (长期记忆) + 近期运行摘录 (短期上下文)
-    /// + 本次指令 + 写回指令。文件丢失时从日志会话 (run-log) 静默重建。
-    /// 等待型 (condition 非空) 走等待协议; 普通 prompt 原样返回。
-    private func buildScheduledPrompt(_ task: ScheduledTask) -> String {
-        if let c = task.condition, !c.isEmpty {
-            return buildWaitingPrompt(task, condition: c)
-        }
-        guard task.continuous else { return task.prompt }
-        var sections: [String] = []
-        // 长期记忆: 交接文件; 丢失且有日志 → 从 run-log 静默重建
-        var handoff = readHandoff(for: task)?.content
-        if (handoff ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            if let rebuilt = rebuildHandoff(from: task.logSessionId) {
-                saveHandoff(for: task, content: rebuilt)
-                handoff = rebuilt
-            }
-        }
-        if let h = handoff?.trimmingCharacters(in: .whitespacesAndNewlines), !h.isEmpty {
-            sections.append("【持续任务 · 工作日志】\n\(h)")
-        }
-        // 短期上下文: 最近一次运行的产出原文 (取最后一条 assistant text, 截取上限)
-        if let logId = task.logSessionId {
-            let tail = replayMessages(for: logId).compactMap { msg -> String? in
-                guard case .text(let s) = msg.content, !s.isEmpty,
-                      msg.role == .assistant else { return nil }
-                return s
-            }.last
-            if var t = tail {
-                if t.count > Tune.scheduleHistoryCharLimit {
-                    t = "…(更早的已省略)\n" + t.suffix(Tune.scheduleHistoryCharLimit)
-                }
-                sections.append("【近期运行摘录】\n\(t)")
-            }
-        }
-        sections.append("【本次指令】\n\(task.prompt)")
-        return sections.joined(separator: "\n\n") +
-            "\n\n请在了解此前执行情况的基础上继续本次任务, 并在结束后把关键进展、当前状态与待办更新写入交接文件: \(handoffPath(for: task))"
-    }
-
-    /// run-log 兜底: 从日志会话的 text 消息重建交接文件内容 (过滤分隔标记, 截取上限)。
-    /// 指令侧只取【本次指令】段 (历史注入模板不入档, 防层级滚雪球)。
-    private func rebuildHandoff(from logId: UUID?) -> String? {
-        guard let logId else { return nil }
-        let lines = replayMessages(for: logId).compactMap { msg -> String? in
-            guard case .text(let s) = msg.content, !s.isEmpty,
-                  !s.hasPrefix("──") else { return nil }   // 过滤运行分隔
-            if msg.role == .user {
-                if let r = s.range(of: "【本次指令】\n") {
-                    return "[指令] " + s[r.upperBound...]
-                }
-                return nil   // 注入模板全文不入档
-            }
-            return "[产出] \(s)"
-        }
-        guard !lines.isEmpty else { return nil }
-        var record = lines.joined(separator: "\n")
-        if record.count > Tune.scheduleHistoryCharLimit * 2 {
-            record = "…(更早的已省略)\n" + record.suffix(Tune.scheduleHistoryCharLimit * 2)
-        }
-        return record
+    /// P3.10: 侧栏任务日志会话标志 (定时任务 clock / 哨兵任务雷达)。
+    func scheduledBadge(for sessionId: UUID) -> String? {
+        scheduler.scheduledBadge(for: sessionId)
     }
 
     // MARK: - Tool approval (转发给 transport)
@@ -2007,16 +1538,6 @@ final class ChatStore: ObservableObject {
     private func currentToolCard(_ toolId: UUID) -> ToolCall? {
         for msg in messages {
             if case .tool(let t) = msg.content, t.id == toolId { return t }
-        }
-        return nil
-    }
-
-    /// P3.10: 侧栏任务日志会话标志 (定时任务 clock / 哨兵任务雷达)
-    func scheduledBadge(for sessionId: UUID) -> String? {
-        for t in scheduledTasks where t.logSessionId == sessionId {
-            return (t.condition?.isEmpty == false)
-                ? "dot.radiowaves.left.and.right"
-                : "clock.badge"
         }
         return nil
     }
@@ -2102,7 +1623,7 @@ extension ChatStore: AgentTransportDelegate {
             } else {
                 setToolPhaseIn(&liveTurns[sid, default: []], toolId, phase)
             }
-            try? persistence?.appendToolUpdateEvent(sessionId: sid, toolId: toolId, phase: phase)
+            persistOrNotify("工具相位落库") { try persistence?.appendToolUpdateEvent(sessionId: sid, toolId: toolId, phase: phase) }
             if case .awaitingApproval = phase { approvalBlocked.insert(sid) }   // P8-T26
 
         case .extensionNotify(let type, let message):
@@ -2161,11 +1682,17 @@ extension ChatStore: AgentTransportDelegate {
         }
     }
 
-    /// App 是否前台激活 (CLI/冒烟无 NSApplication 实例 → 视为非前台, 通知 no-op)。
-    private var appIsForeground: Bool {
-        guard Bundle.main.bundleIdentifier != nil else { return false }
+    // MARK: - P9-#15: NSApp 活跃判定 (单一实现, 双语义兜底)
+    // 冒烟/CLI 无 Bundle.main → headlessDefault 兜底: 通知/闪显路径传 false (视为非前台, no-op);
+    // 在场判定路径传 true (否则冒烟里一切完成都会被算成"离开")。
+
+    private func isAppActive(headlessDefault: Bool) -> Bool {
+        guard Bundle.main.bundleIdentifier != nil else { return headlessDefault }
         return NSApp.isActive
     }
+
+    /// App 是否前台激活 (通知/mini 台闪显判定)。
+    private var appIsForeground: Bool { isAppActive(headlessDefault: false) }
 
     // MARK: - P6.3.2: 离开摘要 (Away summary)
 
@@ -2195,12 +1722,8 @@ extension ChatStore: AgentTransportDelegate {
         awaySummary = nil
     }
 
-    /// P6.3.2: App 是否激活 (在场判定, 语义与 appIsForeground 相反方向的兜底:
-    /// 冒烟/CLI 无 NSApp → 视为在场, 否则冒烟里一切完成都会被算成"离开")。
-    private var appIsActive: Bool {
-        guard Bundle.main.bundleIdentifier != nil else { return true }
-        return NSApp.isActive
-    }
+    /// P6.3.2: App 是否激活 (在场判定, 兜底方向与 appIsForeground 相反 — 见 isAppActive 注释)。
+    private var appIsActive: Bool { isAppActive(headlessDefault: true) }
 
     /// P4.1: 组装完成通知 (标题 = 会话/任务名, 正文 = 耗时 + 回复首行 60 字)。
     private func notifyCompletion(sid: UUID, title: String, elapsed: TimeInterval,
@@ -2303,31 +1826,23 @@ extension ChatStore: AgentTransportDelegate {
         let wasStreaming = list[idx].isStreaming
         list[idx].isStreaming = false
         if let usage { list[idx].usage = usage }
-        if case .text(let s) = list[idx].content, s.contains(Self.doneMarker) {
+        if case .text(let s) = list[idx].content, s.contains(SchedulerService.doneMarker) {
             list[idx].content = .text(stripDoneMarker(s, sid: sid))
         }
         if wasStreaming { persistMessage(list[idx], sid: sid) }
     }
 
-    /// 剥离任务状态标记 (doneMarker); 命中且该会话有在途 fire → 点亮 fireDoneHit。
+    /// 剥离任务状态标记 (doneMarker); 命中且该会话有在途 fire → 通知 SchedulerService (P9.1b)。
     private func stripDoneMarker(_ s: String, sid: UUID) -> String {
-        guard s.contains(Self.doneMarker) else { return s }
-        if fireTurnTask[sid] != nil { fireDoneHit.insert(sid) }
-        return s.replacingOccurrences(of: Self.doneMarker, with: "")
+        guard s.contains(SchedulerService.doneMarker) else { return s }
+        scheduler.noteDoneMarkerHit(sid: sid)
+        return s.replacingOccurrences(of: SchedulerService.doneMarker, with: "")
             .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    /// P3.10/P4.0.2: 等待型 fire 收尾——done 命中则自动停用任务。
-    /// 审批策略无需恢复: 池化后策略按回合下发 (unattended fire 只影响自己的实例配置)。
+    /// P3.10/P4.0.2: 等待型 fire 收尾——done 命中则自动停用任务 (P9.1b: 状态在 SchedulerService)。
     private func finishWaitingFireIfNeeded(sid: UUID) {
-        guard let tid = fireTurnTask.removeValue(forKey: sid) else { return }
-        let hit = fireDoneHit.contains(sid)
-        fireDoneHit.remove(sid)
-        guard hit,
-              let idx = scheduledTasks.firstIndex(where: { $0.id == tid }) else { return }
-        scheduledTasks[idx].enabled = false
-        scheduledTasks[idx].completedAt = Date()
-        try? persistence?.upsertScheduled(scheduledTasks[idx])
+        scheduler.finishWaitingFireIfNeeded(sid: sid)
     }
 
     // MARK: - P3.5: 能力上报归并
@@ -2380,7 +1895,10 @@ extension ChatStore: AgentTransportDelegate {
         let path = Self.exportHTMLPath(sessionId: sid)
         try? FileManager.default.createDirectory(
             atPath: NSHomeDirectory() + "/.mangox/exports", withIntermediateDirectories: true)
-        let t = Self.makeTransport()
+        // 注入实例优先 (冒烟: MockTransport 回 nil 走失败分支, 验证 delegate 链路不弹 Finder);
+        // 生产 injectedTransport 恒 nil → 临时 transport 原行为
+        let t = injectedTransport ?? Self.makeTransport()
+        t.delegate = self   // P9-#1: 导出结果只经 delegate 回调上报, 缺挂 = 永远走 20s 超时兜底
         t.updateWorkingDirectory(activeProjectPath)
         t.updateSessionBinding(sid)   // pi 载入该会话 transcript 再导出
         exportTransport = t
