@@ -50,6 +50,7 @@ struct SettingsView: View {
                     concurrencySection
                     notificationSection
                     captureSection
+                    MailboxAccountsSection(store: store)
                     backupSection
                 }
                 .padding(.horizontal, 24)
@@ -663,7 +664,7 @@ struct SettingsView: View {
 
 // MARK: - 设置卡片容器 (等宽 + 统一边框/圆角)
 
-private extension View {
+extension View {
     func settingsCard() -> some View {
         padding(16)
             .frame(maxWidth: .infinity, alignment: .leading)

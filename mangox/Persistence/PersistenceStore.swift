@@ -15,15 +15,25 @@ final class PersistenceStore {
     private let decoder = JSONDecoder()
     /// 库文件路径 (P8-T28 备份拷贝源; 默认 ~/.mangox/mangox.db)
     let path: String
-    /// P9-#10: 事件重放缓存 (sid → 消息列表)。任何写路径失效; 值类型拷贝, 调用方改不动缓存。
+    /// P9-#10: 事件重放缓存 (sid → 消息列表)。写路径增量维护 (P10.5, 原为失效全量重放)。
     /// 侧栏每次点击会话都全量重放 events (逐行 JSON decode), 事件多时可感卡顿。
     private var replayCache: [UUID: [ChatMessage]] = [:]
+    /// P10.5: 增量 append 乱序标记 — 命中缓存但需惰性重排。
+    private var replayCacheNeedsSort: Set<UUID> = []
+    /// P10.6a: 重放缓存访问序 (旧→新)。原无上限 = 访问过的每个会话全量消息永久常驻,
+    /// 内存随会话数线性增长 (长会话尤甚); 溢出逐出最久未用, 下次读回落全量 SELECT。
+    private var replayCacheOrder: [UUID] = []
+    /// 缓存会话数上限 (常态来回切的就那几个会话, 再多的重放成本已由后台路径兜住)。
+    static let replayCacheLimit = 8
     /// P9-#10: seq 游标 (sid → 下一个 seq)。删除路径清空回落 SELECT MAX(seq)。
     private var seqCursor: [UUID: Int64] = [:]
+    /// P10.5: 后台重放专用只读连接 (WAL + FULLMUTEX, 与主写连接并发读安全)。
+    private let replayDb: Database?
 
     init(path: String = NSHomeDirectory() + "/.mangox/mangox.db") throws {
         self.path = path
         db = try Database(path: path)
+        replayDb = try? Database(path: path, readonly: true)
     }
 
     // MARK: - Schema
@@ -118,8 +128,67 @@ final class PersistenceStore {
             PRIMARY KEY (provider, model_id)
         )
         """)
+        // P10.2a: 邮箱哨兵四表 (账号池 / 哨兵 / 任务线程 / 拒收日志); 凭据与密钥走 Keychain 不进表
+        try db.run("""
+        CREATE TABLE IF NOT EXISTS mailbox_accounts (
+            id         TEXT PRIMARY KEY,
+            label      TEXT NOT NULL,
+            address    TEXT NOT NULL,
+            preset_id  TEXT,
+            imap_host  TEXT NOT NULL DEFAULT '',
+            smtp_host  TEXT NOT NULL DEFAULT '',
+            created_at REAL NOT NULL
+        )
+        """)
+        try db.run("""
+        CREATE TABLE IF NOT EXISTS mailbox_sentinels (
+            id             TEXT PRIMARY KEY,
+            name           TEXT NOT NULL,
+            account_id     TEXT NOT NULL UNIQUE,
+            project_id     TEXT,
+            whitelist      TEXT NOT NULL DEFAULT '[]',
+            require_secret INTEGER NOT NULL DEFAULT 1,
+            poll_interval  INTEGER NOT NULL DEFAULT 30,
+            agent_mode     TEXT NOT NULL DEFAULT 'full',
+            approval       TEXT NOT NULL DEFAULT 'autoJudge',
+            probe_url      TEXT NOT NULL DEFAULT '',
+            enabled        INTEGER NOT NULL DEFAULT 0,
+            last_poll_at   REAL,
+            last_error     TEXT,
+            created_at     REAL NOT NULL
+        )
+        """)
+        try db.run("""
+        CREATE TABLE IF NOT EXISTS mailbox_tasks (
+            id              TEXT PRIMARY KEY,
+            sentinel_id     TEXT NOT NULL,
+            thread_key      TEXT NOT NULL,
+            session_id      TEXT,
+            project_id      TEXT,
+            status          TEXT NOT NULL,
+            title           TEXT NOT NULL,
+            blocked_reason  TEXT,
+            last_message_id TEXT,
+            created_at      REAL NOT NULL,
+            updated_at      REAL NOT NULL,
+            UNIQUE (sentinel_id, thread_key)
+        )
+        """)
+        try db.run("""
+        CREATE TABLE IF NOT EXISTS mailbox_rejections (
+            id          TEXT PRIMARY KEY,
+            sentinel_id TEXT NOT NULL,
+            sender      TEXT NOT NULL,
+            subject     TEXT NOT NULL,
+            reason      TEXT NOT NULL,
+            message_id  TEXT,
+            at          REAL NOT NULL
+        )
+        """)
+        try db.run("CREATE INDEX IF NOT EXISTS idx_mailbox_rejections ON mailbox_rejections(sentinel_id, at)")
         // 旧库补列: 先查 PRAGMA table_info, 列已存在就不发 ALTER
         // (无条件 ALTER 会被 try? 吞掉异常, 但 SQLite 自己仍往 stderr 吐 duplicate column 日志)
+        addColumnIfMissing("mailbox_sentinels", "require_secret", "INTEGER NOT NULL DEFAULT 1")
         addColumnIfMissing("projects", "path", "TEXT")
         // P7-M3: models 表补 reasoning 显式列 (M2 首版靠 map 有无推导, MiniMax 系 map=null 误判)
         addColumnIfMissing("models", "reasoning", "INTEGER NOT NULL DEFAULT 0")
@@ -133,6 +202,10 @@ final class PersistenceStore {
         try? db.run("UPDATE scheduled_tasks SET log_session_id = last_session_id WHERE log_session_id IS NULL AND last_session_id IS NOT NULL")
         // P3.10: 等待型任务 (condition/unattended/completed_at 等)
         addColumnIfMissing("scheduled_tasks", "condition", "TEXT")
+        // P10.4: 任务级执行配置 (JSON blob; 复用 SessionConfig)
+        addColumnIfMissing("scheduled_tasks", "config", "TEXT")
+        // P10.3: 会话级配置快照 (JSON blob; SessionConfig)
+        addColumnIfMissing("sessions", "config", "TEXT")
         addColumnIfMissing("scheduled_tasks", "unattended", "INTEGER NOT NULL DEFAULT 1")
         addColumnIfMissing("scheduled_tasks", "completed_at", "REAL")
         addColumnIfMissing("scheduled_tasks", "run_count", "INTEGER NOT NULL DEFAULT 0")
@@ -268,7 +341,7 @@ final class PersistenceStore {
     func deleteSession(id: UUID) throws {
         try db.run("DELETE FROM sessions WHERE id = ?", [.text(id.uuidString)])
         try db.run("DELETE FROM events WHERE session_id = ?", [.text(id.uuidString)])
-        replayCache[id] = nil   // P9-#10: 写路径失效
+        dropReplayCache(id)   // P9-#10: 写路径失效 (P10.6a: 三处状态同源清)
         seqCursor[id] = nil
     }
 
@@ -348,7 +421,7 @@ final class PersistenceStore {
     // MARK: - Events (append-only trajectory)
 
     private func appendEvent(_ sessionId: UUID, type: String, payload: Data) throws {
-        // P9-#10: seq 游标免每次 SELECT MAX; 写路径同时失效重放缓存
+        // P9-#10: seq 游标免每次 SELECT MAX
         let next: Int64
         if let cursor = seqCursor[sessionId] {
             next = cursor
@@ -359,7 +432,6 @@ final class PersistenceStore {
             next = int(rows.first?["next"] ?? .null)
         }
         seqCursor[sessionId] = next + 1
-        replayCache[sessionId] = nil
         try db.run("""
             INSERT INTO events (session_id, seq, type, payload, ts) VALUES (?,?,?,?,?)
             """, [.text(sessionId.uuidString),
@@ -367,6 +439,41 @@ final class PersistenceStore {
                   .text(type),
                   .text(String(data: payload, encoding: .utf8) ?? ""),
                   .real(Date.now.timeIntervalSince1970)])
+        applyEventToReplayCache(sessionId, type: type, payload: payload)
+    }
+
+    /// P10.5: 缓存增量维护 (原为失效 → 切回该会话即全量重放, 流式会话每事件一次)。
+    /// events append-only: message 追加投影, tool_update 原位 patch; 乱序标记惰性重排。
+    private func applyEventToReplayCache(_ sessionId: UUID, type: String, payload: Data) {
+        guard var cached = replayCache[sessionId] else { return }   // 未缓存: 下次读时全量构建
+        switch type {
+        case "message":
+            guard let msg = try? decoder.decode(ChatMessage.self, from: payload) else {
+                dropReplayCache(sessionId)   // 解码失败: 保守失效
+                return
+            }
+            if let last = cached.last, msg.timestamp < last.timestamp {
+                replayCacheNeedsSort.insert(sessionId)
+            }
+            cached.append(msg)
+            replayCache[sessionId] = cached
+        case "tool_update":
+            struct Payload: Codable { let toolId: UUID; let phase: ToolPhase }
+            guard let p = try? decoder.decode(Payload.self, from: payload) else {
+                dropReplayCache(sessionId)
+                return
+            }
+            if let i = cached.lastIndex(where: {
+                if case .tool(let t) = $0.content { return t.id == p.toolId }
+                return false
+            }), case .tool(let t) = cached[i].content {
+                cached[i].content = .tool(t.withPhase(p.phase))
+                replayCache[sessionId] = cached
+            }
+            // 找不到宿主 tool 消息: 不动缓存 (正常流中宿主必已落库)
+        default:
+            break   // 投影外事件类型不进缓存
+        }
     }
 
     /// 追加整条消息投影 (user 发送 / assistant 落定 / Stop 截断的半截回复)。
@@ -383,20 +490,76 @@ final class PersistenceStore {
 
     /// 重放事件流重建消息列表 (流式 chunk 不落库, 只有终态事件)。
     func loadMessages(sessionId: UUID) throws -> [ChatMessage] {
-        if let hit = replayCache[sessionId] { return hit }   // P9-#10: 写路径已失效, 命中即最新
+        if var hit = replayCache[sessionId] {
+            // P10.5: 增量 append 曾乱序 → 惰性重排一次
+            if replayCacheNeedsSort.contains(sessionId) {
+                hit = Self.stableSorted(hit)
+                replayCache[sessionId] = hit
+                replayCacheNeedsSort.remove(sessionId)
+            }
+            touchReplayCache(sessionId)   // P10.6a: 读即最近使用
+            return hit
+        }
         let rows = try db.query(
             "SELECT type, payload FROM events WHERE session_id = ? ORDER BY seq ASC",
             [.text(sessionId.uuidString)])
+        let out = Self.projectEvents(rows)
+        replayCache[sessionId] = out   // P9-#10
+        touchReplayCache(sessionId)    // P10.6a
+        return out
+    }
+
+    /// P10.5: 缓存命中判定 (ChatStore「先切再渲染」快路径判定用)。
+    func isReplayCached(_ sessionId: UUID) -> Bool {
+        replayCache[sessionId] != nil
+    }
+
+    // MARK: - P10.6a: 重放缓存上限 (LRU)
+
+    /// 已缓存会话数 (冒烟观察用; 不变式 ≤ replayCacheLimit)。
+    var cachedSessionCount: Int { replayCache.count }
+
+    /// 标记最近使用, 并把超限的最久未用项逐出。
+    private func touchReplayCache(_ id: UUID) {
+        if let i = replayCacheOrder.firstIndex(of: id) { replayCacheOrder.remove(at: i) }
+        replayCacheOrder.append(id)
+        while replayCacheOrder.count > Self.replayCacheLimit {
+            dropReplayCache(replayCacheOrder.removeFirst())
+        }
+    }
+
+    /// 三处状态同源清理 (cache / 乱序标记 / 访问序) —— 漏一处会留下不一致的悬挂键。
+    private func dropReplayCache(_ id: UUID) {
+        replayCache[id] = nil
+        replayCacheNeedsSort.remove(id)
+        if let i = replayCacheOrder.firstIndex(of: id) { replayCacheOrder.remove(at: i) }
+    }
+
+    /// P10.5: 后台全量重放 (首切大会话不冻结主线程) — 独立只读连接 SELECT + 纯函数投影。
+    /// 同步阻塞调用方线程; ChatStore 在 Task.detached 中调用。结果落地校验由调用方负责。
+    nonisolated func replayMessagesInBackground(sessionId: UUID) -> [ChatMessage] {
+        guard let replayDb,
+              let rows = try? replayDb.query(
+                "SELECT type, payload FROM events WHERE session_id = ? ORDER BY seq ASC",
+                [.text(sessionId.uuidString)]) else { return [] }
+        return Self.projectEvents(rows)
+    }
+
+    /// 事件行 → 消息投影 (decode + tool_update 合并 + 时序稳定排序)。纯函数, 可后台跑。
+    nonisolated static func projectEvents(_ rows: [[String: DBValue]]) -> [ChatMessage] {
+        let decoder = JSONDecoder()
         var out: [ChatMessage] = []
         for row in rows {
             guard case .text(let json) = row["payload"] ?? .null,
                   let data = json.data(using: .utf8) else { continue }
-            switch text(row, "type") {
-            case "message":
-                out.append(try decoder.decode(ChatMessage.self, from: data))
-            case "tool_update":
+            switch row["type"] {
+            case .text("message"):
+                if let msg = try? decoder.decode(ChatMessage.self, from: data) {
+                    out.append(msg)
+                }
+            case .text("tool_update"):
                 struct Payload: Codable { let toolId: UUID; let phase: ToolPhase }
-                let p = try decoder.decode(Payload.self, from: data)
+                guard let p = try? decoder.decode(Payload.self, from: data) else { continue }
                 if let i = out.lastIndex(where: {
                     if case .tool(let t) = $0.content { return t.id == p.toolId }
                     return false
@@ -407,9 +570,12 @@ final class PersistenceStore {
                 break
             }
         }
-        // 事件到达顺序 ≠ 消息时序 (如 text 先 finalize、think 后落库), 按创建时间戳稳定排序;
-        // 同时间戳用原始索引兜底 (Swift sort 不保证稳定)。
-        out = out.enumerated()
+        return stableSorted(out)
+    }
+
+    /// 按创建时间戳稳定排序 (同时间戳用原始索引兜底)。
+    nonisolated static func stableSorted(_ msgs: [ChatMessage]) -> [ChatMessage] {
+        msgs.enumerated()
             .sorted { a, b in
                 if a.element.timestamp != b.element.timestamp {
                     return a.element.timestamp < b.element.timestamp
@@ -417,8 +583,6 @@ final class PersistenceStore {
                 return a.offset < b.offset
             }
             .map(\.element)
-        replayCache[sessionId] = out   // P9-#10
-        return out
     }
 
     /// P9-#2: 删除最后一条 user 消息事件之后的所有事件 (regenerate 的库侧对账 —
@@ -641,7 +805,7 @@ final class PersistenceStore {
 
     func loadScheduled() throws -> [ScheduledTask] {
         let rows = try db.query("""
-            SELECT id, name, prompt, cron, project_id, enabled, last_run_at, log_session_id, continuous, condition, unattended, completed_at, run_count, created_at
+            SELECT id, name, prompt, cron, project_id, enabled, last_run_at, log_session_id, continuous, condition, unattended, completed_at, run_count, created_at, config
             FROM scheduled_tasks ORDER BY created_at DESC
             """)
         return rows.map { row in
@@ -659,15 +823,20 @@ final class PersistenceStore {
                 unattended: int(row["unattended"] ?? .null) != 0,
                 completedAt: optionalDate(row, "completed_at"),
                 runCount: Int(int(row["run_count"] ?? .null)),
-                createdAt: optionalDate(row, "created_at") ?? .distantPast)
+                createdAt: optionalDate(row, "created_at") ?? .distantPast,
+                config: optionalText(row, "config")
+                    .flatMap { $0.data(using: .utf8) }
+                    .flatMap { try? decoder.decode(SessionConfig.self, from: $0) })
         }
     }
 
     func upsertScheduled(_ t: ScheduledTask) throws {
+        let configJSON = t.config.flatMap { try? encoder.encode($0) }
+            .flatMap { String(data: $0, encoding: .utf8) }
         try db.run("""
             INSERT OR REPLACE INTO scheduled_tasks
-            (id, name, prompt, cron, project_id, enabled, last_run_at, log_session_id, continuous, condition, unattended, completed_at, run_count, created_at)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            (id, name, prompt, cron, project_id, enabled, last_run_at, log_session_id, continuous, condition, unattended, completed_at, run_count, created_at, config)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             """, [.text(t.id.uuidString),
                   .text(t.name),
                   .text(t.prompt),
@@ -681,11 +850,238 @@ final class PersistenceStore {
                   .int(t.unattended ? 1 : 0),
                   t.completedAt.map { .real($0.timeIntervalSince1970) } ?? .null,
                   .int(Int64(t.runCount)),
-                  .real(t.createdAt.timeIntervalSince1970)])
+                  .real(t.createdAt.timeIntervalSince1970),
+                  configJSON.map { .text($0) } ?? .null])
     }
 
     func deleteScheduled(id: UUID) throws {
         try db.run("DELETE FROM scheduled_tasks WHERE id = ?", [.text(id.uuidString)])
+    }
+
+    // MARK: - P10.2a 邮箱哨兵 (账号池 / 哨兵 / 任务线程 / 拒收日志)
+    // 四表只存配置与状态投影; 授权码 / 共享密钥在 Keychain (MailboxCredentialStore)。
+
+    /// 拒收日志每哨兵保留条数 (设计稿 §3.1; 首配时用来发现漏加白名单的发件人, 不是审计流水)。
+    /// nonisolated: 作默认参数值时在调用方 (非 MainActor) 上下文求值。
+    nonisolated static let mailboxRejectionLimit = 200
+
+    // MARK: 账号 (连接参数)
+
+    func loadMailboxAccounts() throws -> [MailboxAccount] {
+        let rows = try db.query("""
+            SELECT id, label, address, preset_id, imap_host, smtp_host, created_at
+            FROM mailbox_accounts ORDER BY created_at ASC
+            """)
+        return rows.map { row in
+            MailboxAccount(
+                id: UUID(uuidString: text(row, "id")) ?? UUID(),
+                label: text(row, "label"),
+                address: text(row, "address"),
+                presetId: optionalText(row, "preset_id"),
+                imapHost: text(row, "imap_host"),
+                smtpHost: text(row, "smtp_host"),
+                createdAt: optionalDate(row, "created_at") ?? .distantPast)
+        }
+    }
+
+    func upsertMailboxAccount(_ a: MailboxAccount) throws {
+        try db.run("""
+            INSERT OR REPLACE INTO mailbox_accounts
+            (id, label, address, preset_id, imap_host, smtp_host, created_at)
+            VALUES (?,?,?,?,?,?,?)
+            """, [.text(a.id.uuidString),
+                  .text(a.label),
+                  .text(a.address),
+                  a.presetId.map { .text($0) } ?? .null,
+                  .text(a.imapHost),
+                  .text(a.smtpHost),
+                  .real(a.createdAt.timeIntervalSince1970)])
+    }
+
+    /// 原始删除 — 引用保护在 `MailboxAccountStore.removeAccount` (被哨兵引用即拒绝, 决定 10)。
+    func deleteMailboxAccount(id: UUID) throws {
+        try db.run("DELETE FROM mailbox_accounts WHERE id = ?", [.text(id.uuidString)])
+    }
+
+    // MARK: 哨兵 (策略主体)
+
+    func loadMailboxSentinels() throws -> [MailboxSentinel] {
+        let rows = try db.query("""
+            SELECT id, name, account_id, project_id, whitelist, require_secret, poll_interval,
+                   agent_mode, approval, probe_url, enabled, last_poll_at, last_error
+            FROM mailbox_sentinels ORDER BY created_at ASC
+            """)
+        return rows.map { row in
+            MailboxSentinel(
+                id: UUID(uuidString: text(row, "id")) ?? UUID(),
+                name: text(row, "name"),
+                accountId: UUID(uuidString: text(row, "account_id")) ?? UUID(),
+                projectId: UUID(uuidString: text(row, "project_id")),
+                whitelist: decodeJSON([String].self, text(row, "whitelist")) ?? [],
+                requireSecret: int(row["require_secret"] ?? .null) == 1,
+                pollInterval: Int(int(row["poll_interval"] ?? .null)),
+                agentMode: AgentMode(rawValue: text(row, "agent_mode")) ?? .full,
+                approval: ApprovalMode(rawValue: text(row, "approval")) ?? .autoJudge,
+                intranetProbeURL: text(row, "probe_url"),
+                enabled: int(row["enabled"] ?? .null) == 1,
+                lastPollAt: optionalDate(row, "last_poll_at"),
+                lastError: optionalText(row, "last_error"))
+        }
+    }
+
+    /// 1:1 占用的唯一性由 `account_id UNIQUE` 把住 (决定 10) — 这里只做占用查询。
+    func upsertMailboxSentinel(_ s: MailboxSentinel) throws {
+        // created_at 不在模型里 (UI 用不到), 但列 NOT NULL: 取表内既有值, 首次插入才落 now,
+        // 否则每次保存都把创建时刻刷成修改时刻, 列表排序会跟着跳。
+        let prior = (try? db.query("SELECT created_at FROM mailbox_sentinels WHERE id = ?",
+                                   [.text(s.id.uuidString)])) ?? []
+        let createdAt = prior.first.flatMap { optionalDate($0, "created_at") } ?? Date.now
+        let whitelistJSON = encodeJSON(s.whitelist) ?? "[]"
+        try db.run("""
+            INSERT OR REPLACE INTO mailbox_sentinels
+            (id, name, account_id, project_id, whitelist, require_secret, poll_interval,
+             agent_mode, approval, probe_url, enabled, last_poll_at, last_error, created_at)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            """, [.text(s.id.uuidString),
+                  .text(s.name),
+                  .text(s.accountId.uuidString),
+                  s.projectId.map { .text($0.uuidString) } ?? .null,
+                  .text(whitelistJSON),
+                  .int(s.requireSecret ? 1 : 0),
+                  .int(Int64(s.pollInterval)),
+                  .text(s.agentMode.rawValue),
+                  .text(s.approval.rawValue),
+                  .text(s.intranetProbeURL),
+                  .int(s.enabled ? 1 : 0),
+                  s.lastPollAt.map { .real($0.timeIntervalSince1970) } ?? .null,
+                  s.lastError.map { .text($0) } ?? .null,
+                  .real(createdAt.timeIntervalSince1970)])
+    }
+
+    /// 删哨兵连带清掉它的线程映射与拒收日志 (两者都以 sentinel_id 归属, 留悬空行只会在 UI 里变孤儿)。
+    /// Keychain 密钥由 `MailboxSentinelStore` 负责一并删除。
+    func deleteMailboxSentinel(id: UUID) throws {
+        let sid = id.uuidString
+        try db.transaction {
+            try db.run("DELETE FROM mailbox_tasks WHERE sentinel_id = ?", [.text(sid)])
+            try db.run("DELETE FROM mailbox_rejections WHERE sentinel_id = ?", [.text(sid)])
+            try db.run("DELETE FROM mailbox_sentinels WHERE id = ?", [.text(sid)])
+        }
+    }
+
+    /// 绑定该账号的哨兵 (设计稿 `sentinel(for: accountId)` 的表侧实现; nil = 账号空闲可选)。
+    func mailboxSentinelId(usingAccount accountId: UUID) -> UUID? {
+        let rows = (try? db.query("SELECT id FROM mailbox_sentinels WHERE account_id = ?",
+                                  [.text(accountId.uuidString)])) ?? []
+        return rows.first.flatMap { UUID(uuidString: text($0, "id")) }
+    }
+
+    // MARK: 任务线程
+
+    func loadMailboxTasks() throws -> [MailboxTask] {
+        let rows = try db.query("""
+            SELECT id, sentinel_id, thread_key, session_id, project_id, status, title,
+                   blocked_reason, last_message_id, created_at, updated_at
+            FROM mailbox_tasks ORDER BY created_at DESC
+            """)
+        return rows.map(mailboxTaskFromRow)
+    }
+
+    /// 线程定位 (决定 12) — **先按 sentinel_id 过滤再匹配 thread_key**, 不同邮箱天然隔离。
+    func mailboxTask(sentinelId: UUID, threadKey: String) -> MailboxTask? {
+        let rows = (try? db.query("""
+            SELECT id, sentinel_id, thread_key, session_id, project_id, status, title,
+                   blocked_reason, last_message_id, created_at, updated_at
+            FROM mailbox_tasks WHERE sentinel_id = ? AND thread_key = ?
+            """, [.text(sentinelId.uuidString), .text(threadKey)])) ?? []
+        return rows.first.map(mailboxTaskFromRow)
+    }
+
+    /// 调用方应先 `mailboxTask(sentinelId:threadKey:)` 取回既有行再改 —— 直接拿新 UUID 落库
+    /// 会撞 UNIQUE(sentinel_id, thread_key) 被 REPLACE 打掉旧行, 线程 id 每轮漂移。
+    func upsertMailboxTask(_ t: MailboxTask) throws {
+        try db.run("""
+            INSERT OR REPLACE INTO mailbox_tasks
+            (id, sentinel_id, thread_key, session_id, project_id, status, title,
+             blocked_reason, last_message_id, created_at, updated_at)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?)
+            """, [.text(t.id.uuidString),
+                  .text(t.sentinelId.uuidString),
+                  .text(t.threadKey),
+                  t.sessionId.map { .text($0.uuidString) } ?? .null,
+                  t.projectId.map { .text($0.uuidString) } ?? .null,
+                  .text(t.status.rawValue),
+                  .text(t.title),
+                  t.blockedReason.map { .text($0) } ?? .null,
+                  t.lastMessageId.map { .text($0) } ?? .null,
+                  .real(t.createdAt.timeIntervalSince1970),
+                  .real(t.updatedAt.timeIntervalSince1970)])
+    }
+
+    func deleteMailboxTask(id: UUID) throws {
+        try db.run("DELETE FROM mailbox_tasks WHERE id = ?", [.text(id.uuidString)])
+    }
+
+    private func mailboxTaskFromRow(_ row: [String: DBValue]) -> MailboxTask {
+        MailboxTask(
+            id: UUID(uuidString: text(row, "id")) ?? UUID(),
+            sentinelId: UUID(uuidString: text(row, "sentinel_id")) ?? UUID(),
+            threadKey: text(row, "thread_key"),
+            sessionId: UUID(uuidString: text(row, "session_id")),
+            projectId: UUID(uuidString: text(row, "project_id")),
+            status: MailboxTaskStatus(rawValue: text(row, "status")) ?? .received,
+            title: text(row, "title"),
+            blockedReason: optionalText(row, "blocked_reason"),
+            lastMessageId: optionalText(row, "last_message_id"),
+            createdAt: optionalDate(row, "created_at") ?? .distantPast,
+            updatedAt: optionalDate(row, "updated_at") ?? .distantPast)
+    }
+
+    // MARK: 拒收日志
+
+    func loadMailboxRejections(sentinelId: UUID, limit: Int = PersistenceStore.mailboxRejectionLimit) -> [MailboxRejection] {
+        let rows = (try? db.query("""
+            SELECT id, sentinel_id, sender, subject, reason, message_id, at
+            FROM mailbox_rejections WHERE sentinel_id = ?
+            ORDER BY at DESC, rowid DESC LIMIT ?
+            """, [.text(sentinelId.uuidString), .int(Int64(limit))])) ?? []
+        return rows.map { row in
+            MailboxRejection(
+                id: UUID(uuidString: text(row, "id")) ?? UUID(),
+                sentinelId: UUID(uuidString: text(row, "sentinel_id")) ?? UUID(),
+                sender: text(row, "sender"),
+                subject: text(row, "subject"),
+                reason: MailboxRejectionReason(rawValue: text(row, "reason")) ?? .notWhitelisted,
+                messageId: optionalText(row, "message_id"),
+                at: optionalDate(row, "at") ?? .distantPast)
+        }
+    }
+
+    /// 追加 + 裁剪: 超出的按 at 最旧滚出 (每哨兵 200 条, 是线索不是流水, 不无限膨胀)。
+    func appendMailboxRejection(_ r: MailboxRejection) throws {
+        let sid = r.sentinelId.uuidString
+        try db.transaction {
+            try db.run("""
+                INSERT INTO mailbox_rejections (id, sentinel_id, sender, subject, reason, message_id, at)
+                VALUES (?,?,?,?,?,?,?)
+                """, [.text(r.id.uuidString),
+                      .text(sid),
+                      .text(r.sender),
+                      .text(r.subject),
+                      .text(r.reason.rawValue),
+                      r.messageId.map { .text($0) } ?? .null,
+                      .real(r.at.timeIntervalSince1970)])
+            try db.run("""
+                DELETE FROM mailbox_rejections WHERE sentinel_id = ? AND id NOT IN (
+                    SELECT id FROM mailbox_rejections WHERE sentinel_id = ?
+                    ORDER BY at DESC, rowid DESC LIMIT ?
+                )
+                """, [.text(sid), .text(sid), .int(Int64(PersistenceStore.mailboxRejectionLimit))])
+        }
+    }
+
+    func deleteMailboxRejections(sentinelId: UUID) throws {
+        try db.run("DELETE FROM mailbox_rejections WHERE sentinel_id = ?", [.text(sentinelId.uuidString)])
     }
 
     // MARK: - Checkpoint (退出前落盘)
@@ -710,6 +1106,47 @@ final class PersistenceStore {
 
     // MARK: - Settings (通用 key-value, P4.0.4 并发上限等)
     // 注意: settings 表 value 列为 TEXT NOT NULL — 整数也按文本存取 (TEXT affinity 语义)。
+
+    // MARK: P10.3 会话级配置 (sessions.config JSON blob + last_session_config KV)
+
+    func loadSessionConfig(id: UUID) -> SessionConfig? {
+        let rows = (try? db.query("SELECT config FROM sessions WHERE id = ?", [.text(id.uuidString)])) ?? []
+        guard let row = rows.first, case .text(let json)? = row["config"],
+              let data = json.data(using: .utf8) else { return nil }
+        return try? JSONDecoder().decode(SessionConfig.self, from: data)
+    }
+
+    func saveSessionConfig(id: UUID, config: SessionConfig) {
+        guard let data = try? JSONEncoder().encode(config),
+              let json = String(data: data, encoding: .utf8) else { return }
+        try? db.run("UPDATE sessions SET config = ? WHERE id = ?", [.text(json), .text(id.uuidString)])
+    }
+
+    /// 全局回落: 上一次快照 (新会话/未存过配置的会话在启动恢复时继承)。
+    func loadLastSessionConfig() -> SessionConfig? {
+        guard let json = loadSettingText(key: "last_session_config"),
+              let data = json.data(using: .utf8) else { return nil }
+        return try? JSONDecoder().decode(SessionConfig.self, from: data)
+    }
+
+    func saveLastSessionConfig(_ config: SessionConfig) {
+        guard let data = try? JSONEncoder().encode(config),
+              let json = String(data: data, encoding: .utf8) else { return }
+        saveSettingText(key: "last_session_config", value: json)
+    }
+
+    /// App 默认配置 (probe 上报的 pi settings 默认, 独立于任何会话): NULL 会话的显示锚点。
+    func loadAppDefaultConfig() -> SessionConfig? {
+        guard let json = loadSettingText(key: "app_default_config"),
+              let data = json.data(using: .utf8) else { return nil }
+        return try? JSONDecoder().decode(SessionConfig.self, from: data)
+    }
+
+    func saveAppDefaultConfig(_ config: SessionConfig) {
+        guard let data = try? JSONEncoder().encode(config),
+              let json = String(data: data, encoding: .utf8) else { return }
+        saveSettingText(key: "app_default_config", value: json)
+    }
 
     func saveSetting(key: String, value: Int) {
         try? db.run("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)",

@@ -29,6 +29,8 @@ struct ScheduledTask: Identifiable {
     var runCount: Int = 0
     /// 列表排序依据 (新任务靠上)。
     var createdAt: Date = Date()
+    /// P10.4 任务级执行配置 (nil = 跟随全局默认); fire 时只动日志会话 transport, 不碰全局。
+    var config: SessionConfig? = nil
 
     /// 解析失败 = cron 非法 (UI 上标记, 调度器跳过)。
     var cronExpr: CronExpr? { CronExpr.parse(cron) }

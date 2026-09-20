@@ -133,8 +133,17 @@ final class SchedulerService: ObservableObject {
         // P9-#17: 恒无人值守 (task.unattended 仅作历史记录) —— 后台日志会话的审批卡
         // 停在 liveTurns 镜像里无 UI 入口, 弹卡 = 任务卡死到 pi 32s 超时 deny
         let cwd = task.projectId.flatMap { pid in store.projects.first(where: { $0.id == pid })?.path }
+        // P10.4: 任务级执行配置 — 只动日志会话 transport (modeOverride/modelOverride 实例级),
+        // 全局期望零污染 (主会话档位/模型不受后台任务影响)
+        let cfg = task.config
         store.beginTurn(sid: logId, prompt: prompt, ephemeral: true,
-                        cwd: cwd, unattended: true)
+                        cwd: cwd, unattended: true,
+                        modeOverride: cfg.flatMap { AgentMode(rawValue: $0.agentMode) },
+                        modelOverride: cfg.map {
+                            (provider: $0.provider, modelId: $0.modelId, thinking: $0.thinkingLevel)
+                        })
+        // P10.3 联动: 日志会话行带上任务配置 (点开会话即恢复其执行配置)
+        if let cfg { store.persistence?.saveSessionConfig(id: logId, config: cfg) }
         if let c = task.condition, !c.isEmpty {
             fireTurnTask[logId] = task.id   // 等待型: 本回合结束扫 done 标记
         }

@@ -208,5 +208,6 @@ final class ModelStore: ObservableObject {
         let t = store.transportFor(sid)
         t.setModel(provider: model.provider, modelId: model.id)
         if let level { t.setThinkingLevel(level.rawValue) }
+        store.stampSessionConfig()   // P10.3: 写穿选中会话配置
     }
 }

@@ -145,8 +145,10 @@ struct ChatView: View {
     }
 
     /// 消息块列 (空态分流在 scrollContent)。
+    /// P10.6a: LazyVStack — 原 VStack 会为全部消息实例化 MessageBlockView (每条内含
+    /// MarkdownView 的块解析 + 文本布局), 长会话首帧同步主线程构建数千视图。
     private var messageBlocks: some View {
-        VStack(alignment: .leading, spacing: Tune.chatMessageSpacing) {
+        LazyVStack(alignment: .leading, spacing: Tune.chatMessageSpacing) {
             ForEach(store.messages) { msg in
                 MessageBlockView(message: msg, store: store)
                     .id(msg.id)

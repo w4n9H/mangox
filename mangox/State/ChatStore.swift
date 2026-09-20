@@ -88,6 +88,7 @@ final class ChatStore: ObservableObject {
         didSet {
             injectedTransport?.updateApprovalPolicy(askApproval: askApproval)
             transports.values.forEach { $0.updateApprovalPolicy(askApproval: askApproval) }
+            stampSessionConfig()   // P10.3: 写穿当前会话配置
         }
     }
     /// P7-M4 模式档位 (能力预设, 与审批开关正交; 按项目记忆, settings KV)。
@@ -97,6 +98,7 @@ final class ChatStore: ObservableObject {
             injectedTransport?.updateMode(agentMode)
             transports.values.forEach { $0.updateMode(agentMode) }
             saveAgentMode()
+            stampSessionConfig()   // P10.3: 写穿当前会话配置
         }
     }
 
@@ -299,6 +301,48 @@ final class ChatStore: ObservableObject {
     private var modelCancellable: AnyCancellable?
     private var captureCancellable: AnyCancellable?
     private var backupCancellable: AnyCancellable?
+    private var mailboxCancellable: AnyCancellable?
+
+    // MARK: - P10.2a 邮箱哨兵 (域逻辑在 MailboxSentinelService, 此处 facade 转发)
+
+    let mailbox = MailboxSentinelService()
+    var mailboxAccounts: [MailboxAccount] { mailbox.accounts }
+    var mailboxSentinels: [MailboxSentinel] { mailbox.sentinels }
+    var mailboxTasks: [MailboxTask] { mailbox.tasks }
+    var mailboxNotice: String? { mailbox.mailboxNotice }
+    /// 冒烟注入: 收件/发件实例工厂 (缺省 = 生产 `CurlMailTransport`, 见 P10.2c)
+    var mailboxTransportFactory: ((MailboxAccount) -> (any MailTransport)?)? {
+        get { mailbox.makeTransport }
+        set { mailbox.makeTransport = newValue }
+    }
+    /// 冒烟注入: 凭据缝 (默认 Keychain)
+    var mailboxCredentials: MailboxCredentialStore {
+        get { mailbox.credentials }
+        set { mailbox.credentials = newValue }
+    }
+    @discardableResult func upsertMailboxSentinel(_ s: MailboxSentinel) -> Bool { mailbox.upsertSentinel(s) }
+    func addMailboxAccount(_ a: MailboxAccount) { mailbox.addAccount(a) }
+    func updateMailboxAccount(_ a: MailboxAccount) { mailbox.updateAccount(a) }
+    @discardableResult func removeMailboxAccount(_ id: UUID) -> Bool { mailbox.removeAccount(id) }
+    func removeMailboxSentinel(id: UUID) { mailbox.removeSentinel(id: id) }
+    func toggleMailboxSentinel(id: UUID) { mailbox.toggleSentinel(id: id) }
+    func availableMailboxAccounts(forSentinel id: UUID?) -> [MailboxAccount] { mailbox.availableAccounts(forSentinel: id) }
+    func pollMailboxOnce() async { await mailbox.pollOnce() }
+
+    // P10.2d: Settings 面板读写的 facade (域逻辑在 service)
+    var mailboxRejections: [MailboxRejection] { mailbox.allRecentRejections() }
+    /// P10.2e: 单个 sparse agent 的拒收 (编辑器内嵌排查段用; 时间倒序)。
+    func mailboxRejections(sentinelId: UUID) -> [MailboxRejection] { mailbox.recentRejections(sentinelId: sentinelId) }
+    var mailboxQueuedTaskCount: Int { mailbox.queuedTaskCount }
+    var mailboxRunningTask: MailboxTask? { mailbox.runningTask }
+    var mailboxLastPollAt: Date? { mailbox.lastPollAt }
+    func sentinelBoundToken(accountId: UUID) -> MailboxSentinel? { mailbox.sentinel(for: accountId) }
+    func testMailboxConnection(accountId: UUID) async -> String? { await mailbox.testConnection(accountId: accountId) }
+    func hasMailboxAccountAuth(accountId: UUID) -> Bool { mailbox.hasAccountAuth(accountId: accountId) }
+    func setMailboxAccountAuth(_ v: String?, accountId: UUID) { mailbox.setAccountAuth(v, accountId: accountId) }
+    func hasMailboxSentinelSecret(sentinelId: UUID) -> Bool { mailbox.hasSentinelSecret(sentinelId: sentinelId) }
+    func setMailboxSentinelSecret(_ v: String?, sentinelId: UUID) { mailbox.setSentinelSecret(v, sentinelId: sentinelId) }
+    func addMailboxWhitelist(sentinelId: UUID, address: String) { mailbox.addToWhitelist(sentinelId: sentinelId, address: address) }
 
     // MARK: - P3.11 扩展管理
     @Published var extensions: [ExtensionItem] = []
@@ -433,12 +477,25 @@ final class ChatStore: ObservableObject {
             // P7-M3: custom_models 一次性迁入 models 表 (幂等), 再加载自管真源
             _ = (try? store.migrateLegacyCustomModels()) ?? 0
             managedModels = (try? store.loadManagedModels()) ?? []
-            // 启动恢复: 打开上一次作业会话 (settings.last_session_id);
-            // 无记录或会话已删除 → 欢迎空态, 发送时才隐式建会话。
+            // P10.3v2: 启动恢复 — 先载 App 默认 KV; 选中会话存过配置用自己的,
+            // 否则回落 App 默认 (独立于会话, 不吃别的会话的劫持); 首次运行退 last_session_config。
+            appDefaultConfig = store.loadAppDefaultConfig()
             if let last = store.loadLastSession(),
                allConversations.contains(where: { $0.id == last }) {
                 selectedConversationId = last
                 messages = replayMessages(for: last)
+                if let cfg = store.loadSessionConfig(id: last) {
+                    applySessionConfig(cfg)
+                } else if let def = appDefaultConfig {
+                    applySessionConfig(def)
+                } else if let lastCfg = store.loadLastSessionConfig() {
+                    applySessionConfig(lastCfg)
+                }
+            } else if let def = appDefaultConfig {
+                // 无选中会话也恢复默认期望 (重启后新建会话免重选)
+                applySessionConfig(def)
+            } else if let lastCfg = store.loadLastSessionConfig() {
+                applySessionConfig(lastCfg)
             } else {
                 selectedConversationId = nil
                 messages = []
@@ -465,11 +522,13 @@ final class ChatStore: ObservableObject {
         model.attach(self)
         capture.attach(self)
         backup.attach(self)
+        mailbox.attach(self)   // P10.2a: 载入账号/哨兵/线程 + 起 tick
         schedulerCancellable = scheduler.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }
         knowledgeCancellable = knowledge.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }
         modelCancellable = model.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }
         captureCancellable = capture.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }
         backupCancellable = backup.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }
+        mailboxCancellable = mailbox.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }
         scanExtensions()   // P3.11: 扫描 + 快照托管扩展列表 (池实例 spawn 期加载)
         syncWorkspaceContext()   // 文件树扫描 (P3.4); cwd 在每次 send 前按实例下发
         // P3.7: 注入块快照 (池实例 spawn 期消费)
@@ -573,6 +632,7 @@ final class ChatStore: ObservableObject {
         showSettingsPanel = false
         try? persistence?.insertChatSession(item)
         markLastSession()
+        stampSessionConfig()   // P10.3: 新会话落生即快照当前配置 (重启恢复有据)
         syncWorkspaceContext()   // 新 chat 无项目 → 工作区清空, Work 回 Chat
     }
 
@@ -645,11 +705,71 @@ final class ChatStore: ObservableObject {
         return (try? persistence.loadMessages(sessionId: id)) ?? []
     }
 
+    // MARK: - P10.5: 先切再渲染 (切换零阻塞)
+
+    /// 重放代数: 每次冷切递增, 后台 decode 落地时校验防串台 (X→Y→X 快速反弹丢弃过期结果)。
+    private var replayGen = 0
+
+    /// P10.5: 先切再渲染 — 缓存命中同步上屏 (亚毫秒); 未命中先空态 + 在途镜像上屏,
+    /// 全量重放挪后台 (只读连接 SELECT + 纯函数投影), 落地校验选中未变再替换。
+    private func loadMessagesForSwitch(_ id: UUID) {
+        guard let p = persistence else {
+            messages = []
+            return
+        }
+        if p.isReplayCached(id) {
+            messages = replayMessages(for: id)
+            mergeInflightIfRunning(id)
+            return
+        }
+        messages = []
+        mergeInflightIfRunning(id)   // 在途产出先上屏, 不等后台 decode
+        replayGen += 1
+        let gen = replayGen
+        Task.detached(priority: .userInitiated) { [weak self] in
+            let decoded = p.replayMessagesInBackground(sessionId: id)
+            await MainActor.run { [weak self] in
+                guard let self, self.selectedConversationId == id, gen == self.replayGen else { return }
+                // 落地合并: decoded 之后追加 decode 期间新增的 (用户新发/在途流式, 整体保留在尾部)
+                let known = Set(decoded.map(\.id))
+                let extras = self.messages.filter { !known.contains($0.id) }
+                self.messages = decoded + extras
+                self.mergeInflightIfRunning(id)
+            }
+        }
+    }
+
+    /// 会话回合在途 → 合并实时镜像 (库快照 + 在途产出), 切回不缺半截;
+    /// 已落库的 finalized 块 replay 已含 → 按 id 去重。
+    private func mergeInflightIfRunning(_ id: UUID) {
+        guard runningTurns.contains(id), let live = liveTurns[id] else { return }
+        let known = Set(messages.map(\.id))
+        messages.append(contentsOf: live.filter { !known.contains($0.id) })
+        liveTurns[id] = nil   // 后续事件直接进 messages (已选中)
+    }
+
+    /// P10.5: 流式宿主判定 (视图或镜像中存在该消息) —— 通行则丢弃迟到 chunk。
+    private func hasStreamingHost(_ id: UUID, sid: UUID) -> Bool {
+        if messages.contains(where: { $0.id == id }) { return true }
+        return (liveTurns[sid] ?? []).contains { $0.id == id }
+    }
+
     // MARK: - Workspace (P3.4: 文件树扫描 + 项目目录管理)
 
     /// 重扫文件树 (cwd 在每次 send 前按会话实例下发, P4.0.2 池化)。
+    /// P10.5: 根目录未变即跳过 — 消除每次切会话的重复文件系统扫描。
+    private var lastSyncedWorkspaceRoot: String?
+    private var syncedNilWorkspaceRoot = false
     private func syncWorkspaceContext() {
-        if let root = activeProjectPath {
+        let root = activeProjectPath
+        if let root {
+            guard root != lastSyncedWorkspaceRoot else { return }
+            lastSyncedWorkspaceRoot = root
+        } else {
+            guard !syncedNilWorkspaceRoot else { return }
+            syncedNilWorkspaceRoot = true
+        }
+        if let root {
             fileTree = WorkspaceScanner.scanShallow(root: root)   // lazy: 只扫一层, 展开时按需加载
         } else {
             fileTree = []
@@ -672,9 +792,88 @@ final class ChatStore: ObservableObject {
     }
 
     func restoreAgentMode() {
+        suppressConfigStamp = true   // P10.3: 项目级档位恢复是程序性写值, 不写穿会话快照
+        defer { suppressConfigStamp = false }
         let idx = persistence?.loadSetting(key: agentModeKey, defaultValue: AgentMode.standard.storageIndex)
             ?? AgentMode.standard.storageIndex
         agentMode = AgentMode(storageIndex: idx)
+    }
+
+    // MARK: - P10.3 会话级配置 (sessions.config 快照 + 跟随选中恢复)
+
+    /// 程序性写值期间抑制 stamp (恢复/应用路径的 didSet 不回写, 防快照被启动默认值污染)。
+    private var suppressConfigStamp = false
+    /// P10.3v2: App 默认配置 (probe 上报的 pi settings 默认, 独立于任何会话)。
+    /// NULL 会话 (无自己的 config 行) 选中时显示它, 不跟随被会话 apply 污染的可变全局。
+    private(set) var appDefaultConfig: SessionConfig?
+
+    /// probe 上报 pi settings 默认 → 捕获/刷新 App 默认配置 (每次启动覆盖, 跟踪 pi 默认);
+    /// 当前选中会话若无自己的配置, 立即把显示切到默认 (防启动回落值滞留)。
+    func captureAppDefault(provider: String, modelId: String, thinkingLevel: String) {
+        guard !provider.isEmpty, !modelId.isEmpty else { return }
+        let cfg = SessionConfig(provider: provider, modelId: modelId,
+                                thinkingLevel: thinkingLevel,
+                                agentMode: agentMode.rawValue, askApproval: askApproval)
+        appDefaultConfig = cfg
+        persistence?.saveAppDefaultConfig(cfg)
+        backfillNullSessionConfigs(with: cfg)
+        if let sid = selectedConversationId, persistence?.loadSessionConfig(id: sid) == nil {
+            applySessionConfig(cfg)   // suppress 在 apply 内, 不写行
+        }
+    }
+
+    /// 历史会话一次性回填: 无 config 行的统一落 App 默认 (用户拍板: 未正式使用, 模型取默认即可)。
+    /// 幂等 — 已有配置的行不动; 回填后改动隔离语义对所有会话生效。
+    private func backfillNullSessionConfigs(with cfg: SessionConfig) {
+        for item in chats where persistence?.loadSessionConfig(id: item.id) == nil {
+            persistence?.saveSessionConfig(id: item.id, config: cfg)
+        }
+    }
+
+    /// 配置快照写穿: 写当前选中会话行 + last_session_config。调用点 = 用户动作入口
+    /// (selectModel / askApproval didSet / agentMode didSet / newConversation 落生)。
+    /// 被动浏览 (selectConversation) 永不写行 — 防 NULL 会话被当前全局固化。
+    func stampSessionConfig() {
+        guard !suppressConfigStamp else { return }
+        guard let target = selectedConversationId else { return }
+        guard !currentProvider.isEmpty else { return }   // 探测未回填前无有效快照可记
+        let cfg = SessionConfig(provider: currentProvider, modelId: currentModelId,
+                                thinkingLevel: userThinkingLevelPinned ? thinkingLevel.rawValue : nil,
+                                agentMode: agentMode.rawValue, askApproval: askApproval)
+        persistence?.saveSessionConfig(id: target, config: cfg)
+        persistence?.saveLastSessionConfig(cfg)
+    }
+
+    /// 会话配置应用到全局期望。didSet 副作用会同步 transport 池 (v1 全池收敛语义, 与手动拨开关一致);
+    /// 模型已不在菜单 (自管删除) → 保留当前模型, 仅恢复其余项。
+    func applySessionConfig(_ cfg: SessionConfig) {
+        // P10.5: 等值短路 — 同配置会话间切换零 @Published 写/零 didSet/零落库 (渲染减负)
+        let sameLevel = cfg.thinkingLevel == nil || cfg.thinkingLevel == thinkingLevel.rawValue
+        if currentProvider == cfg.provider, currentModelId == cfg.modelId,
+           sameLevel, agentMode.rawValue == cfg.agentMode, askApproval == cfg.askApproval {
+            return
+        }
+        suppressConfigStamp = true
+        defer { suppressConfigStamp = false }
+        let known = model.menuModels.isEmpty ||
+            model.menuModels.contains { $0.provider == cfg.provider && $0.id == cfg.modelId }
+        if known {
+            currentProvider = cfg.provider
+            currentModelId = cfg.modelId
+        }
+        if let raw = cfg.thinkingLevel, let level = ThinkingLevel(rawValue: raw) {
+            thinkingLevel = level
+            userThinkingLevelPinned = true   // 会话存过级别 = 用户钉死, 探测上报不再回写
+        }
+        if let mode = AgentMode(rawValue: cfg.agentMode) { agentMode = mode }
+        askApproval = cfg.askApproval
+        // 已存在的实例补推模型期望 (新实例 spawn 经 transportFor 快照, 不主动拉起进程)
+        if let sid = selectedConversationId, let t = transports[sid] {
+            if known, !currentProvider.isEmpty {
+                t.setModel(provider: currentProvider, modelId: currentModelId)
+            }
+            if let raw = cfg.thinkingLevel { t.setThinkingLevel(raw) }
+        }
     }
 
     /// 工作区列手动刷新入口: 只重扫文件树 (不动 cwd 绑定与扩展)。
@@ -829,6 +1028,7 @@ final class ChatStore: ObservableObject {
         runningTurns.remove(sid)
         liveTurns[sid] = nil
         scheduler.clearFireTracking(sid: sid)   // P9.1b: 在途 fire 追踪随会话逐出清理
+        mailbox.noteSessionEvicted(sid: sid)    // P10.2a: 绑定该会话的远程线程失去落点 → 判失败
         turnStartAt[sid] = nil
         approvalBlocked.remove(sid)   // P8-T26: 会话删除即清
     }
@@ -885,20 +1085,20 @@ final class ChatStore: ObservableObject {
             awaySummary = nil      // P6.3.2: 空选中清离开摘要
             return
         }
-        messages = replayMessages(for: id)
-        // 会话回合在途 → 合并实时镜像 (库快照 + 在途产出), 切回不缺半截;
-        // 已落库的 finalized 块 replay 已含 → 按 id 去重
-        if runningTurns.contains(id), let live = liveTurns[id] {
-            let known = Set(messages.map(\.id))
-            messages.append(contentsOf: live.filter { !known.contains($0.id) })
-            liveTurns[id] = nil   // 后续事件直接进 messages (已选中)
-        }
+        loadMessagesForSwitch(id)
         markLastSession()
         syncWorkspaceContext()   // 选中会话变化 → 工作区上下文跟随 (P3.4)
         // P6.1.2: 过程态跟随选中会话 (在途 = streaming 粗粒度; 精细相位仅前台会话事件归并)
         runtimePhase = runningTurns.contains(id) ? .streaming : .idle
         refreshSideChatBanner(for: id)
         settleAwaySummary()   // P6.3.2: 切入会话即结算其离开积累 (无则清显示)
+        // P10.3v2: 会话配置跟随选中 — 存过 = 应用自己的; 没存过 = 应用 App 默认
+        // (不跟随可变全局, 不写行; 被动浏览零写入)
+        if let cfg = persistence?.loadSessionConfig(id: id) {
+            applySessionConfig(cfg)
+        } else if let def = appDefaultConfig {
+            applySessionConfig(def)
+        }
     }
 
     // MARK: - Side chat (P6.3.1 侧问会话)
@@ -1148,7 +1348,9 @@ final class ChatStore: ObservableObject {
     /// 全局 agentMode 不动 (主窗口其余会话档位不受污染)。
     func beginTurn(sid: UUID, prompt: String, ephemeral: Bool,   // P9.1b: internal — SchedulerService fire 回调
                    cwd: String?, unattended: Bool, images: [OutgoingImage] = [],
-                   modeOverride: AgentMode? = nil) {
+                   modeOverride: AgentMode? = nil,
+                   approvalOverride: ApprovalMode? = nil,   // P10.2a-0: 邮箱哨兵 = .autoJudge
+                   modelOverride: (provider: String, modelId: String, thinking: String?)? = nil) {
         let t = transportFor(sid)
         if ephemeral {
             t.updateSessionBinding(nil)   // nil = --no-session (fire 轮次, P3.9 拍板)
@@ -1162,9 +1364,20 @@ final class ChatStore: ObservableObject {
             }
         }
         t.updateWorkingDirectory(cwd)
-        // 无人值守 fire 关审批 (弹卡 = 任务死锁); 其余跟随全局开关
-        t.updateApprovalPolicy(askApproval: unattended ? false : askApproval)
+        // 无人值守 fire 关审批 (弹卡 = 任务死锁); 其余跟随全局开关。
+        // P10.2a-0: approvalOverride 优先 —— 邮箱哨兵走 .autoJudge (白名单放行 + 危险命令拒且不阻塞),
+        // 它是 per-turn 下发, 会被全局 askApproval 开关覆盖, 故每回合 send 前重设。
+        if let approvalOverride {
+            t.updateApprovalMode(approvalOverride)
+        } else {
+            t.updateApprovalPolicy(askApproval: unattended ? false : askApproval)
+        }
         if let modeOverride { t.updateMode(modeOverride) }
+        // P10.4: 任务级模型期望 (transport 实例级, 全局零污染; spawn 快照在本轮生效)
+        if let m = modelOverride {
+            t.setModel(provider: m.provider, modelId: m.modelId)
+            if let thinking = m.thinking { t.setThinkingLevel(thinking) }
+        }
         liveTurns[sid] = liveTurns[sid] ?? []   // 镜像容器就位 (视图会话事件直进 messages)
         runningTurns.insert(sid)
         turnStartAt[sid] = Date()   // P4.1: 回合计时起点
@@ -1247,6 +1460,7 @@ final class ChatStore: ObservableObject {
         approvalBlocked.remove(sid)   // P8-T26: 手动停 → 在途审批一并死掉
         if injectedTurnSid == sid { injectedTurnSid = nil }
         finishWaitingFireIfNeeded(sid: sid)
+        mailbox.noteTurnFinished(sid: sid, blocks: transportFor(sid).autoJudgeBlocks)
     }
 
     /// 重新生成: 截断最后一条 user 消息之后的内容并重放流式回复。
@@ -1582,6 +1796,8 @@ extension ChatStore: AgentTransportDelegate {
             break   // runningTurns 在 beginTurn 即插入 (这里仅确认, 不重复维护)
 
         case .textChunk(let id, let delta):
+            // P10.5: 无宿主 chunk 丢弃 —— 回合已落定 (或被替换) 后的迟到 chunk 若新建消息会成单字残块
+            guard runningTurns.contains(sid) || hasStreamingHost(id, sid: sid) else { break }
             if inView {
                 upsertStreaming(in: &messages, id: id, delta: delta, think: false)
             } else {
@@ -1589,6 +1805,7 @@ extension ChatStore: AgentTransportDelegate {
             }
 
         case .thoughtChunk(let id, let delta):
+            guard runningTurns.contains(sid) || hasStreamingHost(id, sid: sid) else { break }   // P10.5 同上
             if inView {
                 upsertStreaming(in: &messages, id: id, delta: delta, think: true)
             } else {
@@ -1679,6 +1896,9 @@ extension ChatStore: AgentTransportDelegate {
             liveTurns[sid] = nil   // 产出已落库, 镜像即弃 (库为准)
             if injectedTurnSid == sid { injectedTurnSid = nil }
             finishWaitingFireIfNeeded(sid: sid)
+            // P10.2a/b: 释放远程回合串行位 + 结算回执 (blocks = 本回合 autoJudge 拦下的命令;
+            // 事件归并没有 transport 参数, 用 sid 反查池实例 —— 与 stopTurn 同一写法)
+            mailbox.noteTurnFinished(sid: sid, blocks: transportFor(sid).autoJudgeBlocks)
         }
     }
 
@@ -1853,6 +2073,7 @@ extension ChatStore: AgentTransportDelegate {
     func transport(_ transport: any AgentTransport,
                    didUpdateModelState provider: String, modelId: String, thinkingLevel: String) {
         guard transport === capabilityProbe else { return }
+        captureAppDefault(provider: provider, modelId: modelId, thinkingLevel: thinkingLevel)
         if currentProvider.isEmpty { currentProvider = provider }
         if currentModelId.isEmpty { currentModelId = modelId }
         if let level = ThinkingLevel(rawValue: thinkingLevel), !userThinkingLevelPinned {

@@ -42,14 +42,19 @@ final class PiRpcTransport: AgentTransport {
     private var requestId = 0
 
     // 审批 (P3.3): pi 侧 permission-gate 扩展对敏感工具发 extension_ui_request,
-    // 客户端按 askApproval 决定弹卡或自动应答; "Allow always" 由扩展侧会话内记忆。
+    // 客户端按 approvalMode 决定放行/弹卡/拒绝; "Allow always" 由扩展侧会话内记忆。
     private struct PendingApproval {
         let requestId: String
         let toolUUID: UUID
         let callId: String
     }
     private var pendingApprovals: [PendingApproval] = []
-    private var askApprovalOn = true
+    /// P10.2a-0: 裁决档 (默认交互)。老调用点经 updateApprovalPolicy(askApproval:) 映射。
+    internal private(set) var approvalMode: ApprovalMode = .interactive
+    /// P10.2a-0: autoJudge 档拦下的命令 (命令 + 原因), 供任务回执写"卡在哪"。
+    /// 本回合内累积, send 时清空 (transport 实例 = 会话, 见 ChatStore.transports)。
+    /// P10.2b: 类型定义已提到模块级 (ApprovalMode.swift), 此处只留实例状态。
+    internal private(set) var autoJudgeBlocks: [AutoJudgeBlock] = []
     // P3.10: bash 学习白名单 (ChatStore 下发的持久集 + 会话内 alwaysAllow 沉淀)。
     // 判定在客户端桥 (handleExtensionUIRequest) 做, 覆盖所有会话路径。
     private var learnedBashTokens: Set<String> = []
@@ -216,6 +221,7 @@ final class PiRpcTransport: AgentTransport {
         thinkMessageID = nil
         toolCards.removeAll()
         toolStartAt.removeAll()
+        autoJudgeBlocks.removeAll()   // P10.2a-0: 本回合的拦截记录从零开始
         emit(.streamStarted)
         // P7-M6b: images:[{type,data(base64),mimeType}] — autoResize 不覆盖 RPC base64,
         // 进这里的已由 ImagePipeline.compressForSend 压过 (≤1536px JPEG)。
@@ -256,8 +262,15 @@ final class PiRpcTransport: AgentTransport {
         }
     }
 
+    /// 老入口 (askApproval 开关): true → 交互弹卡; false → 全放行。
+    /// P10.2a-0 拆档后它只是二值映射, 需要 autoJudge 的调用点走 updateApprovalMode。
     func updateApprovalPolicy(askApproval: Bool) {
-        askApprovalOn = askApproval
+        approvalMode = askApproval ? .interactive : .autoAllow
+    }
+
+    /// P10.2a-0: 直接指定裁决档 (邮箱哨兵 = .autoJudge)。
+    func updateApprovalMode(_ mode: ApprovalMode) {
+        approvalMode = mode
     }
 
     func updateWorkingDirectory(_ path: String?) {
@@ -802,20 +815,36 @@ final class PiRpcTransport: AgentTransport {
             card = card.withDiffText(diffText)
         }
 
-        // askApproval off → 自动放行, 不弹卡
-        guard askApprovalOn else {
+        // 全放行档: 不弹卡直接过 (定时任务; 弹卡无人点 = 死锁)
+        guard approvalMode.judgesByRisk else {
             respondExtensionUI(reqId, value: "Allow", callId: callId)
             return
         }
 
-        // P3.10 审批分层: bash 只读白名单静默放行 (判定覆盖所有会话; 无人值守由 askApproval=false 自动放行)。
+        // P3.10 审批分层: bash 只读白名单静默放行 (判定覆盖所有会话)。
         // write 到达这里 = 覆盖已存在文件 (扩展侧 existsSync 放行新建) → 按 edit 弹卡。
-        if parts[3] == "bash", askApprovalOn {
+        if parts[3] == "bash" {
             let cmd = parts.dropFirst(4).joined(separator: "|")
-            if BashRiskEvaluator.evaluate(command: cmd, learned: learnedBashTokens) == .allow {
+            let decision = BashRiskEvaluator.judge(command: cmd, learned: learnedBashTokens)
+            if decision.isAllow {
                 respondExtensionUI(reqId, value: "Allow", callId: callId)
                 return
             }
+            // P10.2a-0 无人值守: 危险命令 deny 且不阻塞 —— 不弹卡 (没人点会死锁),
+            // 不静默放行 (那是缺口)。原因落卡片 + 记录, 供任务回执写 "卡在 X"。
+            if approvalMode == .autoJudge {
+                let reason = decision.risk?.label ?? BashRiskEvaluator.Risk.unknownCommand.label
+                autoJudgeBlocks.append(AutoJudgeBlock(callId: callId, command: cmd, reason: reason))
+                card = card.withPhase(.error("MangoX 自动裁决拦下: \(reason)"))
+                toolCards[callId] = card
+                emit(.toolUpdated(card))
+                respondExtensionUI(reqId, value: "Deny", callId: callId)
+                return
+            }
+        } else if approvalMode == .autoJudge {
+            // 决定 8 (P10.2) B 案: 分级只管 bash, write/edit 一律放行。
+            respondExtensionUI(reqId, value: "Allow", callId: callId)
+            return
         }
 
         card = card.withPhase(.awaitingApproval)

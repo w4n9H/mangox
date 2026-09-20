@@ -21,23 +21,28 @@ enum DatabaseError: Error {
     case bind(String)
 }
 
-final class Database {
+/// SQLITE_OPEN_FULLMUTEX 句柄级串行 + WAL → 可从任意线程使用 (含后台只读重放连接)。
+final class Database: @unchecked Sendable {
     private var handle: OpaquePointer?
     /// SQLITE_TRANSIENT: 让 sqlite 自己拷贝绑定字符串
     private let transient = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
 
-    init(path: String) throws {
+    init(path: String, readonly: Bool = false) throws {
         try FileManager.default.createDirectory(
             atPath: (path as NSString).deletingLastPathComponent,
             withIntermediateDirectories: true)
         var db: OpaquePointer?
-        let rc = sqlite3_open_v2(path, &db,
-                                 SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX, nil)
+        let flags = readonly
+            ? SQLITE_OPEN_READONLY | SQLITE_OPEN_FULLMUTEX
+            : SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX
+        let rc = sqlite3_open_v2(path, &db, flags, nil)
         guard rc == SQLITE_OK, let db else {
             throw DatabaseError.open("sqlite3_open_v2 rc=\(rc)")
         }
         handle = db
-        sqlite3_exec(handle, "PRAGMA journal_mode=WAL;", nil, nil, nil)
+        if !readonly {
+            sqlite3_exec(handle, "PRAGMA journal_mode=WAL;", nil, nil, nil)
+        }
     }
 
     deinit { sqlite3_close(handle) }

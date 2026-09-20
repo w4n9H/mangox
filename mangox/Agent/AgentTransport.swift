@@ -53,7 +53,10 @@ protocol AgentTransport: AnyObject {
     /// 对审批卡作出决定。
     func respondToPermission(toolId: UUID, decision: PermissionDecision)
     /// 同步审批策略 (askApproval 开关即时生效; pi 侧由客户端自动应答实现)。
+    /// true = 交互弹卡, false = 全放行。
     func updateApprovalPolicy(askApproval: Bool)
+    /// P10.2a-0: 直接指定裁决档 (邮箱哨兵 = .autoJudge: 危险命令 deny 且不阻塞)。
+    func updateApprovalMode(_ mode: ApprovalMode)
     /// 同步工作目录 (P3.4: project 会话绑定 pi 的 cwd; nil = 无项目, 用 home)。
     func updateWorkingDirectory(_ path: String?)
     /// P3.5: 拉取对端能力上报 (当前模型/思考级别 + 可用模型清单)。spawn 后自动触发。
@@ -90,6 +93,9 @@ protocol AgentTransport: AnyObject {
     func updatePIConfig(_ output: ModelMaterializer.Output?)
     /// P7-M4: 下发模式档位 (spawn 期 --tools / 扩展挂载矩阵; per-turn 语义, 下回合生效)。
     func updateMode(_ mode: AgentMode)
+    /// P10.2b: 本回合 `autoJudge` 档拦下的命令 (回执写"卡在哪"的数据来源; 空 = 无拦截)。
+    /// 语义: 调用时机在回合**落定后**、下一次 `send` 前 (send 时清零)。
+    var autoJudgeBlocks: [AutoJudgeBlock] { get }
 }
 
 /// P3.5: 对端上报的可用模型 (pi modelRegistry 条目的保守投影)。
@@ -167,4 +173,8 @@ extension AgentTransport {
     func updatePIConfig(_ output: ModelMaterializer.Output?) {}
     /// P7-M4: 模式档位下发 (Mock 无进程, 空实现)。
     func updateMode(_ mode: AgentMode) {}
+    /// P10.2a-0: 裁决档下发 (Mock 无审批桥, 空实现)。
+    func updateApprovalMode(_ mode: ApprovalMode) {}
+    /// P10.2b: 拦截记录 (Mock 无审批桥 → 恒空; 冒烟用 MockTransport.autoJudgeBlocks 注入)。
+    var autoJudgeBlocks: [AutoJudgeBlock] { [] }
 }

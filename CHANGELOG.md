@@ -5,6 +5,43 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [0.1.8] - 2026-09-20
+
+本版主线 = **P10 冲刺**：邮箱哨兵（Inbox）新子系统 + 会话/任务级配置持久化 + 会话切换零阻塞。全量冒烟 **541 项 ALL PASS** + `xcodebuild` BUILD SUCCEEDED 零 warning。邮箱哨兵已**真机跑通 收信 → 执行 → 回执**（2026-09-20）。
+
+### Added
+
+- **邮箱哨兵（Inbox）**：一个邮箱 = 一个远程入口 —— 发一封邮件给专用邮箱，MangoX 在自己的项目目录里无人值守跑任务，跑完把结果**回执**回你的邮箱（手机在外也能派活）。全新子系统：4 张表 + 收/发通道 + 鉴权 + 回执链路 + 面板
+  - **鉴权四道闸**（确定性规则，模型不参与）：①发件人白名单 ②首封须同时含 `[MGOX]` 意图标记 + 主题共享密钥（**密钥只在首封校验**）③首封 Date ≤ 7 天 ④Message-ID 幂等。**主防线 = 白名单 + 只 poll INBOX** —— 借服务商 SPF/DKIM/DMARC 过滤当免费的第一道闸，共享密钥只是覆盖「白名单含未配 DMARC 的域」的第二道
+  - **多轮续跑**：直接**回复回执**即可，无需再带密钥（靠 `References` / `In-Reply-To` 命中线程键；主题里的 `[MGOX-<id8>]` 是客户端剥掉 References 时的兜底）。同一线程**续在同一会话**，cwd 吃**首封项目快照**（改配置不让历史线程漂移）
+  - **回执状态机**：主题 `[MGOX][DONE|BLOCKED|FAILED] [MGOX-<id8>] <标题>`，手机上不点开即可扫进度；正文 = 产出 + 拦截清单 + 结算行（状态 / 耗时 / 轮次 / tokens / 费用）
+  - **收/发通道**：封装系统 curl（`imaps://` 收 / `smtps://` 发）+ 自写 `MimeParser`（头折叠 / RFC2047 B+Q / multipart 递归取 text/plain / QP / base64 / charset 含 GB18030）与 `MailMessageBuilder`
+  - **面板**：Settings 新增**邮箱账号池**（可多个 + 163/126/QQ/阿里云四家个人邮箱预设 + 一键测试连接）；Scheduled 页新增 Inbox 段与**最近拒收**面板（含「加入白名单」快捷按钮）
+  - **凭据纪律**：授权码/密钥一律**不入库**（Keychain 按 id 分账 `mailbox.acct.<id>.auth` / `mailbox.sentinel.<id>.secret`），UI 永不回显已存凭据（留空 = 不修改）
+  - ⚠️ **163 / 126 暂不可用**：网易强制客户端在登录后、`SELECT` 前发 IMAP `ID` 自报身份，当前 curl 通道的命令顺序固定、发不出 → 本版请用 **QQ / 阿里云个人邮箱**。用企业邮箱同理不支持（Outlook/Office365 已弃 IMAP basic auth）
+- **审批三档（`ApprovalMode`）**：`Interactive`（弹卡等人点）/ `Auto allow`（全放行）/ `Auto judge`（只读静默放行，危险命令**自动拒绝且不阻塞** + 记原因并回执告知）。无人值守路径一律不走弹卡（后台没人点 = 死锁到超时），新增 `beginTurn(approvalOverride:)` 供哨兵 / 定时任务压过全局档位
+- **会话级配置持久化（P10.3）**：`sessions.config` 记录每个会话自己的模型 / 思考级别 / 模式档 / bypass —— 重启不再全部回默认。恢复链 = 本会话配置 → **App 默认配置**（`app_default_config` KV）→ `last_session_config` 兜底；**被动浏览（切会话）永不写行**，只有用户动作（选模型 / 拨开关 / 新建会话）才写穿
+- **定时任务级模型 / 模式配置（P10.4）**：`scheduled_tasks.config` 复用同一份 `SessionConfig` —— 重活跑 full + 高级模型、轻任务跑 minimal + 便宜模型。fire 时**只对那个会话的 transport 生效**，不污染全局状态；任务日志会话也 stamp 该配置，点开即知「这个任务用的什么模型」
+- **只读 IMAP 诊断探针** `scripts/diag/imap_probe.py`：凭据只从环境变量读、输出全程脱敏、只用 `BODY.PEEK[]`（不 STORE / COPY / EXPUNGE）—— 用来一轮定案「我们发错了」还是「服务器不收」
+
+### Changed
+
+- **调度页命名体系按触发源统一**：定时任务 → **Cron** / 条件等待任务 → **Watch**（原「哨兵任务」）/ 邮件驱动 → **Inbox**（原 Sparse Agent，退为概念统称）。页面名保留 **Scheduled**；账号池（连接 / 凭据）留 Settings，agent + 拒收搬到 Scheduled；编辑器顶部**三档段选** Cron / Watch / Inbox，从编辑器直达三类
+- **会话切换零阻塞（P10.5）**：重放缓存改**增量维护**（`appendEvent` 后原位 append / patch，乱序才惰性重排），切会话改**先切再渲染**（缓存命中同步上屏；未命中先空态 + **独立只读连接**后台 decode 再合并落地，带代数校验防串台）。实测首切 1000 消息会话，同步部分 **0.1ms**（后台落地 22.4ms）、缓存命中切换 **0.4ms**
+- **长会话渲染与内存（P10.6a）**：消息列表 `VStack` → `LazyVStack`（视图构建成本从 O(总条数) 降到 O(视口)）；重放缓存加**访问序 LRU、上限 8 个会话**（只丢缓存不改库，下次读回落全量 SELECT）
+
+### Fixed
+
+- **`BashRiskEvaluator` 六类误放行洞**（自动裁决档的安全底座）：四类参数洞（`find -exec` / `env <cmd>` / `sort -o` / `curl·wget -o|-O|-T`）+ 早期实现整段剥 `2>` / `&>` 误放行 `ls 2>err.txt` + `2>&1` 的 `&` 被当组合分隔符切出假 token。语料 31 危险 + 27 只读全绿
+- **邮箱通道四个真机 bug**（2026-09-20 联调实测，均已修 + 冒烟不变量守住）：
+  - **取信拿不到正文**：`curl -X 'FETCH n BODY.PEEK[]'` 只把 IMAP **响应行**吐到 stdout（后面的大块字面量根本不读，只有 31 字节）→ 改走 curl **内置** `imaps://host/INBOX;UID=n` 路径，stdout 即裸邮件字节。代价 = 内置路径硬编码 `BODY[]`，**取信即置已读**（顺带好处：被拒的信也只出现一轮，不再每轮重复记同一条拒收日志）
+  - **序号 vs UID 坐标系错位**：RFC 3501 裸 `SEARCH` 返回**消息序号**、`UID SEARCH` 才返 UID（信箱只剩 1 封而 `UIDNEXT 97` 时，两者是 `1` 与 `96` 的差别）→ 全链统一到 UID 空间（`UID SEARCH` / `UID FETCH` / `UID STORE` / `UID COPY`）+ 冒烟不变量防回归
+  - **回执发不出去**：curl 不给 SASL 机制时自选 PLAIN，而 **QQ 的 SMTP 只接受 `AUTH LOGIN`**（同一台服务器的 IMAP 反而接受 PLAIN）→ 同一个授权码「IMAP 全通、SMTP 登不上」，看着像授权码没开 SMTP 权限。全链钉死 `--login-options AUTH=LOGIN`；「测试连接」由「只测 IMAP」改为**收发两个方向都验**（新增不发信、只认证的 `smtpAuthProbe`）
+  - **失败静默**：回执发送失败原先只写进一个**没有任何视图消费**的字段 → 「任务跑了、会话建了、回执没到」而界面一片正常。现接进 Inbox 编辑器「运行状态」卡
+- **多轮（后续轮）五条，含一条全域死锁**：①在途任务被后续轮**降级**成排队态 → 落定钩子按 `running` 反查落空 → **串行位永不释放，此后所有哨兵的邮件只进不出**（触发极日常：agent 干活时你在同一线程再回一封）②同线程连发两封原为**覆盖**语义（前一封指令静默丢失）→ 改为合并成一轮 ③回执主题的状态 tag 逐轮累积成 `[DONE] [DONE] …` → 清洗规则改由状态机 `allCases` 派生 ④引用行判定不认 QQ webmail 的 `------ 原始邮件 ------` → 第 2 轮起 prompt 会内嵌上一轮全文 ⑤崩溃残留的幽灵 `running` 行会被落定钩子命中，把**用户自己那轮**的产出当回执发出去 → 重启时一并判失败
+- **两处胶囊下拉点不中**（SwiftUI `Menu` 内容只吃 Button / Toggle / Picker，照 `Picker` 写成 `.tag` 会整列渲染成禁用项，编译期零信号）→ 抽公共件 `CodexPillMenu` + `✓` 前缀标选中
+- 垃圾箱名不再硬编码（`Trash` 在 QQ 上真名是 `Deleted Messages`，且 QQ 不返回 `\Trash` 标志、运行时判不出来）→ 候选列表逐个试 COPY，全失败仍打 `\Deleted`，**永不 EXPUNGE**
+
 ## [0.1.7] - 2026-09-16
 
 ### Fixed

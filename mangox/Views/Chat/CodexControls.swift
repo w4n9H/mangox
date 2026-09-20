@@ -44,6 +44,41 @@ struct CodexSegmented: View {
     }
 }
 
+// MARK: - 胶囊标签下拉菜单 (编辑器 pill 行共用)
+
+/// bgPill 底 + 描边的胶囊胶囊, 内含一个 borderless Menu。
+///
+/// ⚠️ 两条实测约束 (2026-09-18 联调):
+/// 1. `content` 里**只能放** Button / Toggle / Picker / Link —— 想做"单选菜单"时顺手写
+///    `Text(x).tag(y)` 是**静默失效**的: Menu 会展开, 但每一项都渲染成灰色、点不动的死项
+///    (`.tag` 只在 Picker 里有意义)。单选题就写 `Button { sel = y } label: { Text(x) }`。
+/// 2. `label` 只放 Image + Text 各一个 —— borderlessButton Menu 会丢弃多余子视图。
+struct CodexPillMenu<Content: View, Label: View>: View {
+    private let content: Content
+    private let label: Label
+
+    init(@ViewBuilder content: () -> Content, @ViewBuilder label: () -> Label) {
+        self.content = content()
+        self.label = label()
+    }
+
+    var body: some View {
+        Menu { content } label: {
+            HStack(spacing: 4) { label }
+                .font(CodexTheme.fontSmall)
+                .foregroundStyle(CodexTheme.textSecondary)
+                .contentShape(Rectangle())
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 3)
+        .background(CodexTheme.bgPill)
+        .clipShape(Capsule())
+        .overlay(Capsule().stroke(CodexTheme.border.opacity(0.4), lineWidth: 1))
+    }
+}
+
 // MARK: - 自绘 mini 开关 (替换 .toggleStyle(.switch))
 
 struct CodexMiniToggle: View {

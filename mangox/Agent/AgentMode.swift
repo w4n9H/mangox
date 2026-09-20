@@ -6,7 +6,8 @@
 
 import Foundation
 
-enum AgentMode: String, CaseIterable, Identifiable {
+// Codable: 哨兵配置要往 JSON blob / 表列里落 rawValue (P10.2a)。
+enum AgentMode: String, Codable, CaseIterable, Identifiable {
     case minimal, standard, full
     var id: String { rawValue }
 

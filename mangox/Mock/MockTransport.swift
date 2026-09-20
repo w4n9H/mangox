@@ -21,8 +21,15 @@ final class MockTransport: AgentTransport {
     private(set) var lastPIConfig: ModelMaterializer.Output?
     /// P7-M4 smoke 断言用: 最近一次模式档位下发
     private(set) var lastMode: AgentMode?
+    /// P10.4: 任务级模型/级别下发记录 (冒烟断言)
+    private(set) var lastSetModel: (provider: String, modelId: String)?
+    private(set) var lastThinking: String?
     /// P7-M6b smoke 断言用: 最近一次发送的图片数
     private(set) var lastSentImages: [OutgoingImage] = []
+    /// P10.2a smoke 断言用: 最近一次 send 的 prompt (哨兵"beginTurn 收到 prompt"断言)
+    private(set) var lastSentPrompt: String?
+    /// P10.2a smoke 断言用: 最近一次 cwd 下发 (哨兵项目绑定/回落 home 断言)
+    private(set) var lastWorkingDirectory: String?
 
     func updateExtensions(_ paths: [String]) {
         lastDesiredExtensions = paths
@@ -45,6 +52,7 @@ final class MockTransport: AgentTransport {
     func send(prompt: String, images: [OutgoingImage]) {
         cancelled = false
         lastSentImages = images
+        lastSentPrompt = prompt
         delegate?.transport(self, didEmit: .streamStarted)
         Task { await simulateReply(prompt: prompt) }
     }
@@ -61,8 +69,20 @@ final class MockTransport: AgentTransport {
     /// P8-T27 smoke 断言用: 最近一次审批策略下发
     private(set) var lastAskApproval: Bool?
 
+    func updateApprovalMode(_ mode: ApprovalMode) {
+        // P10.2a-0 smoke 断言用: 裁决档下发 (验证 ChatStore.beginTurn 的 approvalOverride 接线)
+        lastApprovalMode = mode
+    }
+
+    /// P10.2a-0 smoke 断言用: 最近一次裁决档下发 (nil = 从未下发, 走全局 askApproval 开关)
+    private(set) var lastApprovalMode: ApprovalMode?
+
+    /// P10.2b smoke 注入: 本回合"被自动裁决拦下"的命令 (回执链路断言用; mock 无审批桥, 默认空)
+    var autoJudgeBlocks: [AutoJudgeBlock] = []
+
     func updateWorkingDirectory(_ path: String?) {
-        // mock 无进程, 无 cwd 概念
+        // mock 无进程, 无 cwd 概念; 记录最近一次下发供 P10.2a 哨兵断言 (项目绑定 / 回落 home)
+        lastWorkingDirectory = path
     }
 
     // MARK: - P9-#1 smoke: 导出 delegate 链路
@@ -91,11 +111,13 @@ final class MockTransport: AgentTransport {
     }
 
     func setModel(provider: String, modelId: String) {
+        lastSetModel = (provider, modelId)   // P10.4: 冒烟断言任务级模型下发
         delegate?.transport(self, didUpdateModelState: provider,
                             modelId: modelId, thinkingLevel: "xhigh")
     }
 
     func setThinkingLevel(_ level: String) {
+        lastThinking = level   // P10.4: 冒烟断言任务级级别下发
         delegate?.transport(self, didUpdateModelState: "deepseek",
                             modelId: "deepseek-v4-flash", thinkingLevel: level)
     }
