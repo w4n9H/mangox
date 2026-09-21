@@ -143,7 +143,7 @@ struct ExtensionsView: View {
         .padding(.leading, 8)
         .padding(.trailing, 6)
         .padding(.vertical, 5)
-        .background(selected ? CodexTheme.bgElevated : Color.clear)
+        .background(selected ? CodexTheme.selected : Color.clear)
         .clipShape(RoundedRectangle(cornerRadius: CodexTheme.radiusSm))
         .contentShape(Rectangle())
         .onTapGesture { selectedPath = item.path }

@@ -21,21 +21,62 @@ enum CodexTheme {
         })
     }
 
-    // MARK: - Surfaces (light: white/gray · dark: near-black)
-    static let bgBase     = adaptive(light: 0xFFFFFF, dark: 0x050507) // app background
-    static let bgSidebar  = adaptive(light: 0xF6F6F7, dark: 0x0A0A0D) // nav/left column
-    static let bgChat     = adaptive(light: 0xFFFFFF, dark: 0x0D0D10) // conversation
-    static let bgRight    = adaptive(light: 0xF6F6F7, dark: 0x0A0A0D) // workspace
-    static let bgCard     = adaptive(light: 0xF3F3F5, dark: 0x16161A) // tool call / message card
-    static let bgElevated = adaptive(light: 0xEDEDEF, dark: 0x1D1D22) // hover / higher surface
-    static let bgInput    = adaptive(light: 0xF1F1F3, dark: 0x131317) // composer background
-    static let bgPill     = adaptive(light: 0xE7E7EA, dark: 0x26262B) // composer 上方的胶囊控件（明显浅灰）
-    static let bgComposer = adaptive(light: 0xFFFFFF, dark: 0x131317) // 输入卡 (暗色下必须比 bgChat 亮, 否则是黑洞)
+    /// 半透明叠加层 —— **悬停 / 选中态专用**（不直接对外用，见下方 hover / selected）。
+    ///
+    /// 为什么不做成实色（2026-09-21 P10.8 修正）：固定实色只在"比它更暗的面"上成立。
+    /// 同一个值落到卡片面或正文面上就会看不见、甚至反过来比底更暗 —— 这正是
+    /// `bgElevated` 一个 token 同时兼"内容卡面"和"悬停态"时暴露出来的问题。
+    /// 叠加层在任意面上都成立：暗色加白、亮色加黑，天然跟着底走。
+    private static func overlay(dark: Double, light: Double) -> Color {
+        Color(nsColor: NSColor(name: nil) { appearance in
+            let isDark = appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+            return isDark ? NSColor(white: 1, alpha: CGFloat(dark))
+                          : NSColor(white: 0, alpha: CGFloat(light))
+        })
+    }
+
+    // MARK: - Surfaces (light: white/gray · dark: 深灰地板 —— 见 Dark 节的"为什么不是纯黑")
+
+    static let bgBase     = adaptive(light: 0xFFFFFF, dark: Dark.bgBase) // app background · 窗口底 (最外层)
+    static let bgSidebar  = adaptive(light: 0xF6F6F7, dark: Dark.bgSidebar) // nav/left column
+    static let bgRight    = adaptive(light: 0xF6F6F7, dark: Dark.bgSidebar) // workspace
+
+    /// **页面底** —— 主区面板的"纸边": 顶栏 / 各面板最外圈。
+    /// ⚠️ 大段正文**不坐这一层** —— 那正是 2026-09-21 boss「黑色主题看着眼睛很累」的根因,
+    /// 正文请用 `contentPanel`。
+    /// ⚠️ P10.8c: **聊天页内部不再用它**（输入区/状态栏已收回 `contentPanel`）——
+    /// 面板内部只允许一种底色, 否则相邻两个面之间会出现"无边界元素的硬边"。
+    static let bgChat     = adaptive(light: 0xFFFFFF, dark: Dark.bgChat)
+
+    /// **内容面** (P10.8b 新增) —— 主区里 **正文真正坐着的那一层**: 消息列 / 轨迹列表 / 引用块。
+    ///
+    /// 为什么不直接抬 `bgChat`: 它还兼着"顶栏底 / 各面板最外圈", 抬它会把顶栏一起抬平,
+    /// 层次反而糊掉 —— 内容面是**局部**的, 页面底是**全局**的。
+    /// 亮色取值与 `bgChat` 同为纯白: 亮色模式本来就是"白纸 + 灰卡", 不需要第二层 (改它 = 无谓的亮色回归)。
+    /// P10.8c: 底档 (输入区 + 状态栏) 也归这一层 —— **聊天页从顶到底只有一种底色**。
+    static let contentPanel = adaptive(light: 0xFFFFFF, dark: Dark.contentPanel)
+
+    /// 输入井 (搜索框/字段面) / 卡面 / 卡内次级面 / 胶囊。
+    static let bgInput    = adaptive(light: 0xF1F1F3, dark: Dark.bgInput)
+    static let bgCard     = adaptive(light: 0xF3F3F5, dark: Dark.bgCard) // tool card / code block / table
+    static let bgElevated = adaptive(light: 0xEDEDEF, dark: Dark.bgElevated) // 卡内次级面 (表头·按钮·工具条) · 设置卡面
+    static let bgPill     = adaptive(light: 0xE7E7EA, dark: Dark.bgPill) // composer 上方的胶囊控件（明显浅灰）
+    /// 输入卡面 —— 暗色下比**它所在的两种面都暗一档**(正文面 contentPanel / 页面底 bgChat),
+    /// 所以既能在聊天页当"凹槽", 又能当其他页面上的字段底 (旧注释说的"必须比 bgChat 亮"已过时)。
+    static let bgComposer = adaptive(light: 0xFFFFFF, dark: Dark.bgInput)
+
+    // MARK: - 交互态 (悬停 / 选中)
+    //
+    // 用**半透明叠加**而不是实色: 实色只在"比它更暗的面"上成立。侧栏选中行 (底=侧栏)、
+    // 卡内悬停按钮 (底=卡面)、分段控件 hover (底=容器面) —— 三者底色差了三档, 同一个实色不可能都对。
+    // 两个 token 而不是一个: **选中必须比悬停更实**, 否则"当前项在哪"读不出来。
+    static let hover    = overlay(dark: Dark.hoverAlpha, light: 0.05)
+    static let selected = overlay(dark: Dark.selectedAlpha, light: 0.08)
 
     // MARK: - Borders
-    static let border     = adaptive(light: 0xE3E3E7, dark: 0x25252B)
-    static let divider    = adaptive(light: 0xECECEF, dark: 0x1A1A1E)
-    static let guide      = adaptive(light: 0xDCDCE2, dark: 0x2E2E36) // 侧栏层级引导线 (比 divider 实, 比 border 软)
+    static let border     = adaptive(light: 0xE3E3E7, dark: Dark.border)
+    static let divider    = adaptive(light: 0xECECEF, dark: Dark.divider)
+    static let guide      = adaptive(light: 0xDCDCE2, dark: Dark.guide) // 侧栏层级引导线 (比 divider 实, 比 border 软)
 
     // MARK: - Accent
     static let accent       = adaptive(light: 0xDD5742, dark: 0xDD5742) // warm orange-red (brand primary)
@@ -44,16 +85,16 @@ enum CodexTheme {
     static let toolRunning  = adaptive(light: 0xB07A12, dark: 0xE0A030) // amber when running
     static let toolDone     = adaptive(light: 0x1A7F37, dark: 0x3FB950) // green when done
     static let toolError    = adaptive(light: 0xD1242F, dark: 0xE5484D) // red
-    static let toolQueued   = adaptive(light: 0x6B6B78, dark: 0x6B6B78) // gray-blue for queued
+    static let toolQueued   = adaptive(light: 0x6B6B78, dark: Dark.toolQueued) // gray-blue for queued
     static let info         = adaptive(light: 0x0969DA, dark: 0x7DA3F0)
     static let blocked      = adaptive(light: 0xB07A12, dark: 0xE0A030) // amber awaiting-approval (P8-T26)
 
     // MARK: - Text
-    static let textPrimary   = adaptive(light: 0x24292F, dark: 0xEDEDED) // 柔和近黑 (0x1F2328 太硬)
-    static let textSecondary = adaptive(light: 0x57606A, dark: 0x9A9AA3)
-    static let textTertiary  = adaptive(light: 0x6E7781, dark: 0x6B6B76)
-    static let textMuted     = adaptive(light: 0x9CA3AB, dark: 0x4A4A52)
-    static let textMono      = adaptive(light: 0x24292F, dark: 0xC9C9D0)
+    static let textPrimary   = adaptive(light: 0x24292F, dark: Dark.textPrimary) // 柔和近黑 (0x1F2328 太硬)
+    static let textSecondary = adaptive(light: 0x57606A, dark: Dark.textSecondary)
+    static let textTertiary  = adaptive(light: 0x6E7781, dark: Dark.textTertiary)
+    static let textMuted     = adaptive(light: 0x9CA3AB, dark: Dark.textMuted)
+    static let textMono      = adaptive(light: 0x24292F, dark: Dark.textMono)
 
     // MARK: - Status
     static let statusRunning = toolRunning
@@ -84,6 +125,98 @@ enum CodexTheme {
     static let animMed:  Animation   = .easeInOut(duration: 0.25)
     /// New message / tool card insertion.
     static let animMessage: Animation = .spring(response: 0.28, dampingFraction: 0.85)
+
+    // MARK: - ★ 暗色板原始值（P10.8「暗色不再累眼」）
+    //
+    // **为什么单独抽出来**：这些字面量既是渲染值、也是**冒烟里算对比度的输入** ——
+    // 只有一个源头，才不会出现"改了色值但守卫还在验旧数字"的漂移。
+    //
+    // **第一刀 · 为什么不是纯黑**（2026-09-21 boss 反馈"黑色主题看着眼睛很累"，实测定位）：
+    // 截图采样 + WCAG 计算显示，旧值 = 近纯黑底（`#0D0D10`，相对亮度 0.0041）
+    // 压近纯白正文（`#EDEDED`）→ **对比度 16.6:1**。大段正文在超高对比度下会产生
+    // **光晕（halation）**，长时间阅读明显累眼 —— 这是暗色模式最常见的反模式，
+    // 因为"对比度越高越清晰"只对小字短文本成立，对整屏正文不成立。
+    //
+    // 现代暗色 OLED 规范（Material / Apple HIG）的共识是：**"暗"由黑变深灰承担，
+    // 层次由面与面的亮度差承担，而不是把地板压到 0**。第一刀取舒适带：
+    //   地板 0x111116（不再触及纯黑）· 正文对比度 16.6 → 10.5:1
+    //   代码 mono 11.8 → 8.7:1（整屏代码块不再发白光）· 三级 3.7 → 5.1（达标）
+    //
+    // **第二刀 · 正文得有一层"面"**（P10.8b，boss 对比截图后："我感觉 settings 看着更舒服"）：
+    // 第一刀之后 Chat 仍比 Settings 累眼，因为两者的差别不是颜色而是**结构** ——
+    //   Settings：正文坐在**卡片面**上（`bgElevated` → 8.32:1）
+    //   Chat    ：正文坐在**页面底**上（`bgChat`，与最外圈同一个面 → 10.51:1，且面本身近黑）
+    // 于是给主区正文引入了独立一档 `contentPanel`（正文对比度 9.37:1），
+    // 卡片（工具卡/代码块/表格）整体再往上让一档 `bgCard`。
+    // 面链因此从 7 级变 8 级：bgBase < bgSidebar < bgChat < bgInput < **contentPanel** < bgCard < bgElevated < bgPill
+    //
+    // ⚠️ **为什么内容面不直接对齐 Settings 卡面（0x2C2C35）** —— 不是保守，是**结构不允许**：
+    // 卡片必须严格亮于它所处的面。内容面一顶到 0x2C2C35，Chat 里的工具卡/代码块就再无档位可去
+    // （再往上就撞 `bgElevated`，而 `bgElevated` 正是 Settings 卡面本身）。
+    // 所以内容面**只能**落在卡面下一档 —— 这也解释了为什么"照 Settings 调"不能是复制它的数值，
+    // 只能是复制它的**结构**：正文坐在独立面 / 卡面比正文面亮一档。
+    // 要把正文再压低，就抬 `contentPanel` 且连带抬 bgCard/bgElevated/bgPill ——
+    // 改完跑 `python3 scripts/diag/palette_probe.py`，它会直接说哪条不变量破了（不用等整条冒烟）。
+    //
+    // **第三刀 · 面板内部只允许一种底色**（P10.8c，boss 圈出"我画框那里有明显的割裂感"）：
+    // 第二刀把正文抬起来之后，底部输入区那条色带（当时坐 `bgChat`）的顶边与正文面之间，
+    // 出现了一道横贯全宽、**没有任何视觉元素承担它**的硬边 —— 两侧都是大面积纯色，
+    // 眼睛就只能读成"两块板拼在一起"（左侧空白处最明显，那里连内容都没有）。
+    // 判据：**一条"面"要么承载内容，要么自带可见的边界元素（线 / 圆角 / 阴影）**，
+    // 否则它在邻面上就是一块补丁。输入区（143pt 高、无边界元素）与状态栏（与输入区同色，
+    // 被读成同一块板的下半截）都不满足 → 一起收回 `contentPanel`，
+    // 层级改由**卡自己**表达：项目条 `bgCard` 浮起 / 输入卡 `bgComposer` 凹下。
+    // 于是聊天页从顶到底只有一种底色，一道缝都不剩（亮色本来就同色，这次是**暗色向亮色对齐**）。
+    enum Dark {
+        // 面：亮度严格单调递增
+        // bgBase < bgSidebar < bgChat < bgInput < contentPanel < bgCard < bgElevated < bgPill
+        // （冒烟守这条链 —— 抬了地板忘了抬卡片，卡片就变成"贴在地板上的补丁"）
+        static let bgBase: UInt32     = 0x111116   // 窗口底
+        static let bgSidebar: UInt32  = 0x16161B
+        static let bgChat: UInt32     = 0x191920   // 页面底
+        static let bgInput: UInt32    = 0x1F1F27   // 输入井/字段面（比 contentPanel 暗一档）
+        /// ★ 内容面（P10.8b）：正文坐这一层。取值 = 旧 bgCard —— 即"把原来给卡片的那一档，
+        /// 让给正文"，卡片整体再往上让一档（见 bgCard）。**正文对比度 9.36:1**。
+        static let contentPanel: UInt32 = 0x23232C
+        static let bgCard: UInt32     = 0x282830   // 卡面（工具卡 / 代码块 / 表格）
+        static let bgElevated: UInt32 = 0x2C2C35   // 卡内次级面（表头/按钮/工具条）· 设置卡面
+        static let bgPill: UInt32     = 0x343440
+        // 描边（随地板一起抬，否则在新底上"消失"）
+        static let border: UInt32     = 0x373742
+        static let divider: UInt32    = 0x282832
+        static let guide: UInt32      = 0x3E3E4A
+        // 文字：按新底重新定档（地板抬高后，旧的次级色会偏暗、正文会偏亮）
+        static let textPrimary: UInt32   = 0xC8C8D0
+        static let textSecondary: UInt32 = 0xA8A8B2
+        /// 三级从 0x8A8A95 抬到 0x8E8E99 —— 卡面抬一档后，旧值在卡上掉到 4.29:1（跌破 AA），
+        /// 抬到 0x8E8E99 才让"卡上的三级小字"重回过线。这是抬面**必须配套**的一步，不是顺手美化。
+        static let textTertiary: UInt32  = 0x8E8E99
+        static let textMuted: UInt32     = 0x6C6C77
+        static let textMono: UInt32      = 0xB6B6C0
+        static let toolQueued: UInt32    = 0x8A8A95
+        // 交互态叠加 alpha（暗色加白）。也放这里 —— 冒烟要断言"选中比悬停实"。
+        static let hoverAlpha: Double    = 0.06
+        static let selectedAlpha: Double = 0.10
+    }
+
+    /// WCAG 相对亮度 / 对比度 —— 让"配色舒不舒服"成为**可断言的数值**，而不是只能靠眼睛。
+    /// 放主题文件而不是冒烟里：冒烟里那份会成为漂移源（主题改了、守卫还验旧数）。
+    enum WCAG {
+
+        static func luminance(_ hex: UInt32) -> Double {
+            func f(_ v: UInt32) -> Double {
+                let c = Double(v & 0xFF) / 255.0
+                return c <= 0.03928 ? c / 12.92 : pow((c + 0.055) / 1.055, 2.4)
+            }
+            return 0.2126 * f(hex >> 16) + 0.7152 * f(hex >> 8) + 0.0722 * f(hex)
+        }
+
+        /// 1.0 ~ 21.0；越大越"硬"。
+        static func contrast(_ a: UInt32, _ b: UInt32) -> Double {
+            let la = luminance(a), lb = luminance(b)
+            return (max(la, lb) + 0.05) / (min(la, lb) + 0.05)
+        }
+    }
 }
 
 // MARK: - ★ 调参区 (Tune)

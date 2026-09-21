@@ -126,7 +126,7 @@ struct KnowledgeView: View {
         .padding(.leading, 8)
         .padding(.trailing, 6)
         .padding(.vertical, 5)
-        .background(selected ? CodexTheme.bgElevated : (hovered ? CodexTheme.bgElevated.opacity(0.5) : Color.clear))
+        .background(selected ? CodexTheme.selected : (hovered ? CodexTheme.hover : Color.clear))
         .clipShape(RoundedRectangle(cornerRadius: CodexTheme.radiusSm))
         .contentShape(Rectangle())
         .onHover { hoveringId = $0 ? item.id : nil }

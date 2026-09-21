@@ -25,7 +25,12 @@ struct ChatComposer: View {
         .padding(.bottom, Tune.composerBottomPadding)
         .frame(maxWidth: Tune.composerMaxWidth)   // 内容宽 + 2×外边距, 与消息列内容宽同源 (Tune.chatContentWidth)
         .frame(maxWidth: .infinity)
-        .background(CodexTheme.bgBase)
+        // P10.8c: 输入区**与正文面同面** —— 它本来就是同一张纸的下半部, 不是"另一层"。
+        // 上一版让它坐页面底 (bgChat) 当"凹槽", 但这条色带的顶边落在消息列下方的空白处,
+        // 成了一道横贯全宽、无任何边界元素的硬边 (boss 2026-09-21 圈出"明显的割裂感")。
+        // 现在: 区域 = 正文面; "凹"交给输入卡自己 (bgComposer 比正文面暗一档 + 描边),
+        // "浮"交给项目条 (bgCard 比正文面亮) —— 层级全由卡表达, 交界处没有第二种底色。
+        .background(CodexTheme.contentPanel)
         .overlay(alignment: .bottom) {
             if let query = mentionQuery {
                 MentionPopup(store: store, query: query) { path in
@@ -357,6 +362,11 @@ struct ChatComposer: View {
                     .font(.system(size: 11, weight: .semibold))
                     .foregroundStyle(canSend ? CodexTheme.bgBase : CodexTheme.textMuted)
                     .frame(width: Tune.sendButtonSize, height: Tune.sendButtonSize)
+                    // ⚠️ 禁用态用 `bgChat`（= 比输入区所在的 `contentPanel` 暗一档）**是有意的**：
+                    // 它和"可用态 = 实心 `textPrimary` 圆"配成一对（都是"实心圆按钮"，只是灭的），
+                    // 且自带 1px 描边 → 满足"面必须自带边界元素"的判据，不是无边界补丁。
+                    // 历史上它和输入区同为 `bgChat`（填色等于隐形、只剩圈）；P10.8c 把输入区
+                    // 抬到 `contentPanel` 后它才显形 —— 别把它"修"回 `contentPanel`。
                     .background(
                         Group {
                             if canSend {
@@ -519,6 +529,19 @@ struct CompactTextEditor: NSViewRepresentable {
     /// 两条路都拦; 剪贴板无图时放行常规文本粘贴)。
     private final class PasteInterceptTextView: NSTextView {
         var onImagePaste: ((Data, String) -> Void)?
+
+        /// 空草稿时**不画插入点** —— 那一行归占位提示 (两者同起点, 叠在一起会互相啃字:
+        /// 2026-09-21 boss"那个闪烁线和那句'给 MangoX 发消息'重叠了, 感官非常不友好";
+        /// 截图实测: 光标占 x 102–105, 而"给"的墨迹从 x 97 起 → 竖线落在字的左半)。
+        ///
+        /// 为什么不是"把提示往右挪几个点": 首字的左边距是**字体/语言相关**的
+        /// (CJK 与拉丁不同), 一个硬编码偏移不可能对两门语言都对; 空态只留提示 = 语言无关。
+        /// ⚠️ 只拦"画"、不拦"擦": 擦除路径 (`turnedOn == false`) 必须照常走,
+        /// 否则把草稿删空后屏幕上会留下一根擦不掉的旧光标。
+        override func drawInsertionPoint(in rect: NSRect, color: NSColor, turnedOn flag: Bool) {
+            if flag, string.isEmpty { return }
+            super.drawInsertionPoint(in: rect, color: color, turnedOn: flag)
+        }
 
         override func paste(_ sender: Any?) {
             if let img = ImagePipeline.pasteboardImage() {

@@ -152,18 +152,20 @@ struct ContentView: View {
                     if store.capsuleMode == .trajectory {
                         TrajectoryView(store: store)
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
-                            .background(CodexTheme.bgChat)
+                            .background(CodexTheme.contentPanel)
                     } else {
                         ChatView(store: store)
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
-                            .background(CodexTheme.bgChat)
+                            .background(CodexTheme.contentPanel)
                     }
                     BottomStatusBar(phase: store.runtimePhase,
                                     turnCount: store.currentTurnCount,
                                     stats: store.sessionStats)
                 }
+                // P10.8b: 底档整块用**内容面** —— 这段是"正文坐的纸"，不是页面底。
+                // 页面底 (bgChat) 只留给顶栏与面板最外圈；正文/轨迹/状态栏都在这层之上。
                 .frame(maxWidth: .infinity)
-                .background(CodexTheme.bgChat)
+                .background(CodexTheme.contentPanel)
             }
             if store.workspaceVisible {
                 Divider().overlay(CodexTheme.divider)

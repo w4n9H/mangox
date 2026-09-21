@@ -2684,6 +2684,66 @@ struct SmokeMain {
         check(Tune.sidebarRowIndent > 8,
               "T-UI 侧栏层级: 项目内会话行有真实缩进 (顶层恒 8, 子行必须更进)")
 
+        // ===== T-COLOR (P10.8): 暗色板舒适区 =====
+        // 起因: boss 反馈"黑色主题看着眼睛很累"。采样截图 + 算 WCAG 定位到**两级**问题:
+        //  ① 旧值近纯黑底(#0D0D10, 亮度 0.0041) 压近纯白正文(#EDEDED) = 对比度 16.6:1
+        //     → 整屏正文产生光晕(halation), 久读累眼。"对比度越高越清晰"只对小字短文本成立。
+        //  ② 抬完地板仍比 Settings 累眼 —— 因为**正文坐在页面底上, 压根没有自己的面**
+        //     (Settings 的正文坐在卡片面上 / 8.32:1 —— boss 对比两张截图后拍的板)。
+        // 这里把"舒适"冻成数值区间: 正文 9~12.5 / mono 7.5~10 / 次级 6~8.5 / 三级 ≥4.5, 地板不碰纯黑。
+        // 两面都守: 太高(刺眼)与太低(费劲)都不行 —— 只写上限的那半等于没守。
+        //
+        // ⚠️ 基准是 **contentPanel**(正文真正坐着的那一层), 不再是 bgChat。
+        //    P10.8b 之前正文确实坐在 bgChat 上, 所以当时拿它当基准; 现在 bgChat 是"页面底",
+        //    正文已经不坐它了 —— **基准必须跟语义走**, 否则守卫只是在替一个没人坐的面背书。
+        let darkPanel = CodexTheme.Dark.contentPanel
+        let crBody = CodexTheme.WCAG.contrast(CodexTheme.Dark.textPrimary, darkPanel)
+        check(crBody >= 9.0 && crBody <= 12.5,
+              "T-COLOR 暗色正文对比度落在舒适区 9~12.5 (实测 \(String(format: "%.2f", crBody)):1)")
+        let crMono = CodexTheme.WCAG.contrast(CodexTheme.Dark.textMono, darkPanel)
+        check(crMono >= 7.5 && crMono <= 10.0,
+              "T-COLOR 暗色 mono 对比度落在舒适区 7.5~10 (整屏代码块不发白光; 实测 \(String(format: "%.2f", crMono)):1)")
+        let crSecond = CodexTheme.WCAG.contrast(CodexTheme.Dark.textSecondary, darkPanel)
+        check(crSecond >= 6.0 && crSecond <= 8.5,
+              "T-COLOR 暗色次级文字仍可读且不与正文抢层次 (6~8.5; 实测 \(String(format: "%.2f", crSecond)):1)")
+        let crThird = CodexTheme.WCAG.contrast(CodexTheme.Dark.textTertiary, darkPanel)
+        check(crThird >= 4.5,
+              "T-COLOR 暗色三级文字达到 WCAG AA 正文标准 (≥4.5; 实测 \(String(format: "%.2f", crThird)):1)")
+        let crOnCard = CodexTheme.WCAG.contrast(CodexTheme.Dark.textPrimary, CodexTheme.Dark.bgCard)
+        check(crOnCard >= 8.5,
+              "T-COLOR 卡片上的正文同样舒适 (工具卡/引用块 ≥8.5; 实测 \(String(format: "%.2f", crOnCard)):1)")
+        // 卡面上的 mono (代码块正文) —— 卡面抬一档后**最容易掉的就是它**, 单独守一条。
+        let crMonoOnCard = CodexTheme.WCAG.contrast(CodexTheme.Dark.textMono, CodexTheme.Dark.bgCard)
+        check(crMonoOnCard >= 7.0,
+              "T-COLOR 卡面上的 mono 仍可读 (代码块正文 ≥7.0; 实测 \(String(format: "%.2f", crMonoOnCard)):1)")
+        // **正文面必须真的抬离了页面底** —— 这正是 boss 那两张截图的结论 (正文坐页面底 = 累眼)。
+        // 只守"面够亮"不够: 页面底和正文面若连在一起 (比值 1.0), 数值再漂亮也还是老样子。
+        // 门槛给 1.5 留调参余量 (实测 1.73)。
+        let surfaceLift = CodexTheme.WCAG.luminance(CodexTheme.Dark.contentPanel)
+                        / CodexTheme.WCAG.luminance(CodexTheme.Dark.bgChat)
+        check(surfaceLift >= 1.5,
+              "T-COLOR 正文面抬离页面底 (contentPanel/bgChat 亮度 ≥1.5×; 实测 \(String(format: "%.2f", surfaceLift))×)")
+        let floor = CodexTheme.WCAG.luminance(CodexTheme.Dark.bgBase)
+        check(floor >= 0.004,
+              "T-COLOR 暗色地板不碰纯黑 (bgBase 相对亮度 ≥0.004, 纯黑=0; 实测 \(String(format: "%.5f", floor)))")
+
+        let surfaceChain: [(String, UInt32)] = [
+            ("bgBase", CodexTheme.Dark.bgBase), ("bgSidebar", CodexTheme.Dark.bgSidebar),
+            ("bgChat", CodexTheme.Dark.bgChat), ("bgInput", CodexTheme.Dark.bgInput),
+            ("contentPanel", CodexTheme.Dark.contentPanel), ("bgCard", CodexTheme.Dark.bgCard),
+            ("bgElevated", CodexTheme.Dark.bgElevated), ("bgPill", CodexTheme.Dark.bgPill),
+        ]
+        let monotonic = zip(surfaceChain, surfaceChain.dropFirst()).allSatisfy {
+            CodexTheme.WCAG.luminance($0.0.1) < CodexTheme.WCAG.luminance($0.1.1)
+        }
+        check(monotonic,
+              "T-COLOR 暗色面层级亮度严格单调递增 (bgBase < bgSidebar < bgChat < bgInput < contentPanel < bgCard < bgElevated < bgPill)")
+
+        // 交互态: **选中必须比悬停实** —— 两者都用半透明叠加, 顺手写反了编译期零信号,
+        // 症状是"当前项在哪读不出来" (2026-09-21 顺手加这条)。
+        check(CodexTheme.Dark.selectedAlpha > CodexTheme.Dark.hoverAlpha,
+              "T-COLOR 选中态比悬停态实 (selectedAlpha \(CodexTheme.Dark.selectedAlpha) > hoverAlpha \(CodexTheme.Dark.hoverAlpha))")
+
         report()    }
 }
 

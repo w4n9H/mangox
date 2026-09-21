@@ -223,7 +223,7 @@ struct ScheduledView: View {
         .padding(.leading, 8)
         .padding(.trailing, 6)
         .padding(.vertical, 5)
-        .background(selected ? CodexTheme.bgElevated : (hovered ? CodexTheme.bgElevated.opacity(0.5) : Color.clear))
+        .background(selected ? CodexTheme.selected : (hovered ? CodexTheme.hover : Color.clear))
         .clipShape(RoundedRectangle(cornerRadius: CodexTheme.radiusSm))
         .contentShape(Rectangle())
         .onHover { hoveringId = $0 ? task.id : nil }
@@ -275,7 +275,7 @@ struct ScheduledView: View {
         .padding(.leading, 8)
         .padding(.trailing, 6)
         .padding(.vertical, 5)
-        .background(selected ? CodexTheme.bgElevated : (hovered ? CodexTheme.bgElevated.opacity(0.5) : Color.clear))
+        .background(selected ? CodexTheme.selected : (hovered ? CodexTheme.hover : Color.clear))
         .clipShape(RoundedRectangle(cornerRadius: CodexTheme.radiusSm))
         .contentShape(Rectangle())
         .onHover { hoveringId = $0 ? agent.id : nil }
@@ -826,7 +826,7 @@ struct ScheduledView: View {
                 .padding(.horizontal, 10)
                 .padding(.vertical, 2)
                 .frame(height: 22)
-                .background(cronMode == mode ? CodexTheme.bgElevated : Color.clear)
+                .background(cronMode == mode ? CodexTheme.selected : Color.clear)
                 .clipShape(Capsule())
                 .overlay(Capsule().stroke(CodexTheme.border.opacity(cronMode == mode ? 0.6 : 0.35), lineWidth: 1))
         }

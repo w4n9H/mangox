@@ -374,7 +374,9 @@ struct ConversationRow: View {
         .padding(.leading, indent ? Tune.sidebarRowIndent : 8)
         .padding(.trailing, 8)
         .padding(.vertical, Tune.sidebarRowVPadding)
-        .background(isSelected ? CodexTheme.bgElevated : Color.clear)
+        // P10.8b: 选中态用半透明叠加 —— 原来直接用 bgElevated，而 bgElevated 现在已让给
+        // "卡内次级面 / 设置卡面"，一个实色不可能同时适配侧栏底与卡面底。
+        .background(isSelected ? CodexTheme.selected : Color.clear)
         .clipShape(RoundedRectangle(cornerRadius: CodexTheme.radiusSm))
         .contentShape(Rectangle())
         .onHover { hovering = $0 }

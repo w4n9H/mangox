@@ -28,7 +28,9 @@ struct CodexSegmented: View {
                         .frame(height: 22)
                         .background(
                             selection == i ? CodexTheme.bgBase
-                            : (hovering == i ? CodexTheme.bgElevated : Color.clear)
+                            // P10.8b: 悬停用叠加层 —— 容器本身就是 bgElevated，
+                            // 原来 hover 也填 bgElevated = 悬停与不悬停**同色**（等于没做）。
+                            : (hovering == i ? CodexTheme.hover : Color.clear)
                         )
                         .clipShape(Capsule())
                         .shadow(color: selection == i ? .black.opacity(0.08) : .clear,
@@ -139,7 +141,7 @@ struct CodexGhostButtonStyle: ButtonStyle {
                 .padding(.horizontal, 8)
                 .padding(.vertical, 3)
                 .background(
-                    (hovering ? CodexTheme.bgElevated : Color.clear)
+                    (hovering ? CodexTheme.hover : Color.clear)
                         .opacity(pressed ? 1.5 : 1)
                 )
                 .clipShape(RoundedRectangle(cornerRadius: CodexTheme.radiusSm))
@@ -191,7 +193,7 @@ struct CodexActionButtonStyle: ButtonStyle {
             case .success:
                 return CodexTheme.toolDone
             case .danger:
-                return (hovering && !disabled) ? CodexTheme.bgElevated : Color.clear
+                return (hovering && !disabled) ? CodexTheme.hover : Color.clear
             }
         }
 

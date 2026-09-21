@@ -41,7 +41,7 @@ struct TrajectoryView: View {
             }
             ChatBottomBar(store: store)   // 轨迹模式仍可继续输入 (共享底栏)
         }
-        .background(CodexTheme.bgChat)
+        .background(CodexTheme.contentPanel)   // P10.8b: 轨迹列表同属"正文面"
         .onChange(of: store.selectedConversationId) { _, _ in
             expanded.removeAll()   // 换会话收起全部展开行
             turnOverrides.removeAll()

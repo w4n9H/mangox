@@ -18,7 +18,13 @@ enum ToolKind: String, Hashable, Codable {
     case search
     case delegate
 
-    var label: String { rawValue }
+    /// 展示用名 —— **全大写英文**，与轨迹页的 `USER` / `ASSISTANT` 标签同一种写法
+    /// (2026-09-21 boss: "trace 那里, 统一全大写英文")。四个消费点都吃这个属性:
+    /// 轨迹工具名 chip / "BASH × 5" 折叠行 / 工具卡片的 kind tag (Chat + 轨迹同源)。
+    ///
+    /// ⚠️ **只动展示, 不动 `rawValue`** —— 小写的 rawValue 既作 `Codable` 编解码键,
+    /// 又是 pi 上报的工具名 (比对/派发都用它), 跟着大写会把落库数据和工具识别一起打坏。
+    var label: String { rawValue.uppercased() }
 
     /// Default phase color (overridable per card via `phase`).
     var defaultColor: Color {

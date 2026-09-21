@@ -2,7 +2,7 @@
 
 macOS 原生 AI Agent 客户端（SwiftUI），对标 Codex Desktop 的交互形态，底层对接 [pi CLI](https://github.com/earendil-works/pi) 作为推理引擎。
 
-![version](https://img.shields.io/badge/version-0.1.9-orange)
+![version](https://img.shields.io/badge/version-0.1.10-orange)
 
 ## 功能
 
@@ -29,6 +29,7 @@ macOS 原生 AI Agent 客户端（SwiftUI），对标 Codex Desktop 的交互形
 **界面**
 - **中英双语**：Settings → 外观 切换（跟随系统 / 中文 / English），即时生效、重启记住；词表 492 条，命令名与角色标签（Chat / Trace / USER / ASSISTANT / TOOL）原样保留英文
 - **外观三态**：跟随系统（真正交回系统，跟随系统级切换）/ 浅色 / 深色；老配置无需迁移，缺失值回落浅色
+- **暗色主视觉重算**：正文面与页面底分层（正文不再坐在页面底上），卡片严格亮于正文面，面层级链显式单调；正文对比度 9.37:1 落在舒适区，地板不碰纯黑；同一面板内只允许一种底色（聊天页从顶到底零硬边）；交互态（悬停 / 选中）改半透明叠加，选中比悬停实
 - **侧栏层级**：项目内会话行缩进 34pt + 1px 引导线，顶层与子级一眼可分
 
 **项目模式**
@@ -44,7 +45,7 @@ macOS 原生 AI Agent 客户端（SwiftUI），对标 Codex Desktop 的交互形
 
 **工程化**
 - SQLite 持久化（WAL），事件流重放式加载；退出时 WAL checkpoint + 终止在途 pi 进程
-- 冒烟门禁：`scripts/smoke/run.sh` 一条命令跑 548 项语义冒烟（事件归并/并发路由/fire 后台化/上限拒绝/落库对拍/轨迹派生/settled 语义/状态栏数据链/过程态胶囊/Trace v2/侧问 fork/离开摘要/自动命名/模型物化/元数据目录/模式矩阵/附件管线/发送门控/日分组/审批阻塞/热键配置/捕获链路/备份引擎/重放缓存/无人值守 fire/审批分级裁决/BashRiskEvaluator 语料/邮箱哨兵四道闸/主题与正文清洗/MIME 解析与回执组装/多轮并发与续跑/会话配置恢复/任务级配置/连接失效重建/外观三态与侧栏几何）
+- 冒烟门禁：`scripts/smoke/run.sh` 一条命令跑 558 项语义冒烟（事件归并/并发路由/fire 后台化/上限拒绝/落库对拍/轨迹派生/settled 语义/状态栏数据链/过程态胶囊/Trace v2/侧问 fork/离开摘要/自动命名/模型物化/元数据目录/模式矩阵/附件管线/发送门控/日分组/审批阻塞/热键配置/捕获链路/备份引擎/重放缓存/无人值守 fire/审批分级裁决/BashRiskEvaluator 语料/邮箱哨兵四道闸/主题与正文清洗/MIME 解析与回执组装/多轮并发与续跑/会话配置恢复/任务级配置/连接失效重建/外观三态与侧栏几何/暗色板舒适区与正文面层级）
 - 扩展管理：内置 mangox-approval（源码内嵌, 每次 spawn 自动校验重建，换机器零影响），托管扩展启停/导入/删除
 - 内置 JetBrains Mono（SIL OFL），等宽三级字体链
 - 本地化三道门禁：`gen_strings.py --check`（词表对账）+ `scan_wiring.py --check`（接线判定）+ `e2e_probe.py`（端到端渲染指纹，含 1 条反例）
@@ -62,7 +63,7 @@ macOS 原生 AI Agent 客户端（SwiftUI），对标 Codex Desktop 的交互形
 open mangox.xcodeproj   # Xcode 里 Cmd+R
 ```
 
-## 已知限制 (v0.1.9)
+## 已知限制 (v0.1.10)
 
 - **漏译表现为回落中文，不报错**：缺项回落 key 本身（= 中文原文），所以英文界面可能出现中英混排；想收口就把 `gen_strings.py --check` 换成逐语言对账
 - **新增语言尚未完全泛化**：译文真源 `scripts/l10n/en_values.py` 仍是单份字典、`e2e_probe.py` 硬编码 en / zh-Hans —— 加语言要补「译文真源 + 探针」两处（`AppLanguage` 加 case、新建 `<lang>.lproj` 已在门禁覆盖内）
@@ -77,6 +78,7 @@ open mangox.xcodeproj   # Xcode 里 Cmd+R
 - **图片消息的 token 成本**：base64 随 RPC 发送（≤4 张/条），侧问 fork 快照会原样携带历史图片（token 含图）
 - **工具执行中产生的图片暂不上屏**：工具产图在路线图中冻结，工具输出的 content 图片块当前不展示
 - **轨迹视图的回合时长是估计值**：按事件时间差计算（低估最后一个块的流式时长）；手动停止的回合可能没有 usage（显示 token 缺省）
+- **输入框空态看不到光标（有意）**：占位提示与系统插入点是同一起点，竖线会压进首字的左半；故**空草稿时不画插入点**，一旦输入立即恢复（CJK 与拉丁的首字左边距不同，靠挪提示位置治不了）
 
 > 注：App 图标源图在 `icon_work/AppIcon.png`（1024），`scripts/gen-icon.sh` 展开为全 10 档 `mangox/Resources/AppIcon.icns`，经 Info.plist `CFBundleIconFile` 挂载。
 > 坑（2026-09-14 实证，勿回退 asset catalog 方案）：本机 actool/Xcode 16.2 对 appiconset 无论单尺寸 universal（静默不产出）还是传统多尺寸（icns 只塞 ≤256 档）都不完整，Dock 放大即糊；iconutil 直出 icns 才是全档。

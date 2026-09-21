@@ -51,7 +51,10 @@ struct BottomStatusBar: View {
         }
         .padding(.horizontal, 10)
         .frame(height: Tune.bottomBarHeight)
-        .background(CodexTheme.bgBase)
+        // P10.8c: 与正文面同面 (理由见 ChatComposer 同处注释) —— 底档整块只有一种底色,
+        // 面板内部零硬边。它与输入区同色时会和输入区拼成一块板, 所以一起收回正文面;
+        // 分区改由顶部这条 1px 线承担 (`divider` 在正文面上 ΔL*≈5.6, 看得见)。
+        .background(CodexTheme.contentPanel)
         .overlay(
             Rectangle().frame(height: 1).foregroundStyle(CodexTheme.divider),
             alignment: .top
