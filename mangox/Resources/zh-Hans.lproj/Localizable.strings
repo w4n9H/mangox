@@ -1,0 +1,10 @@
+/* 
+   MangoX 中文本地化表 —— 故意留空。
+
+   本项目**用中文原文当 key** (LocalizedStringKey 的 key 即字面量), 所以中文词不需要映射:
+   表内查不到 key 时 Foundation 直接返回 key 本身 = 中文原文。
+
+   本文件的存在意义只有一条: 占住 zh-Hans 这个本地化槽位。
+   若删掉它, 请求 zh-Hans 时会回落到 development region 的表 (en.lproj) —— 整个中文界面变英文。
+   (2026-09-20 探针 B 组实证: 只有 en.lproj 时 `zh|lit 删除` 渲染成 "Delete(en)"。)
+*/

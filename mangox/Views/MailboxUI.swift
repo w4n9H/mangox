@@ -7,7 +7,7 @@
 import SwiftUI
 
 /// 小徽章 (预设来源 / 已绑定 / 审批档 / 免密钥…)。
-func mboxBadge(_ text: String, color: Color) -> some View {
+func mboxBadge(_ text: LocalizedStringKey, color: Color) -> some View {
     Text(text)
         .font(.system(size: 10, weight: .medium))
         .foregroundStyle(color)

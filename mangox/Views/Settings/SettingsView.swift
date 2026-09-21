@@ -10,6 +10,8 @@ import SwiftUI
 struct SettingsView: View {
     @ObservedObject var store: ChatStore
     @ObservedObject private var notifier = CompletionNotifier.shared
+    @ObservedObject private var appearance = AppearanceModel.shared   // P10.7: 主题外观三态
+    @ObservedObject private var language = LanguageModel.shared        // P10.7: 语言三态
 
     // P7-M3 添加表单状态
     @State private var selectedPresetId: String?      // nil = 自定义
@@ -46,6 +48,8 @@ struct SettingsView: View {
             Divider().overlay(CodexTheme.divider)
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
+                    appearanceSection
+                    languageSection
                     modelSection
                     concurrencySection
                     notificationSection
@@ -87,7 +91,7 @@ struct SettingsView: View {
 
     // MARK: - 统一行范式: 左标题+说明, 右控件
 
-    private func settingRow<Control: View>(title: String, detail: String,
+    private func settingRow<Control: View>(title: LocalizedStringKey, detail: LocalizedStringKey,
                                            @ViewBuilder control: () -> Control) -> some View {
         HStack(alignment: .center, spacing: 16) {
             VStack(alignment: .leading, spacing: 3) {
@@ -102,6 +106,50 @@ struct SettingsView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             control()
         }
+    }
+
+    // MARK: - 外观 (P10.7: 原侧栏品牌行的 dark/light 按钮移到这里, 并升为三态)
+
+    private var appearanceSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            settingRow(title: "外观",
+                       detail: "跟随系统 = 由 macOS 的浅色/深色设置决定; 切换立即生效, 影响全 App (含迷你台)") {
+                Picker("", selection: Binding(
+                    get: { appearance.current },
+                    set: { appearance.current = $0 }
+                )) {
+                    ForEach(AppAppearance.allCases) { mode in
+                        Text(mode.label).tag(mode)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .fixedSize()
+            }
+        }
+        .settingsCard()
+    }
+
+    // MARK: - 语言 (P10.7: 中文串即 key, 表内缺项自动回落中文原文)
+
+    private var languageSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            settingRow(title: "语言 (Language)",
+                       detail: "跟随系统 = 由 macOS 的语言设置决定; 切换立即生效, 影响全 App (含迷你台与快速捕获)。系统级文案 (菜单栏 / 系统弹窗) 仍随系统语言, 重启后完全一致。") {
+                Picker("", selection: Binding(
+                    get: { language.current },
+                    set: { language.current = $0 }
+                )) {
+                    ForEach(AppLanguage.allCases) { lang in
+                        Text(lang.label).tag(lang)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .fixedSize()
+            }
+        }
+        .settingsCard()
     }
 
     // MARK: - 模型 (P7-M3 自管真源)
@@ -140,7 +188,7 @@ struct SettingsView: View {
         return ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 6) {
                 ForEach(ProviderPresets.all.filter { primary.contains($0.id) }) { p in
-                    chip(p.displayName, selected: selectedPresetId == p.id) {
+                    chip(LK(p.displayName), selected: selectedPresetId == p.id) {
                         loadPreset(p)
                     }
                 }
@@ -149,7 +197,7 @@ struct SettingsView: View {
                 }
                 if showMorePresets {
                     ForEach(others) { p in
-                        chip(p.displayName, selected: selectedPresetId == p.id) {
+                        chip(LK(p.displayName), selected: selectedPresetId == p.id) {
                             loadPreset(p)
                         }
                     }
@@ -164,7 +212,7 @@ struct SettingsView: View {
         }
     }
 
-    private func chip(_ title: String, selected: Bool, action: @escaping () -> Void) -> some View {
+    private func chip(_ title: LocalizedStringKey, selected: Bool, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Text(title)
                 .font(.system(size: 11, weight: selected ? .semibold : .regular))
@@ -216,7 +264,7 @@ struct SettingsView: View {
             }
 
             HStack(spacing: 8) {
-                Button(testState == .testing ? "测试中…" : "测试连接") { testConnection() }
+                Button(LK(testState == .testing ? "测试中…" : "测试连接")) { testConnection() }
                     .fixedSize()
                     .disabled(testState == .testing || baseURL.isEmpty)
                 Button("保存并启用") { saveModels() }
@@ -294,7 +342,7 @@ struct SettingsView: View {
                         Circle()
                             .fill(hasKey ? CodexTheme.toolDone : CodexTheme.toolError)
                             .frame(width: 6, height: 6)
-                            .help(hasKey ? "Key 已存" : "Key 缺失 (物化后不可用)")
+                            .help(LK(hasKey ? "Key 已存" : "Key 缺失 (物化后不可用)"))
                     }
                 }
                 Text("\(m.provider) / \(m.modelId)")
@@ -305,7 +353,7 @@ struct SettingsView: View {
             Button {
                 store.selectManagedModel(m)
             } label: {
-                Text(isCurrent ? "当前" : "启用")
+                Text(LK(isCurrent ? "当前" : "启用"))
                     .font(.system(size: 11))
                     .foregroundStyle(isCurrent ? CodexTheme.toolDone : CodexTheme.textSecondary)
                     .padding(.horizontal, 8).padding(.vertical, 3)
@@ -337,9 +385,9 @@ struct SettingsView: View {
 
     private func sourceBadge(_ s: ManagedModelSource) -> String {
         switch s {
-        case .preset: "预设"
-        case .custom: "自定义"
-        case .legacy: "迁移"
+        case .preset: L("预设")
+        case .custom: L("自定义")
+        case .legacy: L("迁移")
         }
     }
 
@@ -358,10 +406,10 @@ struct SettingsView: View {
 
     private var formHint: String {
         if let formError { return formError }
-        if testState == .done && !verified { return "未验证 — 拉取失败, 使用预设清单兜底" }
-        if verified { return "✓ 连通, 勾选后保存" }
-        if selectedPresetId == nil { return "自定义 provider: 填 Base URL, 可选测试" }
-        return "选择预设, 填 Key 后测试连接"
+        if testState == .done && !verified { return L("未验证 — 拉取失败, 使用预设清单兜底") }
+        if verified { return L("✓ 连通, 勾选后保存") }
+        if selectedPresetId == nil { return L("自定义 provider: 填 Base URL, 可选测试") }
+        return L("选择预设, 填 Key 后测试连接")
     }
 
     private func loadPreset(_ p: ProviderPreset) {
@@ -434,7 +482,7 @@ struct SettingsView: View {
                 checked = Set(result.modelIds.filter { seeds[$0] != nil })   // 种子预勾, 其余不勾
             } else {
                 verified = false
-                formError = "拉取失败 (\(result.error ?? "未知")), 已回落预设清单"
+                formError = String(format: L("拉取失败 (%@), 已回落预设清单"), result.error ?? L("未知"))
             }
         }
     }
@@ -447,7 +495,7 @@ struct SettingsView: View {
             store.setProviderKey(apiKey, provider: provider)
         }
         if needsKey && apiKey.isEmpty && store.providerKey(provider: provider) == nil {
-            formError = "该预设需要 API Key"
+            formError = L("该预设需要 API Key")
             return
         }
         let keyRef: String? = (selectedPreset?.needsKey ?? true) ? provider : nil
@@ -535,9 +583,9 @@ struct SettingsView: View {
         let hint: String? = {
             switch notifier.authorizationStatus {
             case .denied:
-                return "⚠️ 系统通知未授权 —— 请到 系统设置 → 通知 → MangoX 开启"
+                return L("⚠️ 系统通知未授权 —— 请到 系统设置 → 通知 → MangoX 开启")
             case .notDetermined:
-                return "尚未请求通知授权, 打开开关后首次完成时会请求"
+                return L("尚未请求通知授权, 打开开关后首次完成时会请求")
             default:
                 return nil
             }
@@ -620,7 +668,7 @@ struct SettingsView: View {
             settingRow(title: "手动备份",
                        detail: "把会话数据库 (含知识库) 与图片附件、会话记录完整拷贝到目标目录的 mangox-backup-<时间戳>/ 子目录, 供人工保管") {
                 HStack(spacing: 8) {
-                    Button(store.backupRunning ? "备份中…" : "立即备份") { runBackup() }
+                    Button(LK(store.backupRunning ? "备份中…" : "立即备份")) { runBackup() }
                         .fixedSize()
                         .disabled(store.backupRunning || store.backupDirectory == nil)
                     Button("选择目录…") { pickBackupDir() }
@@ -629,13 +677,13 @@ struct SettingsView: View {
             }
             Divider().overlay(CodexTheme.divider)
             HStack {
-                Text(store.backupDirectory ?? "未选择备份目录")
+                Text(LK(store.backupDirectory ?? "未选择备份目录"))
                     .font(CodexTheme.fontMonoXs)
                     .foregroundStyle(CodexTheme.textSecondary)
                     .lineLimit(1)
                     .truncationMode(.middle)
                 Spacer()
-                Text(store.lastBackupSummary ?? "尚未备份")
+                Text(LK(store.lastBackupSummary ?? "尚未备份"))
                     .font(.system(size: 11))
                     .foregroundStyle(store.lastBackupSummary?.hasPrefix("✓") == true
                                      ? CodexTheme.toolDone : CodexTheme.toolError)
@@ -649,7 +697,7 @@ struct SettingsView: View {
         panel.canChooseFiles = false
         panel.canChooseDirectories = true
         panel.canCreateDirectories = true
-        panel.prompt = "选择"
+        panel.prompt = L("选择")
         if panel.runModal() == .OK, let url = panel.url {
             store.setBackupDirectory(url.path)
         }

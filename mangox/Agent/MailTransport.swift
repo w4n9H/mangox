@@ -59,12 +59,13 @@ enum MailTransportError: Error, Equatable {
     case parse(String)           // 解析失败
     case send(String)
 
+    /// 用户可见错误文案 (进 setNotice / 表单错误) → 走 L()。落库面不用它。
     var label: String {
         switch self {
-        case .notConfigured(let s): return "未配置: \(s)"
-        case .connection(let s):    return "连接失败: \(s)"
-        case .parse(let s):         return "解析失败: \(s)"
-        case .send(let s):          return "发送失败: \(s)"
+        case .notConfigured(let s): return String(format: L("未配置: %@"), s)
+        case .connection(let s):    return String(format: L("连接失败: %@"), s)
+        case .parse(let s):         return String(format: L("解析失败: %@"), s)
+        case .send(let s):          return String(format: L("发送失败: %@"), s)
         }
     }
 }

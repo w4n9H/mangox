@@ -70,11 +70,11 @@ final class CaptureService: ObservableObject {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }
         guard !store.engineMissing else {
-            store.setExtensionNotice("未找到 pi CLI, 捕获未发送", isError: true)
+            store.setExtensionNotice(L("未找到 pi CLI, 捕获未发送"), isError: true)
             return nil
         }
         guard !store.atTurnLimit else {
-            store.setExtensionNotice("并发已达上限 (\(store.maxConcurrentTurns)), 捕获未发送", isError: true)
+            store.setExtensionNotice(String(format: L("并发已达上限 (%lld), 捕获未发送"), store.maxConcurrentTurns), isError: true)
             return nil
         }
         switch target {
@@ -90,7 +90,7 @@ final class CaptureService: ObservableObject {
             }
             let sid = item.id
             let msg = ChatMessage(role: .user, content: .text(trimmed))
-            store.persistOrNotify("捕获消息落库") { try store.persistence?.appendMessageEvent(sessionId: sid, msg) }   // 先落库再选中 (replay 能取到)
+            store.persistOrNotify(L("捕获消息落库")) { try store.persistence?.appendMessageEvent(sessionId: sid, msg) }   
             store.selectConversation(sid)
             store.messages = [msg]
             store.autoTitleIfNeeded(sid: sid, text: trimmed)
@@ -101,15 +101,15 @@ final class CaptureService: ObservableObject {
 
         case .append(let sid):
             guard store.allConversations.contains(where: { $0.id == sid }) else {
-                store.setExtensionNotice("目标会话已不存在, 捕获未发送", isError: true)
+                store.setExtensionNotice(L("目标会话已不存在, 捕获未发送"), isError: true)
                 return nil
             }
             guard !store.runningTurns.contains(sid) else {
-                store.setExtensionNotice("该会话回合在途, 捕获未发送", isError: true)
+                store.setExtensionNotice(L("该会话回合在途, 捕获未发送"), isError: true)
                 return nil
             }
             let msg = ChatMessage(role: .user, content: .text(trimmed))
-            store.persistOrNotify("捕获追加落库") { try store.persistence?.appendMessageEvent(sessionId: sid, msg) }
+            store.persistOrNotify(L("捕获追加落库")) { try store.persistence?.appendMessageEvent(sessionId: sid, msg) }
             store.selectConversation(sid)   // replay 带全量历史 + 新消息
             store.autoTitleIfNeeded(sid: sid, text: trimmed)   // 空标题会话首次追加即命名
             let cwd = store.projects.first(where: { $0.items.contains { $0.id == sid } })?.path

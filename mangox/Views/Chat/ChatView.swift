@@ -191,11 +191,18 @@ struct AwaySummaryPill: View {
                     Image(systemName: "arrow.down.circle")
                         .font(.system(size: 10))
                         .foregroundStyle(CodexTheme.textMuted)
-                    Text(turns == 1 ? "离开期间完成 1 轮" : "离开期间完成 \(turns) 轮")
-                        .font(.system(size: 12, weight: .medium))
-                        .foregroundStyle(CodexTheme.textPrimary)
+                    // 单复数分开写: 英文 "1 turn" / "N turns" 需要各自一条词条 (不靠 %lld 硬套)
+                    if turns == 1 {
+                        Text("离开期间完成 1 轮")
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundStyle(CodexTheme.textPrimary)
+                    } else {
+                        Text("离开期间完成 \(turns) 轮")
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundStyle(CodexTheme.textPrimary)
+                    }
                     if !preview.isEmpty {
-                        Text("· 最近：" + preview)
+                        Text(L("· 最近：") + preview)
                             .font(.system(size: 12))
                             .foregroundStyle(CodexTheme.textSecondary)
                             .lineLimit(1)
@@ -432,8 +439,8 @@ struct MessageBlockView: View {
             if message.role == .assistant {
                 // 记忆自动提炼 (人工触发): 整段会话 → 候选 → 知识面板待审核
                 footerButton(store.distillRunning ? "hourglass" : "wand.and.stars",
-                             store.distillRunning ? "提炼中…" : "提炼本会话 → 待审核记忆",
-                             label: store.distillRunning ? "提炼中…" : "提炼",
+                             LK(store.distillRunning ? "提炼中…" : "提炼本会话 → 待审核记忆"),
+                             label: LK(store.distillRunning ? "提炼中…" : "提炼"),
                              disabled: store.distillRunning) {
                     store.distillMemoryFromCurrentSession()
                 }
@@ -445,8 +452,8 @@ struct MessageBlockView: View {
     }
 
     /// 图标 + 文字标签 (裸图标不解释, 猜谜界面不要有)
-    private func footerButton(_ icon: String, _ help: String,
-                              label: String? = nil,
+    private func footerButton(_ icon: String, _ help: LocalizedStringKey,
+                              label: LocalizedStringKey? = nil,
                               disabled: Bool = false,
                               action: @escaping () -> Void) -> some View {
         Button(action: action) {

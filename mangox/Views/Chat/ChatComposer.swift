@@ -227,7 +227,7 @@ struct ChatComposer: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .help(store.askApproval ? "审批流开启, 点击关闭" : "审批流关闭, 点击开启")
+        .help(LK(store.askApproval ? "审批流开启, 点击关闭" : "审批流关闭, 点击开启"))
     }
 
     // MARK: - 模式档位 pill (P7-M4: 极简/常规/完整, per-turn spawn 生效)
@@ -302,7 +302,7 @@ struct ChatComposer: View {
         // 无生效条目不占位 (与 Codex 降噪口径一致)
         if store.activeKnowledgeCount > 0 {
             Menu {
-                Button(store.knowledgeDirty ? "重启引擎生效 (知识改动将注入)" : "注入块已是最新") {
+                Button(LK(store.knowledgeDirty ? "重启引擎生效 (知识改动将注入)" : "注入块已是最新")) {
                     store.restartEngine()
                 }
                 .disabled(!store.knowledgeDirty)

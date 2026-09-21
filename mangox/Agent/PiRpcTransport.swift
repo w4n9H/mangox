@@ -252,7 +252,7 @@ final class PiRpcTransport: AgentTransport {
         if var card = toolCards[pending.callId] {
             switch decision {
             case .allow, .alwaysAllow: card = card.withPhase(.running)
-            case .deny:                card = card.withPhase(.error("已拒绝"))
+            case .deny:                card = card.withPhase(.error(L("已拒绝")))
             }
             respondExtensionUI(pending.requestId, value: value, callId: pending.callId)
             toolCards[pending.callId] = card
@@ -688,7 +688,7 @@ final class PiRpcTransport: AgentTransport {
                   var card = toolCards[callId] else { return }
             let isError = dict["isError"] as? Bool ?? false
             if isError {
-                let msg = outputString(dict["result"]) ?? "工具执行失败"
+                let msg = outputString(dict["result"]) ?? L("工具执行失败")
                 card = card.withPhase(.error(String(msg.prefix(200))))
             } else {
                 if let out = outputString(dict["result"]) {
@@ -835,7 +835,7 @@ final class PiRpcTransport: AgentTransport {
             if approvalMode == .autoJudge {
                 let reason = decision.risk?.label ?? BashRiskEvaluator.Risk.unknownCommand.label
                 autoJudgeBlocks.append(AutoJudgeBlock(callId: callId, command: cmd, reason: reason))
-                card = card.withPhase(.error("MangoX 自动裁决拦下: \(reason)"))
+                card = card.withPhase(.error(String(format: L("MangoX 自动裁决拦下: %@"), reason)))
                 toolCards[callId] = card
                 emit(.toolUpdated(card))
                 respondExtensionUI(reqId, value: "Deny", callId: callId)
@@ -993,14 +993,14 @@ final class PiRpcTransport: AgentTransport {
         let aborted = dict["aborted"] as? Bool ?? false
         let message: String
         if aborted {
-            message = "上下文压缩已中止"
+            message = L("上下文压缩已中止")
         } else if let result = dict["result"] as? [String: Any] {
             let before = result["tokensBefore"] as? Int ?? 0
             let after = result["estimatedTokensAfter"] as? Int ?? 0
-            message = String(format: "上下文压缩完成：%d → %d tokens", before, after)
+            message = String(format: L("上下文压缩完成：%lld → %lld tokens"), before, after)
         } else {
-            let err = dict["errorMessage"] as? String ?? "未知错误"
-            message = "上下文压缩失败：\(err)"
+            let err = dict["errorMessage"] as? String ?? L("未知错误")
+            message = String(format: L("上下文压缩失败：%@"), err)
         }
         emit(.extensionNotify(type: aborted ? "warning" : "info", message: String(message.prefix(200))))
     }

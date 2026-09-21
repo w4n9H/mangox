@@ -45,7 +45,7 @@ enum ModelCatalogFetcher {
     static func fetch(baseURL: String, apiKey: String?, apiType: String,
                       ollamaStyle: Bool) async -> Result {
         guard let url = modelsURL(baseURL: baseURL, ollamaStyle: ollamaStyle) else {
-            return Result(modelIds: [], verified: false, error: "base URL 无效")
+            return Result(modelIds: [], verified: false, error: L("base URL 无效"))
         }
         var req = URLRequest(url: url, timeoutInterval: 10)
         if let apiKey, !apiKey.isEmpty {
@@ -63,7 +63,7 @@ enum ModelCatalogFetcher {
                 return Result(modelIds: [], verified: false, error: "HTTP \(code)")
             }
             guard let ids = parseModelIds(data) else {
-                return Result(modelIds: [], verified: false, error: "响应格式不认识")
+                return Result(modelIds: [], verified: false, error: L("响应格式不认识"))
             }
             return Result(modelIds: ids, verified: true, error: nil)
         } catch {

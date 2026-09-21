@@ -13,9 +13,9 @@ enum ExtensionSource: String {
 
     var label: String {
         switch self {
-        case .managed: "托管"
-        case .global: "全局"
-        case .project: "项目"
+        case .managed: L("托管")
+        case .global: L("全局")
+        case .project: L("项目")
         }
     }
 }

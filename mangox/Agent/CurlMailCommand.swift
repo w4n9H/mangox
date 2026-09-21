@@ -149,11 +149,12 @@ enum CurlMailCommand {
             detail = detail.replacingOccurrences(of: secret, with: "***")
         }
         switch exitCode {
-        case 67:    return .connection("认证失败, 检查授权码\(detail.isEmpty ? "" : " (\(detail))")")
-        case 6, 7:  return .connection(detail.isEmpty ? "无法连接主机" : detail)
-        case 28:    return .connection("连接超时")
-        case 78:    return .connection("服务端未返回该邮件 (UID 已不存在或被移走)")
-        default:    return .connection(detail.isEmpty ? "curl 退出码 \(exitCode)" : detail)
+        case 67:    return .connection(String(format: L("认证失败, 检查授权码%@"),
+                                              detail.isEmpty ? "" : " (\(detail))"))
+        case 6, 7:  return .connection(detail.isEmpty ? L("无法连接主机") : detail)
+        case 28:    return .connection(L("连接超时"))
+        case 78:    return .connection(L("服务端未返回该邮件 (UID 已不存在或被移走)"))
+        default:    return .connection(detail.isEmpty ? String(format: L("curl 退出码 %d"), exitCode) : detail)
         }
     }
 }

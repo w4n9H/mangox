@@ -50,13 +50,13 @@ enum BackupEngine {
         do {
             try fileManager.createDirectory(at: dest, withIntermediateDirectories: true)
         } catch {
-            out.errors.append("创建备份目录失败: \(error.localizedDescription)")
+            out.errors.append(String(format: L("创建备份目录失败: %@"), error.localizedDescription))
             return out
         }
 
         // 1. db 主文件 (checkpoint TRUNCATE 后 -wal 已清零, 不拷侧车文件)
         guard fileManager.fileExists(atPath: dbPath) else {
-            out.errors.append("数据库文件缺失: \(dbPath)")
+            out.errors.append(String(format: L("数据库文件缺失: %@"), dbPath))
             return out
         }
         do {
@@ -64,7 +64,7 @@ enum BackupEngine {
                                      toPath: dest.appendingPathComponent("mangox.db").path)
             out.dbCopied = true
         } catch {
-            out.errors.append("数据库拷贝失败: \(error.localizedDescription)")
+            out.errors.append(String(format: L("数据库拷贝失败: %@"), error.localizedDescription))
             return out
         }
 
@@ -88,7 +88,7 @@ enum BackupEngine {
                                      toPath: dest.appendingPathComponent(name).path)
             return true
         } catch {
-            out.errors.append("\(name) 拷贝失败: \(error.localizedDescription)")
+            out.errors.append(String(format: L("%@ 拷贝失败: %@"), name, error.localizedDescription))
             return false
         }
     }

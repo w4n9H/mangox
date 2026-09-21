@@ -33,7 +33,7 @@ final class BackupService: ObservableObject {
     @discardableResult
     func performManualBackup(destRoot: String, now: Date = .now) -> BackupOutcome {
         guard !backupRunning else {
-            return BackupOutcome(errors: ["备份已在进行中"])
+            return BackupOutcome(errors: [L("备份已在进行中")])
         }
         backupRunning = true
         defer { backupRunning = false }
@@ -79,7 +79,7 @@ final class BackupService: ObservableObject {
             f.dateFormat = "M/d HH:mm"
             summary = "✓ \(f.string(from: now)) · \(size)"
         } else {
-            summary = "✗ " + (outcome.errors.first ?? "未知失败")
+            summary = "✗ " + (outcome.errors.first ?? L("未知失败"))
         }
         lastBackupSummary = summary
         store?.persistence?.saveSettingText(key: "backup_last", value: summary)

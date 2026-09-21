@@ -16,7 +16,7 @@ struct ChatBottomBar: View {
         if let outcome = store.distillOutcome {
             noticeBanner(outcome,
                          clear: { store.distillOutcome = nil },
-                         actionTitle: outcome.isError ? nil : "去审核",
+                         actionTitle: outcome.isError ? nil : L("去审核"),
                          action: outcome.isError ? nil : { store.openKnowledgePanel() })
         }
         if let notice = store.turnLimitNotice {
@@ -69,7 +69,7 @@ struct ChatBottomBar: View {
                     .padding(.horizontal, 8)
                     .padding(.vertical, 2)
                     .contentShape(Rectangle())
-                    .help(actionTitle == "去审核" ? "打开知识面板的待审核分组" : "")
+                    .help(LK(actionTitle == "去审核" ? "打开知识面板的待审核分组" : ""))
             }
             Button {
                 clear()

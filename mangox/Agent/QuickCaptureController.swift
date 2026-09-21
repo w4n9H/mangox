@@ -43,7 +43,7 @@ final class QuickCaptureController {
         let status = RegisterEventHotKey(hk.keyCode, hk.modifiers, id,
                                          GetApplicationEventTarget(), 0, &ref)
         guard status == noErr, let ref else {
-            store?.setExtensionNotice("快捷键 \(hk.display) 被其他 App 占用, 请在设置中更改捕获热键",
+            store?.setExtensionNotice(String(format: L("快捷键 %@ 被其他 App 占用, 请在设置中更改捕获热键"), hk.display),
                                       isError: true)
             return
         }
@@ -109,7 +109,7 @@ final class QuickCaptureController {
         p.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         p.isReleasedWhenClosed = false
         if let store {
-            p.contentView = NSHostingView(rootView: QuickCaptureView(store: store))
+            p.contentView = NSHostingView(rootView: L10nRoot { QuickCaptureView(store: store) })
         }
         panel = p
         return p
@@ -235,9 +235,9 @@ struct QuickCaptureView: View {
         switch t {
         case .newSession(let pid):
             let proj = pid.flatMap { p in store.projects.first { $0.id == p }?.title }
-            return proj.map { "新会话-\($0)" } ?? "新会话"
+            return proj.map { String(format: L("新会话-%@"), $0) } ?? L("新会话")
         case .append(let sid):
-            return "追加-" + (store.allConversations.first { $0.id == sid }?.title ?? "已删除会话")
+            return L("追加-") + (store.allConversations.first { $0.id == sid }?.title ?? L("已删除会话"))
         }
     }
 

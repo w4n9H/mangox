@@ -40,11 +40,11 @@ enum ApprovalMode: String, Codable, CaseIterable, Identifiable {
     var subtitle: String {
         switch self {
         case .interactive:
-            "只读命令静默放行, 其余弹审批卡等待点击。"
+            L("只读命令静默放行, 其余弹审批卡等待点击。")
         case .autoAllow:
-            "不弹卡, 全部放行 — 定时任务用 (无人点击, 弹卡即死锁)。"
+            L("不弹卡, 全部放行 — 定时任务用 (无人点击, 弹卡即死锁)。")
         case .autoJudge:
-            "只读命令静默放行, 危险命令自动拒绝并记下原因 (回执告知) — 远程驱动用。"
+            L("只读命令静默放行, 危险命令自动拒绝并记下原因 (回执告知) — 远程驱动用。")
         }
     }
 

@@ -35,6 +35,7 @@ enum CodexTheme {
     // MARK: - Borders
     static let border     = adaptive(light: 0xE3E3E7, dark: 0x25252B)
     static let divider    = adaptive(light: 0xECECEF, dark: 0x1A1A1E)
+    static let guide      = adaptive(light: 0xDCDCE2, dark: 0x2E2E36) // 侧栏层级引导线 (比 divider 实, 比 border 软)
 
     // MARK: - Accent
     static let accent       = adaptive(light: 0xDD5742, dark: 0xDD5742) // warm orange-red (brand primary)
@@ -146,7 +147,13 @@ enum Tune {
 
     // 侧栏
     static let sidebarWidth: CGFloat          = 256
-    static let sidebarRowIndent: CGFloat      = 30   // 项目下会话行缩进
+    /// 项目下会话行缩进 (顶层会话行恒为 8, 见 ConversationRow 的 leading)。
+    /// P10.7 修正: 该参数此前是死代码 —— 调用点硬编码 `indent: false`, 层级从未表达。
+    static let sidebarRowIndent: CGFloat      = 34
+    /// 层级引导线 x (相对子行容器左缘) = 项目行 folder 图标中心:
+    /// 项目行 leading 4 + chevron 10 + spacing 6 + folder 半宽 7 = 27。
+    /// 不变量: `sidebarGuideInset + 1 <= sidebarRowIndent` (线必须落在子会话图标左侧), 冒烟守住。
+    static let sidebarGuideInset: CGFloat     = 27
     static let sidebarRowVPadding: CGFloat    = 5    // 会话行垂直内边距
     static let sidebarProjectRowVPadding: CGFloat = 8 // 项目行垂直内边距
 
@@ -189,25 +196,27 @@ enum Copy {
 
     // 欢迎页
     static let welcomeMark = "π"
-    static let welcomeQuestion = "今天做点什么？"
+    // **UI 可见文案一律用 `static var`** —— `static let` 是懒加载的一次性求值,
+    // 会把 L() 的结果冻结在首次访问, 之后切语言不再跟随。
+    static var welcomeQuestion: String { L("今天做点什么？") }
 
     // Composer
-    static let composerPlaceholder = "给 MangoX 发消息…"
-    static let chooseProjectFallback = "Choose project"   // 未选项目时 pill 的占位
-    static let chooseProjectMenu = "Choose project…"      // pill 菜单里的"取消选择"
+    static var composerPlaceholder: String { L("给 MangoX 发消息…") }
+    static let chooseProjectFallback = "Choose project"   // 未选项目时 pill 的占位 (恒英文)
+    static let chooseProjectMenu = "Choose project…"      // pill 菜单里的"取消选择" (恒英文)
 
     // 附件与目录选择面板
-    static let attachPanelMessage = "选择要附加的文件"
-    static let newProjectPanelMessage = "选择项目文件夹 (将作为 Agent 工作目录)"
+    static var attachPanelMessage: String { L("选择要附加的文件") }
+    static var newProjectPanelMessage: String { L("选择项目文件夹 (将作为 Agent 工作目录)") }
     static func pickProjectPanelMessage(_ project: String) -> String {
-        "为「\(project)」选择工作目录"
+        String(format: L("为「%@」选择工作目录"), project)
     }
     static func attachment(_ path: String) -> String {
-        " [附件: \(path)]"
+        String(format: L(" [附件: %@]"), path)
     }
 
     // 流式状态
-    static let streamingIndicator = "生成中…"
+    static var streamingIndicator: String { L("生成中…") }
 }
 
 // MARK: - Color hex helper

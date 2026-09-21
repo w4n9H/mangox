@@ -326,7 +326,7 @@ struct TrajectoryView: View {
                             .foregroundStyle(CodexTheme.textMuted)
                     }
                 }
-                Text(turn.prompt.isEmpty ? "(无输入)" : TrajectoryBuilder.firstSentence(turn.prompt))
+                Text(LK(turn.prompt.isEmpty ? "(无输入)" : TrajectoryBuilder.firstSentence(turn.prompt)))
                     .font(.system(size: 12, weight: .medium))
                     .foregroundStyle(CodexTheme.textPrimary)
                     .lineLimit(1)
@@ -610,7 +610,7 @@ struct TrajectoryView: View {
 
     private func detailLine(_ key: String, _ value: String) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
-            Text(key)
+            Text(LK(key))
                 .font(CodexTheme.fontMonoXs)
                 .foregroundStyle(CodexTheme.textMuted)
                 .fixedSize()

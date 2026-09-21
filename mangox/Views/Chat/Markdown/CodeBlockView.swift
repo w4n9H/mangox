@@ -26,7 +26,7 @@ struct CodeBlockView: View {
                     HStack(spacing: 4) {
                         Image(systemName: copied ? "checkmark" : "doc.on.doc")
                             .font(.system(size: 10))
-                        Text(copied ? "已复制" : "复制")
+                        Text(LK(copied ? "已复制" : "复制"))
                             .font(CodexTheme.fontTiny)
                     }
                     .foregroundStyle(copied ? CodexTheme.toolDone : CodexTheme.textTertiary)

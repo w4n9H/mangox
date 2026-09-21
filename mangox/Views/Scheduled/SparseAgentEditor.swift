@@ -48,9 +48,9 @@ struct SparseAgentEditor: View {
 
     /// 尚未填齐的必填项 (按钮被锁/将报错时显示在按钮旁)。
     private var missingRequired: String? {
-        if !nameFilled { return "名称" }
-        if accountId == nil { return "邮箱" }
-        if parsedWhitelist.isEmpty { return "发件人白名单" }
+        if !nameFilled { return L("名称") }
+        if accountId == nil { return L("邮箱") }
+        if parsedWhitelist.isEmpty { return L("发件人白名单") }
         return nil
     }
 
@@ -128,12 +128,12 @@ struct SparseAgentEditor: View {
                     .foregroundStyle(CodexTheme.toolRunning)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            Button(savedFlash ? "✓ 已保存" : (effectiveExistingId == nil ? "创建" : "保存")) { save() }
+            Button(LK(savedFlash ? "✓ 已保存" : (effectiveExistingId == nil ? "创建" : "保存"))) { save() }
                 .buttonStyle(CodexActionButtonStyle(kind: savedFlash ? .success : .primary,
                                                     disabled: !nameFilled))
                 .disabled(savedFlash || !nameFilled)
-                .help(nameFilled ? (effectiveExistingId == nil ? "创建这个 Inbox" : "保存")
-                                 : "请先填名称 (编辑器顶部那个大字输入框)")
+                .help(nameFilled ? LK(effectiveExistingId == nil ? "创建这个 Inbox" : "保存")
+                                 : LK("请先填名称 (编辑器顶部那个大字输入框)"))
         }
     }
 
@@ -141,25 +141,25 @@ struct SparseAgentEditor: View {
         CodexPillMenu {
             menuItem("请选择", selected: accountId == nil) { accountId = nil }
             ForEach(available) { a in
-                menuItem(accountTitle(a), selected: accountId == a.id) { accountId = a.id }
+                menuItem(LK(accountTitle(a)), selected: accountId == a.id) { accountId = a.id }
             }
         } label: {
             Image(systemName: "tray.full").font(.system(size: 10))
-            Text(selectedAccount.map { $0.label.isEmpty ? $0.address : $0.label } ?? "选择邮箱")
+            Text(LK(selectedAccount.map { $0.label.isEmpty ? $0.address : $0.label } ?? "选择邮箱"))
         }
         .disabled(effectiveExistingId != nil)   // 绑定后不可改 (1:1, 改绑请重建)
-        .help(effectiveExistingId != nil ? "邮箱绑定后不可修改 (一个邮箱只服务一个 Inbox)" : "选择收信用的邮箱账号")
+        .help(LK(effectiveExistingId != nil ? "邮箱绑定后不可修改 (一个邮箱只服务一个 Inbox)" : "选择收信用的邮箱账号"))
     }
 
     private var projectMenu: some View {
         CodexPillMenu {
             menuItem("无项目 (回落 home)", selected: projectId == nil) { projectId = nil }
             ForEach(bindableProjects) { p in
-                menuItem(p.title, selected: projectId == p.id) { projectId = p.id }
+                menuItem(LK(p.title), selected: projectId == p.id) { projectId = p.id }
             }
         } label: {
             Image(systemName: "folder").font(.system(size: 10))
-            Text(selectedProject.map { "→ \($0.title)" } ?? "→ 回落 home")
+            Text(LK(selectedProject.map { "→ \($0.title)" } ?? "→ 回落 home"))
         }
         .help("agent 在这个目录里干活; 选「无项目」时按 home 执行 (请看管好白名单)")
     }
@@ -170,14 +170,16 @@ struct SparseAgentEditor: View {
 
     /// 胶囊菜单里的单选条目 (✓ 前缀 = 当前选中, 与 ChatComposer 模型菜单同款)。
     /// 必须用 Button —— 见 CodexPillMenu 上方的约束说明。
-    private func menuItem(_ title: String, selected: Bool, action: @escaping () -> Void) -> some View {
-        Button(action: action) { Text(selected ? "✓ \(title)" : title) }
+    private func menuItem(_ title: LocalizedStringKey, selected: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            if selected { Text("✓ ") + Text(title) } else { Text(title) }
+        }
     }
 
     private var enabledToggle: some View {
         HStack(spacing: 5) {
             CodexMiniToggle(isOn: Binding(get: { draft.enabled }, set: { draft.enabled = $0 }))
-            Text(draft.enabled ? "启用" : "停用")
+            Text(LK(draft.enabled ? "启用" : "停用"))
                 .font(CodexTheme.fontSmall)
                 .foregroundStyle(draft.enabled ? CodexTheme.textPrimary : CodexTheme.textTertiary)
         }
@@ -224,7 +226,7 @@ struct SparseAgentEditor: View {
                         .fixedSize()
                     if draft.requireSecret {
                         SecureField(store.hasMailboxSentinelSecret(sentinelId: draft.id)
-                                    ? "已设置 (留空不修改)" : "共享密钥", text: $secretInput)
+                                    ? L("已设置 (留空不修改)") : L("共享密钥"), text: $secretInput)
                             .textFieldStyle(.roundedBorder)
                             .font(CodexFonts.monoFont(12))
                             .frame(maxWidth: 260)
@@ -286,7 +288,7 @@ struct SparseAgentEditor: View {
                 .fixedSize(horizontal: false, vertical: true)
             if let existing = effectiveExistingId.flatMap({ id in store.mailboxSentinels.first { $0.id == id } }) {
                 HStack(spacing: 10) {
-                    Text(existing.lastPollAt.map { "上次收信 \(relativeTime($0))" } ?? "尚未收信")
+                    Text(existing.lastPollAt.map { String(format: L("上次收信 %@"), relativeTime($0)) } ?? L("尚未收信"))
                         .font(CodexTheme.fontSmall)
                         .foregroundStyle(CodexTheme.textMuted)
                     Text("白名单 \(existing.whitelist.count) 条")
@@ -319,14 +321,14 @@ struct SparseAgentEditor: View {
     }
 
     private var globalStatusLine: String {
-        var parts: [String] = ["全局串行 (同一时刻只跑一个远程任务)"]
-        parts.append("排队 \(store.mailboxQueuedTaskCount) 个")
+        var parts: [String] = [L("全局串行 (同一时刻只跑一个远程任务)")]
+        parts.append(String(format: L("排队 %lld 个"), store.mailboxQueuedTaskCount))
         if let running = store.mailboxRunningTask {
-            parts.append("在途: \(running.title)")
+            parts.append(String(format: L("在途: %@"), running.title))
         } else {
-            parts.append("串行位空闲")
+            parts.append(L("串行位空闲"))
         }
-        if let last = store.mailboxLastPollAt { parts.append("最近收信 \(relativeTime(last))") }
+        if let last = store.mailboxLastPollAt { parts.append(String(format: L("最近收信 %@"), relativeTime(last))) }
         return parts.joined(separator: " · ")
     }
 
@@ -392,7 +394,7 @@ struct SparseAgentEditor: View {
 
     // MARK: - 小件
 
-    private func field<C: View>(_ label: String, hint: String?,
+    private func field<C: View>(_ label: LocalizedStringKey, hint: LocalizedStringKey?,
                                 @ViewBuilder control: () -> C) -> some View {
         HStack(alignment: .top, spacing: 10) {
             VStack(alignment: .leading, spacing: 2) {
@@ -432,14 +434,14 @@ struct SparseAgentEditor: View {
     private func save() {
         var agent = draft
         agent.name = agent.name.trimmingCharacters(in: .whitespaces)
-        guard !agent.name.isEmpty else { formError = "请填名字"; return }
-        guard let accountId else { formError = "请选择邮箱"; return }
+        guard !agent.name.isEmpty else { formError = L("请填名字"); return }
+        guard let accountId else { formError = L("请选择邮箱"); return }
         agent.accountId = accountId
         agent.projectId = projectId
         agent.whitelist = parsedWhitelist
-        guard !agent.whitelist.isEmpty else { formError = "白名单至少一个发件人地址"; return }
+        guard !agent.whitelist.isEmpty else { formError = L("白名单至少一个发件人地址"); return }
         guard store.upsertMailboxSentinel(agent) else {
-            formError = "该邮箱已被其他 Inbox agent 占用 (一个邮箱只能绑一个)"
+            formError = L("该邮箱已被其他 Inbox agent 占用 (一个邮箱只能绑一个)")
             return
         }
         let secret = secretInput.trimmingCharacters(in: .whitespaces)
@@ -448,7 +450,7 @@ struct SparseAgentEditor: View {
         secretInput = ""
         // 密钥闸开着却没有密钥 → 留在原地提示 (已落库, 补完密钥再保存即更新同一行)
         if agent.requireSecret && !store.hasMailboxSentinelSecret(sentinelId: agent.id) {
-            formError = "密钥闸开着但没有密钥 —— 首封会被判「缺密钥」拒绝"
+            formError = L("密钥闸开着但没有密钥 —— 首封会被判「缺密钥」拒绝")
             return
         }
         formError = nil

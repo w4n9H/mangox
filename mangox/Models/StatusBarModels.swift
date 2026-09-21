@@ -40,15 +40,16 @@ enum RuntimePhase: Equatable {
     /// queue_update (steering + followUp 合计; 清空回 streaming)
     case queued(count: Int)
 
-    /// 胶囊文案 (P6 设计 §2.3)。
+    /// 胶囊文案 (P6 设计 §2.3)。**域层 String: 必须显式 L()** —— 字面量本身不吃本地化。
     var capsuleText: String {
         switch self {
         case .idle:                          return "idle"
         case .streaming:                     return "streaming"
-        case .retrying(let a, let m, let d): return "重试 \(a)/\(m) · \((d + 999) / 1000)s 后"
-        case .compacting(let reason):        return "压缩中（\(reason)）…"
-        case .summarizing:                   return "摘要重试中…"
-        case .queued(let n):                 return "排队 \(n) 条"
+        case .retrying(let a, let m, let d):
+            return String(format: L("重试 %lld/%lld · %llds 后"), a, m, (d + 999) / 1000)
+        case .compacting(let reason):        return String(format: L("压缩中（%@）…"), reason)
+        case .summarizing:                   return L("摘要重试中…")
+        case .queued(let n):                 return String(format: L("排队 %lld 条"), n)
         }
     }
 

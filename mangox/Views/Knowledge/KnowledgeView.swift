@@ -153,12 +153,12 @@ struct KnowledgeView: View {
     private func scopeLabel(_ item: KnowledgeItem) -> String {
         var parts: [String] = []
         parts.append(item.scope == .global
-                     ? "全局"
-                     : store.projects.first { $0.id == item.projectId }?.title ?? "未知项目")
+                     ? L("全局")
+                     : store.projects.first { $0.id == item.projectId }?.title ?? L("未知项目"))
         if item.status == .pending {
-            parts.append("待审核 · 提炼候选")
+            parts.append(L("待审核 · 提炼候选"))
         } else if item.source == .session {
-            parts.append("记忆")
+            parts.append(L("记忆"))
         }
         return parts.joined(separator: " · ")
     }
@@ -236,7 +236,7 @@ struct KnowledgeView: View {
                 .buttonStyle(CodexActionButtonStyle(kind: .danger))
                 .help("删除该条目")
             }
-            Button(savedFlash ? "✓ 已保存" : "保存") { saveEditing() }
+            Button(LK(savedFlash ? "✓ 已保存" : "保存")) { saveEditing() }
                 .buttonStyle(CodexActionButtonStyle(
                     kind: savedFlash ? .success : .primary,
                     disabled: !draftReady))
@@ -252,7 +252,7 @@ struct KnowledgeView: View {
                 Button(p.title) { draftProjectId = p.id }
             }
         } label: {
-            Text(store.projects.first { $0.id == draftProjectId }?.title ?? "选择项目")
+            Text(LK(store.projects.first { $0.id == draftProjectId }?.title ?? "选择项目"))
                 .font(CodexTheme.fontSmall)
                 .foregroundStyle(CodexTheme.textSecondary)
                 .contentShape(Rectangle())
@@ -309,8 +309,11 @@ struct KnowledgeView: View {
     private func resolvedTitle() -> String {
         let t = draftTitle.trimmingCharacters(in: .whitespacesAndNewlines)
         if !t.isEmpty { return t }
-        return String(draftContent.trimmingCharacters(in: .whitespacesAndNewlines)
-            .split(separator: "\n").first?.prefix(24) ?? "知识")
+        // 先 String 化再兜底 —— 直接写 `String(substring? ?? L("知识"))` 会因左侧是
+        // `Substring?` 而要求右侧同为 Substring (L() 返回 String, 编译不过)。
+        let head = draftContent.trimmingCharacters(in: .whitespacesAndNewlines)
+            .split(separator: "\n").first.map { String($0.prefix(24)) }
+        return head ?? L("知识")
     }
 
     // MARK: - 草稿动作

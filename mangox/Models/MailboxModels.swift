@@ -126,10 +126,10 @@ enum MailboxRejectionReason: String, Codable, CaseIterable {
 
     var label: String {
         switch self {
-        case .notWhitelisted: return "发件人不在白名单"
+        case .notWhitelisted: return L("发件人不在白名单")
         case .missingIntent:  return "主题缺 [MGOX] 标记"
-        case .secretMissing:  return "agent 未配密钥"
-        case .secretMismatch: return "密钥不匹配"
+        case .secretMissing:  return L("agent 未配密钥")
+        case .secretMismatch: return L("密钥不匹配")
         }
     }
 }

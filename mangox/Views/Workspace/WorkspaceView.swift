@@ -74,7 +74,7 @@ struct WorkspaceView: View {
                 .lineLimit(1)
             gitChip
             Spacer()
-            Text(totalFiles.map { "\($0) 项" } ?? "")
+            Text(totalFiles.map { String(format: L("%lld 项"), $0) } ?? "")
                 .font(CodexFonts.monoFont(10))
                 .foregroundStyle(CodexTheme.textMuted)
             Button {
@@ -482,7 +482,7 @@ fileprivate struct DiffStatView: View {
                     .foregroundStyle(CodexTheme.toolError)
             }
         }
-        .help("+\(stat.added) / -\(stat.deleted) 行")
+        .help(String(format: L("+%lld / -%lld 行"), stat.added, stat.deleted))
     }
 
     static func short(_ n: Int) -> String {
@@ -679,14 +679,14 @@ struct FilePreviewView: View {
         let fm = FileManager.default
         guard let attr = try? fm.attributesOfItem(atPath: absolutePath),
               let size = attr[.size] as? Int, size <= 1_000_000
-        else { return "// 文件过大 (>1 MB), 暂不支持预览" }
+        else { return L("// 文件过大 (>1 MB), 暂不支持预览") }
         let imageExts: Set<String> = ["png", "jpg", "jpeg", "gif", "webp", "icns", "pdf"]
         let ext = (fileName as NSString).pathExtension.lowercased()
-        if imageExts.contains(ext) { return "// 二进制文件 (\(ext)), 图片预览将在后续版本提供" }
+        if imageExts.contains(ext) { return String(format: L("// 二进制文件 (%@), 图片预览将在后续版本提供"), ext) }
         guard let s = try? String(contentsOfFile: absolutePath, encoding: .utf8) else {
-            return "// 二进制文件或暂不支持的编码"
+            return L("// 二进制文件或暂不支持的编码")
         }
-        if s.isEmpty { return "// 空文件" }
+        if s.isEmpty { return L("// 空文件") }
         return s
     }
 

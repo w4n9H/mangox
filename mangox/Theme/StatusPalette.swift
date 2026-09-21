@@ -24,11 +24,11 @@ enum ToolPhase: Hashable, Codable {
 
     var label: String {
         switch self {
-        case .queued:           return "等待"
-        case .running:          return "运行中"
-        case .done:             return "完成"
-        case .awaitingApproval: return "待审批"
-        case .error:            return "错误"
+        case .queued:           return L("等待")
+        case .running:          return L("运行中")
+        case .done:             return L("完成")
+        case .awaitingApproval: return L("待审批")
+        case .error:            return L("错误")
         }
     }
 }

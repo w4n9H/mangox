@@ -63,10 +63,15 @@ struct ContentView: View {
                         }
                         .buttonStyle(.plain)
                         .help("还原主窗口")
-                        Text(store.runningTurns.isEmpty ? "任务台"
-                             : "任务台 · \(store.runningTurns.count) 个在途")
-                            .font(.system(size: 12, weight: .semibold))
-                            .foregroundStyle(CodexTheme.textPrimary)
+                        Group {
+                            if store.runningTurns.isEmpty {
+                                Text("任务台")
+                            } else {
+                                Text("任务台 · \(store.runningTurns.count) 个在途")
+                            }
+                        }
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(CodexTheme.textPrimary)
                     }
                 } else {
                     HStack {
@@ -81,7 +86,7 @@ struct ContentView: View {
                                                  : CodexTheme.textMuted)
                         }
                         .buttonStyle(.plain)
-                        .help(store.sidebarCollapsed ? "展开侧栏" : "收起侧栏")
+                        .help(LK(store.sidebarCollapsed ? "展开侧栏" : "收起侧栏"))
 
                         // P4.2: 最小化为任务台 (Apple Music mini player 同款; 向内收 = 缩小)
                         Button(action: { store.miniMode = true }) {

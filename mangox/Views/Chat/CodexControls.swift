@@ -9,7 +9,7 @@ import SwiftUI
 // MARK: - 自绘段选 (替换 .pickerStyle(.segmented))
 
 struct CodexSegmented: View {
-    let options: [String]
+    let options: [LocalizedStringKey]
     @Binding var selection: Int
     @State private var hovering: Int?
 

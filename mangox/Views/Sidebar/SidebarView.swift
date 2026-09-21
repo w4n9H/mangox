@@ -10,7 +10,6 @@ struct SidebarView: View {
     let store: ChatStore
     /// 数据源 = chats/projects 投影 (订阅域状态, 不含流式热路径)。
     @StateObject private var model: SidebarModel
-    @ObservedObject private var appearance = AppearanceModel.shared
     @State private var expandedProjects: Set<UUID> = []
     // 删除会话二次确认 (两种粒度: 仅 db / db+pi 记忆文件)
     @State private var confirmDeleteTarget: ConversationItem?
@@ -55,7 +54,7 @@ struct SidebarView: View {
         }
     }
 
-    // MARK: - Brand header (主题切换; 侧栏开关在顶栏)
+    // MARK: - Brand header (主题切换已移入 设置 → 外观, P10.7)
 
     private var brandHeader: some View {
         HStack(spacing: 8) {
@@ -63,17 +62,6 @@ struct SidebarView: View {
                 .font(.system(size: 14, weight: .semibold))
                 .foregroundStyle(CodexTheme.textPrimary)
             Spacer()
-            Button(action: { appearance.toggle() }) {
-                Text(appearance.current)
-                    .font(CodexFonts.monoFont(10, weight: .medium))
-                    .foregroundStyle(CodexTheme.textSecondary)
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 3)
-                    .background(CodexTheme.bgElevated)
-                    .clipShape(Capsule())
-            }
-            .buttonStyle(.plain)
-            .help(appearance.current == "dark" ? "Switch to light" : "Switch to dark")
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 6)
@@ -150,11 +138,28 @@ struct SidebarView: View {
             ForEach(model.projects) { group in
                 projectRow(group)
                 if expandedProjects.contains(group.id) {
-                    ForEach(group.items.sorted { $0.updatedAt > $1.updatedAt }) { item in
-                        sessionRow(item)
-                    }
+                    nestedSessions(group)
                 }
             }
+        }
+    }
+
+    /// 项目下的会话: 缩进 + 一条竖向引导线, 表达"这些会话属于上面那个项目"。
+    /// P10.7 之前这里与顶层会话同缩进 (`indent` 被硬编码 false, Tune.sidebarRowIndent 是死代码),
+    /// 层级完全读不出来 —— 会话看起来和项目平级。
+    private func nestedSessions(_ group: ProjectGroup) -> some View {
+        VStack(alignment: .leading, spacing: 1) {
+            ForEach(group.items.sorted { $0.updatedAt > $1.updatedAt }) { item in
+                sessionRow(item, indent: true)
+            }
+        }
+        .overlay(alignment: .topLeading) {
+            // 只跨子会话区 (不含项目行本身), 上下各留 4pt 让线不贴着相邻行
+            Rectangle()
+                .fill(CodexTheme.guide)
+                .frame(width: 1)
+                .padding(.leading, Tune.sidebarGuideInset)
+                .padding(.vertical, 4)
         }
     }
 
@@ -210,11 +215,11 @@ struct SidebarView: View {
     /// 删除项目二次确认 (连带其下所有会话, 不可撤销)。
     private func confirmDeleteProject(_ group: ProjectGroup) {
         let alert = NSAlert()
-        alert.messageText = "删除项目「\(group.title)」？"
-        alert.informativeText = "该项目下的所有会话与消息记录将一并删除, 此操作不可撤销。"
+        alert.messageText = String(format: L("删除项目「%@」？"), group.title)
+        alert.informativeText = L("该项目下的所有会话与消息记录将一并删除, 此操作不可撤销。")
         alert.alertStyle = .warning
-        alert.addButton(withTitle: "删除")
-        alert.addButton(withTitle: "取消")
+        alert.addButton(withTitle: L("删除"))
+        alert.addButton(withTitle: L("取消"))
         if alert.runModal() == .alertFirstButtonReturn {
             store.deleteProject(group.id)
         }
@@ -231,7 +236,7 @@ struct SidebarView: View {
                 if let items = grouped[bucket], !items.isEmpty {
                     dayHeader(bucket, count: items.count)
                     ForEach(items) { item in
-                        sessionRow(item)
+                        sessionRow(item, indent: false)
                     }
                 }
             }
@@ -240,7 +245,7 @@ struct SidebarView: View {
 
     private func dayHeader(_ bucket: DayBucket, count: Int) -> some View {
         HStack {
-            Text(bucket.rawValue)
+            Text(LK(bucket.rawValue))
                 .font(.system(size: 10, weight: .medium))
                 .tracking(0.5)
             Spacer()
@@ -265,10 +270,11 @@ struct SidebarView: View {
 
     // MARK: - Session row (含重命名/删除)
 
-    private func sessionRow(_ item: ConversationItem) -> some View {
+    /// `indent` 必传 (不给默认值 —— 之前默认值 let 调用点静默省略, 层级就是这么丢的)。
+    private func sessionRow(_ item: ConversationItem, indent: Bool) -> some View {
         ConversationRow(item: item,
                         isSelected: item.id == model.selectedConversationId,
-                        indent: false,
+                        indent: indent,
                         // P6.3.1: 侧问会话 = fork 徽章; 普通会话 = 定时任务标 or 对话气泡
                         badge: item.sideOf != nil
                             ? "arrow.triangle.branch"
@@ -288,7 +294,8 @@ struct SidebarView: View {
 struct ConversationRow: View {
     let item: ConversationItem
     let isSelected: Bool
-    var indent: Bool = false
+    /// 项目下的会话行 = true (缩进到 `Tune.sidebarRowIndent`); 顶层会话行 = false (8)。
+    let indent: Bool
     /// P3.10: 定时/哨兵任务的日志会话标志 (SF Symbol 名; nil = 普通会话)
     var badge: String? = nil
     /// 会话回合运行中 → 绿色脉冲圈

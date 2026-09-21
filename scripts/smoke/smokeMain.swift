@@ -2668,6 +2668,22 @@ struct SmokeMain {
         check(!reloadedStore.hasMailboxAccountAuth(accountId: sAcc2.id),
               "T-MAILBOX-S 授权码不入库 (只活在 Keychain / 凭据缝)")
 
+        // ===== T-UI (P10.7): 外观三态 / 侧栏层级几何 =====
+        check(AppAppearance.allCases.count == 3, "T-UI 外观: 三态 (跟随系统 / 浅色 / 深色)")
+        check(AppAppearance.system.nsAppearanceName == nil,
+              "T-UI 外观: 跟随系统 → 交回系统 (NSApp.appearance = nil)")
+        check(AppAppearance.light.nsAppearanceName == .aqua && AppAppearance.dark.nsAppearanceName == .darkAqua,
+              "T-UI 外观: 浅色 → aqua / 深色 → darkAqua")
+        check(AppAppearance.resolve("light") == .light && AppAppearance.resolve("dark") == .dark
+              && AppAppearance.resolve("system") == .system,
+              "T-UI 外观: 老值 light/dark 直接可读 (UserDefaults 无需迁移)")
+        check(AppAppearance.resolve(nil) == .light && AppAppearance.resolve("garbage") == .light,
+              "T-UI 外观: 缺失/未知值回落 .light (与旧版缺省一致, 不把用户突然翻成深色)")
+        check(Tune.sidebarGuideInset + 1 <= Tune.sidebarRowIndent,
+              "T-UI 侧栏层级: 引导线落在子会话图标左侧 (inset+1 ≤ indent), 防缩进被调到小于线宽")
+        check(Tune.sidebarRowIndent > 8,
+              "T-UI 侧栏层级: 项目内会话行有真实缩进 (顶层恒 8, 子行必须更进)")
+
         report()    }
 }
 

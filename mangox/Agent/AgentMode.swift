@@ -22,11 +22,11 @@ enum AgentMode: String, Codable, CaseIterable, Identifiable {
     var subtitle: String {
         switch self {
         case .minimal:
-            "仅 read / bash / write / edit 四个内置工具, 不挂业务扩展 — 轻装跑定时任务与快速问答。"
+            L("仅 read / bash / write / edit 四个内置工具, 不挂业务扩展 — 轻装跑定时任务与快速问答。")
         case .standard:
-            "功能完整的编码 Agent, 内置工具全量 (读/写/Shell/检索), 不挂业务扩展 — 日常默认档。"
+            L("功能完整的编码 Agent, 内置工具全量 (读/写/Shell/检索), 不挂业务扩展 — 日常默认档。")
         case .full:
-            "具备标准模式全部能力, 并挂载全部业务扩展, 扩展注册的工具一并进入工具池。"
+            L("具备标准模式全部能力, 并挂载全部业务扩展, 扩展注册的工具一并进入工具池。")
         }
     }
 

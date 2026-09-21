@@ -90,7 +90,7 @@ struct ExtensionsView: View {
         }
     }
 
-    private func section(_ title: String, source: ExtensionSource) -> some View {
+    private func section(_ title: LocalizedStringKey, source: ExtensionSource) -> some View {
         let items = store.extensions.filter { $0.source == source }
         return Group {
             if !items.isEmpty {
@@ -129,7 +129,7 @@ struct ExtensionsView: View {
                     set: { _ in store.toggleExtension(item) }
                 ),
                 disabled: item.isBuiltIn)   // 内置审批扩展恒开
-                .help(item.isBuiltIn ? "内置审批扩展, 不可停用" : "启停 (重启引擎生效)")
+                .help(LK(item.isBuiltIn ? "内置审批扩展, 不可停用" : "启停 (重启引擎生效)"))
             } else {
                 Text(item.source.label)
                     .font(.system(size: 9))

@@ -22,7 +22,7 @@ final class MiniWindowController {
     func attach(store: ChatStore) {
         guard window == nil else { return }
         self.store = store
-        let hosting = NSHostingView(rootView: MiniBarWindowView(store: store))
+        let hosting = NSHostingView(rootView: L10nRoot { MiniBarWindowView(store: store) })
         let win = NSWindow(contentRect: NSRect(x: 0, y: 0, width: Tune.miniBarWidth, height: 180),
                            styleMask: [.titled, .fullSizeContentView, .closable, .miniaturizable],
                            backing: .buffered, defer: false)

@@ -428,7 +428,7 @@ final class ChatStore: ObservableObject {
 
     /// 读取扩展源码 (详情预览)
     func extensionSource(_ item: ExtensionItem) -> String {
-        (try? String(contentsOfFile: item.path, encoding: .utf8)) ?? "// 无法读取源码"
+        (try? String(contentsOfFile: item.path, encoding: .utf8)) ?? L("// 无法读取源码")
     }
 
     func toggleExtensionsPanel() {
@@ -1109,7 +1109,7 @@ final class ChatStore: ObservableObject {
             activeSideChat = nil
             return
         }
-        let parentTitle = allConversations.first { $0.id == info.sideOf }?.title ?? "已删除的会话"
+        let parentTitle = allConversations.first { $0.id == info.sideOf }?.title ?? L("已删除的会话")
         activeSideChat = SideChatInfo(parent: info.sideOf, parentTitle: parentTitle,
                                       turns: info.turns, at: info.at)
     }
@@ -1153,15 +1153,15 @@ final class ChatStore: ObservableObject {
     func startSideChat(from sourceId: UUID, upTo turns: Int? = nil) {
         guard let item = allConversations.first(where: { $0.id == sourceId }),
               item.sideOf == nil else {
-            setTurnLimitNotice("无法侧问：源会话无效或已是侧问会话")
+            setTurnLimitNotice(L("无法侧问：源会话无效或已是侧问会话"))
             return
         }
         guard !runningTurns.contains(sourceId) else {
-            setTurnLimitNotice("源会话回合进行中，结束后再发起侧问")
+            setTurnLimitNotice(L("源会话回合进行中，结束后再发起侧问"))
             return
         }
         guard let sourceFile = sideChatSourceFile(for: sourceId) else {
-            setTurnLimitNotice("无法侧问：该会话没有持久记忆文件 (如临时任务会话)")
+            setTurnLimitNotice(L("无法侧问：该会话没有持久记忆文件 (如临时任务会话)"))
             return
         }
         // 截断快照 (轮级入口); 整文件入口直接用源文件, 零拷贝
@@ -1169,7 +1169,7 @@ final class ChatStore: ObservableObject {
         let forkSource: String
         if let turns {
             guard let snap = Self.prepareForkSnapshot(sourcePath: sourceFile, turns: turns) else {
-                setTurnLimitNotice("侧问快照创建失败：无法读取源会话记忆文件")
+                setTurnLimitNotice(L("侧问快照创建失败：无法读取源会话记忆文件"))
                 return
             }
             tempSnapshot = snap
@@ -1257,7 +1257,7 @@ final class ChatStore: ObservableObject {
         // 引擎缺失: 不发请求, 本地给一条说明 (engineMissing 横幅常驻在聊天顶部)
         if engineMissing {
             messages.append(ChatMessage(role: .assistant,
-                                        content: .text("⚠️ 未找到 pi CLI, 无法发送。请确认已安装 pi 并重启 MangoX (或检查 pi 安装路径)。")))
+                                        content: .text(L("⚠️ 未找到 pi CLI, 无法发送。请确认已安装 pi 并重启 MangoX (或检查 pi 安装路径)。"))))
             return
         }
         ensureConversationForSend() // 无选中会话时隐式建会话, 消息才有归属
@@ -1266,7 +1266,7 @@ final class ChatStore: ObservableObject {
         // P4.0.4: 并发上限 —— 拒绝 + 横幅提示 (v1 不排队)
         if atTurnLimit {
             draft = trimmed
-            setTurnLimitNotice("并发已达上限 (\(maxConcurrentTurns)), 请等待任务结束或在设置中调高")
+            setTurnLimitNotice(String(format: L("并发已达上限 (%lld), 请等待任务结束或在设置中调高"), maxConcurrentTurns))
             return
         }
         // P7-M6b 门控: 附件随时可挂, 发送时才拦 (模型不支持图片 → 提示换模型, 附件不白挂)
@@ -1274,7 +1274,7 @@ final class ChatStore: ObservableObject {
         var outgoing: [OutgoingImage] = []
         if !pendingImages.isEmpty {
             guard currentModelSupportsImages else {
-                setTurnLimitNotice("当前模型不支持图片输入, 请在设置中改用多模态模型后再发")
+                setTurnLimitNotice(L("当前模型不支持图片输入, 请在设置中改用多模态模型后再发"))
                 return
             }
             for p in pendingImages {
@@ -1299,7 +1299,7 @@ final class ChatStore: ObservableObject {
         persistMessage(msg, sid: sid)
         autoTitleIfNeeded(sid: sid, text: trimmed)   // P6.4: 默认标题会话按首条消息自动命名
         // 任务 fire 轮次保持 ephemeral (交接文件注入模板不得滚进持久 transcript)
-        beginTurn(sid: sid, prompt: trimmed.isEmpty ? "请看图" : trimmed, ephemeral: ephemeral,
+        beginTurn(sid: sid, prompt: trimmed.isEmpty ? L("请看图") : trimmed, ephemeral: ephemeral,
                   cwd: activeProjectPath, unattended: false, images: outgoing)
     }
 
@@ -1308,11 +1308,11 @@ final class ChatStore: ObservableObject {
     func addPendingImage(_ data: Data, suggestedExtension ext: String) {
         guard ImagePipeline.isImageExtension(ext) || ext.isEmpty else { return }
         guard pendingImages.count < ImagePipeline.maxPerMessage else {
-            setTurnLimitNotice("单条消息最多 \(ImagePipeline.maxPerMessage) 张图片, 超出请拆条发送")
+            setTurnLimitNotice(String(format: L("单条消息最多 %lld 张图片, 超出请拆条发送"), ImagePipeline.maxPerMessage))
             return
         }
         guard let size = ImagePipeline.pixelSize(of: data) else {
-            setTurnLimitNotice("无法识别的图片数据")
+            setTurnLimitNotice(L("无法识别的图片数据"))
             return
         }
         pendingImages.append(PendingImage(id: UUID(), data: data,
@@ -1322,7 +1322,7 @@ final class ChatStore: ObservableObject {
 
     func addPendingImage(at url: URL) {
         guard let data = try? Data(contentsOf: url) else {
-            setTurnLimitNotice("无法读取图片文件")
+            setTurnLimitNotice(L("无法读取图片文件"))
             return
         }
         addPendingImage(data, suggestedExtension: url.pathExtension)
@@ -1408,14 +1408,14 @@ final class ChatStore: ObservableObject {
     func persistOrNotify(_ op: String, _ body: () throws -> Void) {   // P9.1d: internal — CaptureService 落库回调
         do { try body() } catch {
             print("[Persistence] \(op) 失败: \(error)")
-            setTurnLimitNotice("⚠️ 本地库写入失败 (\(op)), 数据可能未保存", isError: true)
+            setTurnLimitNotice(String(format: L("⚠️ 本地库写入失败 (%@), 数据可能未保存"), op), isError: true)
         }
     }
 
     /// 落库: 显式 sid 优先 (回合归属), 缺省回落当前选中会话。
     func persistMessage(_ m: ChatMessage, sid: UUID? = nil) {   // P9.1b: internal — SchedulerService fire 落库
         guard let sid = sid ?? selectedConversationId else { return }
-        persistOrNotify("消息落库") { try persistence?.appendMessageEvent(sessionId: sid, m) }
+        persistOrNotify(L("消息落库")) { try persistence?.appendMessageEvent(sessionId: sid, m) }
         touchConversation(sid)   // P8.0: 消息落库即刷新侧栏活跃时间
     }
 
@@ -1468,7 +1468,7 @@ final class ChatStore: ObservableObject {
         guard let sid = selectedConversationId,
               !runningTurns.contains(sid) else { return }
         if atTurnLimit {
-            setTurnLimitNotice("并发已达上限 (\(maxConcurrentTurns)), 请等待任务结束或在设置中调高")
+            setTurnLimitNotice(String(format: L("并发已达上限 (%lld), 请等待任务结束或在设置中调高"), maxConcurrentTurns))
             return
         }
         guard let lastUserIdx = messages.lastIndex(where: { $0.role == .user }) else { return }
@@ -1840,7 +1840,7 @@ extension ChatStore: AgentTransportDelegate {
             } else {
                 setToolPhaseIn(&liveTurns[sid, default: []], toolId, phase)
             }
-            persistOrNotify("工具相位落库") { try persistence?.appendToolUpdateEvent(sessionId: sid, toolId: toolId, phase: phase) }
+            persistOrNotify(L("工具相位落库")) { try persistence?.appendToolUpdateEvent(sessionId: sid, toolId: toolId, phase: phase) }
             if case .awaitingApproval = phase { approvalBlocked.insert(sid) }   // P8-T26
 
         case .extensionNotify(let type, let message):
@@ -1878,11 +1878,11 @@ extension ChatStore: AgentTransportDelegate {
                     accumulateAway(sid: sid, projection: proj)
                 }
                 if elapsed >= 1 {
-                    let title = allConversations.first { $0.id == sid }?.title ?? "任务"
+                    let title = allConversations.first { $0.id == sid }?.title ?? L("任务")
                     let mins = Int(elapsed) / 60, secs = Int(elapsed) % 60
                     if appIsForeground {
                         // P4.2: mini 台完成闪显数据 (显示 5s 后自清, mini 窗口保持不自动还原)
-                        lastCompleted = (sid, title, String(format: "✓ 完成 · 耗时 %02d:%02d", mins, secs))
+                        lastCompleted = (sid, title, String(format: L("✓ 完成 · 耗时 %02d:%02d"), mins, secs))
                         lastCompletedTask?.cancel()
                         lastCompletedTask = Task { @MainActor in
                             try? await Task.sleep(nanoseconds: 5_000_000_000)
@@ -1951,8 +1951,8 @@ extension ChatStore: AgentTransportDelegate {
         let preview = Self.assistantPreviewLine(projection)
         let mins = Int(elapsed) / 60, secs = Int(elapsed) % 60
         let body = preview.isEmpty
-            ? String(format: "回合完成 · 耗时 %02d:%02d", mins, secs)
-            : String(format: "回合完成 · 耗时 %02d:%02d\n%@", mins, secs, preview)
+            ? String(format: L("回合完成 · 耗时 %02d:%02d"), mins, secs)
+            : String(format: L("回合完成 · 耗时 %02d:%02d\n%@"), mins, secs, preview)
         Task { await CompletionNotifier.shared.post(sessionId: sid, title: title, body: body) }
     }
 
@@ -1971,7 +1971,7 @@ extension ChatStore: AgentTransportDelegate {
 
     /// 迷你条 L1: 会话名 / 任务名。
     func turnTitle(_ sid: UUID) -> String {
-        allConversations.first { $0.id == sid }?.title ?? "任务"
+        allConversations.first { $0.id == sid }?.title ?? L("任务")
     }
 
     /// 迷你条 L1: 回合计时 (mm:ss)。
@@ -1995,10 +1995,10 @@ extension ChatStore: AgentTransportDelegate {
                 return "…" + String(s.suffix(60))
             }
             if msg.isStreaming, case .think = msg.content {
-                return "思考中…"
+                return L("思考中…")
             }
         }
-        return "运行中…"
+        return L("运行中…")
     }
 
     /// 流式块 upsert: 有则追加 delta (光标保持), 无则建块 (归属路由保证内容不断头)。
@@ -2139,10 +2139,10 @@ extension ChatStore: AgentTransportDelegate {
         isExportingHTML = false
         t.shutdown()
         if let path {
-            setExtensionNotice("HTML 已导出 · 已在 Finder 显示", isError: false)
+            setExtensionNotice(L("HTML 已导出 · 已在 Finder 显示"), isError: false)
             NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)])
         } else {
-            setExtensionNotice(timeout ? "导出超时" : "导出失败", isError: true)
+            setExtensionNotice(timeout ? L("导出超时") : L("导出失败"), isError: true)
         }
     }
 
@@ -2162,7 +2162,7 @@ extension ChatStore: AgentTransportDelegate {
             try? persistence?.setSessionFile(id: sid, path: path)
             transport.updateSessionFilePath(path)
         } else {
-            setExtensionNotice("侧问创建失败：快照回读未完成 (回合未成功)", isError: true)
+            setExtensionNotice(L("侧问创建失败：快照回读未完成 (回合未成功)"), isError: true)
             deleteConversation(sid)
         }
     }

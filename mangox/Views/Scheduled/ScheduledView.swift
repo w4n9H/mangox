@@ -288,11 +288,11 @@ struct ScheduledView: View {
         if let error = agent.lastError, !error.isEmpty {
             parts.append("✗ \(error)")
         } else if agent.enabled {
-            parts.append("收信中 · 每 \(agent.pollInterval)s")
+            parts.append(String(format: L("收信中 · 每 %llds"), agent.pollInterval))
         } else {
-            parts.append("已停用 · 每 \(agent.pollInterval)s")
+            parts.append(String(format: L("已停用 · 每 %llds"), agent.pollInterval))
         }
-        parts.append(agent.lastPollAt.map { "上次收信 \(relativeTime($0))" } ?? "尚未收信")
+        parts.append(agent.lastPollAt.map { String(format: L("上次收信 %@"), relativeTime($0)) } ?? L("尚未收信"))
         return parts.joined(separator: " · ")
     }
 
@@ -300,35 +300,35 @@ struct ScheduledView: View {
     private func sparseContextLine(_ agent: MailboxSentinel) -> String {
         let account = store.mailboxAccounts.first { $0.id == agent.accountId }
         let project = store.projects.first { $0.id == agent.projectId }
-        let address = account?.address ?? "账号已删除"
+        let address = account?.address ?? L("账号已删除")
         return "\(address)  →  \(project.map(\.title) ?? "home")"
     }
 
     /// 三行版式 · L2 状态行 (扫一眼的高频信息; cron 无效红字提示)
     private func statusLine(_ task: ScheduledTask) -> String {
-        if !cronValid(task) { return "cron 无效" }
+        if !cronValid(task) { return L("cron 无效") }
         var parts: [String] = []
         if task.condition?.isEmpty == false {
             if let done = task.completedAt {
-                parts.append("已触发 · \(done.relativeTag)")
+                parts.append(String(format: L("已触发 · %@"), done.relativeTag))
             } else if task.enabled {
-                parts.append("值守中 · \(FrequencyKind.from(cron: task.cron).shortLabel)")
+                parts.append(String(format: L("值守中 · %@"), FrequencyKind.from(cron: task.cron).shortLabel))
             } else {
-                parts.append("已暂停")
+                parts.append(L("已暂停"))
             }
         } else {
             parts.append(CronExpr.describe(task.cron))   // "每天 09:00" 等人话描述 (识别不出=cron 原文)
             if !task.enabled {
-                parts.append("已暂停")
+                parts.append(L("已暂停"))
             } else if task.continuous {
-                parts.append("持续")
+                parts.append(L("持续"))
             }
             if task.runCount > 0 {
-                parts.append("已跑 \(task.runCount) 次")
+                parts.append(String(format: L("已跑 %lld 次"), task.runCount))
             } else if let last = task.lastRunAt {
-                parts.append("上次 \(last.relativeTag)")
+                parts.append(String(format: L("上次 %@"), last.relativeTag))
             } else if parts.isEmpty {
-                parts.append("待运行")
+                parts.append(L("待运行"))
             }
         }
         return parts.joined(separator: " · ")
@@ -338,12 +338,12 @@ struct ScheduledView: View {
     private func contextLine(_ task: ScheduledTask) -> String {
         var parts: [String] = []
         if let pid = task.projectId {
-            parts.append(store.projects.first { $0.id == pid }?.title ?? "未知项目")
+            parts.append(store.projects.first { $0.id == pid }?.title ?? L("未知项目"))
         } else {
-            parts.append("无项目")
+            parts.append(L("无项目"))
         }
         parts.append(task.condition?.isEmpty == false ? FrequencyKind.from(cron: task.cron).cron : task.cron)
-        parts.append("无人值守")   // P9-#17: fire 恒 unattended, 展示与运行时行为对齐
+        parts.append(L("无人值守"))   
         return parts.joined(separator: " · ")
     }
 
@@ -429,12 +429,12 @@ struct ScheduledView: View {
                 }
                 .buttonStyle(CodexActionButtonStyle(kind: .danger))
             }
-            Button(savedFlash ? "✓ 已保存" : "保存") { saveEditing() }
+            Button(LK(savedFlash ? "✓ 已保存" : "保存")) { saveEditing() }
                 .buttonStyle(CodexActionButtonStyle(
                     kind: savedFlash ? .success : .primary,
                     disabled: !draftReady))
                 .disabled(!draftReady || savedFlash)
-                .help(draftReady ? "保存" : (draftIsWaiting ? "触发条件与动作为必填" : "prompt 与 cron 为必填"))
+                .help(LK(draftReady ? "保存" : (draftIsWaiting ? "触发条件与动作为必填" : "prompt 与 cron 为必填")))
         }
     }
 
@@ -449,9 +449,9 @@ struct ScheduledView: View {
         case .inbox: "Inbox"
         } }
         var help: String { switch self {
-        case .cron: "到点投递 prompt (cron 驱动)"
-        case .watch: "按频率轻检查触发条件, 条件成立才执行动作 (条件驱动)"
-        case .inbox: "来信驱动的无人值守 agent: 按间隔收信, 过鉴权四道闸后起会话执行"
+        case .cron: L("到点投递 prompt (cron 驱动)")
+        case .watch: L("按频率轻检查触发条件, 条件成立才执行动作 (条件驱动)")
+        case .inbox: L("来信驱动的无人值守 agent: 按间隔收信, 过鉴权四道闸后起会话执行")
         } }
     }
 
@@ -626,7 +626,7 @@ struct ScheduledView: View {
         } label: {
             Image(systemName: "cpu")
             Text(store.model.customLabel(provider: draftProvider, modelId: draftModelId)
-                 ?? (draftModelId.isEmpty ? "选择模型" : draftModelId))
+                 ?? (draftModelId.isEmpty ? L("选择模型") : draftModelId))
         }
     }
 
@@ -639,7 +639,7 @@ struct ScheduledView: View {
             }
         } label: {
             Image(systemName: "brain")
-            Text(draftThinking ?? "级别")
+            Text(LK(draftThinking ?? "级别"))
         }
     }
 
@@ -652,7 +652,7 @@ struct ScheduledView: View {
             }
         } label: {
             Image(systemName: "switch.2")
-            Text(AgentMode(rawValue: draftMode)?.displayName ?? "模式")
+            Text(LK(AgentMode(rawValue: draftMode)?.displayName ?? "模式"))
         }
     }
 
@@ -668,8 +668,8 @@ struct ScheduledView: View {
     }
 
     private var projectLabel: String {
-        guard let pid = draftProjectId else { return "无项目（纯对话）" }
-        return store.projects.first { $0.id == pid }?.title ?? "选择项目"
+        guard let pid = draftProjectId else { return L("无项目（纯对话）") }
+        return store.projects.first { $0.id == pid }?.title ?? L("选择项目")
     }
 
     /// 持续模式开关 (跨天任务: 每次触发注入上次运行的执行记录)
@@ -712,15 +712,15 @@ struct ScheduledView: View {
         case .low: "*/30 * * * *"
         } }
         var label: String { switch self {
-        case .high: "高 · 每 5 分钟"
-        case .medium: "中 · 每 15 分钟"
-        case .low: "低 · 每 30 分钟"
+        case .high: L("高 · 每 5 分钟")
+        case .medium: L("中 · 每 15 分钟")
+        case .low: L("低 · 每 30 分钟")
         } }
         /// 状态行简短版 (不带档位词)
         var shortLabel: String { switch self {
-        case .high: "每 5 分钟"
-        case .medium: "每 15 分钟"
-        case .low: "每 30 分钟"
+        case .high: L("每 5 分钟")
+        case .medium: L("每 15 分钟")
+        case .low: L("每 30 分钟")
         } }
         static func from(cron: String) -> FrequencyKind {
             allCases.first { $0.cron == cron } ?? .low
@@ -732,17 +732,17 @@ struct ScheduledView: View {
         case daily, weekly, interval, advanced
         var id: String { rawValue }
         var label: String { switch self {
-        case .daily: "每天"
-        case .weekly: "每周"
-        case .interval: "间隔"
-        case .advanced: "高级"
+        case .daily: L("每天")
+        case .weekly: L("每周")
+        case .interval: L("间隔")
+        case .advanced: L("高级")
         } }
     }
 
     enum IntervalUnit: String, CaseIterable, Identifiable {
         case minutes, hours
         var id: String { rawValue }
-        var label: String { self == .minutes ? "分钟" : "小时" }
+        var label: String { self == .minutes ? L("分钟") : L("小时") }
         var clamp: ClosedRange<Int> { self == .minutes ? 1...59 : 1...23 }
     }
 
@@ -834,7 +834,7 @@ struct ScheduledView: View {
     }
 
     /// 自绘时间输入 (对齐页面自绘控件语言, 不用原生 DatePicker): 整数域外自动钳制
-    private func timeField(label: String, value: Binding<Int>, range: ClosedRange<Int>) -> some View {
+    private func timeField(label: LocalizedStringKey, value: Binding<Int>, range: ClosedRange<Int>) -> some View {
         HStack(spacing: 4) {
             Text(label)
                 .font(CodexTheme.fontTiny)
@@ -884,7 +884,7 @@ struct ScheduledView: View {
                 Button(action: {
                     if active { cronWeekdays.remove(wd) } else { cronWeekdays.insert(wd) }
                 }) {
-                    Text(["日", "一", "二", "三", "四", "五", "六"][wd])
+                    Text(LK(["日", "一", "二", "三", "四", "五", "六"][wd]))
                         .font(CodexTheme.fontSmall)
                         .foregroundStyle(active ? CodexTheme.textPrimary : CodexTheme.textMuted)
                         .frame(width: 22, height: 22)
@@ -914,7 +914,7 @@ struct ScheduledView: View {
                 .padding(.vertical, 10)
                 .frame(minHeight: 220)
             if draftPrompt.isEmpty {
-                Text(draftIsWaiting ? "条件触发后要执行的动作…" : "到点投递给 Agent 的 prompt…")
+                Text(LK(draftIsWaiting ? "条件触发后要执行的动作…" : "到点投递给 Agent 的 prompt…"))
                     .font(CodexTheme.fontBody)
                     .foregroundStyle(CodexTheme.textMuted)
                     .padding(.leading, 12)
@@ -1154,7 +1154,10 @@ struct ScheduledView: View {
         // 名称留空 → 自动取 prompt 首行前 24 字 (与"保存为记忆"命名规则一致)
         let name = draftName.trimmingCharacters(in: .whitespacesAndNewlines)
         if name.isEmpty {
-            draftName = String(draftPrompt.split(separator: "\n").first?.prefix(24) ?? "任务")
+            // 先 String 化再兜底 —— 直接写 `String(substring? ?? L("任务"))` 会因左侧是
+            // `Substring?` 而要求右侧同为 Substring (L() 返回 String, 编译不过)。
+            let head = draftPrompt.split(separator: "\n").first.map { String($0.prefix(24)) }
+            draftName = head ?? L("任务")
         }
         if let id = editingId,
            var existing = store.scheduledTasks.first(where: { $0.id == id }) {

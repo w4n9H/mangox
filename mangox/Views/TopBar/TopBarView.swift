@@ -89,7 +89,7 @@ struct TopBarWorkButton: View {
         .disabled(!store.canUseWorkspace)
         .opacity(!store.canUseWorkspace ? 0.35 : 1)
         .help(store.canUseWorkspace
-              ? (store.workspaceVisible ? "收起工作区" : "打开工作区")
-              : "仅项目会话可用 (在输入框上方选择项目)")
+              ? (store.workspaceVisible ? L("收起工作区") : L("打开工作区"))
+              : L("仅项目会话可用 (在输入框上方选择项目)"))
     }
 }

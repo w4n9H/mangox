@@ -235,7 +235,7 @@ final class MailboxSentinelService: ObservableObject {
         let now = Date()
         for sentinel in sentinels where sentinel.enabled {
             guard let account = accounts.first(where: { $0.id == sentinel.accountId }) else {
-                setNotice("Inbox「\(sentinel.name)」: 绑定的邮箱账号已不存在")
+                setNotice(String(format: L("Inbox「%@」: 绑定的邮箱账号已不存在"), sentinel.name))
                 continue
             }
             if !force, let last = sentinel.lastPollAt,
@@ -247,8 +247,8 @@ final class MailboxSentinelService: ObservableObject {
 
     private func pollSentinel(_ sentinel: MailboxSentinel, account: MailboxAccount, now: Date) async {
         guard let transport = transport(for: account) else {
-            markPoll(sentinel.id, at: now, error: "收件实现未接入 (P10.2c)")
-            setNotice("Inbox「\(sentinel.name)」: 收件实现未接入 (P10.2c)")
+            markPoll(sentinel.id, at: now, error: L("收件实现未接入 (P10.2c)"))
+            setNotice(String(format: L("Inbox「%@」: 收件实现未接入 (P10.2c)"), sentinel.name))
             return
         }
         do {
@@ -260,14 +260,14 @@ final class MailboxSentinelService: ObservableObject {
         } catch {
             let msg = (error as? MailTransportError)?.label ?? String(describing: error)
             markPoll(sentinel.id, at: now, error: msg)
-            setNotice("Inbox「\(sentinel.name)」: \(msg)")
+            setNotice(String(format: L("Inbox「%@」: %@"), sentinel.name, msg))
         }
     }
 
     func testConnection(accountId: UUID) async -> String {
-        guard let account = accounts.first(where: { $0.id == accountId }) else { return "账号不存在" }
-        guard let t = transport(for: account) else { return "收件实现未接入 (P10.2c)" }
-        return await t.testConnection() ?? "连接正常"
+        guard let account = accounts.first(where: { $0.id == accountId }) else { return L("账号不存在") }
+        guard let t = transport(for: account) else { return L("收件实现未接入 (P10.2c)") }
+        return await t.testConnection() ?? L("连接正常")
     }
 
     /// 丢弃该账号的缓存连接实例。**任何改动连接参数 (host / address) 或凭据的写入都必须调用** ——
@@ -330,7 +330,7 @@ final class MailboxSentinelService: ObservableObject {
                 task.status = .failed
                 task.blockedReason = "项目目录不存在: \(path ?? "<未绑定路径>")"
                 persistTask(task)
-                setNotice("Inbox「\(sentinel.name)」: 项目目录不存在, 任务未执行")
+                setNotice(String(format: L("Inbox「%@」: 项目目录不存在, 任务未执行"), sentinel.name))
                 await replyOnce("mailbox.dir_missing.\(task.id.uuidString)",
                                 mail: mail, sentinel: sentinel, transport: transport, title: title,
                                 body: "[MGOX][FAILED] 项目目录不存在: \(path ?? "<未绑定路径>")\n任务未执行。")
@@ -490,7 +490,7 @@ final class MailboxSentinelService: ObservableObject {
                            stats: MailboxReplyStats, blocks: [AutoJudgeBlock]) {
         guard let account = accounts.first(where: { $0.id == sentinel.accountId }),
               let transport = transport(for: account) else {
-            setNotice("回执未发出: Inbox「\(sentinel.name)」的账号/收件实现不可用")
+            setNotice(String(format: L("回执未发出: Inbox「%@」的账号/收件实现不可用"), sentinel.name))
             return
         }
         let mail = OutgoingMail(
@@ -504,7 +504,7 @@ final class MailboxSentinelService: ObservableObject {
         Task { @MainActor in
             do { try await transport.send(mail) }
             catch {
-                setNotice("回执发送失败: \((error as? MailTransportError)?.label ?? String(describing: error))")
+                setNotice(String(format: L("回执发送失败: %@"), (error as? MailTransportError)?.label ?? String(describing: error)))
             }
         }
     }
@@ -545,7 +545,7 @@ final class MailboxSentinelService: ObservableObject {
                                  body: body, inReplyTo: mail.messageId,
                                  references: [mail.messageId])
         do { try await transport.send(reply) }
-        catch { setNotice("回执发送失败: \((error as? MailTransportError)?.label ?? String(describing: error))") }
+        catch { setNotice(String(format: L("回执发送失败: %@"), (error as? MailTransportError)?.label ?? String(describing: error))) }
     }
 
     private func canReplyOnce(key: String) -> Bool {
@@ -810,8 +810,8 @@ final class MailboxSentinelService: ObservableObject {
     /// "测试连接" (§7.1): 跑一遍 IMAP 登录 + 列 INBOX; nil = 成功, 非 nil = 错误文案。
     /// SMTP 不单独握手 —— 两处共用同一授权码, IMAP 通了凭据即可用; host/端口写错会在这里立刻暴露。
     func testConnection(accountId: UUID) async -> String? {
-        guard let account = accounts.first(where: { $0.id == accountId }) else { return "账号不存在" }
-        guard let transport = transport(for: account) else { return "无法建立连接实例" }
+        guard let account = accounts.first(where: { $0.id == accountId }) else { return L("账号不存在") }
+        guard let transport = transport(for: account) else { return L("无法建立连接实例") }
         return await transport.testConnection()
     }
 

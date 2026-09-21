@@ -51,7 +51,7 @@ private struct MailboxAccountBlock: View {
                 accountForm
             }
             HStack(spacing: 8) {
-                Button(expanded ? "取消" : "添加邮箱") {
+                Button(LK(expanded ? "取消" : "添加邮箱")) {
                     if expanded { resetForm() } else { startAdd() }
                 }
                 .fixedSize()
@@ -73,7 +73,7 @@ private struct MailboxAccountBlock: View {
                 HStack(spacing: 6) {
                     Text(account.label).font(.system(size: 12, weight: .semibold))
                         .foregroundStyle(CodexTheme.textPrimary)
-                    mboxBadge(MailProviderPreset.label(forPresetId: account.presetId), color: CodexTheme.textSecondary)
+                    mboxBadge(LK(MailProviderPreset.label(forPresetId: account.presetId)), color: CodexTheme.textSecondary)
                     if bound != nil {
                         mboxBadge("已绑定", color: CodexTheme.accent)
                     }
@@ -81,20 +81,20 @@ private struct MailboxAccountBlock: View {
                 HStack(spacing: 6) {
                     Text(account.address).font(CodexFonts.monoFont(11))
                         .foregroundStyle(CodexTheme.textSecondary)
-                    Text(store.hasMailboxAccountAuth(accountId: account.id) ? "授权码已设置" : "缺授权码")
+                    Text(LK(store.hasMailboxAccountAuth(accountId: account.id) ? "授权码已设置" : "缺授权码"))
                         .font(.system(size: 10))
                         .foregroundStyle(store.hasMailboxAccountAuth(accountId: account.id)
                                          ? CodexTheme.toolDone : CodexTheme.toolError)
                 }
                 if let result = testResult[account.id] {
-                    Text(result.isEmpty ? "✓ 连接正常 (IMAP 登录 + 列 INBOX)" : "✗ \(result)")
+                    Text(LK(result.isEmpty ? "✓ 连接正常 (IMAP 登录 + 列 INBOX)" : "✗ \(result)"))
                         .font(.system(size: 10))
                         .foregroundStyle(result.isEmpty ? CodexTheme.toolDone : CodexTheme.toolError)
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-            Button(testing == account.id ? "测试中…" : "测试连接") { runTest(account) }
+            Button(LK(testing == account.id ? "测试中…" : "测试连接")) { runTest(account) }
                 .fixedSize()
                 .disabled(testing != nil)
             Button("编辑") { startEdit(account) }.fixedSize()
@@ -103,7 +103,7 @@ private struct MailboxAccountBlock: View {
             }
             .fixedSize()
             .disabled(bound != nil)
-            .help(bound.map { "先删除 Inbox agent「\($0.name)」" } ?? "删除该账号 (含 Keychain 授权码)")
+            .help(bound.map { String(format: L("先删除 Inbox agent「%@」"), $0.name) } ?? L("删除该账号 (含 Keychain 授权码)"))
         }
     }
 
@@ -132,7 +132,7 @@ private struct MailboxAccountBlock: View {
             HStack(spacing: 10) {
                 Text("授权码").font(.system(size: 11)).foregroundStyle(CodexTheme.textSecondary)
                     .frame(width: 64, alignment: .leading)
-                SecureField(store.hasMailboxAccountAuth(accountId: draft.id) ? "已设置 (留空不修改)" : "授权码 / 客户端专用密码",
+                SecureField(LK(store.hasMailboxAccountAuth(accountId: draft.id) ? "已设置 (留空不修改)" : "授权码 / 客户端专用密码"),
                             text: $authInput)
                     .textFieldStyle(.roundedBorder)
                     .font(CodexFonts.monoFont(12))
@@ -149,7 +149,7 @@ private struct MailboxAccountBlock: View {
                 }
             }
             HStack(spacing: 8) {
-                Button(editing == nil ? "保存" : "保存修改", action: save)
+                Button(LK(editing == nil ? "保存" : "保存修改"), action: save)
                     .fixedSize()
                 if editing != nil {
                     Text("改动会重置该账号的连接实例 (下次收信生效)")
@@ -159,7 +159,7 @@ private struct MailboxAccountBlock: View {
         }
     }
 
-    private func field(_ label: String, text: Binding<String>, hint: String) -> some View {
+    private func field(_ label: LocalizedStringKey, text: Binding<String>, hint: LocalizedStringKey) -> some View {
         HStack(spacing: 10) {
             Text(label).font(.system(size: 11)).foregroundStyle(CodexTheme.textSecondary)
                 .frame(width: 64, alignment: .leading)
@@ -216,9 +216,9 @@ private struct MailboxAccountBlock: View {
         account.imapHost = account.imapHost.trimmingCharacters(in: .whitespaces)
         account.smtpHost = account.smtpHost.trimmingCharacters(in: .whitespaces)
         if account.label.isEmpty { account.label = account.address }
-        guard account.address.contains("@") else { formError = "请填有效的邮箱地址"; return }
+        guard account.address.contains("@") else { formError = L("请填有效的邮箱地址"); return }
         guard !account.imapHost.isEmpty, !account.smtpHost.isEmpty else {
-            formError = "IMAP / SMTP 主机不能为空 (含端口)"; return
+            formError = L("IMAP / SMTP 主机不能为空 (含端口)"); return
         }
         if editing == nil { store.addMailboxAccount(account) } else { store.updateMailboxAccount(account) }
         let auth = authInput.trimmingCharacters(in: .whitespaces)
@@ -240,8 +240,8 @@ private struct MailboxAccountBlock: View {
 // MARK: - 共用小件
 
 private struct SettingsBlockHeader: View {
-    let title: String
-    let detail: String
+    let title: LocalizedStringKey
+    let detail: LocalizedStringKey
 
     var body: some View {
         VStack(alignment: .leading, spacing: 3) {

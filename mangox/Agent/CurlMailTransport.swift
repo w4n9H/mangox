@@ -75,7 +75,7 @@ final class CurlMailTransport: MailTransport {
             let raw = try await execute(CurlMailCommand.fetchMessage(
                 uid: uid, host: host, user: account.address, auth: secret))
             guard let text = CurlMailCommand.fetchedBody(raw) else {
-                throw MailTransportError.parse("UID \(uid) 未取到邮件正文")
+                throw MailTransportError.parse(String(format: L("UID %lld 未取到邮件正文"), uid))
             }
             do {
                 mails.append(try MimeParser.parse(text, uid: uid))
@@ -87,7 +87,7 @@ final class CurlMailTransport: MailTransport {
     }
 
     func markRead(_ mail: RawMail) async throws {
-        guard let uid = mail.uid else { throw MailTransportError.notConfigured("该邮件缺 IMAP UID") }
+        guard let uid = mail.uid else { throw MailTransportError.notConfigured(L("该邮件缺 IMAP UID")) }
         let (host, secret) = try context()
         try await store(uid: uid, deleted: false, host: host, secret: secret)
     }
@@ -95,7 +95,7 @@ final class CurlMailTransport: MailTransport {
     /// COPY 到 Trash 是**尽力而为** (部分服务商无该文件夹或只读), 失败仍要打 `\Deleted`。
     /// 文件夹名逐个候选试: 服务端的垃圾箱名随服务商与界面语言变, 猜错只是多一次进程。
     func moveToTrash(_ mail: RawMail) async throws {
-        guard let uid = mail.uid else { throw MailTransportError.notConfigured("该邮件缺 IMAP UID") }
+        guard let uid = mail.uid else { throw MailTransportError.notConfigured(L("该邮件缺 IMAP UID")) }
         let (host, secret) = try context()
         for mailbox in trashCandidates {
             let copied = (try? await execute(CurlMailCommand.copyToTrash(
@@ -107,9 +107,9 @@ final class CurlMailTransport: MailTransport {
 
     func send(_ mail: OutgoingMail) async throws {
         guard let smtpHost = nonEmpty(account.smtpHost) else {
-            throw MailTransportError.notConfigured("缺 SMTP 主机")
+            throw MailTransportError.notConfigured(L("缺 SMTP 主机"))
         }
-        guard let secret = nonEmpty(auth) else { throw MailTransportError.notConfigured("账号缺授权码") }
+        guard let secret = nonEmpty(auth) else { throw MailTransportError.notConfigured(L("账号缺授权码")) }
         let body = MailMessageBuilder.rfc822(mail, from: account.address)
         let arguments = CurlMailCommand.send(host: smtpHost, user: account.address,
                                              auth: secret, from: account.address, to: mail.to)
@@ -129,15 +129,15 @@ final class CurlMailTransport: MailTransport {
         } catch {
             return (error as? MailTransportError)?.label ?? "\(error)"
         }
-        guard let smtpHost = nonEmpty(account.smtpHost) else { return "IMAP 正常, 但账号缺 SMTP 主机" }
-        guard let secret = nonEmpty(auth) else { return "IMAP 正常, 但账号缺授权码" }
+        guard let smtpHost = nonEmpty(account.smtpHost) else { return L("IMAP 正常, 但账号缺 SMTP 主机") }
+        guard let secret = nonEmpty(auth) else { return L("IMAP 正常, 但账号缺授权码") }
         let probe = CurlMailCommand.smtpAuthProbe(host: smtpHost, user: account.address, auth: secret)
-        guard let result = try? await runner.run(probe, stdin: nil) else { return "IMAP 正常, 但 SMTP 连接失败" }
+        guard let result = try? await runner.run(probe, stdin: nil) else { return L("IMAP 正常, 但 SMTP 连接失败") }
         // 认证过后 curl 卡在 MAIL FROM / RCPT (没给收件人) → 那些非零码**恰好证明认证已过**。
         if [0, 8, 55, 56, 65].contains(Int(result.exitCode)) { return nil }
         let label = CurlMailCommand.failure(exitCode: result.exitCode, stderr: result.stderr,
-                                            secrets: [secret])?.label ?? "curl 退出码 \(result.exitCode)"
-        return "IMAP 正常, 但 SMTP 未通过: \(label)"
+                                            secrets: [secret])?.label ?? String(format: L("curl 退出码 %lld"), result.exitCode)
+        return String(format: L("IMAP 正常, 但 SMTP 未通过: %@"), label)
     }
 
     // MARK: - 内部
@@ -145,9 +145,9 @@ final class CurlMailTransport: MailTransport {
     /// (IMAP 主机, 授权码) —— 缺一即 `notConfigured`, 不带着半截配置去连。
     private func context() throws -> (host: String, secret: String) {
         guard let host = nonEmpty(account.imapHost) else {
-            throw MailTransportError.notConfigured("缺 IMAP 主机")
+            throw MailTransportError.notConfigured(L("缺 IMAP 主机"))
         }
-        guard let secret = nonEmpty(auth) else { throw MailTransportError.notConfigured("账号缺授权码") }
+        guard let secret = nonEmpty(auth) else { throw MailTransportError.notConfigured(L("账号缺授权码")) }
         return (host, secret)
     }
 

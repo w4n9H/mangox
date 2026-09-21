@@ -24,7 +24,7 @@ enum MimeParser {
         func value(_ name: String) -> String? { fields.first { $0.0 == name }?.1 }
 
         guard let rawId = value("message-id"), !normalizeMessageId(rawId).isEmpty else {
-            throw MailTransportError.parse("缺少 Message-ID")
+            throw MailTransportError.parse(L("缺少 Message-ID"))
         }
         return RawMail(
             uid: uid,
@@ -82,7 +82,7 @@ enum MimeParser {
             return decodeBody(rawBody, ct: ct, encoding: cte)
         }
         guard let boundary = ct.params["boundary"], !boundary.isEmpty else {
-            throw MailTransportError.parse("multipart 缺 boundary")
+            throw MailTransportError.parse(L("multipart 缺 boundary"))
         }
         for part in splitParts(rawBody, boundary: boundary) {
             let (partHeader, partBody) = splitHeaderBody(part)

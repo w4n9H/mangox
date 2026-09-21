@@ -1,0 +1,53 @@
+# MangoX 本地化「接线」豁免名单
+#
+# 格式: 每行 `相对路径|字面量`  —— 与 scripts/l10n/scan_wiring.py 的 key 形态逐字一致。
+# 为什么用「路径|字面量」而不是行号: 行号随无关改动漂移, 字面量不会。
+#
+# 只登记**确实不该本地化**的串。四类:
+#   A. 邮件协议面 —— 解析/构造邮件用的模式串、文件夹名、回执正文
+#   B. 落库值 —— 写进 DB 且**无视图消费**的列 (本地化后会在切语言时留下过期语言的脏值)
+#   C. 兼作判别键 —— 同一个串既要当比较键又要当显示文本 (键留中文, 显示点用 LK() 取词)
+#   D. Mock 假回复 —— 模拟模型输出, 与真实模型一样不随 UI 语言变
+#
+# 新增条目必须在上方注释里写清"为什么不能本地化", 否则后来者会当成漏译删掉。
+
+# ── A. 邮件协议面 ────────────────────────────────────────────────────────────
+# IMAP 垃圾箱名候选: 服务端文件夹名是语言/实现相关的 (QQ 实测 `Deleted Messages`, 163 用中文名)
+mangox/Agent/CurlMailTransport.swift|已删除
+# 引用行判定 —— 认不出来会导致第二轮 prompt 内嵌上一轮全文 (见 isQuoteLine 注释)
+mangox/State/MailboxSentinelService.swift|写道：
+mangox/State/MailboxSentinelService.swift|写道:
+mangox/State/MailboxSentinelService.swift|原始邮件
+# 主题兜底文本 (写进发件人可见的 Subject, 属邮件本体)
+mangox/State/MailboxSentinelService.swift|来自 %@
+# 回执正文 —— 与 MailboxReply.swift / gateReplyBody 同待遇 (协议面, 恒中文)
+mangox/State/MailboxSentinelService.swift|邮件正文为空 (或只有 HTML): 请以纯文本发送任务内容。
+
+# ── B. 落库值: blocked_reason (全仓无视图消费, 恒中文) ────────────────────────
+mangox/State/MailboxSentinelService.swift|上次退出时回合还在跑, 重启后无法结算
+mangox/State/MailboxSentinelService.swift|重启后排队正文已丢失 (回合上下文不落库)
+mangox/State/MailboxSentinelService.swift|项目目录不存在: %@
+mangox/State/MailboxSentinelService.swift|会话已被删除
+
+# ── C. 兼作判别键 (键留中文, 显示点 LK() 取词) ───────────────────────────────
+# DayBucket.rawValue 兼作侧栏分组的 ForEach id → 键恒定; 显示点 SidebarView 改 Text(LK(bucket.rawValue))
+mangox/Models/DayBucket.swift|今天
+mangox/Models/DayBucket.swift|昨天
+mangox/Models/DayBucket.swift|本周
+mangox/Models/DayBucket.swift|更早
+# ToolDetail.key 兼作判别键 (ToolCallCardView 用 `d.key != "输出"` 判是否重复打印) →
+# 键恒定; 显示点改 Text(LK(d.key)) / detailLine(LK(d.key), …)
+mangox/Agent/PiRpcTransport.swift|输出
+mangox/Views/Chat/ToolCallCardView.swift|输出
+
+# ── D. Mock 传输层的假模型回复 (模拟模型输出, 与真实模型一样不随 UI 语言变) ──────
+mangox/Mock/MockTransport.swift|已拒绝
+mangox/Mock/MockTransport.swift|好的,先记下「%@」的需求,我会在下一轮把上下文喂给模型,再回执计划。
+
+# ── E. 多行字符串里的嵌入代码 (注入给 pi 的扩展 JS 源码) ───────────────────────
+# `PiRpcTransport` 把审批扩展的 JS 整段塞在 `let source = """…"""` 里:
+#   rows.push("… 其余改动省略");
+# 加 L() 会变成 `rows.push(L(…))` —— 非法 JS, 在扩展进程里 `L is not defined`,
+# 被 try/catch 静默吞掉 (工具卡差异少一行, 零报错)。**实测踩过, 已回退**。
+# 要本地化这段文案, 得在 Swift 侧插值并做 JS 字符串转义 (`\(jsEscaped(L(…)))`), 属独立改动。
+mangox/Agent/PiRpcTransport.swift|… 其余改动省略

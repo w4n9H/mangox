@@ -5,6 +5,35 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [0.1.9] - 2026-09-21
+
+本版主线 = **中英双语界面（L10n）全量落地 + 外观三态与侧栏层级（P10.7）**。UI 文案从「硬编码中文」改为**查表**：本版 diff 内 **270 行取词站点 / 38 个文件**（含 59 处带插值的 `String(format: L(…))`），en 词表 **492 条**；新增**三道 l10n 专属门禁**（词表对账 / 接线判定 / 端到端渲染指纹）。全量冒烟 **548 项 ALL PASS** + `xcodebuild` BUILD SUCCEEDED 零 warning。
+
+### Added
+
+- **中英双语界面（跟随系统 / 中文 / English）**：Settings → 外观 页切换，即时生效、重启记住
+  - `AppLanguage` 三态 + `LanguageModel`（UserDefaults `appLanguage`）；`en.lproj` 词表 **492 条**。**中文侧故意不建表** —— 缺项回落 key 本身（= 中文原文），所以原文用中文写，漏译只会显示中文、**不会漏出 key 名**
+  - **三处 `L10nRoot` 注入**：主窗口 / MiniBar / 快速捕获条 —— 后两者是**独立 NSWindow**，不继承主窗口的 environment，漏一处整窗不翻译
+  - 两条取词路径**不同源**：视图层 `Text("中文")` 走 `\.environment(\.locale)`（父层换 locale 后已渲染的 Text 会重解析 → 视图层字面量站点零改动）；域层 `String`（cron 人话、状态栏胶囊、面板标题、通知文案、AppKit `NSAlert` / `NSOpenPanel`）不吃 locale → **逐处显式 `L()`**
+  - `Copy.*` 文案由 `static let` 改 `static var` —— `static let` 是懒加载一次性求值，会把译文**冻结在首次访问**，之后切语言不跟随
+- **外观三态（P10.7）**：跟随系统 / 浅色 / 深色。**跟随系统 = `NSApp.appearance = nil`**（真正交回系统，跟随系统级切换）；UserDefaults 老值 `light` / `dark` 直接可读**无需迁移**；缺失 / 未知值回落浅色（与旧版缺省一致，不把用户突然翻成深色）。`AppearanceModel` / `AppAppearance` 从 `mangoxApp.swift` 外移到 `Theme/`
+- **侧栏层级表达（P10.7）**：项目内会话行缩进 **34pt** + 1px **层级引导线**（`CodexTheme.guide`，x = 项目行 folder 图标中心 **27pt**），顶层会话行恒 8pt
+- **l10n 三道专属门禁** `scripts/l10n/`：① `gen_strings.py --check` **词表对账**（492/492 + 废弃项扫描）② `scan_wiring.py --check` **接线判定**（看字面量落在什么位置，汇聚点名单从源码自动发现）③ `e2e_probe.py` **端到端渲染指纹**（词表 492 条 × (en 命中 + zh 回落) + 形态 12 例 + **1 条反例**，断言某个未接线的字面量保持原文 —— 防"一律本地化"的假绿）。词表真源 `en_values.py` 单文件可 diff，生成与对账同一份数据
+  - 豁免清单 `wiring_allow.txt` 逐条标注原因（邮件协议面 / 落库值 / 兼作判别键 / **注入给 pi 的扩展 JS 源码**）。最后一项有实据：codemod 曾把多行字符串里的 `rows.push("…")` 包成 `L(…)` = 非法 JS，扩展进程 `try/catch` **静默吞掉** → 现加 `EMBEDDED` 检测 + `--apply` 前置拒绝落盘
+- **冒烟 T-UI 段 7 项不变量**：外观三态映射（system → nil / light → aqua / dark → darkAqua）、老值可读、未知值回落浅色、`sidebarGuideInset + 1 <= sidebarRowIndent`（引导线必须落在子会话图标左侧，防缩进被调到小于线宽）、子行必须比顶层更进
+
+### Changed
+
+- **全量 UI 文案接线**：`Text("中文")` 就地接线；带插值改 `String(format: L("<格式串>"), args)`（说明符按类型定，`Int` → `%lld`、`Double` 另作映射）；**说明符猜错 = 查表失配 = 静默回落中文、编译期零信号**，故映射集中在一处管理
+- **星期名不再用中文字符硬拼**：`["日","一",…]` → 词表取字 + 空格连接（英文下才是 `Mon Tue …`；原文硬拼在英文界面会渲染成 `每周一二 09:00`）
+- **项目 `developmentRegion` en → `zh-Hans`**，`knownRegions` 加 `zh-Hans` —— 让源语言声明与代码里的中文原文一致
+- **冒烟基建整理**：`scripts/smoke/smokeStubs.swift` 删除。原先是为绕开"`@main` 文件不参与冒烟编译"而在 stubs 里复制一份可断言类型（漂移源），现改为把类型外移到真实源文件
+
+### Fixed
+
+- **侧栏层级此前从未表达**：`Tune.sidebarRowIndent` 是**死代码** —— 调用点硬编码 `indent: false`，项目内会话与顶层会话视觉上无区分。本版接回真实缩进 + 引导线，冒烟加几何不变量守住
+- **接线过程两类只在编译期暴露的洞**（codemod 无法预判，已记入纪律）：① `… .split(separator:).first?.prefix(24) ?? L("任务")` 左值是 `Substring?` → 类型不匹配，须先 `.map { String(...) }` 再兜底 ② 形参本就声明为 `LocalizedStringKey` 的站点（自动发现漏网）再包 `L()` 反而不编译
+
 ## [0.1.8] - 2026-09-20
 
 本版主线 = **P10 冲刺**：邮箱哨兵（Inbox）新子系统 + 会话/任务级配置持久化 + 会话切换零阻塞。全量冒烟 **541 项 ALL PASS** + `xcodebuild` BUILD SUCCEEDED 零 warning。邮箱哨兵已**真机跑通 收信 → 执行 → 回执**（2026-09-20）。

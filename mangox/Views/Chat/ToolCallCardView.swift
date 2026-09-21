@@ -80,7 +80,7 @@ struct ToolCallCardView: View {
                                     .frame(width: 18, height: 18)
                             }
                             .buttonStyle(.plain)
-                            .help(outputExpanded ? "收起" : "展开全部")
+                            .help(LK(outputExpanded ? "收起" : "展开全部"))
                         }
                     }
 
@@ -88,7 +88,7 @@ struct ToolCallCardView: View {
                         HStack(alignment: .firstTextBaseline, spacing: 12) {
                             // 分节头已是"输出", 行内同 key 不再重复打印
                             if d.key != "输出" {
-                                Text(d.key)
+                                Text(LK(d.key))
                                     .font(CodexTheme.fontMonoXs)
                                     .foregroundStyle(CodexTheme.textTertiary)
                                     .frame(width: 36, alignment: .leading)

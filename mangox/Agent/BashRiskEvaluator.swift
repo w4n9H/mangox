@@ -26,13 +26,13 @@ enum BashRiskEvaluator {
         /// 回执文案 (「卡在: <label>」)。
         var label: String {
             switch self {
-            case .unknownCommand: return "非只读命令"
-            case .redirect:       return "写文件 (重定向)"
-            case .findAction:     return "find 执行命令/改文件"
-            case .envExec:        return "env 执行程序"
-            case .sortOutput:     return "sort 写文件"
-            case .netFetchWrite:  return "下载落盘/上传文件"
-            case .gitWrite:       return "git 写操作"
+            case .unknownCommand: return L("非只读命令")
+            case .redirect:       return L("写文件 (重定向)")
+            case .findAction:     return L("find 执行命令/改文件")
+            case .envExec:        return L("env 执行程序")
+            case .sortOutput:     return L("sort 写文件")
+            case .netFetchWrite:  return L("下载落盘/上传文件")
+            case .gitWrite:       return L("git 写操作")
             }
         }
     }

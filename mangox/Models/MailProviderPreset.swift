@@ -26,32 +26,32 @@ struct MailProviderPreset: Identifiable, Equatable {
     static let netease163 = MailProviderPreset(
         id: "163", label: "网易 163 邮箱", domains: ["163.com"],
         imapHost: "imap.163.com:993", smtpHost: "smtp.163.com:465",
-        authNote: "网页版邮箱「设置 → IMAP/SMTP」开启服务, 手机验证后得到授权码 —— 用它当密码, 不是登录密码",
+        authNote: L("网页版邮箱「设置 → IMAP/SMTP」开启服务, 手机验证后得到授权码 —— 用它当密码, 不是登录密码"),
         helpURL: "https://help.mail.163.com/")
 
     static let netease126 = MailProviderPreset(
         id: "126", label: "网易 126 邮箱", domains: ["126.com"],
         imapHost: "imap.126.com:993", smtpHost: "smtp.126.com:465",
-        authNote: "网页版邮箱「设置 → IMAP/SMTP」开启服务, 手机验证后得到授权码 —— 用它当密码, 不是登录密码",
+        authNote: L("网页版邮箱「设置 → IMAP/SMTP」开启服务, 手机验证后得到授权码 —— 用它当密码, 不是登录密码"),
         helpURL: "https://help.mail.163.com/")
 
     static let qq = MailProviderPreset(
         id: "qq", label: "QQ 邮箱", domains: ["qq.com", "foxmail.com"],
         imapHost: "imap.qq.com:993", smtpHost: "smtp.qq.com:465",
-        authNote: "网页版邮箱「设置 → 账户」开启 IMAP/SMTP 服务, 短信验证后得到授权码 —— 用它当密码, 不是登录密码",
+        authNote: L("网页版邮箱「设置 → 账户」开启 IMAP/SMTP 服务, 短信验证后得到授权码 —— 用它当密码, 不是登录密码"),
         helpURL: "https://service.mail.qq.com/")
 
     static let aliyun = MailProviderPreset(
         id: "aliyun", label: "阿里云邮箱", domains: ["aliyun.com"],
         imapHost: "imap.mxhichina.com:993", smtpHost: "smtp.mxhichina.com:465",
-        authNote: "网页版邮箱「设置 → 客户端设置」开启 IMAP/SMTP, 生成客户端专用密码 —— 用它当密码, 不是登录密码",
+        authNote: L("网页版邮箱「设置 → 客户端设置」开启 IMAP/SMTP, 生成客户端专用密码 —— 用它当密码, 不是登录密码"),
         helpURL: "https://mail.aliyun.com/")
 
     /// 兜底: host 留空由用户手填 (其他服务商 / 自建)。
     static let custom = MailProviderPreset(
         id: customId, label: "自定义", domains: [],
         imapHost: "", smtpHost: "",
-        authNote: "手动填写 IMAP / SMTP 主机 (含端口, 如 imap.example.com:993); 同样须用授权码或客户端专用密码",
+        authNote: L("手动填写 IMAP / SMTP 主机 (含端口, 如 imap.example.com:993); 同样须用授权码或客户端专用密码"),
         helpURL: nil)
 
     static let all: [MailProviderPreset] = [netease163, netease126, qq, aliyun]
@@ -85,6 +85,6 @@ struct MailProviderPreset: Identifiable, Equatable {
 
     /// 列表里那枚来源徽章的文字 (账号已删掉预设或选了自定义时回落"自定义")。
     static func label(forPresetId id: String?) -> String {
-        preset(id: id)?.label ?? "自定义"
+        preset(id: id)?.label ?? L("自定义")
     }
 }
