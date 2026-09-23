@@ -51,3 +51,22 @@ mangox/Mock/MockTransport.swift|好的,先记下「%@」的需求,我会在下�
 # 被 try/catch 静默吞掉 (工具卡差异少一行, 零报错)。**实测踩过, 已回退**。
 # 要本地化这段文案, 得在 Swift 侧插值并做 JS 字符串转义 (`\(jsEscaped(L(…)))`), 属独立改动。
 mangox/Agent/PiRpcTransport.swift|… 其余改动省略
+
+# ── F. 注入块的契约 token: kind / layer 标签 (P11.1) ──────────────────────────
+# `KnowledgeKind.tag` 是**两用**的:
+#   ① 拼进 L0 注入块发给模型 —— 这是**给模型的契约 token**, 不是 UI 文案;
+#   ② 同时当 l10n 词表的 key, 由 UI 侧 `L()` / `LK()` 取词。
+# `KnowledgeLayer.tag` 只占 ② (组装只写 kind, 层标签不进注入块) —— 但它同样是
+# "中文原文当 key" 的形态, 一并豁免 (改措辞请改这里的字面量, 别删整行)。
+# 若在这里就 L(): 用户切换界面语言会**改掉注入进 prompt 的字节** ⇒
+#   a) 破坏稳定段的逐字节稳定性 (P11 守卫 12, KV cache 前缀会失效);
+#   b) 让"同一个 agent 的行为"被**用户的界面语言**决定。
+# 所以模型层**只给中文原文**, 取词一律在 UI 侧。冒烟 T-KNOW 正守这两条。
+# ⚠️ 删掉本组豁免 = 有人把 tag 改成 L() 之后, 扫描器再也拦不住 —— 请勿删除。
+mangox/Models/KnowledgeModels.swift|人格
+mangox/Models/KnowledgeModels.swift|用户
+mangox/Models/KnowledgeModels.swift|硬规
+mangox/Models/KnowledgeModels.swift|事实
+mangox/Models/KnowledgeModels.swift|教训
+mangox/Models/KnowledgeModels.swift|每轮都带上
+mangox/Models/KnowledgeModels.swift|需要时才查

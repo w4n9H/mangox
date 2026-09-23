@@ -19,6 +19,33 @@ struct SmokeMain {
     @MainActor
     static var failures: [String] = []
 
+    /// **所有用例夹具的共同根** (在临时目录下)。`run()` 一开始就把它指到本次运行的 `dir`。
+    ///
+    /// 为什么要有这一层: 9 个用例原先各自 `NSHomeDirectory() + "/.mangox/smoke-<tag>-…"`,
+    /// **而且都没有清理** ⇒ 每跑一次冒烟就在**用户真实的 app 数据目录**里长 9 个目录
+    /// (2026-09-22 实测积到 **154 个 / 68 MB**, 详见 `fixtureDir` 注释)。
+    /// 有了共同根之后, 清理变成"删一个目录", 而不是"记住 9 个地方"。
+    @MainActor
+    static var fixturesRoot: String = ""
+
+    /// 一个用例的夹具目录。**必定落在临时目录下** —— 这条是硬约束, 不是习惯。
+    ///
+    /// - 历史: 这 9 处（t25b / t26b / t27 / t28 / tp9 / tp9b / tp10 / tp10b / tperf）原本
+    ///   把夹具建在 `NSHomeDirectory() + "/.mangox/"` 里且**从不清理**, 于是冒烟每跑一次就往
+    ///   用户的 app 数据目录里撒 9 个 `smoke-*`。实测累积 154 个、68 MB, 而它**不会有任何红灯**
+    ///   （夹具建得成、断言全绿、退出码 0）。
+    /// - 为什么可以搬走: 这些用例一律**显式传** `dbPath` / `managedExtensionsDir`, 夹具位置与
+    ///   生产路径无关；`T-P9` 那条 `/.mangox/exports/` 断言取的是 `NSHomeDirectory()`(生产路径),
+    ///   也不受影响。
+    /// - 为什么不干脆用各自的 `NSTemporaryDirectory()`: 散在各处就又是一份"要记得清"的清单。
+    @MainActor
+    static func fixtureDir(_ tag: String) -> String {
+        let base = fixturesRoot.isEmpty ? NSTemporaryDirectory() : fixturesRoot
+        let path = base + "/\(tag)-\(UUID().uuidString.prefix(8))"
+        try? FileManager.default.createDirectory(atPath: path, withIntermediateDirectories: true)
+        return path
+    }
+
     @MainActor
     static func check(_ cond: Bool, _ what: String) {
         print((cond ? "PASS" : "FAIL") + " - " + what)
@@ -47,6 +74,16 @@ struct SmokeMain {
     static func report() -> Never {
         print(failures.isEmpty ? "\nALL PASS" : "\nFAILURES: \(failures.count)")
         failures.forEach { print(" - " + $0) }
+        // 夹具清理 (2026-09-22): **只在全绿时清** —— 失败时留下现场供排查 (那正是最需要它的时刻)。
+        // 判据里必须带"在临时目录下"这一条: `fixturesRoot` 万一被人指错, 这句 guard 是唯一防线。
+        if fixturesRoot.isEmpty {
+            print("(未使用夹具根)")
+        } else if failures.isEmpty && fixturesRoot.hasPrefix(NSTemporaryDirectory()) {
+            try? FileManager.default.removeItem(atPath: fixturesRoot)
+            print("(已清理夹具目录 \(fixturesRoot))")
+        } else {
+            print("(保留夹具目录供排查: \(fixturesRoot))")
+        }
         exit(failures.isEmpty ? 0 : 1)
     }
 
@@ -54,6 +91,24 @@ struct SmokeMain {
     static func run() async {
         let dir = NSTemporaryDirectory() + "mx-smoke-\(UUID().uuidString)"
         try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+        // 全部用例夹具挂到这一个根下 ⇒ `report()` 里"删一个目录"就把它们收干净 (见 `fixturesRoot`)。
+        fixturesRoot = dir
+        // 起手就报出夹具根: 进程**没走到 `report()`** 就死掉时 (编译期以外的崩溃 / 被打断),
+        // 这是唯一能知道现场在哪的线索 —— 实测 2026-09-22 有一个这样的根被留了下来。
+        print("夹具根: \(dir)")
+        // ⚠️ **进程级**重定向 agent 落盘根 (persona pack + L1 的共同父层), 必须在**建任何 ChatStore 之前**。
+        //    落盘发生在 `ChatStore.init` 的 `refreshSnapshot()` 里 —— 靠"每个测试 helper 记得设实例 override"
+        //    漏过一次 (2026-09-22): 造老库的 helper 没设 `l1RootOverride`, 一次冒烟就把夹具「老条目」
+        //    写进了用户真实的 `~/.mangox/agent/memory/`。**漏一次就是数据污染, 而且没有任何红灯。**
+        let agentTmp = dir + "/agent-root"
+        try? FileManager.default.createDirectory(atPath: agentTmp, withIntermediateDirectories: true)
+        KnowledgeStore.agentRootOverride = agentTmp
+        // 守卫 21: 落盘根**必须**在临时目录下。这条断言的存在理由不是"怕写错", 而是
+        // "重定向被删掉时得有东西变红" —— 上一版是靠各 helper 自觉设, 漏了却全绿。
+        // ⚠️ 原先编作"守卫 16", 与索引段那条 (§7 守卫 16) **重号** —— 同一个文件里两个 16,
+        //    以后指着编号说话必然对错人。2026-09-23 更正为 21 (文档 §7 同步)。
+        check(KnowledgeStore.agentRoot.hasPrefix(NSTemporaryDirectory()),
+              "守卫 21: 冒烟期 agent 落盘根重定向到临时目录 (实测 \(KnowledgeStore.agentRoot))")
         // ⚠️ 共享 mock 只服务本段 (T1~T20): ChatStore.init 会把 mock.delegate 指到自己,
         // 而 T22/T22b/T23/T23b/T24/T24b 各节用**同一个 mock** 建自己的 store → delegate 被后建者抢走
         // (链尾 = store24b, :1172)。在 :1172 之后再用顶层 store 发回合 (beginTurn/runScheduledFire),
@@ -1251,8 +1306,7 @@ struct SmokeMain {
 
             // ---- T26b P8: 审批真链路 (PiRpcTransport 实解析 → store, 复刻实机事件序) ----
             print("== T26b P8: 审批真链路 ==")
-            let dir26b = NSHomeDirectory() + "/.mangox/smoke-t26b-\(UUID().uuidString.prefix(8))"
-            try? FileManager.default.createDirectory(atPath: dir26b, withIntermediateDirectories: true)
+            let dir26b = fixtureDir("t26b")
             let pi26 = PiRpcTransport()
             let store26 = ChatStore(transport: pi26, dbPath: dir26b + "/t26b.db",
                                     managedExtensionsDir: dir26b + "/ext")
@@ -1273,8 +1327,7 @@ struct SmokeMain {
 
             // ---- T25b P8.0: 会话活跃刷新 updatedAt (日分组数据源, 防"昨天"误显) ----
             print("== T25b P8.0: updatedAt 活跃刷新 ==")
-            let dir25b = NSHomeDirectory() + "/.mangox/smoke-t25b-\(UUID().uuidString.prefix(8))"
-            try? FileManager.default.createDirectory(atPath: dir25b, withIntermediateDirectories: true)
+            let dir25b = fixtureDir("t25b")
             let store25b = ChatStore(transport: MockTransport(), dbPath: dir25b + "/t25b.db",
                                      managedExtensionsDir: dir25b + "/ext")
             store25b.newConversation()
@@ -1293,7 +1346,7 @@ struct SmokeMain {
 
             // ---- T28 P8: 手动备份 (checkpoint→拷贝→时间戳目录; 缺目录容错) ----
             print("== T28 P8: 手动备份 ==")
-            let dir28 = NSHomeDirectory() + "/.mangox/smoke-t28-\(UUID().uuidString.prefix(8))"
+            let dir28 = fixtureDir("t28")
             let src28 = dir28 + "/src", dest28 = dir28 + "/dest"
             try! FileManager.default.createDirectory(atPath: src28 + "/attachments", withIntermediateDirectories: true)
             try! FileManager.default.createDirectory(atPath: src28 + "/sessions", withIntermediateDirectories: true)
@@ -1332,8 +1385,7 @@ struct SmokeMain {
 
             // ---- T27 P8: 快速捕获 (热键配置 + 无人值守发送链路) ----
             print("== T27 P8: 快速捕获 ==")
-            let dir27 = NSHomeDirectory() + "/.mangox/smoke-t27-\(UUID().uuidString.prefix(8))"
-            try! FileManager.default.createDirectory(atPath: dir27, withIntermediateDirectories: true)
+            let dir27 = fixtureDir("t27")
             let mock27 = MockTransport()
             let store27 = ChatStore(transport: mock27, dbPath: dir27 + "/t27.db",
                                     managedExtensionsDir: dir27 + "/ext")
@@ -1404,8 +1456,7 @@ struct SmokeMain {
             // 修复前: exportTraceHTML 未挂 delegate → 回调被丢 → 永远 20s 超时;
             // 修复后: MockTransport 同步回调 (nil = 失败分支, 避免冒烟弹 Finder) → 立即收尾
             print("== T-P9 Batch1: 导出 delegate 链路 ==")
-            let dir9 = NSHomeDirectory() + "/.mangox/smoke-tp9-\(UUID().uuidString.prefix(8))"
-            try! FileManager.default.createDirectory(atPath: dir9, withIntermediateDirectories: true)
+            let dir9 = fixtureDir("tp9")
             let store9 = ChatStore(transport: mock27, dbPath: dir9 + "/t9.db",
                                    managedExtensionsDir: dir9 + "/ext")
             store9.newConversation()
@@ -1418,8 +1469,7 @@ struct SmokeMain {
 
             // ---- T-P9b Batch2: regenerate 清库 (P9-#2) + fire 强制无人值守 (P9-#17) ----
             print("== T-P9b Batch2: regenerate 清库 + fire 无人值守 ==")
-            let dir9b = NSHomeDirectory() + "/.mangox/smoke-tp9b-\(UUID().uuidString.prefix(8))"
-            try! FileManager.default.createDirectory(atPath: dir9b, withIntermediateDirectories: true)
+            let dir9b = fixtureDir("tp9b")
             let mock9b = MockTransport()
             let store9b = ChatStore(transport: mock9b, dbPath: dir9b + "/t.db",
                                     managedExtensionsDir: dir9b + "/ext")
@@ -1456,8 +1506,7 @@ struct SmokeMain {
 
             // ---- T-P10.3: 会话级配置快照与恢复 (v2: App 默认锚点 + 被动浏览零写入) ----
             print("== T-P10.3: 会话配置快照与恢复 ==")
-            let dir10 = NSHomeDirectory() + "/.mangox/smoke-tp10-\(UUID().uuidString.prefix(8))"
-            try! FileManager.default.createDirectory(atPath: dir10, withIntermediateDirectories: true)
+            let dir10 = fixtureDir("tp10")
             let mock10 = MockTransport()
             let store10 = ChatStore(transport: mock10, dbPath: dir10 + "/t.db",
                                     managedExtensionsDir: dir10 + "/ext")
@@ -1530,8 +1579,7 @@ struct SmokeMain {
 
             // ---- T-P10.4: 定时任务级模型/模式配置 ----
             print("== T-P10.4: 任务级 fire 配置 ==")
-            let dir10b = NSHomeDirectory() + "/.mangox/smoke-tp10b-\(UUID().uuidString.prefix(8))"
-            try! FileManager.default.createDirectory(atPath: dir10b, withIntermediateDirectories: true)
+            let dir10b = fixtureDir("tp10b")
             let mock10b = MockTransport()
             let store10b = ChatStore(transport: mock10b, dbPath: dir10b + "/t.db",
                                      managedExtensionsDir: dir10b + "/ext")
@@ -1566,8 +1614,7 @@ struct SmokeMain {
 
         // ---- T-PERF: 会话切换分段计时 (P10.3v2 切换延迟排查, 只打印不设阈值) ----
         print("== T-PERF: 会话切换分段计时 ==")
-        let dirP = NSHomeDirectory() + "/.mangox/smoke-tperf-\(UUID().uuidString.prefix(8))"
-        try! FileManager.default.createDirectory(atPath: dirP, withIntermediateDirectories: true)
+        let dirP = fixtureDir("tperf")
         let mockP = MockTransport()
         let storeP = ChatStore(transport: mockP, dbPath: dirP + "/t.db",
                                managedExtensionsDir: dirP + "/ext")
@@ -1775,8 +1822,7 @@ struct SmokeMain {
         // 用独立 store+mock (与后段各节一致): 主 store 的注入 mock 早被 T22~T24b 复用
         // (ChatStore.init 会把 mock.delegate 抢到后建 store 上), 在主 store 上发回合
         // 事件会全落到后建 store → 主 store.runningTurns 永不清空。
-        let jdir = NSTemporaryDirectory() + "mx-smoke-judge-\(UUID().uuidString)"
-        try? FileManager.default.createDirectory(atPath: jdir, withIntermediateDirectories: true)
+        let jdir = fixtureDir("judge")
         let jmock = MockTransport()
         let jstore = ChatStore(transport: jmock, dbPath: jdir + "/judge.db",
                                managedExtensionsDir: jdir + "/ext")
@@ -1793,7 +1839,7 @@ struct SmokeMain {
 
         // ===== T-MAILBOX (P10.2a): 四道闸 / 清洗 / 线程定位 / 项目 cwd / 全局串行 =====
         // 同上: 本段自建 amock (agent) + mstore, 不复用顶层 store (delegate 劫持)。
-        let mdir = NSTemporaryDirectory() + "mx-smoke-mailbox-\(UUID().uuidString)"
+        let mdir = fixtureDir("mailbox")
         let p1dir = mdir + "/proj-one", p2dir = mdir + "/proj-two"
         try? FileManager.default.createDirectory(atPath: p1dir, withIntermediateDirectories: true)
         try? FileManager.default.createDirectory(atPath: p2dir, withIntermediateDirectories: true)
@@ -2480,8 +2526,7 @@ struct SmokeMain {
 
         // ===== T-MAILBOX-S (P10.2d): Settings 域层契约 (预设表 / 账号池 / 哨兵 / 拒收 / Keychain 缝) =====
         // 独立 store + 独立 mock (项目约定: 新段不复用顶层 store 的 delegate 归属)
-        let sdir = NSTemporaryDirectory() + "mx-smoke-mboxs-\(UUID().uuidString)"
-        try? FileManager.default.createDirectory(atPath: sdir, withIntermediateDirectories: true)
+        let sdir = fixtureDir("mboxs")
         let sstore = ChatStore(transport: MockTransport(), dbPath: sdir + "/mbxs.db",
                                managedExtensionsDir: sdir + "/ext")
         sstore.mailboxCredentials = InMemoryMailboxCredentialStore()
@@ -2743,6 +2788,1171 @@ struct SmokeMain {
         // 症状是"当前项在哪读不出来" (2026-09-21 顺手加这条)。
         check(CodexTheme.Dark.selectedAlpha > CodexTheme.Dark.hoverAlpha,
               "T-COLOR 选中态比悬停态实 (selectedAlpha \(CodexTheme.Dark.selectedAlpha) > hoverAlpha \(CodexTheme.Dark.hoverAlpha))")
+
+        // ===== T-KNOW (P11.1): 分层组装 / 可预测降级 / key 保留集合 / 老库升级 =====
+        // 独立 store + 独立 mock (项目约定: 新段不复用顶层 store 的 delegate 归属)。
+        // persona pack 一律指向临时目录 —— 冒烟**绝不读用户家目录的 ~/.mangox/agent**
+        // (否则"塞 200 条噪声后稳定段不变"会因为用户手改过 pack 而随机变红)。
+        let kdir = fixtureDir("know")
+        let packDir = kdir + "/agent"
+        try? FileManager.default.createDirectory(atPath: packDir, withIntermediateDirectories: true)
+        let kstore = ChatStore(transport: MockTransport(), dbPath: kdir + "/know.db",
+                               managedExtensionsDir: kdir + "/ext")
+        kstore.mailbox.stopScheduler()
+        kstore.knowledge.personaPackDirOverride = packDir
+        // L1 落盘同样重定向 —— **冒烟绝不写用户家目录 / 用户项目目录**
+        // (不重定向的话 "按需" 条目的 L1 文件会被写进真实的 ~/.mangox/agent/memory/)。
+        kstore.knowledge.l1RootOverride = kdir + "/l1"
+        kstore.knowledge.refreshSnapshot()
+
+        func writePack(_ name: String, _ body: String) {
+            try? body.write(toFile: packDir + "/" + name, atomically: true, encoding: .utf8)
+        }
+        /// 注入块里稳定段的比对形态 —— **从 `bodyText` 切, 不从 `text` 切**:
+        /// persona 段现在恒在 `text` 偏移 0 (守卫 10), 按 `text` 数行会切到 persona 段里去。
+        func stableSegment(_ inj: KnowledgeStore.KnowledgeInjection) -> String {
+            guard let body = inj.bodyText else { return "" }
+            return body.components(separatedBy: "\n").prefix(1 + inj.stableCount).joined(separator: "\n")
+        }
+        /// 稳定段里逐行的条目标题 (用于断言**顺序**, 而不仅是内容)。
+        func stableTitles(_ inj: KnowledgeStore.KnowledgeInjection) -> [String] {
+            guard let body = inj.bodyText else { return [] }
+            return body.components(separatedBy: "\n").dropFirst().prefix(inj.stableCount).compactMap { line in
+                guard let open = line.range(of: "] "),
+                      let colon = line.range(of: ": ", range: open.upperBound..<line.endIndex)
+                else { return nil }
+                return String(line[open.upperBound..<colon.lowerBound])
+            }
+        }
+        func l1Files(_ dir: String) -> [String] {
+            ((try? FileManager.default.contentsOfDirectory(atPath: dir)) ?? []).sorted()
+        }
+        func parsedKeys(_ raw: String) -> [String]? {
+            if case .keys(let keys) = KnowledgeStore.parseFrontmatterKeys(raw) { return keys }
+            return nil
+        }
+        func parseFailed(_ raw: String) -> Bool {
+            if case .failed = KnowledgeStore.parseFrontmatterKeys(raw) { return true }
+            return false
+        }
+        func newStore(_ tag: String) -> ChatStore {
+            let dir = fixtureDir("know-\(tag)")
+            let s = ChatStore(transport: MockTransport(), dbPath: dir + "/k.db",
+                              managedExtensionsDir: dir + "/ext")
+            s.mailbox.stopScheduler()
+            return s
+        }
+
+        // —— 五类标签 = 中文常量: 注入块是**给模型的契约 token**, 不是 UI 文案 ——
+        // 若在模型层就 L(), 用户切换界面语言会改掉注入进 prompt 的字节 ⇒ 违反守卫 12,
+        // 且"同一个 agent 的行为被用户的界面语言决定"。UI 侧才走 L()/LK() 取词。
+        check(KnowledgeKind.allCases.map(\.tag) == ["人格", "用户", "硬规", "事实", "教训"],
+              "T-KNOW 五类标签 = 中文常量 (注入块用原文; 只有 UI 走 L()/LK() 取词)")
+        check(KnowledgeKind.allCases.filter(\.isStableSegment).map(\.tag) == ["人格", "用户", "硬规"],
+              "T-KNOW 稳定段成员 = 人格/用户/硬规 (事实与教训可降级)")
+
+        // —— 基底: 3 条稳定段 + 2 条按需 ——
+        // 曾有一条 `本地敏感` (always + sensitivity=local), 用来测"不进 prompt 却仍在面板上"。
+        // P11.2c 删掉敏感档后能表达这件事的**只剩 layer** ⇒ 它改成普通按需条目;
+        // 而这条不变量本身**照旧要守** (守卫 6): 不进 prompt 的条目必须仍被计数、仍在左列。
+        _ = kstore.addKnowledge(title: "身份", content: "我是星期五。", scope: .global, projectId: nil,
+                                kind: .persona, layer: .always)
+        _ = kstore.addKnowledge(title: "称呼", content: "称呼他老哥/boss。", scope: .global, projectId: nil,
+                                kind: .user, layer: .always)
+        _ = kstore.addKnowledge(title: "成品纪律", content: "绝不外发半成品。", scope: .global, projectId: nil,
+                                kind: .rule, layer: .always)
+        _ = kstore.addKnowledge(title: "按需一", content: "按需条目不进 prompt。", scope: .global, projectId: nil,
+                                kind: .fact, layer: .ondemand)
+        _ = kstore.addKnowledge(title: "按需二", content: "同样不进 prompt。", scope: .global, projectId: nil,
+                                kind: .fact, layer: .ondemand)
+
+        let base = kstore.lastInjection
+        check(base.stableCount == 3, "T-KNOW 稳定段 3 条全部入块")
+        check(base.text?.contains("[人格] 身份") == true && base.text?.contains("[硬规] 成品纪律") == true,
+              "T-KNOW 注入块用中文 kind 标签拼行 (模型侧契约)")
+        check(base.text?.contains("按需一") == false && base.text?.contains("按需二") == false,
+              "T-KNOW layer=ondemand 永不进 prompt (守卫 6)")
+        check(base.residentCount == 3 && base.onDemandCount == 2,
+              "T-KNOW 按需条目计入「按需」而非凭空消失 (分档判据 = 是否进 prompt)")
+        // 2026-09-22 起左列按**来源**分区 (常驻 / 自定义 / 知识库), 层不再是分区维度 ⇒ 这里断言的是
+        // "五条全部落在自定义区" (含 2 条按需) —— 分区轴换了, 但"一条都不许凭空消失"这条不变量没换。
+        check(kstore.customKnowledge.count == 5,
+              "T-KNOW 自定义区含全部 5 条 (常驻 3 + 按需 2) —— 分区轴换了, 消失不变量没换")
+        check(kstore.customKnowledge.filter { !$0.isResident }.count == base.onDemandCount,
+              "T-KNOW 按需条数与载荷口径同源 (面板按 isResident 数出来的 == 组装器数的)")
+        check(base.residentCount == base.personaCount + base.stableCount + base.volatileCount
+              && base.residentChars == base.personaChars + base.stableChars + base.volatileChars,
+              "T-KNOW 载荷条计数自洽 (resident = persona + stable + volatile)")
+
+        // —— lastInjection 必须随写入自动刷新 (UI 直接读它; 没人填就是死数据) ——
+        let residentBefore = kstore.lastInjection.residentCount
+        _ = kstore.addKnowledge(title: "自刷新探针", content: "新增一条常驻。", scope: .global, projectId: nil,
+                                kind: .fact, layer: .always)
+        check(kstore.lastInjection.residentCount == residentBefore + 1,
+              "T-KNOW lastInjection 随写入自动刷新 (不必手动 refresh)")
+
+        // —— 守卫 12: 改易变段 ⇒ 稳定段字节不变; 改稳定段正文 ⇒ **顺序**不变 ——
+        let stableBytes0 = stableSegment(kstore.lastInjection)
+        if let i = kstore.knowledgeItems.firstIndex(where: { $0.title == "自刷新探针" }) {
+            var it = kstore.knowledgeItems[i]
+            it.content = "改动后的正文。" + String(repeating: "x", count: 50)
+            it.updatedAt = Date()          // 真实编辑器走 withUpdated → 会刷新 updatedAt; 冒烟必须同款
+            _ = kstore.updateKnowledge(it)
+        }
+        check(stableSegment(kstore.lastInjection) == stableBytes0,
+              "T-KNOW 改易变段不触碰稳定段 (守卫 12: KV cache-stable 前缀逐字节不变)")
+        let titles0 = stableTitles(kstore.lastInjection)
+        // 同 priority 时若用 updatedAt 兜底, 改正文就会把小改动的那条顶到最前 ⇒ 前缀抖动
+        check(titles0 == titles0.sorted(),
+              "T-KNOW 稳定段同 priority 按 title 定序 (与 updatedAt 无关; 实测 \(titles0.joined(separator: "/")))")
+        // ⚠️ 两处都要紧: ① **必须刷新 `updatedAt`** (同 withUpdated) —— 只改 content 不碰 updatedAt 时,
+        //    这条断言对"updatedAt 兜底"的实现**也是绿的** (反例实测到的假绿, 记在这儿防后人改回去);
+        // ② 必须改 **title 排序在最后**的那条 (身份: 成0x6210 < 称0x79F0 < 身0x8EAB) ——
+        //    改 title 最前的「成品纪律」时 title 序与 updatedAt 序**恰好重合**, 同样假绿。
+        if let i = kstore.knowledgeItems.firstIndex(where: { $0.title == "身份" }) {
+            var it = kstore.knowledgeItems[i]
+            it.content = "改过的身份正文。"
+            it.updatedAt = Date()
+            _ = kstore.updateKnowledge(it)
+        }
+        check(stableTitles(kstore.lastInjection) == titles0,
+              "T-KNOW 改稳定段正文不改变其顺序 (守卫 12 的第二半: 改正文 ≠ 改位置)")
+        let stableBytes1 = stableSegment(kstore.lastInjection)
+
+        // —— 守卫 1: 塞 200 条噪声 ⇒ L0 稳定段一条不少、字节不变 ——
+        // 400 字/条 × 200 = 80k > 64k 预算 ⇒ 顺带把守卫 2 一起压出来
+        let noise = String(repeating: "雾", count: 400)
+        for i in 1...200 {
+            _ = kstore.addKnowledge(title: String(format: "噪声%03d", i), content: noise,
+                                    scope: .global, projectId: nil, kind: .fact, layer: .always,
+                                    priority: i)
+        }
+        let noisy = kstore.lastInjection
+        check(stableTitles(noisy) == titles0 && stableSegment(noisy) == stableBytes1,
+              "T-KNOW 塞 200 条噪声后 L0 稳定段一条不少且字节不变 (守卫 1)")
+        check(noisy.volatileCount > 100 && noisy.residentCount > 5,
+              "T-KNOW 噪声确实进了易变段 (否则守卫 1 是空断言; 实测 volatile=\(noisy.volatileCount))")
+
+        // —— 守卫 2: L0 超限 = 告警 + 按 priority 降级截尾 + **不阻断注入** ——
+        check(noisy.overflowed && !noisy.degraded.isEmpty,
+              "T-KNOW 超预算触发降级 (实测降 \(noisy.degraded.count) 条)")
+        check(noisy.text.map { !$0.isEmpty } == true,
+              "T-KNOW 超限不阻断注入 (铁律: 记忆故障不具备打断任务执行的权力)")
+        check(kstore.injectionWarnings.map(\.kind).contains(.residentOverflow),
+              "T-KNOW 超限有告警 (数据在 store 上: UI 与事件流各自措辞)")
+        let overflowTitles = kstore.injectionWarnings.compactMap { w -> [String]? in
+            if case .residentOverflow(let titles) = w { return titles }
+            return nil
+        }.first ?? []
+        check(overflowTitles.count == noisy.degraded.count && !overflowTitles.isEmpty,
+              "T-KNOW 超限告警指名道姓 (红条要能说出降了哪几条; 实测 \(overflowTitles.count) 条)")
+        check(noisy.residentChars <= Tune.knowledgeTotalCharLimit,
+              "T-KNOW 降级后落回预算内 (实测 \(noisy.residentChars) / \(Tune.knowledgeTotalCharLimit))")
+        // 口径: 自定义区是"用户有哪些条目"(含被关掉的), 而这条断言问的是**注入账** ——
+        // 只有"启用且常驻"的那些才该被算进去。所以要把关掉的减掉 —— 不是把断言放宽,
+        // 而是把两个不同的集合分开 (否则将来某条被关掉, 这里会以"降级丢账"的假象变红)。
+        let panelResident = kstore.customKnowledge.filter { $0.isResident }.count
+        let offInKstore = kstore.customKnowledge.filter { $0.isResident && !$0.enabled }.count
+        let injectedResident = noisy.stableCount + noisy.volatileCount + noisy.degraded.count
+        check(injectedResident + offInKstore == panelResident,
+              "T-KNOW 降级不丢账: 入块 + 降级 + 关掉的 == 自定义区里的常驻条目 (实测 \(injectedResident)+\(offInKstore)/\(panelResident))")
+        check(noisy.degraded.allSatisfy { !$0.kind.isStableSegment },
+              "T-KNOW 降级的只有易变段 (稳定段永不参与截尾)")
+
+        // —— 截尾 vs 贪心填空: 确定性构造 (判据 = §2.5「可预测」) ——
+        // A/B/C 各 16000 字 (单条上限) 吃掉预算, D 装不下, 其后还有一条 **很小** 的 E。
+        // 截尾 ⇒ E 也不进 (高优先级的没进, 低优先级的就不许进);
+        // 贪心 ⇒ E 会塞进缝隙 ⇒ 用户看到"priority 1 进了、priority 70 没进" = 无字之墙。
+        let tailStore = newStore("tail")
+        let big = String(repeating: "巨", count: Tune.knowledgeItemCharLimit)
+        let alphabet = Array("ABCD")
+        for (idx, p) in [100, 90, 80, 70].enumerated() {
+            _ = tailStore.addKnowledge(title: String(alphabet[idx]), content: big,
+                                       scope: .global, projectId: nil,
+                                       kind: .fact, layer: .always, priority: p)
+        }
+        _ = tailStore.addKnowledge(title: "E", content: String(repeating: "小", count: 100),
+                                   scope: .global, projectId: nil, kind: .fact, layer: .always, priority: 1)
+        let tail = tailStore.lastInjection
+        check(tail.degraded.contains { $0.title == "D" } && tail.degraded.contains { $0.title == "E" },
+              "T-KNOW 超限按 priority **截尾**: 大条目 D 装不下后, 其后的小条目 E 也不进 (不做贪心填空)")
+        check(tail.text?.contains("] E:") == false,
+              "T-KNOW 被截尾的条目确实不在注入块内 (低优先级不得越过高优先级)")
+
+        // —— 守卫 3: 撞 pack key 被拒, 且给**可读原因** (禁止而不提示 = 无字之墙) ——
+        writePack("identity.md", """
+        ---
+        summary: "我是谁"
+        priority: 10
+        layer: always
+        keys:
+          - agent.name
+          - user.call_name
+        ---
+        正文。
+        """)
+        writePack("tone.md", """
+        ---
+        keys: [agent.tone, "agent.voice"]
+        ---
+        正文。
+        """)
+        check(kstore.knowledge.reservedKeys() == ["agent.name", "user.call_name", "agent.tone", "agent.voice"],
+              "T-KNOW pack keys 保留集合 (块式 `- k` 与内联 `[a, b]` 两种写法都认, 引号可省)")
+        check(kstore.knowledge.packKeyHolders["agent.name"] == "identity.md",
+              "T-KNOW 保留集合带持有者文件名 (UI 才能说「去改那个文件」)")
+        let rejectPack = kstore.addKnowledge(title: "抢名", content: "x", scope: .global, projectId: nil,
+                                             kind: .fact, layer: .always, key: "agent.name")
+        // 断言**数据**而不是文案: 文案由 View 侧拼 (域层在 l10n 排除名单里, 它出文案就是隐形漏译)。
+        check(rejectPack == .heldByPack(key: "agent.name", file: "identity.md"),
+              "T-KNOW 撞 pack key 被拒且数据里带持有者文件名 (实测: \(String(describing: rejectPack)))")
+        check(!kstore.knowledgeItems.contains { $0.title == "抢名" },
+              "T-KNOW 被拒条目不落库 (拒绝创建, 不是「谁赢」)")
+        check(kstore.addKnowledge(title: "自有键", content: "y", scope: .global, projectId: nil,
+                                  kind: .fact, layer: .always, key: "project.mine") == nil,
+              "T-KNOW 不撞的 key 正常放行")
+        let rejectDup = kstore.addKnowledge(title: "重键", content: "z", scope: .global, projectId: nil,
+                                            kind: .fact, layer: .always, key: "project.mine")
+        check(rejectDup == .duplicateKey(key: "project.mine"),
+              "T-KNOW DB 内重复 key 也被拒 (实测: \(String(describing: rejectDup)))")
+
+        // —— 守卫 9: frontmatter 解析失败 ⇒ **收紧** (保留集合不得变空后放行) ——
+        let brokenRaw = "---\ntitle: x\nkeys:\n  - oops\n"
+        check(parseFailed(brokenRaw) && parsedKeys(brokenRaw) == nil,
+              "T-KNOW 起始 --- 无收尾 ⇒ 判为解析失败 (不是「没有 keys」)")
+        writePack("broken.md", brokenRaw)
+        _ = kstore.knowledge.reloadPackKeys()
+        check(kstore.knowledge.packKeysParseFailed,
+              "T-KNOW 解析失败被记下 (组装自检红)")
+        check(kstore.knowledge.keyRejection("brand.new") == .packFrontmatterBroken,
+              "T-KNOW 解析失败 ⇒ 保守禁止新建**任何** key (失败时收紧, 不放松 —— 否则守卫被静默绕过)")
+        writePack("broken.md", """
+        ---
+        title: x
+        keys:
+          - fixed.key
+        ---
+        正文。
+        """)
+        _ = kstore.knowledge.reloadPackKeys()
+        check(!kstore.knowledge.packKeysParseFailed && kstore.knowledge.keyRejection("brand.new") == nil
+              && kstore.knowledge.reservedKeys().contains("fixed.key"),
+              "T-KNOW 修好 frontmatter 后恢复放行 (收紧是可逆的)")
+
+        // —— 守卫 13: pack keys **事后扩张** 撞 DB 存量 ⇒ 该条不注入 + 红条 ——
+        // (守卫 3 只管写入时拒绝; 用户手改 pack 新增 key 时, 写入期早过了)
+        check(kstore.addKnowledge(title: "影子", content: "这条本在块内。", scope: .global, projectId: nil,
+                                  kind: .fact, layer: .always, priority: 500, key: "project.shadow") == nil,
+              "T-KNOW 扩张前该 key 无人占用, 可建 (前置)")
+        check(kstore.knowledge.lastInjection.text?.contains("影子") == true,
+              "T-KNOW 扩张前它在注入块内 (前置)")
+        writePack("shadow.md", """
+        ---
+        keys:
+          - project.shadow
+        ---
+        正文。
+        """)
+        kstore.knowledge.refreshSnapshot()
+        let shadowed = kstore.lastInjection
+        check(shadowed.text?.contains("影子") == false,
+              "T-KNOW pack 事后扩张 ⇒ 该 DB 条不再注入 (守卫 13: pack 唯一持有)")
+        check(shadowed.reservedConflicts.count == 1 && shadowed.reservedConflicts.first?.title == "影子",
+              "T-KNOW 冲突条目被单独列出 (红条要能指名道姓 + 给迁移指引)")
+        check(kstore.knowledge.injectionWarnings.contains { warning in
+            if case .reservedKeyConflicts(let titles) = warning { return titles == ["影子"] }
+            return false
+        }, "T-KNOW 事后扩张进告警且指名道姓 (store 只出标题, 文案在 UI 侧拼)")
+
+        // —— upsert 走 `ON CONFLICT(id) DO UPDATE` 而非 `INSERT OR REPLACE` ——
+        // ⚠️ 诚实边界: `REPLACE` 只在**唯一约束冲突**时才删邻居, 而 `keyRejection` 已在写入期拦住
+        //    key 撞车 ⇒ 从 App 自己的 API 走**到不了**那个场景, 两种实现在可达输入上行为相同。
+        //    换 `ON CONFLICT` 的收益是**纵深防御**: 把"不会误删"从"靠上层校验"降级为"DB 层不可能"。
+        //    这条断言守的是更宽的一层: 更新一条不得影响另一条 (含它是 key 邻居的情形)。
+        let upsertStore = newStore("upsert")
+        _ = upsertStore.addKnowledge(title: "甲", content: "a", scope: .global, projectId: nil,
+                                     kind: .fact, layer: .always, key: "k.one")
+        _ = upsertStore.addKnowledge(title: "乙", content: "b", scope: .global, projectId: nil,
+                                     kind: .fact, layer: .always, key: "k.two")
+        if let i = upsertStore.knowledgeItems.firstIndex(where: { $0.title == "甲" }) {
+            var it = upsertStore.knowledgeItems[i]
+            it.priority = 7
+            _ = upsertStore.updateKnowledge(it)
+        }
+        if let upsertPath = upsertStore.persistenceDebug?.path {
+            let again = ChatStore(transport: MockTransport(), dbPath: upsertPath,
+                                  managedExtensionsDir: fixtureDir("know-none"))
+            again.mailbox.stopScheduler()
+            check(again.knowledgeItems.contains { $0.title == "乙" && $0.key == "k.two" }
+                  && again.knowledgeItems.contains { $0.title == "甲" && $0.priority == 7 },
+                  "T-KNOW 更新一条不影响另一条 (含 key 邻居; 走 ON CONFLICT 是纵深防御)")
+        }
+
+        // —— 守卫 4: 老库 (P11.1 之前的 schema) 打开后自动补列 + 未知值回落缺省 ——
+        /// 用**裸 sqlite** 造一个 P11.1 之前的 knowledge_items (只带 P3.7 时代那批列)。
+        func legacyStore(_ tag: String, extraColumns: String, extraCols: [String], extraVals: [DBValue]) -> ChatStore? {
+            let dir = fixtureDir("know-old-\(tag)")
+            let path = dir + "/old.db"
+            do {
+                let old = try Database(path: path)
+                try old.run("""
+                CREATE TABLE knowledge_items (
+                    id                TEXT PRIMARY KEY,
+                    scope             TEXT NOT NULL,
+                    project_id        TEXT,
+                    title             TEXT NOT NULL,
+                    content           TEXT NOT NULL,
+                    source            TEXT NOT NULL,
+                    origin_session_id TEXT,
+                    enabled           INTEGER NOT NULL DEFAULT 1,
+                    status            TEXT NOT NULL DEFAULT 'active',
+                    created_at        REAL NOT NULL,
+                    updated_at        REAL NOT NULL\(extraColumns)
+                )
+                """)
+                let now = Date().timeIntervalSince1970
+                let cols = extraCols.isEmpty ? "" : ", " + extraCols.joined(separator: ", ")
+                let marks = extraCols.isEmpty ? "" : ", " + Array(repeating: "?", count: extraCols.count).joined(separator: ", ")
+                try old.run("""
+                INSERT INTO knowledge_items
+                    (id, scope, title, content, source, enabled, status, created_at, updated_at\(cols))
+                VALUES (?, 'global', '老条目', '升级前就在。', 'manual', 1, 'active', ?, ?\(marks))
+                """, [.text(UUID().uuidString), .real(now), .real(now)] + extraVals)
+            } catch {
+                check(false, "T-KNOW 造老库失败 (\(tag)): \(error)")
+                return nil
+            }
+            let s = ChatStore(transport: MockTransport(), dbPath: path,
+                              managedExtensionsDir: dir + "/ext")
+            s.mailbox.stopScheduler()
+            return s
+        }
+        if let legacy = legacyStore("plain", extraColumns: "", extraCols: [], extraVals: []) {
+            let item = legacy.knowledgeItems.first
+            check(item?.kind == .fact && item?.layer == .ondemand && item?.priority == 0
+                  && item?.key == nil && item?.hitCount == 0,
+                  "T-KNOW 老库补列后落缺省 fact/ondemand (守卫 4: 不崩、无需迁移脚本)")
+        }
+        if let garbage = legacyStore("garbage",
+                                     extraColumns: ",\n    kind TEXT,\n    layer TEXT",
+                                     extraCols: ["kind", "layer"],
+                                     extraVals: [.text("wat"), .text("nowhere")]) {
+            let item = garbage.knowledgeItems.first
+            check(item?.kind == .fact && item?.layer == .ondemand,
+                  "T-KNOW 未知列值回落缺省 (不静默变成「没有层」的幽灵条目)")
+        }
+
+        // —— priority 边界 (2026-09-22 补: 原来步进器无上下限, `999+1` 能一路点上去) ——
+        let pr = KnowledgeItem.priorityRange
+        check(KnowledgeItem.clampedPriority(5000) == pr.upperBound
+                && KnowledgeItem.clampedPriority(-5) == pr.lowerBound
+                && KnowledgeItem.clampedPriority(7) == 7,
+              "T-KNOW priority 越界钳制 (区间 \(pr); 单一定义在 KnowledgeItem.priorityRange)")
+        _ = kstore.addKnowledge(title: "越界优先级", content: "x", scope: .global, projectId: nil,
+                                kind: .fact, layer: .always, priority: 5000)
+        check(kstore.knowledgeItems.first { $0.title == "越界优先级" }?.priority == pr.upperBound,
+              "T-KNOW 写入路径归一化越界值 (不靠 UI 控件兜底: 手改 DB / 将来的导入器也走这条)")
+
+        // —— 关闭注入 ≠ 从面板消失 (2026-09-22 boss 实测报的 bug) ——
+        // 症状: 新增一条 (默认常驻) → 关掉行内开关 → 它**从两个分组里同时掉出**, 面板上彻底看不见。
+        // 根因: 左列复用**注入资格**的判据 (含 `enabled`) ⇒ 那个开关的实际效果等于删除。
+        // 修的形态: 注入资格 (`injectableScopedItems`) 与面板投影 (`customKnowledge`) **拆开**,
+        // 关掉的条目前者排除、后者保留 —— 可见 ≠ 会被注入。三条判据必须各自为真, 缺一条都修歪:
+        //   ① 留在自定义区 (可见) ② 不进 prompt (真关掉) ③ L1 文件被回收 (否则索引里还看得见它)。
+        let tdir = fixtureDir("know-off")
+        let offStore = ChatStore(transport: MockTransport(), dbPath: tdir + "/off.db",
+                                 managedExtensionsDir: tdir + "/ext")
+        offStore.mailbox.stopScheduler()
+        offStore.knowledge.l1RootOverride = tdir + "/l1"     // 同 kstore: 冒烟绝不写用户家目录
+        offStore.knowledge.refreshSnapshot()
+        let offL1 = tdir + "/l1/global"                      // `resolvedL1Dir(projectPath: nil)`
+        _ = offStore.addKnowledge(title: "常驻待关", content: "关掉我。", scope: .global, projectId: nil,
+                                  kind: .rule, layer: .always)
+        _ = offStore.addKnowledge(title: "按需待关", content: "也关掉我。", scope: .global, projectId: nil,
+                                  kind: .fact, layer: .ondemand)
+        let injectBefore = offStore.lastInjection
+        if let offResident = offStore.knowledgeItems.first(where: { $0.title == "常驻待关" }),
+           let offOnDemand = offStore.knowledgeItems.first(where: { $0.title == "按需待关" }) {
+            // 前置: 关之前两条都在自定义区, 且常驻那条真的进了 prompt / 按需那条真的落了盘 ——
+            // 没有前置, 下面的"关掉后还在"可能只是"压根没挂上"的空断言。
+            check(offStore.customKnowledge.contains { $0.id == offResident.id }
+                  && offStore.customKnowledge.contains { $0.id == offOnDemand.id }
+                  && (injectBefore.text?.contains("常驻待关") ?? false)
+                  && l1Files(offL1).count == 1,
+                  "T-KNOW 关闭注入夹具前置: 两条都在自定义区 / 常驻进了 prompt / 按需落了 L1")
+
+            offStore.toggleKnowledge(id: offResident.id)
+            offStore.toggleKnowledge(id: offOnDemand.id)
+
+            check(offStore.customKnowledge.contains { $0.id == offResident.id },
+                  "T-KNOW **关掉注入后条目仍在自定义区** —— 此前它会同时掉出两个分组、面板上消失 (= 开关等于删除)")
+            check(offStore.customKnowledge.contains { $0.id == offOnDemand.id },
+                  "T-KNOW 关掉的按需条目同样留在自定义区 (开/关不是分区维度, 来源才是)")
+            check(offStore.customKnowledge.first { $0.id == offResident.id }?.enabled == false,
+                  "T-KNOW 关掉的状态如实落在条目上 (行内开关读的就是 `enabled`, 不另开一个影子状态)")
+            check((offStore.lastInjection.text?.contains("常驻待关") ?? true) == false
+                  && offStore.lastInjection.residentCount == injectBefore.residentCount - 1,
+                  "T-KNOW 关掉 ⇒ 真的不进 prompt (**可见 ≠ 会被注入**; 载荷条同步减一)")
+            check(l1Files(offL1).isEmpty,
+                  "T-KNOW 关掉的按需条目 L1 文件被回收 (否则它还在知识库索引里, 等于没关)")
+
+            offStore.toggleKnowledge(id: offResident.id)
+            offStore.toggleKnowledge(id: offOnDemand.id)
+            check((offStore.lastInjection.text?.contains("常驻待关") ?? false)
+                  && offStore.lastInjection.residentCount == injectBefore.residentCount
+                  && l1Files(offL1).count == 1,
+                  "T-KNOW 重新打开三处同步复原 (面板 / 注入块 / L1 文件) —— 开关可逆")
+        } else {
+            check(false, "T-KNOW 关闭注入夹具没建起来 (条目没落进 store)")
+        }
+
+        // —— 三区结构 (2026-09-22 boss: "三个区域即可, 最上面常驻区, 然后自定义区, 最下面知识库区") ——
+        // 分区轴从**层**换成**来源**。这条断言守的是换轴之后仍然成立的那个不变量:
+        // **三区合起来覆盖全部可见行, 且两两不重叠** —— 重复行正是旧版"同一来源被劈成两半"的病根。
+        do {
+            let zonePack = kstore.personaPack.entries.count
+            let zoneCustom = kstore.customKnowledge.count
+            let zoneBases = kstore.effectiveKnowledgeBases.count
+            check(zonePack > 0 || zoneCustom > 0 || zoneBases > 0,
+                  "T-KNOW 三区至少一区有内容 (常驻 \(zonePack) / 自定义 \(zoneCustom) / 知识库 \(zoneBases))")
+            // 知识库区**恒有内置库** (L1 落盘目录) ⇒ 这一段永远不判空。它不是装饰: 挂载入口住在这一段里,
+            // 藏起来的入口等于没有入口。
+            check(kstore.effectiveKnowledgeBases.contains { $0.isBuiltin },
+                  "T-KNOW 知识库区恒有内置库 (该区不判空 —— 挂载入口住在里面)")
+            // 库的运行开关**不能把行也弄消失** —— 与条目那条同一条纪律 (关掉 = 状态, 不是删除)。
+            // 内置库的"停用"记在 `builtinDisabled`、而 `effectiveKnowledgeBases` 把它折算进 `enabled`:
+            // 若 UI 自己判一遍, 这条判据就有两个真源, 某天改一处就会静默失效。
+            let builtinAll = kstore.effectiveKnowledgeBases.filter(\.isBuiltin).map(\.id)
+            // 走 **UI 的同一条入口** (`toggleKnowledgeBase`): 它内部才把内置库的停用折算进 `builtinDisabled`。
+            for gid in builtinAll { kstore.toggleKnowledgeBase(id: gid) }
+            check(kstore.effectiveKnowledgeBases.contains { $0.isBuiltin && !$0.enabled },
+                  "T-KNOW 停用的内置库**仍在列表里** (状态为关) —— 行消失就再也开不回来")
+            for gid in builtinAll { kstore.toggleKnowledgeBase(id: gid) }
+            check(kstore.effectiveKnowledgeBases.allSatisfy { $0.isBuiltin ? $0.enabled : true },
+                  "T-KNOW 重新启用后行状态复原 (开关可逆)")
+        }
+
+        // —— 待审核候选: 与正式条目互斥, 且不进 prompt ——
+        // 蒸馏入口要真跑一次 LLM, 冒烟不依赖它 ⇒ 用裸 sqlite 造一行 pending (同 `legacyStore` 的做法),
+        // 再让第二个 store 从同一个 DB 读回来。这一段此前**完全没有覆盖** (面板的第三态没人守)。
+        let pendDir = fixtureDir("know-pending")
+        let pendSeed = ChatStore(transport: MockTransport(), dbPath: pendDir + "/p.db",
+                                 managedExtensionsDir: pendDir + "/ext")
+        pendSeed.mailbox.stopScheduler()
+        let pendStamp = Date().timeIntervalSince1970
+        if let ppath = pendSeed.persistenceDebug?.path {
+            do {
+                let db = try Database(path: ppath)
+                try db.run("""
+                INSERT INTO knowledge_items
+                    (id, scope, title, content, source, enabled, status, created_at, updated_at)
+                VALUES (?, 'global', '候选一', '从会话里提炼出来的。', 'session', 1, 'pending', ?, ?)
+                """, [.text(UUID().uuidString), .real(pendStamp), .real(pendStamp)])
+            } catch {
+                check(false, "T-KNOW 造待审核夹具失败: \(error)")
+            }
+        }
+        let pendStore = ChatStore(transport: MockTransport(), dbPath: pendDir + "/p.db",
+                                  managedExtensionsDir: pendDir + "/ext")
+        pendStore.mailbox.stopScheduler()
+        check(pendStore.pendingKnowledge.count == 1 && pendStore.customKnowledge.isEmpty,
+              "T-KNOW 待审核候选**不进自定义区**的正式条目部分 (status != active)")
+        check(Set(pendStore.pendingKnowledge.map(\.id))
+                .isDisjoint(with: Set(pendStore.customKnowledge.map(\.id))),
+              "T-KNOW 待审核与正式条目**互斥** —— 两者都渲染在自定义区里, 重叠 = 同一条出现两行")
+        check((pendStore.lastInjection.text ?? "").contains("候选一") == false,
+              "T-KNOW 待审核候选不进 prompt (审核前绝不注入)")
+
+        // ===== T-PERSONA (P11.2a): persona pack 只读导入 / 结构性首段 / 组装自检 / L1 落盘 =====
+        // ⚠️ 范围: **造机制 + 验证**, 不是把人设真源搬过来 (那属 P11.2b)。所以夹具全在临时目录 ——
+        //    **不碰 ~/.mangox/agent, 不碰用户项目目录**。真实迁移前 `~/.mangox/agent/` 就是不存在。
+        let pdir = fixtureDir("persona")
+        let pPack = pdir + "/agent"
+        try? FileManager.default.createDirectory(atPath: pPack, withIntermediateDirectories: true)
+        let pstore = ChatStore(transport: MockTransport(), dbPath: pdir + "/p.db",
+                               managedExtensionsDir: pdir + "/ext")
+        pstore.mailbox.stopScheduler()
+        pstore.knowledge.personaPackDirOverride = pPack
+        pstore.knowledge.l1RootOverride = pdir + "/l1"
+
+        func writePersona(_ name: String, _ body: String) {
+            try? body.write(toFile: pPack + "/" + name, atomically: true, encoding: .utf8)
+        }
+        func personaWarnings(_ s: ChatStore) -> [KnowledgeStore.KnowledgeWarning] { s.knowledge.injectionWarnings }
+
+        // ⚠️ `shared: false` 与各份的 `summary:` 都是**故意留着的未知键**
+        // (两者都已从契约删除: `shared` 于 P11.2c, `summary` 于 2026-09-23 —— 行标题改出厂固定表)。
+        // 留它们同时是两件事的证据, 所以别"顺手清干净":
+        //   ① 用户的老文件里会残留它们 (真实 `~/.mangox/agent/SOUL.md` 从前就写着 `summary`) ——
+        //      解析器必须对它们**无感**;
+        //   ② 下面所有 read_when/priority/layer/keys 断言照常通过, 这就是"无感"的证明。
+        // 靠的是 `guard collecting != .none` 兜未知键, 而不是为它们各写一个专门分支。
+        writePersona("SOUL.md", """
+        ---
+        summary: "我是谁 · 态度与边界"
+        read_when:
+          - Every session start
+          - 不确定该用什么态度时
+        priority: 30
+        layer: always
+        shared: false
+        keys:
+          - agent.name
+        ---
+        我对 boss 直接, 不绕弯。
+        """)
+        writePersona("RULES.md", """
+        ---
+        summary: "硬规"
+        priority: 20
+        keys: [agent.rules]
+        ---
+        绝不外发半成品。
+        """)
+        writePersona("NOTES.md", """
+        ---
+        summary: "按需笔记"
+        layer: ondemand
+        ---
+        这条只在被问到时才该出现。
+        """)
+        pstore.knowledge.refreshSnapshot()
+        // 先放两条 DB 条目 (一条硬规、一条事实) —— 否则"稳定段一条不缺"/"段边界"的断言是空跑:
+        // 稳定段为空时 `missingStable` 必然为空, 那种绿什么也没证明。
+        _ = pstore.addKnowledge(title: "外发纪律", content: "外发前先自查。", scope: .global, projectId: nil,
+                                kind: .rule, layer: .always)
+        _ = pstore.addKnowledge(title: "项目约定", content: "本地数据是 sqlite。", scope: .global, projectId: nil,
+                                kind: .fact, layer: .always)
+
+        // —— 守卫 5: frontmatter 解析 (单一解析器 —— 组装与校验同源) ——
+        let pack = pstore.knowledge.personaPack
+        check(pack.entries.count == 3, "T-PERSONA pack 读入 3 个文件 (实测 \(pack.entries.count))")
+        check(pack.entry("SOUL.md")?.readWhen.count == 2
+                && pack.entry("SOUL.md")?.priority == 30,
+              "T-PERSONA read_when / priority 都读出来了 (夹具里那份 `summary:` 已不生效, 见行标题段)")
+        check(pack.entry("RULES.md")?.keys == ["agent.rules"],
+              "T-PERSONA keys 内联 `[a]` 与块式 `- k` 都认 (与 T-KNOW 同一解析器)")
+        check(pack.entry("SOUL.md")?.content == "我对 boss 直接, 不绕弯。",
+              "T-PERSONA 正文 = frontmatter 之后, 原样 (它就是进 prompt 的字节)")
+        check(pack.residentEntries.map(\.fileName) == ["SOUL.md", "RULES.md"],
+              "T-PERSONA 段内按 priority 降序 (30 → 20); 顺序确定性 = 逐字节稳定的前提")
+        check(pack.entry("NOTES.md")?.isResident == false,
+              "T-PERSONA layer=ondemand 的 pack 文件不进 prompt (它本来就是磁盘上的文件, 不必再抄一份到 L1)")
+        check(pack.reservedKeys == ["agent.name", "agent.rules"],
+              "T-PERSONA 保留集合 = 全部 pack keys (守卫 3 的输入)")
+
+        // —— 守卫 10: persona 段是**结构**, 不是"priority 碰巧排前" ——
+        let inj0 = pstore.knowledge.lastInjection
+        let personaBytes0 = inj0.personaText
+        check(!personaBytes0.isEmpty && inj0.text?.hasPrefix(personaBytes0) == true,
+              "T-PERSONA persona 段起于组装结果**偏移 0** (守卫 10)")
+        check(inj0.personaCount == 2 && inj0.personaChars > 0,
+              "T-PERSONA 人格段计入「每轮都带上」的条数与字数 (实测 \(inj0.personaCount) 条 / \(inj0.personaChars) 字)")
+        check(inj0.personaChars == pack.residentEntries.reduce(0) { $0 + $1.content.count },
+              "T-PERSONA 人格段计费 = 各文件正文, 与 DB 条目同口径 (标记不计)")
+        check(inj0.text?.contains("这条只在被问到时才该出现。") == false,
+              "T-PERSONA ondemand 的 pack 文件正文确实不在 prompt 里")
+        check(inj0.bodyText?.contains("[硬规] 外发纪律") == true && inj0.text?.hasPrefix(inj0.bodyText ?? "") == false,
+              "T-PERSONA 段边界显式暴露: `bodyText` = DB 那段 (不含 persona), persona 段排在它**之前**")
+
+        // —— 守卫 1 + 10 的交集: 200 条噪声吃满预算, 人格段字节不变且仍在偏移 0 ——
+        let noiseP = String(repeating: "雾", count: 400)
+        for i in 1...200 {
+            _ = pstore.addKnowledge(title: String(format: "噪声%03d", i), content: noiseP,
+                                    scope: .global, projectId: nil, kind: .fact, layer: .always, priority: i)
+        }
+        let injNoisy = pstore.knowledge.lastInjection
+        check(injNoisy.overflowed && injNoisy.personaText == personaBytes0
+                && injNoisy.text?.hasPrefix(personaBytes0) == true,
+              "T-PERSONA 超预算截尾后人格段**字节不变且仍在偏移 0** (实测降 \(injNoisy.degraded.count) 条)")
+        check(injNoisy.text?.contains("绝不外发半成品。") == true,
+              "T-PERSONA 截尾动不了人格段 —— 它是**结构**不是数据 (fact 可丢, persona 丢了就不是它了)")
+
+        // —— 自检 ①③⑤: 正常组装下必须各自为真 ——
+        // ⚠️ **每条写成独立断言**, 不串成 `&&`: 复合断言红了只知道"有人红了", 造反例时
+        //    根本分不清是哪一条守卫失效 —— 那等于没验 (本轮造反例实测发现的, 见注释末)。
+        check(injNoisy.missingStable.isEmpty,
+              "T-PERSONA 自检①: 稳定段一条不缺 (独立断言; 复合断言的红不具诊断性)")
+        check(injNoisy.unaccountedResident.isEmpty,
+              "T-PERSONA 自检③: 没有条目既不在块内、也不在降级清单里 (无静默丢弃)")
+        check(!injNoisy.personaNotAtOffsetZero,
+              "T-PERSONA 自检⑤: persona 段确实在偏移 0")
+        check(personaWarnings(pstore).allSatisfy { $0.kind != .stableSegmentMissing },
+              "T-PERSONA 自检① 通过时不往 UI 抛红条 (自检只报真问题, 不报「一切正常」)")
+        check(personaWarnings(pstore).allSatisfy { $0.kind != .silentlyDropped },
+              "T-PERSONA 自检③ 通过时不往 UI 抛红条")
+        check(personaWarnings(pstore).allSatisfy { $0.kind != .personaNotAtOffsetZero },
+              "T-PERSONA 自检⑤ 通过时不往 UI 抛红条")
+        // ⚠️ 与上面成对看的诚实边界: `degraded.count + volatileCount + stableCount == 全部常驻`
+        //    那条**计数恒等式拦不住静默丢弃** (实测: 从块里悄悄少拼一行, 计数照样平)。
+        //    所以自检①③必须靠**在块里找字符串**, 不能复用计数 —— 这是它们存在的唯一理由。
+
+        // —— 守卫 5/9: frontmatter 破损 ⇒ 自检红 + 收紧 + 该文件不注入 ——
+        writePersona("broken.md", "---\nkeys:\n  - oops\n")
+        pstore.knowledge.refreshSnapshot()
+        let injBroken = pstore.knowledge.lastInjection
+        check(injBroken.packKeysParseFailed, "T-PERSONA 破损被记下 (组装自检红)")
+        check(personaWarnings(pstore).contains { w in
+            if case .personaFrontmatterBroken(let files) = w { return files == ["broken.md"] }
+            return false
+        }, "T-PERSONA 破损告警**指名道姓给文件名** (「pack 坏了」不可行动, 「修 broken.md」才可行动)")
+        check(pstore.knowledge.keyRejection("brand.new") == .packFrontmatterBroken,
+              "守卫 9: 破损 ⇒ 保守禁止新建任何 key (失败时收紧)")
+        check(injBroken.text?.contains("oops") == false,
+              "T-PERSONA 破损文件不进 prompt —— 它连 layer 都读不出来, 不做乐观假设")
+        check(personaWarnings(pstore).contains { $0.kind == .personaFrontmatterBroken }
+                && pstore.knowledge.personaPack.entry("broken.md")?.isBroken == true,
+              "T-PERSONA 破损文件仍在左列可见 (用户得知道是哪个文件坏了, 才修得动)")
+        writePersona("broken.md", "---\nkeys:\n  - fixed.key\n---\n正文。\n")
+        pstore.knowledge.refreshSnapshot()
+        check(!pstore.knowledge.personaPack.parseFailed
+                && pstore.knowledge.keyRejection("brand.new") == nil,
+              "T-PERSONA 修好 frontmatter 后恢复放行 (收紧是可逆的)")
+        try? FileManager.default.removeItem(atPath: pPack + "/broken.md")
+        pstore.knowledge.refreshSnapshot()
+
+        // —— §3.2 空 pack: persona 段**整段消失** ⇒ 必须响 (2026-09-23, boss 实测提问后补) ——
+        // 判据是「**没有可载入的 .md**」, 不是"少了几份": 用户可故意只留一份 (§2.1 —— 把"必须三份"
+        // 这种结构塞回数据正是它反对的)。所以断言一律围绕"有没有可载入的东西", 不数文件个数。
+        // ⚠️ 断言告警前必须走 `reloadPersonaPackAndRefresh()`: `buildInjection()` 只**返回**结果、
+        //    不写 `lastInjection`, 而 `injectionWarnings` 派生自后者 —— 少这一步会**同时**假红
+        //    (新写的告警测不到) 与假绿 ("移走后消失"本来就是空断言)。上一轮被门抓到过一次。
+        let emptyDir = fixtureDir("pack-empty")
+        let epackDir = emptyDir + "/agent"          // **故意不建** —— 目录不存在
+        let estore = ChatStore(transport: MockTransport(), dbPath: emptyDir + "/e.db",
+                               managedExtensionsDir: emptyDir + "/ext")
+        estore.mailbox.stopScheduler()
+        estore.knowledge.personaPackDirOverride = epackDir
+        estore.knowledge.l1RootOverride = emptyDir + "/l1"
+        estore.reloadPersonaPackAndRefresh()
+        let eInj = estore.knowledge.lastInjection
+        check(eInj.personaPackEmpty == .dirMissing && eInj.personaText.isEmpty
+                && !(eInj.text ?? "").contains("persona pack"),
+              "T-PERSONA 空 pack(目录不在): 段整段消失 **且**原因记为 .dirMissing (实测 \(String(describing: eInj.personaPackEmpty)))")
+        check(estore.injectionWarnings.contains { $0.kind == .personaPackEmpty },
+              "T-PERSONA 空 pack: 告警在场 —— 人格本体一个字都没进 prompt, 不许有静默缺席")
+        // 目录在、里面空 ⇒ 原因换成 `.noFiles`。**两个 case 不是装饰**: 用户动作不同
+        // (一个是"去建目录", 一个是"去放文件"), 而"下一步做什么"正是告警唯一的用处。
+        try? FileManager.default.createDirectory(atPath: epackDir, withIntermediateDirectories: true)
+        estore.reloadPersonaPackAndRefresh()
+        check(estore.knowledge.lastInjection.personaPackEmpty == .noFiles,
+              "T-PERSONA 空 pack(目录在但空): 原因换成 .noFiles (两种空的用户动作不同)")
+        // 「放一份就能好」必须**双向**断言: 只断言"消失"是空断言 (它从来就没响过也满足)。
+        let warnedWhenEmpty = estore.injectionWarnings.contains { $0.kind == .personaPackEmpty }
+        try? "我对 boss 直接, 不绕弯。".write(toFile: epackDir + "/SOUL.md", atomically: true, encoding: .utf8)
+        estore.reloadPersonaPackAndRefresh()
+        check(warnedWhenEmpty
+                && estore.knowledge.lastInjection.personaPackEmpty == nil
+                && !estore.injectionWarnings.contains { $0.kind == .personaPackEmpty },
+              "T-PERSONA 放**一份** SOUL.md 即恢复 (判据是「有可载入的 md」, 不是「凑够三份」)")
+        // 文件在磁盘上但读不出来 (编码坏) —— `ls` 看得见, 内容却没进 prompt。这是**磁盘上完全
+        // 看不出来**的一件事, 只有组装器知道 ⇒ 不报就等于没有。
+        try? FileManager.default.removeItem(atPath: epackDir + "/SOUL.md")
+        // 字节取 `0x80` 起头的孤立续字节: **确定非法**的 UTF-8 (不用 BOM —— 那会让"是不是自动
+        // 识别成 UTF-16"变成一个测试自己都说不清的问题)。
+        try? Data([0x80, 0x81, 0x82]).write(to: URL(fileURLWithPath: epackDir + "/BAD.md"))
+        estore.reloadPersonaPackAndRefresh()
+        check(estore.knowledge.lastInjection.personaUnreadableFiles == ["BAD.md"],
+              "T-PERSONA 读不出来的 pack 文件被点名 (实测 \(estore.knowledge.lastInjection.personaUnreadableFiles))")
+        check(estore.injectionWarnings.contains { $0.kind == .personaUnreadableFiles }
+                && !estore.injectionWarnings.contains { $0.kind == .personaPackEmpty },
+              "T-PERSONA 有「读不出来」就不重复报「空 pack」 (同一件事挨两枪 = 红条变噪音, 用户开始无视红条)")
+        // —— 「用改名做测试」这个动作的**陷阱**, 顺手钉成断言 (2026-09-23, boss 问过) ——
+        // 后缀决定成败: 改成 `SOUL.bak.md` **仍会被载入** (`load` 只认 `hasSuffix(".md")`, 大小写敏感),
+        // 于是"我把它改名了"测出来的结论**恰好是反的** —— 你以为"改名后模型还记得", 实际那个文件
+        // 压根没退出。真要让一份人格文件失效, 必须改掉 `.md` 后缀 (`SOUL.md.bak`) 或移出目录。
+        try? FileManager.default.removeItem(atPath: epackDir + "/BAD.md")
+        try? "我还在。".write(toFile: epackDir + "/SOUL.bak.md", atomically: true, encoding: .utf8)
+        estore.reloadPersonaPackAndRefresh()
+        check(estore.knowledge.lastInjection.personaPackEmpty == nil
+                && estore.knowledge.personaPack.entries.map(\.fileName) == ["SOUL.bak.md"],
+              "T-PERSONA 改名陷阱: 改成 `SOUL.bak.md` **仍被载入** (要它退出得改掉后缀, 否则测到的结论正好相反)")
+
+        // —— 行文案 = 文件名 + App 出厂固定表, **不读文件内容** (2026-09-23 boss 拍板"直接固定化就行") ——
+        // 上一版这里是一条"回落链" (`summary` → 正文首个 `#` → 文件名)。撤掉它的判据不是
+        // "顺序排得不好", 而是**它建立在用户内容上** —— 用户写什么不可控, 链只是把赌注缩小了一点。
+        // 固定表把这件事从**内容推导**变成**产品决定**: 三份已知常驻文件各有一句出厂文案, 表外用文件名。
+        // 契约里随之删掉 `summary` ⇒ 本段同时是那次删除的守卫: 文件里写了 `summary` 也不再生效。
+        let ttDir = fixtureDir("pack-title")
+        let ttPack = ttDir + "/agent"
+        try? FileManager.default.createDirectory(atPath: ttPack, withIntermediateDirectories: true)
+        let ttStore = ChatStore(transport: MockTransport(), dbPath: ttDir + "/t.db",
+                                managedExtensionsDir: ttDir + "/ext")
+        ttStore.mailbox.stopScheduler()
+        ttStore.knowledge.personaPackDirOverride = ttPack
+        ttStore.knowledge.l1RootOverride = ttDir + "/l1"
+        func writeTitleFile(_ name: String, _ body: String) {
+            try? body.write(toFile: ttPack + "/" + name, atomically: true, encoding: .utf8)
+        }
+        // 夹具里这份 SOUL.md **故意写了** `summary` 与正文标题: 标题仍必须是出厂文案。
+        writeTitleFile("SOUL.md", "---\nsummary: \"我自己起的标题\"\n---\n# 正文里的标题\n\n正文。\n")
+        writeTitleFile("NOTES.md", "随手写的一份, 没有 frontmatter、也没有标题行。\n")
+        let ttLoaded = ttStore.knowledge.reloadPersonaPack()
+        check(PersonaRowText.title(for: "SOUL.md") == "SOUL.md - " + L("我是谁"),
+              "T-PERSONA 行文案①: 标题 = **文件名 + 出厂文案** (`SOUL.md - 我是谁`), 且文件里写了 `summary` 也不算数")
+        check(PersonaRowText.title(for: "NOTES.md") == "NOTES.md",
+              "T-PERSONA 行文案②: 表外文件**只有文件名**, 不留破折号后缀 (否则看着像被截断了)")
+        check(PersonaRowText.title(for: "soul.md") == "soul.md - " + L("我是谁"),
+              "T-PERSONA 行文案③: 大小写不敏感, 且显示的是**文件真实拼写** (不是表里的规范名)")
+        check(PersonaRowText.title(for: "RULES.md") == "RULES.md - " + L("我必须怎么做")
+                && PersonaRowText.title(for: "USER.md") == "USER.md - " + L("你是谁"),
+              "T-PERSONA 行文案④: 三份出厂文案都在表里 (`RULES.md` / `USER.md`)")
+        let ttSoul = ttLoaded.entry("SOUL.md")
+        let ttSub = ttSoul.map { PersonaRowText.subtitle(for: $0) } ?? ""
+        check(ttSoul != nil && ttSub.hasPrefix("persona · ")
+                && ttSub.contains(String(ttSoul?.content.count ?? -1)),
+              "T-PERSONA 行文案⑤: 副标字数取 `content.count`(进 prompt 的那部分) —— 与面板「人格段 M 字」同源, 逐行能加得上")
+        check(ttLoaded.entries.count == 2,
+              "T-PERSONA 行文案⑥: 文件里残留的 `summary:` 被**静默跳过** (同 `shared` 的处理: 不报错、不生效)")
+
+        // —— 人格段过胖 ⇒ 易变段整体降级, 但**注入照常发生** (铁律: 记忆故障不阻断任务) ——
+        let fatDir = fixtureDir("fat")
+        let fatPack = fatDir + "/agent"
+        try? FileManager.default.createDirectory(atPath: fatPack, withIntermediateDirectories: true)
+        try? ("---\nsummary: 胖人格\n---\n" + String(repeating: "胖", count: Tune.knowledgeTotalCharLimit + 1000))
+            .write(toFile: fatPack + "/SOUL.md", atomically: true, encoding: .utf8)
+        let fatStore = ChatStore(transport: MockTransport(), dbPath: fatDir + "/f.db",
+                                 managedExtensionsDir: fatDir + "/ext")
+        fatStore.mailbox.stopScheduler()
+        fatStore.knowledge.personaPackDirOverride = fatPack
+        fatStore.knowledge.l1RootOverride = fatDir + "/l1"
+        _ = fatStore.addKnowledge(title: "小易变", content: "会被挤掉。", scope: .global, projectId: nil,
+                                  kind: .fact, layer: .always, priority: 999)
+        let fat = fatStore.knowledge.lastInjection
+        check(fat.personaChars > Tune.knowledgeTotalCharLimit && fat.degraded.count == 1
+                && fat.text?.hasPrefix(fat.personaText) == true && fat.text?.isEmpty == false,
+              "T-PERSONA 人格段自身超预算 ⇒ 易变段整体降级, 但**人格段照常注入** (不静默丢、不阻断)")
+        check(fat.volatileCount == 0,
+              "T-PERSONA 人格段先吃预算: 剩余额度为负 ⇒ 所有易变条目降级 (载荷条不会说「只用了 30k」而真实已 50k)")
+
+        // —— 守卫 15 / 守卫 7: L1 一条一文件、文件名 = key、落点不占危险名 ——
+        let ldir = fixtureDir("l1")
+        let lstore = ChatStore(transport: MockTransport(), dbPath: ldir + "/l.db",
+                               managedExtensionsDir: ldir + "/ext")
+        lstore.mailbox.stopScheduler()
+        lstore.knowledge.personaPackDirOverride = ldir + "/agent"     // 空目录
+        lstore.knowledge.l1RootOverride = ldir + "/l1"
+        let l1Global = ldir + "/l1/global"
+        func l1Names(_ dir: String) -> [String] {
+            ((try? FileManager.default.contentsOfDirectory(atPath: dir)) ?? []).sorted()
+        }
+        lstore.knowledge.refreshSnapshot()
+        check(l1Names(l1Global).isEmpty, "T-PERSONA 没有按需条目时 L1 目录是空的 (实测 \(l1Names(l1Global)))")
+
+        // 两条都靠 `!isResident` 落 L1。曾用 `always + sensitivity=local` 造第二条, 用来证明
+        // "两个开关同效" —— P11.2c 删掉敏感档后, 第二条改成**无 key 的**普通按需条目,
+        // 顺带把另一半也覆盖上: 落盘由 `!isResident` 决定, **与有没有 key 无关**。
+        _ = lstore.addKnowledge(title: "按需甲", content: "甲正文。", scope: .global, projectId: nil,
+                                kind: .fact, layer: .ondemand, key: "note.alpha")
+        _ = lstore.addKnowledge(title: "按需乙", content: "乙正文。", scope: .global, projectId: nil,
+                                kind: .fact, layer: .ondemand)
+        let afterAdd = l1Names(l1Global)
+        check(afterAdd.contains("note.alpha.md"),
+              "守卫 15: 一条一文件且**文件名 = key** (实测 \(afterAdd))")
+        check(afterAdd.count == 2,
+              "T-PERSONA 按需条目**都**落 L1 —— 判据是 `!isResident`, 与有没有 key 无关 (实测 \(afterAdd))")
+        check(KnowledgeStore.isOurL1File(l1Global + "/note.alpha.md"),
+              "T-PERSONA L1 文件带**我们自己的标记** (对账时靠它区分「我写的」与「用户丢进来的」)")
+        check(KnowledgeStore.isAllowedL1Path(l1Global) && KnowledgeStore.isAllowedL1Path(ldir + "/proj-x/.mangox/agent"),
+              "守卫 7: 落点不占 AGENTS.md / CLAUDE.md / .pi/")
+        check(!KnowledgeStore.isAllowedL1Path("/tmp/x/AGENTS.md")
+                && !KnowledgeStore.isAllowedL1Path("/tmp/proj/.pi") ,
+              "守卫 7 反向: 危险名被判否 (否则这条守卫只是个装饰)")
+        // 查**生产形状**, 不查 `l1Dir` —— 后者带测试重定向, 用它会变成"自己证自己"
+        check(KnowledgeStore.productionL1Dir(projectPath: nil).hasSuffix("/.mangox/agent/memory")
+                && KnowledgeStore.productionL1Dir(projectPath: "/tmp/p").hasSuffix("/.mangox/agent"),
+              "T-PERSONA L1 落点: 全局 ~/.mangox/agent/memory (persona pack 的下一层), 项目内 <项目>/.mangox/agent")
+        check(KnowledgeStore.l1Dir(projectPath: nil).hasPrefix(NSTemporaryDirectory())
+                && KnowledgeStore.l1Dir(projectPath: "/tmp/p").hasPrefix(NSTemporaryDirectory()),
+              "T-PERSONA L1 落点**两种作用域**都被重定向 (项目内落点也在用户项目里, 同样不该被冒烟写)")
+
+        // 文件名净化: `key` 是用户输入, 直接当文件名有两个真风险
+        var probe = KnowledgeItem(id: UUID(), scope: .global, projectId: nil,
+                                  title: "t", content: "c", source: .manual)
+        probe.key = "AGENTS.md"
+        check(KnowledgeStore.l1FileName(for: probe) == "k-AGENTS.md.md",
+              "守卫 7 的**文件名侧**: key=AGENTS.md 会写出一个 pi 自动加载的文件 ⇒ 必须净化 (实测 \(KnowledgeStore.l1FileName(for: probe)))")
+        probe.key = "../../escape"
+        let escaped = KnowledgeStore.l1FileName(for: probe)
+        check(!escaped.contains("/") && !escaped.hasPrefix("."),
+              "T-PERSONA 路径穿越被挡住 (实测 \(escaped))")
+        probe.key = "note.alpha"
+        check(KnowledgeStore.l1FileName(for: probe) == "note.alpha.md",
+              "T-PERSONA 净化对正常 key 是**恒等变换** (只有畸形 key 才看得到前缀)")
+
+        // 无标记的外部文件一律不动 + 对账会清理自己写过的
+        try? "用户自己的笔记".write(toFile: l1Global + "/mine.md", atomically: true, encoding: .utf8)
+        lstore.knowledge.refreshSnapshot()
+        check(l1Names(l1Global).contains("mine.md"),
+              "T-PERSONA 无标记的外部文件**一律不动** (目录是 App 管的, 用户的文件是用户的)")
+        if let i = lstore.knowledgeItems.firstIndex(where: { $0.key == "note.alpha" }) {
+            var it = lstore.knowledgeItems[i]
+            it.layer = .always                       // 改成常驻 ⇒ 不该再有 L1 文件
+            _ = lstore.updateKnowledge(it)
+        }
+        check(!l1Names(l1Global).contains("note.alpha.md"),
+              "T-PERSONA 改成常驻 ⇒ L1 文件被清掉 (只写不删 = 「记忆只涨不缩」换个地方复发)")
+        check(l1Names(l1Global).contains("mine.md"),
+              "T-PERSONA 对账只删带自己标记的 —— 清理一轮后用户的文件仍在")
+        let secondId = lstore.knowledgeItems.first { $0.title == "按需乙" }?.id
+        if let secondId { lstore.knowledge.deleteKnowledge(id: secondId) }
+        check(l1Names(l1Global) == ["mine.md"],
+              "T-PERSONA 条目删除 ⇒ 它的 L1 文件同步消失 (实测 \(l1Names(l1Global)))")
+
+        // ===== T-KB (P11.4a): 知识库档 —— 扫描契约 / 索引段 / 挂载 CRUD / 只读红线 / 预算待遇 =====
+        // ⚠️ 范围红线 (同 §6.2a): 夹具**全部在临时目录**, 不碰任何真实目录。
+        //    内置库 (L1 落盘目录自动挂载) 靠 `l1RootOverride` 重定向 —— 它同时是"内置库真会进索引"
+        //    这条断言的**唯一可测形态**: 不重定向就成了对用户家目录状态下断言。
+        let kbDir = fixtureDir("kb")
+        let kbLib = kbDir + "/lib"          // 用户挂载的库夹具
+        let kbPack = kbDir + "/pack"
+        try? FileManager.default.createDirectory(atPath: kbPack, withIntermediateDirectories: true)
+        // 人格段非空 —— 守卫 17 要断言 persona 也在这个偏移序里; 空 pack 会让那条断言少一项。
+        try? "---\nsummary: \"人格\"\npriority: 10\n---\n我是星期五。\n".write(
+            toFile: kbPack + "/SOUL.md", atomically: true, encoding: .utf8)
+
+        func mk(_ rel: String, _ body: String = "内容") {
+            let full = kbLib + "/" + rel
+            try? FileManager.default.createDirectory(atPath: (full as NSString).deletingLastPathComponent,
+                                                     withIntermediateDirectories: true)
+            try? body.write(toFile: full, atomically: true, encoding: .utf8)
+        }
+        // 该进的
+        mk("a.md"); mk("b.txt"); mk("c.html"); mk("d.htm")
+        mk("sub1/s1.md"); mk("sub1/s2.txt")
+        mk("sub2/sub3/s3.md")               // 第 3 层 (根下直接文件 = 第 1 层)
+        // 不该进的
+        mk("e.pdf"); mk("f.json"); mk("g.png")          // 非文档格式
+        mk(".hidden.md")                                 // 隐藏项
+        mk("node_modules/dep.md"); mk("DerivedData/out.md"); mk(".build/x.md"); mk(".git/y.md")
+        mk("sub2/sub3/sub4/s4.md")                       // 第 4 层 —— 深度边界的**唯一**判据
+        // 符号链接: 一个指向 sub2 的目录链 (跟了就会多出 linkdir/sub3/s3.md), 一个自引用环
+        try? FileManager.default.createSymbolicLink(atPath: kbLib + "/linkdir",
+                                                    withDestinationPath: "sub2")
+        try? FileManager.default.createSymbolicLink(atPath: kbLib + "/self",
+                                                    withDestinationPath: ".")
+
+        let kbs = ChatStore(transport: MockTransport(), dbPath: kbDir + "/kb.db",
+                            managedExtensionsDir: kbDir + "/ext")
+        kbs.mailbox.stopScheduler()
+        kbs.knowledge.l1RootOverride = kbDir + "/l1"
+        kbs.knowledge.personaPackDirOverride = kbPack
+
+        // —— 守卫 18: 扫描不越界 ——
+        let kdocs = KnowledgeBaseScan.docs(root: kbLib)
+        let krels = kdocs.map(\.relativePath)
+        check(krels == krels.sorted(), "T-KB 扫描结果按相对路径排序 (确定性 = 前缀稳定的前提)")
+        check(["a.md", "b.txt", "c.html", "d.htm"].allSatisfy(krels.contains),
+              "T-KB 守卫 18: md/txt/html/htm 都收 (实测 \(krels))")
+        check(!["e.pdf", "f.json", "g.png"].contains(where: krels.contains),
+              "T-KB 守卫 18: 非文档格式不收 (pdf/json/png)")
+        check(!krels.contains(".hidden.md"), "T-KB 守卫 18: 隐藏项 (. 开头) 不收")
+        check(!krels.contains("node_modules/dep.md"), "T-KB 守卫 18: node_modules 不收")
+        check(!krels.contains("DerivedData/out.md"), "T-KB 守卫 18: DerivedData 不收")
+        check(!krels.contains(".build/x.md") && !krels.contains(".git/y.md"),
+              "T-KB 守卫 18: .build / .git 不收 (一挂就是代码仓库时它们能占掉大半个索引)")
+        check(krels.contains("sub1/s1.md") && krels.contains("sub1/s2.txt"),
+              "T-KB 守卫 18: 第 2 层收")
+        check(krels.contains("sub2/sub3/s3.md"),
+              "T-KB 守卫 18: 第 3 层收 —— 「递归 3 层」的口径就在这一条与下一条上")
+        check(!krels.contains("sub2/sub3/sub4/s4.md"),
+              "T-KB 守卫 18: **第 4 层不收** (差一层就会有人说「我明明放进去了」)")
+        check(kdocs.first { $0.relativePath == "sub2/sub3/s3.md" }?.depth == 3,
+              "T-KB 深度口径: 根下直接文件 = 第 1 层 ⇒ a/b/c.md = \(kdocs.first { $0.relativePath == "sub2/sub3/s3.md" }?.depth ?? -1)")
+        check(!krels.contains { $0.hasPrefix("linkdir/") },
+              "T-KB 守卫 18: 符号链接目录**不跟随** (跟了就会多出一份 linkdir/sub3/s3.md)")
+        check(krels.filter { $0 == "sub2/sub3/s3.md" }.count == 1,
+              "T-KB 自引用环既没让遍历挂死, 也没重复收 (深度上限是兜底, 链接判据是主判据)")
+
+        // —— 守卫 19: App 只读不写 (红线) ——
+        // 判据 = 目录快照 (文件集 + 大小 + mtime) 前后逐项相等。快照只覆盖**被挂载的库目录**:
+        // L1 落盘与 sqlite 不在其中, 否则测的就成了"别的子系统有没有写盘"。
+        func dirSnapshot(_ root: String) -> [String] {
+            var out: [String] = []
+            let fm = FileManager.default
+            func walk(_ dir: String, _ rel: String) {
+                for name in (try? fm.contentsOfDirectory(atPath: dir))?.sorted() ?? [] {
+                    let full = dir + "/" + name
+                    let attrs = try? fm.attributesOfItem(atPath: full)
+                    let isDir = (attrs?[.type] as? FileAttributeType) == .typeDirectory
+                    let size = (attrs?[.size] as? NSNumber)?.intValue ?? 0
+                    let mod = (attrs?[.modificationDate] as? Date)?.timeIntervalSince1970 ?? 0
+                    out.append("\(rel)\(name)|\(isDir ? "d" : "f")|\(size)|\(mod)")
+                    if isDir { walk(full, rel + name + "/") }
+                }
+            }
+            walk(root, "")
+            return out.sorted()
+        }
+        // —— 守卫 20: 描述必填 + 路径判据 + 重复挂载 ——
+        check(kbs.knowledge.addKnowledgeBase(path: kbLib, description: "MangoX 冒烟夹具库") == nil,
+              "T-KB 正常挂载成功 (返回 nil = 无拒绝; 描述一句就够 —— 它是「这是什么的资料」)")
+        try? FileManager.default.createDirectory(atPath: kbDir + "/other", withIntermediateDirectories: true)
+        try? "x".write(toFile: kbDir + "/other/n.md", atomically: true, encoding: .utf8)
+        try? "x".write(toFile: kbDir + "/afile.md", atomically: true, encoding: .utf8)
+        check(kbs.knowledge.addKnowledgeBase(path: kbLib, description: "   ") == .emptyDescription,
+              "T-KB 守卫 20: 空描述被拒 (静默回落到目录名 ⇒ 用户永远不会回来补一句真正有用的话)")
+        check(kbs.knowledge.addKnowledgeBase(path: kbDir + "/other",
+                                             description: String(repeating: "字", count: 201))
+                == .descriptionTooLong(limit: KnowledgeBase.descriptionLimit),
+              "T-KB 守卫 20: 超长描述被拒 (> \(KnowledgeBase.descriptionLimit) 字符)")
+        check(kbs.knowledge.addKnowledgeBase(path: kbDir + "/afile.md", description: "这是文件不是目录")
+                == .notADirectory,
+              "T-KB 挂载对象必须是**存在的目录** (是文件也不行)")
+        check(kbs.knowledge.addKnowledgeBase(path: kbLib, description: "重复挂载")
+                == .duplicatePath(existing: "lib"),
+              "T-KB 重复挂载被拒 —— 同一目录挂两次 = 索引里同一份资料出现两遍, 纯浪费每轮预算")
+        check(kbs.knowledge.addKnowledgeBase(path: kbLib + "/", description: "末尾斜杠")
+                == .duplicatePath(existing: "lib"),
+              "T-KB 末尾斜杠归一化后仍判重复 (`/a/b` 与 `/a/b/` 是同一个目录)")
+        check(kbs.knowledge.knowledgeBases.count == 1, "T-KB 被拒的都没落库 (实测 \(kbs.knowledge.knowledgeBases.count) 条)")
+        check(KnowledgeStore.normalizedBasePath(kbLib + "/") == kbLib
+                && KnowledgeStore.normalizedBasePath(kbLib) == kbLib,
+              "T-KB 路径标准化 = 展开 ~ + 去末尾斜杠, 且对规范形态是恒等变换")
+
+        // —— 守卫 19: App 只读不写 (红线) ——
+        // 判据 = 目录快照 (文件集 + 大小 + mtime) 前后逐项相等。**必须在挂载之后取**,
+        // 否则扫描压根没走这个目录, 断言是空跑 (那种绿什么也没证明)。
+        // 快照只覆盖被挂载的库目录: L1 落盘与 sqlite 不在其中, 否则测的就成了"别的子系统有没有写盘"。
+        let kbSnapBefore = dirSnapshot(kbLib)
+        _ = kbs.knowledge.knowledgeBaseScan()
+        _ = kbs.knowledge.buildInjection()
+        check(kbSnapBefore == dirSnapshot(kbLib),
+              "T-KB 守卫 19: 扫描前后目录快照**逐项相等** —— 不写入、不改名、不生成隐藏索引文件")
+
+        // —— 守卫 16 / 17: 索引段进块 + 段序 ——
+        _ = kbs.addKnowledge(title: "冒烟硬规", content: "硬规内容", scope: .global, projectId: nil,
+                             kind: .rule, layer: .always)
+        _ = kbs.addKnowledge(title: "冒烟事实", content: "事实内容", scope: .global, projectId: nil,
+                             kind: .fact, layer: .always)
+        let injK = kbs.knowledge.buildInjection()
+        let kblk = injK.text ?? ""
+        check(kblk.contains("[知识库] lib"),
+              "T-KB 守卫 16: 挂了启用的库 ⇒ 索引段在注入块内")
+        check(kblk.contains("路径: " + kbLib),
+              "T-KB 索引给**绝对路径** —— 只给文件名等于给了 agent 一张没有馆址的卡片")
+        check(kblk.contains("说明: MangoX 冒烟夹具库"),
+              "T-KB 索引带**描述** (只有文件名 = 给 agent 一串没有语义的字符串)")
+        check(kblk.contains("  sub1/s1.md"),
+              "T-KB 深文件用**相对路径** (深度信息本身有价值)")
+        check(injK.indexCount == 1 && injK.indexChars > 0 && injK.indexSkipped.isEmpty,
+              "T-KB 索引段计数正常 (实测 \(injK.indexCount) 库 / \(injK.indexChars) 字)")
+        check(injK.indexSilentlyDropped.isEmpty,
+              "T-KB 守卫 16 自检⑥: 没有库既不在索引里、也不是因预算缺席")
+        // 段序**靠偏移断言**, 不复用组装顺序 (守卫 17 的造反例只有这条会红)
+        func koff(_ s: String) -> Int {
+            let r = (kblk as NSString).range(of: s)
+            return r.location == NSNotFound ? -1 : r.location
+        }
+        let oPersona = koff("我是星期五。"), oStable = koff("- [硬规] 冒烟硬规")
+        let oIndex = koff("[知识库] lib"), oVolatile = koff("- [事实] 冒烟事实")
+        check(oPersona >= 0 && oStable >= 0 && oIndex >= 0 && oVolatile >= 0,
+              "T-KB 夹具: 四段都在块内 (persona \(oPersona) / 稳定 \(oStable) / 索引 \(oIndex) / 易变 \(oVolatile))")
+        check(oPersona < oStable && oStable < oIndex && oIndex < oVolatile,
+              "T-KB 守卫 17: 段序 = persona < 稳定段 < **索引段** < 易变段 (前缀稳定性的支点)")
+        check(!injK.segmentOrderViolated, "T-KB 守卫 17 自检同判 (比偏移, 不复用组装顺序)")
+        check(injK.missingStable.isEmpty && injK.unaccountedResident.isEmpty
+                && !injK.personaNotAtOffsetZero,
+              "T-KB 加了索引段之后, 原有的自检 ①③⑤ 仍然全绿 (组装改动没伤到旧不变量)")
+        check(!kbs.knowledge.injectionWarnings.contains { $0.kind == .indexSkipped },
+              "T-KB 索引装得下时不抛这条红条 (自检只报真问题, 不报「一切正常」)")
+
+        // —— 守卫 16 后半 + 守卫 12 扩展: 停用 ⇒ 整段消失, 且不触碰 persona / 稳定段字节 ——
+        let personaBytesBefore = injK.personaText
+        let stableBytesBefore = injK.stableChars
+        if let libId = kbs.knowledge.knowledgeBases.first?.id {
+            kbs.knowledge.toggleKnowledgeBase(id: libId)
+            let injOff = kbs.knowledge.buildInjection()
+            check(injOff.indexText.isEmpty && !(injOff.text ?? "").contains("[知识库]"),
+                  "T-KB 守卫 16: 停用 ⇒ 索引段**整段消失** (索引是给模型看的, 没有「灰」这个状态)")
+            check(injOff.personaText == personaBytesBefore && injOff.stableChars == stableBytesBefore,
+                  "T-KB 守卫 12 扩展: 摘库**不得触碰** persona 与稳定段字节 (否则一挂库就打断 prompt cache)")
+            check(injOff.onDemandCount == injK.onDemandCount,
+                  "T-KB 摘库不动条目计数 (两套东西不互相污染)")
+            kbs.knowledge.toggleKnowledgeBase(id: libId)
+            check(kbs.knowledge.buildInjection().indexChars > 0, "T-KB 重新启用 ⇒ 索引段回来 (开关可逆)")
+        } else {
+            check(false, "T-KB 夹具: 挂载记录存在")
+        }
+
+        // ===== P11.4b: 索引预览同源 / 现算无缓存 / pack 里 ondemand 文件必须响 =====
+
+        // —— 预览同源: "逐字就是 agent 收到的那段" 必须可证伪 ——
+        // 视图的预览调的是 `KnowledgeBaseScan.indexBlock`。但"两边调了同一个函数"是**读代码**得出的
+        // 结论, 不是判据 —— 代码一改它就失效, 而且失效时不会变红。所以断言它的**可观察后果**:
+        // 每库单独算出来的块必须**逐字出现在**拼好的索引段里, 且 token 出现次数 == 进索引的库数。
+        // 若有人另写一份格式化逻辑 (或某个库在拼接时被吃掉), 这两条就红。
+        if let kSeg = kbs.knowledge.knowledgeIndexSegment() {
+            let kBlocks = kbs.knowledge.knowledgeBaseScan()
+                .compactMap { KnowledgeBaseScan.indexBlock(for: $0.base, docs: $0.docs) }
+            check(kBlocks.count == 1,
+                  "P11.4b 夹具: 恰好一个库有块 (另一个是空的 L1 目录 —— 空库不注入)")
+            check(kBlocks.allSatisfy { kSeg.text.contains($0.text) },
+                  "P11.4b 预览同源: 每库的块**逐字**出现在注入段里 (预览说 12 个文件、agent 看到 9 个 = 这里红)")
+            check(kSeg.text.components(separatedBy: KnowledgeBaseScan.token).count - 1 == kSeg.count,
+                  "P11.4b 预览同源: token 出现次数 == 进索引的库数 (少了 = 某个库被静默拼丢)")
+        } else {
+            check(false, "P11.4b 夹具: 索引段存在")
+        }
+
+        // —— §6.4b-3: 在 App 外改目录 ⇒ 下一次组装就带上 (现算, 无缓存) ——
+        mk("later.md")
+        check((kbs.knowledge.buildInjection().text ?? "").contains("  later.md"),
+              "P11.4b 现算无缓存: App 外新增的文件, 下一次组装**立刻**进索引 (磁盘为准)")
+        try? FileManager.default.removeItem(atPath: kbLib + "/later.md")
+        check(!(kbs.knowledge.buildInjection().text ?? "").contains("  later.md"),
+              "P11.4b 现算无缓存: 删掉的文件下一轮就不在了 (不是「只增不减」的缓存)")
+
+        // —— §3.2: pack 里 `layer: ondemand` 的文件必须**响** ——
+        // 它不进 prompt (对), 但它**也进不了索引** (pack 目录不是任何库的扫描根 —— L1 落盘目录是它的
+        // **子目录**) ⇒ 对模型彻底隐形。不点名的话用户看不到任何红灯, 这就是 PROJECTS.md 那个洞的形状。
+        try? "---\nsummary: \"按需资料\"\nlayer: ondemand\n---\n按需正文\n".write(
+            toFile: kbPack + "/NOTES.md", atomically: true, encoding: .utf8)
+        // ⚠️ 必须走 `reloadPersonaPackAndRefresh()` —— **不是** `buildInjection()`。
+        // `buildInjection()` 只**返回**结果, 不写 `lastInjection`; 而 `injectionWarnings` 派生自
+        // `lastInjection` ⇒ 少这一步的话, 下面两条告警断言测的是**上一个快照**:
+        // 新增那条会假红 (红得莫名其妙), "移走后消失" 那条会**假绿** (它本来就还没出现过)。
+        // 这个入口也正是生产路径: "用户在 App 外改了人格文件" 就走它 (见它的文档注释)。
+        kbs.knowledge.reloadPersonaPackAndRefresh()
+        let injOD = kbs.knowledge.buildInjection()
+        check(injOD.onDemandPackFiles == ["NOTES.md"],
+              "T-KB §3.2: pack 里的 ondemand 文件被**点名** (实测 \(injOD.onDemandPackFiles))")
+        check(kbs.knowledge.injectionWarnings.contains { $0.kind == .onDemandPackFiles },
+              "T-KB §3.2: 它产生一条告警 —— 隐形的东西必须有红灯 (否则就是静默缺席)")
+        check(!(injOD.text ?? "").contains("按需正文"),
+              "T-KB §3.2: 告警**不改变注入行为** —— 它照旧不进 prompt")
+        check(!(injOD.text ?? "").contains("NOTES.md"),
+              "T-KB §3.2: 它也**不在索引里** —— 这正是必须告警的理由 (对模型彻底隐形)")
+        check(injOD.personaText == personaBytesBefore,
+              "T-KB §3.2: 加一个 ondemand 文件**不动** persona 段字节 (当 always 处理就会让非人格内容挤进人格段)")
+        // 先把"在的时候**确实报了**"抓下来 —— 只断言"移走后消失"是**空断言**: 一个从来不发火的
+        // 告警也能过。两半合起来才是判据 (同「门自己绿着」的纪律)。
+        let warnedWhilePresent = kbs.knowledge.injectionWarnings.contains { $0.kind == .onDemandPackFiles }
+        try? FileManager.default.removeItem(atPath: kbPack + "/NOTES.md")
+        // 上面那步已刷 lastInjection (injectionWarnings 是读它的派生属性), 别再补 buildInjection()
+        kbs.knowledge.reloadPersonaPackAndRefresh()
+        check(warnedWhilePresent
+                && !kbs.knowledge.injectionWarnings.contains { $0.kind == .onDemandPackFiles },
+              "T-KB §3.2 双向: 文件在时**报了** (实测 warned=\(warnedWhilePresent)), 移走后消失")
+
+        // —— 每库上限: **折省略而非静默截断** ——
+        let manyDir = kbDir + "/many"
+        try? FileManager.default.createDirectory(atPath: manyDir, withIntermediateDirectories: true)
+        for i in 0..<200 {
+            try? "x".write(toFile: manyDir + String(format: "/f%03d.md", i),
+                           atomically: true, encoding: .utf8)
+        }
+        let manyDocs = KnowledgeBaseScan.docs(root: manyDir)
+        check(manyDocs.count == 200, "T-KB 夹具: 200 个文件 (实测 \(manyDocs.count))")
+        if let mb = KnowledgeBaseScan.indexBlock(
+            for: KnowledgeBase(id: "t1", path: manyDir, description: "上限夹具"), docs: manyDocs) {
+            check(mb.shown == KnowledgeBaseScan.maxLinesPerBase && mb.omitted == 80,
+                  "T-KB 每库上限 \(KnowledgeBaseScan.maxLinesPerBase) 行 (实测 \(mb.shown) 行 + 另 \(mb.omitted) 个)")
+            check(mb.text.contains("… 另 80 个文件"),
+                  "T-KB **折省略而非静默截断** —— 不写「另 N 个」, agent 会把「索引里没有」读成「资料里没有」")
+            check(mb.chars <= KnowledgeBaseScan.maxCharsPerBase,
+                  "T-KB 字符兜底也没破 (\(mb.chars) ≤ \(KnowledgeBaseScan.maxCharsPerBase))")
+        } else {
+            check(false, "T-KB 上限夹具: indexBlock 非 nil")
+        }
+        // 字符兜底: 文件名很长时行数上限拦不住 ⇒ 从尾部继续丢
+        let longDir = kbDir + "/long"
+        try? FileManager.default.createDirectory(atPath: longDir, withIntermediateDirectories: true)
+        for i in 0..<60 {
+            let long = String(format: "n%02d-", i) + String(repeating: "很长的文件名", count: 9)
+            try? "x".write(toFile: longDir + "/" + long + ".md", atomically: true, encoding: .utf8)
+        }
+        let longDocs = KnowledgeBaseScan.docs(root: longDir)
+        if let lb = KnowledgeBaseScan.indexBlock(
+            for: KnowledgeBase(id: "t2", path: longDir, description: "长名夹具"), docs: longDocs) {
+            check(lb.shown + lb.omitted == longDocs.count,
+                  "T-KB 字符兜底: 「显示 + 省略 = 总数」恒等 (\(lb.shown) + \(lb.omitted) = \(longDocs.count))")
+            check(lb.chars <= KnowledgeBaseScan.maxCharsPerBase && lb.shown < longDocs.count,
+                  "T-KB 字符兜底真的生效 (\(lb.chars) ≤ \(KnowledgeBaseScan.maxCharsPerBase), 只显示 \(lb.shown)/\(longDocs.count))")
+            check(lb.text.contains("… 另"), "T-KB 字符兜底同样折省略")
+        } else {
+            check(false, "T-KB 长名夹具: indexBlock 非 nil")
+        }
+
+        // —— Q13: L1 落盘目录自动挂成**内置库** ——
+        // 为什么必须有: `layer=ondemand` 的条目落成 L1 文件之后, **除 SOUL.md 里那句手写文字外
+        // 没有任何机制告诉 agent 它们存在** (P11.1 遗留的真真空 —— "不进 prompt"是对的, 缺的是"进索引")。
+        _ = kbs.addKnowledge(title: "按需资料", content: "只给索引, 正文按需读",
+                             scope: .global, projectId: nil, kind: .fact, layer: .ondemand)
+        let gid = KnowledgeStore.builtinGlobalID
+        check(kbs.knowledge.allKnowledgeBases.contains { $0.id == gid && $0.isBuiltin },
+              "T-KB Q13: L1 落盘目录自动挂成内置库 (跨项目 \(kbs.knowledge.l1RootOverride ?? "")/global)")
+        let injG = kbs.knowledge.buildInjection()
+        if let od = kbs.knowledgeItems.first(where: { $0.title == "按需资料" }) {
+            let l1Name = KnowledgeStore.l1FileName(for: od)
+            check(injG.indexText.contains(l1Name),
+                  "T-KB 内置库索引里出现按需条目的 L1 文件 (\(l1Name)) —— 「ondemand 条目不再隐形」的唯一证据")
+            check(!(injG.text ?? "").contains("只给索引, 正文按需读"),
+                  "T-KB 按需条目**正文不进 prompt** (守卫 6 没被索引段破坏 —— 进索引的只是文件名)")
+        } else {
+            check(false, "T-KB 夹具: 按需条目存在")
+        }
+        // 内置库: 存在不归用户配置, **是否生效**归用户配置
+        kbs.knowledge.setBuiltinKnowledgeBaseEnabled(id: gid, enabled: false)
+        check(!kbs.knowledge.buildInjection().indexText.contains("[知识库] global"),
+              "T-KB 守卫 16: 内置库可**停用** (一段会话里它成了噪声源是正当诉求)")
+        check(kbs.knowledge.knowledgeBaseScan().first { $0.base.id == gid }?.base.enabled == false,
+              "T-KB 内置库的停用**真的反映到扫描列表** —— 读 `allKnowledgeBases` 会让这个开关**静默失效**")
+        kbs.knowledge.setBuiltinKnowledgeBaseEnabled(id: gid, enabled: true)
+        check(kbs.knowledge.buildInjection().indexText.contains("[知识库] global"),
+              "T-KB 内置库可重新启用 (开关可逆)")
+        kbs.knowledge.deleteKnowledgeBase(id: gid)
+        check(kbs.knowledge.allKnowledgeBases.contains { $0.id == gid },
+              "T-KB 内置库**不可删** —— 删了下次现算又回来, 那种「删了又出现」的按钮比没有按钮更坏")
+
+        // —— 预算待遇 (Q11 方案 A): 装不下 ⇒ 整段缺席 + 点名每库占多少字, 且**不阻断别的段** ——
+        let kb2Dir = fixtureDir("kb2")
+        let kb2Lib = kb2Dir + "/lib2"
+        try? FileManager.default.createDirectory(atPath: kb2Lib, withIntermediateDirectories: true)
+        for i in 0..<5 {
+            try? "x".write(toFile: kb2Lib + "/d\(i).md", atomically: true, encoding: .utf8)
+        }
+        let kbs2 = ChatStore(transport: MockTransport(), dbPath: kb2Dir + "/kb2.db",
+                             managedExtensionsDir: kb2Dir + "/ext")
+        kbs2.mailbox.stopScheduler()
+        kbs2.knowledge.l1RootOverride = kb2Dir + "/l1"
+        kbs2.knowledge.personaPackDirOverride = kb2Dir + "/pack"   // 空 pack ⇒ persona 0 字, 算式干净
+        _ = kbs2.knowledge.addKnowledgeBase(path: kb2Lib, description: "预算夹具")
+        if let seg2 = kbs2.knowledge.knowledgeIndexSegment() {
+            // 用稳定段条目 (永不降级) 吃掉预算, 直到**恰好装不下索引**。这样测的是真预算路径,
+            // 而不是把 `Tune.knowledgeTotalCharLimit` 改小 (那会同时改掉被测对象)。
+            var guardN = 0
+            while guardN < 100 {
+                let left = Tune.knowledgeTotalCharLimit - kbs2.knowledge.buildInjection().stableChars
+                if left <= seg2.chars { break }
+                let title = "占位\(guardN)"
+                let want = min(15000, left - seg2.chars + 1)
+                guard want > title.count + 1 else { break }
+                _ = kbs2.addKnowledge(title: title,
+                                      content: String(repeating: "x", count: want - title.count),
+                                      scope: .global, projectId: nil, kind: .rule, layer: .always)
+                guardN += 1
+            }
+            // 再放一条**小易变条**: 索引缺席不该连累它 (Q11 方案 A 的关键 —— 缺席是局部的)
+            _ = kbs2.addKnowledge(title: "易变小条", content: "短", scope: .global, projectId: nil,
+                                  kind: .fact, layer: .always)
+            let injX = kbs2.knowledge.buildInjection()
+            let leftX = Tune.knowledgeTotalCharLimit - injX.personaChars - injX.stableChars
+            check(leftX < seg2.chars,
+                  "T-KB 夹具: 预算确实装不下索引 (剩 \(leftX) < 索引 \(seg2.chars))")
+            check(injX.indexText.isEmpty && injX.indexChars == 0,
+                  "T-KB Q11-A: 装不下 ⇒ **整段缺席** (宁缺勿残 —— 残缺的地图会让 agent 以为「资料只有这些」)")
+            check(injX.indexSkipped.contains { $0.name == "lib2" && $0.chars > 0 },
+                  "T-KB Q11-A: 缺席是**响的** —— 点名每库占多少字 (实测 \(injX.indexSkipped.map { "\($0.name) \($0.chars)" }))")
+            check(kbs2.knowledge.injectionWarnings.contains { $0.kind == .indexSkipped },
+                  "T-KB Q11-A: 组装告警里有 `indexSkipped` (静默缺席才是要根除的那个病)")
+            check(injX.volatileCount == 1,
+                  "T-KB Q11-A: 索引缺席**不阻断**其他段 (易变小条照常进, 实测 \(injX.volatileCount))")
+            check(injX.missingStable.isEmpty && !injX.segmentOrderViolated,
+                  "T-KB 索引缺席时自检仍全绿 (① 稳定段一条不少 / ⑦ 段序)")
+        } else {
+            check(false, "T-KB 预算夹具: knowledgeIndexSegment 非 nil")
+        }
 
         report()    }
 }

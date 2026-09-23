@@ -23,38 +23,43 @@ struct MailProviderPreset: Identifiable, Equatable {
     var isCustom: Bool { id == Self.customId }
     static let customId = "custom"
 
-    static let netease163 = MailProviderPreset(
+    // ⚠️ 下面全部写成**计算属性** (`static var` + 花括号), 不可用 `static let`:
+    // `authNote` 是 `L()` 的结果, 而 `static let` 是**懒加载的一次性求值** —— 首次访问就把当时
+    // 语言的译文冻住, 之后切界面语言不再跟随 (2026-09-23 与 `PersonaRowText` 同批修)。
+    // `label` 不在此列: 它是**裸中文 key**, 由显示点 `LK()` 取词 (同 `DayBucket.rawValue` 的形态)。
+    static var netease163: MailProviderPreset { MailProviderPreset(
         id: "163", label: "网易 163 邮箱", domains: ["163.com"],
         imapHost: "imap.163.com:993", smtpHost: "smtp.163.com:465",
         authNote: L("网页版邮箱「设置 → IMAP/SMTP」开启服务, 手机验证后得到授权码 —— 用它当密码, 不是登录密码"),
-        helpURL: "https://help.mail.163.com/")
+        helpURL: "https://help.mail.163.com/") }
 
-    static let netease126 = MailProviderPreset(
+    static var netease126: MailProviderPreset { MailProviderPreset(
         id: "126", label: "网易 126 邮箱", domains: ["126.com"],
         imapHost: "imap.126.com:993", smtpHost: "smtp.126.com:465",
         authNote: L("网页版邮箱「设置 → IMAP/SMTP」开启服务, 手机验证后得到授权码 —— 用它当密码, 不是登录密码"),
-        helpURL: "https://help.mail.163.com/")
+        helpURL: "https://help.mail.163.com/") }
 
-    static let qq = MailProviderPreset(
+    static var qq: MailProviderPreset { MailProviderPreset(
         id: "qq", label: "QQ 邮箱", domains: ["qq.com", "foxmail.com"],
         imapHost: "imap.qq.com:993", smtpHost: "smtp.qq.com:465",
         authNote: L("网页版邮箱「设置 → 账户」开启 IMAP/SMTP 服务, 短信验证后得到授权码 —— 用它当密码, 不是登录密码"),
-        helpURL: "https://service.mail.qq.com/")
+        helpURL: "https://service.mail.qq.com/") }
 
-    static let aliyun = MailProviderPreset(
+    static var aliyun: MailProviderPreset { MailProviderPreset(
         id: "aliyun", label: "阿里云邮箱", domains: ["aliyun.com"],
         imapHost: "imap.mxhichina.com:993", smtpHost: "smtp.mxhichina.com:465",
         authNote: L("网页版邮箱「设置 → 客户端设置」开启 IMAP/SMTP, 生成客户端专用密码 —— 用它当密码, 不是登录密码"),
-        helpURL: "https://mail.aliyun.com/")
+        helpURL: "https://mail.aliyun.com/") }
 
     /// 兜底: host 留空由用户手填 (其他服务商 / 自建)。
-    static let custom = MailProviderPreset(
+    static var custom: MailProviderPreset { MailProviderPreset(
         id: customId, label: "自定义", domains: [],
         imapHost: "", smtpHost: "",
         authNote: L("手动填写 IMAP / SMTP 主机 (含端口, 如 imap.example.com:993); 同样须用授权码或客户端专用密码"),
-        helpURL: nil)
+        helpURL: nil) }
 
-    static let all: [MailProviderPreset] = [netease163, netease126, qq, aliyun]
+    /// 也必须是计算属性 —— 写成 `static let` 会把**上面那几个实例**在首次访问时一起冻住。
+    static var all: [MailProviderPreset] { [netease163, netease126, qq, aliyun] }
     /// UI 选择器顺序: 4 个预设 + 自定义兜底。
     static var allWithCustom: [MailProviderPreset] { all + [custom] }
 

@@ -15,14 +15,25 @@ MangoX 本地化「接线」扫描器 —— 词表覆盖 ≠ 接线正确
 判据: 取字面量**开引号之前同一行**的前缀, 看它结尾是否匹配本地化汇聚点 (SINK)。
 行级启发式不可避免有误差 —— 所以本脚本把可疑项**分类**打出来, 由人分诊, 而不是自动改。
 
+本文件管**两条**判据 (都是"取词到底有没有生效", 但失效方式不同):
+
+  ① `可疑未接线字面量` —— 取词**根本没发生**: 字面量没落在汇聚点上, 切英文后照旧显示中文。
+  ② `冻结取词` —— 取词**只发生了一次**: `L()` / `LK()` 的结果被存进**存储属性**
+     (`static let` / 文件级 `let`), 首次访问就把当时语言的译文冻住, 之后切语言不再跟随。
+     安全形态 = 计算属性 (`static var x: T { L(…) }`) 或函数体局部变量。
+     2026-09-23 boss 实测触发 (英文模式下常驻行标题后半句仍是中文) —— 而 `CodexTheme` 里
+     早就写过这条约定的注释却仍被违反 ⇒ **注释不是门禁**, 所以补了这一条。
+
 用法:
   python3 scripts/l10n/scan_wiring.py              # 打印可疑清单 (按文件分组)
-  python3 scripts/l10n/scan_wiring.py --check      # 门禁: 有可疑项则退出码 1
+  python3 scripts/l10n/scan_wiring.py --check      # 门禁: 两类判据任一有毒则退出码 1
   python3 scripts/l10n/scan_wiring.py --only FILE  # 只看某文件/目录前缀
   python3 scripts/l10n/scan_wiring.py --explain    # 打印各类别的含义
 
 真源: 与 gen_strings.py 共用排除规则 (EXCLUDE_FILES / EXCLUDE_PAT / EXCLUDE_LINE /
-LOG_KEY / is_regex_key), 保证两台门看的字面量集合一致。
+LOG_KEY / is_regex_key) 与**唯一的注释剥离器** `strip_line_comment`, 保证两台门看的
+字面量集合一致 —— 各写一份的实现迟早分叉 (本文件曾自带一份, gen_strings 用裸 `split('//')`,
+于是 5 条 `//` 开头的文案在词表门里静默失踪)。
 """
 
 import os
@@ -33,7 +44,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from gen_strings import (  # noqa: E402
     APP, CJK, EXCLUDE_FILES, EXCLUDE_LINE, EXCLUDE_PAT, LOG_KEY, ROOT,
-    is_regex_key, scan_literals, to_format_key,
+    is_regex_key, scan_literals, strip_line_comment, to_format_key,
 )
 
 ALLOW_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'wiring_allow.txt')
@@ -94,6 +105,14 @@ SUSPECT_KINDS = [
 INLINE_BREAK = re.compile(r'(?<![=!<>])=(?!=)|\breturn\b|\bcase\b')
 
 EXPLICIT_LOCALIZERS = {'L', 'LK', 'NSLocalizedString', 'localizedString'}
+
+# ── 存储属性声明 (供「冻结取词」判据用) ──────────────────────────────────────
+#
+# 访问修饰符/`static`/`lazy` 等前缀可有可无, 关键是拿到 `let`/`var` 与变量名。
+STORAGE_DECL = re.compile(
+    r'^(\s*)(?:(?:private|fileprivate|public|internal|open|final|static|class|nonisolated|lazy)\s+)*'
+    r'(let|var)\s+(\w+)')
+
 
 # 系统自带的、有 `init(_ key: LocalizedStringKey, …)` 重载的 API。
 SINK_SYSTEM = {
@@ -271,36 +290,6 @@ def analyze(code, start, sinks):
     return False, 'OTHER'
 
 
-def strip_line_comment(code):
-    """去行尾注释 —— 但**不能**用 `split('//')` (会切坏 `"https://…"`)。"""
-    out = []
-    in_str = False
-    escaped = False
-    i = 0
-    while i < len(code):
-        c = code[i]
-        if in_str:
-            out.append(c)
-            if escaped:
-                escaped = False
-            elif c == '\\':
-                escaped = True
-            elif c == '"':
-                in_str = False
-            i += 1
-            continue
-        if c == '"':
-            in_str = True
-            out.append(c)
-            i += 1
-            continue
-        if c == '/' and i + 1 < len(code) and code[i + 1] == '/':
-            break
-        out.append(c)
-        i += 1
-    return ''.join(out)
-
-
 def load_allow():
     """接线豁免名单: 每行 `相对路径|字面量` (不含注释/空行)。
 
@@ -337,6 +326,64 @@ def embedded_ranges(text):
         ranges.append((start, end))
         i = end
     return ranges
+
+
+def frozen_lookups():
+    """「冻结取词」—— `L()` / `LK()` 的结果被存进**存储属性**, 取词只发生一次。
+
+    为什么单列一类 (2026-09-23 boss 实测: 英文模式下常驻行标题后半句仍是中文):
+    `static let` / 文件级 `let` 是**懒加载的一次性求值**, 首次访问就把当时语言的译文冻住,
+    之后切界面语言不再跟随。而同一条 UI 上"每次调用重算"的部分会正常跟随 ⇒ 表现为
+    **一半跟随、一半不跟随**, 看起来像随机的脏字符串。
+
+    约定本来只是 `CodexTheme` 里的一句注释 —— **注释不是门禁, 所以又被违反了**。
+    这条判据能比人眼可靠: 判据是**存储形态**, 不依赖作者记不记得。
+
+    安全形态 (不报):
+      · 计算属性 `static var x: T { L(…) }`      —— 每次访问重算
+      · 函数体内的局部变量                        —— 每次调用重算
+    局限 (承认): `static let all = [netease163, …]` 这种**间接**捕获 (本身没有 `L(`,
+    冻住的是被引用的实例) 抓不到 —— 修的时候要连着看一层。
+    """
+    found = []
+    for dirpath, _, filenames in os.walk(APP):
+        for name in sorted(filenames):
+            if not name.endswith('.swift'):
+                continue
+            full = os.path.join(dirpath, name)
+            rel = os.path.relpath(full, ROOT)
+            lines = open(full, encoding='utf-8').read().split('\n')
+            for i, line in enumerate(lines):
+                code = strip_line_comment(line)
+                m = STORAGE_DECL.match(code)
+                if not m:
+                    continue
+                indent, var_kind, var_name = m.group(1), m.group(2), m.group(3)
+                is_static = bool(re.search(r'\bstatic\b', code))
+                if indent and not is_static:
+                    continue                      # 函数体局部变量: 每次调用重算
+                rest = code[m.end():].rstrip()
+                # 计算属性 = `{` 出现在任何 `=` 之前 (无 `=` 也算)
+                brace, eq = rest.find('{'), rest.find('=')
+                if brace >= 0 and (eq < 0 or brace < eq):
+                    continue
+                if re.search(r'\b(?:L|LK)\s*\(', _decl_body(lines, i)):
+                    found.append((rel, i + 1, 'static' if is_static else '文件级', var_name))
+    return found
+
+
+def _decl_body(lines, start, limit=30):
+    """一条声明的完整文本: 从声明行起, 直到括号配平 (含跨行实参)。"""
+    seg, depth = [], 0
+    for j in range(start, min(start + limit, len(lines))):
+        cur = lines[j]
+        seg.append(cur)
+        depth += cur.count('(') + cur.count('[') - cur.count(')') - cur.count(']')
+        if j == start and depth <= 0 and not cur.rstrip().endswith('='):
+            break
+        if j > start and depth <= 0:
+            break
+    return '\n'.join(seg)
 
 
 def suspects():
@@ -390,6 +437,9 @@ def main():
         print('可疑类别 (越靠前越确定「必须加 L()」):')
         for kind, _, desc in SUSPECT_KINDS:
             print(f'  {kind:14s} {desc}')
+        print('\n另有第二类判据「冻结取词」: L()/LK() 落在**存储属性**里')
+        print('  (static let / 文件级 let) —— 首次访问求值一次, 切语言不再跟随。')
+        print('  安全形态: 计算属性 static var x: T { L(…) } / 函数体局部变量。')
         print('\n豁免名单: scripts/l10n/wiring_allow.txt (`相对路径|字面量`)')
         return 0
 
@@ -416,8 +466,18 @@ def main():
     if total == 0:
         print('OK - 全部含汉字字面量都落在本地化汇聚点上')
 
-    if '--check' in args and total:
-        print(f'\nFAIL - {total} 处疑似未接线', file=sys.stderr)
+    frozen = frozen_lookups()
+    if only:
+        frozen = [f for f in frozen if f[0].startswith(only)]
+    print(f'\n冻结取词 (存储属性里缓存 L()/LK()): {len(frozen)}')
+    for rel, lineno, shape, var_name in frozen:
+        print(f'   {rel}:{lineno}  [{shape} {var_name}]  ← 改成计算属性 (static var + 花括号)')
+    if not frozen:
+        print('OK - 取词都在每次求值的位置 (计算属性 / 函数体)')
+
+    bad = total + len(frozen)
+    if '--check' in args and bad:
+        print(f'\nFAIL - 疑似未接线 {total} 处 + 冻结取词 {len(frozen)} 处', file=sys.stderr)
         return 1
     return 0
 

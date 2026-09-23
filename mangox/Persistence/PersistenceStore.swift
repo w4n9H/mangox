@@ -94,6 +94,40 @@ final class PersistenceStore {
             updated_at        REAL NOT NULL
         )
         """)
+        // P11.1: 注入与记忆 —— 条目分类 / 层 / 优先级 / 身份键 / 教训触发面 / 敏感档 / 命中信号
+        addColumnIfMissing("knowledge_items", "kind", "TEXT NOT NULL DEFAULT 'fact'")
+        addColumnIfMissing("knowledge_items", "layer", "TEXT NOT NULL DEFAULT 'ondemand'")
+        addColumnIfMissing("knowledge_items", "priority", "INTEGER NOT NULL DEFAULT 0")
+        addColumnIfMissing("knowledge_items", "key", "TEXT")
+        addColumnIfMissing("knowledge_items", "trigger", "TEXT")
+        addColumnIfMissing("knowledge_items", "counterfactual", "TEXT")
+        // `sensitivity` 已于 2026-09-22 (P11.2c) 停用 —— **列保留, 代码不再读写它**。
+        // 保留而不 DROP 是**有意留下的妥协, 不是遗漏**, 理由两条:
+        //   ① 可回滚: 旧代码会 `SELECT sensitivity`; 若新建的库没这列, 回滚即崩 (而旧库有);
+        //   ② DROP COLUMN 不可逆, 换来的只是一列 TEXT 的空间。
+        // 它在 DB 里是死重量, 在代码里是活的注释 —— 看到它别"顺手清掉", 先读这段。
+        addColumnIfMissing("knowledge_items", "sensitivity", "TEXT NOT NULL DEFAULT 'normal'")
+        addColumnIfMissing("knowledge_items", "hit_count", "INTEGER NOT NULL DEFAULT 0")
+        addColumnIfMissing("knowledge_items", "last_hit_at", "REAL")
+        // `key` 全局唯一 (设计上不允许冲突)。SQLite 的 UNIQUE 索引允许多个 NULL ⇒ 无 key 的存量条目不受影响。
+        try db.run("CREATE UNIQUE INDEX IF NOT EXISTS idx_knowledge_key ON knowledge_items(key)")
+        // P11.4: 知识库档 (第三载体) —— **只存路径 + 描述, 正文仍在磁盘上** (§3.4)。
+        // 幂等建表 ⇒ 老库升上来是空列表, 不需要迁移脚本 (同 `addColumnIfMissing` 的策略)。
+        // 内置库 (L1 落盘目录自动挂载) **不落这张表** —— 它由落盘目录决定, 每次现算,
+        // 落库就会出现"库删了但行还在"的幽灵。
+        try db.run("""
+        CREATE TABLE IF NOT EXISTS knowledge_bases (
+            id          TEXT PRIMARY KEY,
+            path        TEXT NOT NULL,             -- 目录绝对路径 (展开 ~ 后)
+            description TEXT NOT NULL,             -- 必填: 索引里那句"这是什么"
+            enabled     INTEGER NOT NULL DEFAULT 1,
+            created_at  REAL NOT NULL,
+            updated_at  REAL NOT NULL
+        )
+        """)
+        // 同一目录挂两次 = 索引里同一份资料出现两遍, 纯浪费每轮预算。**DB 层也挡一道**
+        // (纵深防御: store 层已先拦, 但手改 DB / 将来的导入器不走 UI)。
+        try db.run("CREATE UNIQUE INDEX IF NOT EXISTS idx_kb_path ON knowledge_bases(path)")
         try db.run("CREATE INDEX IF NOT EXISTS idx_events_session ON events(session_id, seq)")
         // P5.1: 自定义模型 (菜单自主 — 与 pi 目录条目的展示名解耦)
         try db.run("""
@@ -620,13 +654,19 @@ final class PersistenceStore {
     func loadKnowledge() throws -> [KnowledgeItem] {
         let rows = try db.query("""
             SELECT id, scope, project_id, title, content, source, origin_session_id,
-                   enabled, status, note, created_at, updated_at
+                   enabled, status, note, created_at, updated_at,
+                   kind, layer, priority, key, trigger, counterfactual,
+                   hit_count, last_hit_at
             FROM knowledge_items ORDER BY updated_at DESC
             """)
         return rows.compactMap { row in
             let scope: KnowledgeScope = text(row, "scope") == "project" ? .project : .global
             let source: KnowledgeSource = text(row, "source") == "session" ? .session : .manual
             let status: KnowledgeStatus = text(row, "status") == "pending" ? .pending : .active
+            // P11.1: 未知/缺失值一律回落缺省 (存量库补列后即为缺省值)
+            let kind = KnowledgeKind(rawValue: text(row, "kind")) ?? .fact
+            let layer = KnowledgeLayer(rawValue: text(row, "layer")) ?? .ondemand
+            let lastHit = double(row, "last_hit_at")
             return KnowledgeItem(
                 id: UUID(uuidString: text(row, "id")) ?? UUID(),
                 scope: scope,
@@ -639,32 +679,110 @@ final class PersistenceStore {
                 status: status,
                 note: text(row, "note").isEmpty ? nil : text(row, "note"),
                 createdAt: Date(timeIntervalSince1970: double(row, "created_at")),
-                updatedAt: Date(timeIntervalSince1970: double(row, "updated_at")))
+                updatedAt: Date(timeIntervalSince1970: double(row, "updated_at")),
+                kind: kind,
+                layer: layer,
+                priority: Int(int(row["priority"] ?? .null)),
+                key: text(row, "key").isEmpty ? nil : text(row, "key"),
+                trigger: text(row, "trigger").isEmpty ? nil : text(row, "trigger"),
+                counterfactual: text(row, "counterfactual").isEmpty ? nil : text(row, "counterfactual"),
+                hitCount: Int(int(row["hit_count"] ?? .null)),
+                lastHitAt: lastHit > 0 ? Date(timeIntervalSince1970: lastHit) : nil)
         }
     }
 
+    /// 写入条目。**按 id 冲突更新, 不用 INSERT OR REPLACE** —— P11.1 给 `key` 加了 UNIQUE 索引后,
+    /// REPLACE 的语义会因"撞 key"而**删掉另一条** (静默丢数据)。撞 key 必须报错 (store 层已先拦)。
     func upsertKnowledge(_ item: KnowledgeItem) throws {
+        // ⚠️ 参数数组单独成形并显式标注类型 —— 直接内联在 db.run(...) 里会让类型检查爆掉
+        // ("unable to type-check in reasonable time", 21 个混合 DBValue 实测踩过)。
+        //
+        // 用 `ON CONFLICT(id) DO UPDATE` 而非 `INSERT OR REPLACE`: 后者在**唯一约束冲突**时
+        // 是"删掉冲突行再插", 而 P11.1 给 `key` 加了 `UNIQUE`。诚实边界: 该场景目前**走不到**
+        // (写入期 `keyRejection` 已拦住 key 撞车), 所以这不是在修一个已可达的 bug ——
+        // 收益是**纵深防御**: 把"不会误删"从"靠上层校验"降级为"DB 层不可能"。
+        let params: [DBValue] = [
+            .text(item.id.uuidString),
+            .text(item.scope == .project ? "project" : "global"),
+            item.projectId.map { .text($0.uuidString) } ?? .null,
+            .text(item.title),
+            .text(item.content),
+            .text(item.source == .session ? "session" : "manual"),
+            item.originSessionId.map { .text($0.uuidString) } ?? .null,
+            .int(item.enabled ? 1 : 0),
+            .text(item.status == .pending ? "pending" : "active"),
+            item.note.map { .text($0) } ?? .null,
+            .real(item.createdAt.timeIntervalSince1970),
+            .real(item.updatedAt.timeIntervalSince1970),
+            .text(item.kind.rawValue),
+            .text(item.layer.rawValue),
+            .int(Int64(item.priority)),
+            item.key.map { .text($0) } ?? .null,
+            item.trigger.map { .text($0) } ?? .null,
+            item.counterfactual.map { .text($0) } ?? .null,
+            .int(Int64(item.hitCount)),
+            item.lastHitAt.map { .real($0.timeIntervalSince1970) } ?? .null,
+        ]
         try db.run("""
-            INSERT OR REPLACE INTO knowledge_items
+            INSERT INTO knowledge_items
             (id, scope, project_id, title, content, source, origin_session_id,
-             enabled, status, note, created_at, updated_at)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
-            """, [.text(item.id.uuidString),
-                  .text(item.scope == .project ? "project" : "global"),
-                  item.projectId.map { .text($0.uuidString) } ?? .null,
-                  .text(item.title),
-                  .text(item.content),
-                  .text(item.source == .session ? "session" : "manual"),
-                  item.originSessionId.map { .text($0.uuidString) } ?? .null,
-                  .int(item.enabled ? 1 : 0),
-                  .text(item.status == .pending ? "pending" : "active"),
-                  item.note.map { .text($0) } ?? .null,
-                  .real(item.createdAt.timeIntervalSince1970),
-                  .real(item.updatedAt.timeIntervalSince1970)])
+             enabled, status, note, created_at, updated_at,
+             kind, layer, priority, key, trigger, counterfactual, hit_count, last_hit_at)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            ON CONFLICT(id) DO UPDATE SET
+             scope = excluded.scope, project_id = excluded.project_id,
+             title = excluded.title, content = excluded.content,
+             source = excluded.source, origin_session_id = excluded.origin_session_id,
+             enabled = excluded.enabled, status = excluded.status, note = excluded.note,
+             created_at = excluded.created_at, updated_at = excluded.updated_at,
+             kind = excluded.kind, layer = excluded.layer, priority = excluded.priority,
+             key = excluded.key, trigger = excluded.trigger,
+             counterfactual = excluded.counterfactual,
+             hit_count = excluded.hit_count, last_hit_at = excluded.last_hit_at
+            """, params)
     }
 
     func deleteKnowledge(id: UUID) throws {
         try db.run("DELETE FROM knowledge_items WHERE id = ?", [.text(id.uuidString)])
+    }
+
+    // MARK: - Knowledge bases (P11.4 知识库档)
+
+    func loadKnowledgeBases() throws -> [KnowledgeBase] {
+        let rows = try db.query("""
+            SELECT id, path, description, enabled, created_at, updated_at
+            FROM knowledge_bases ORDER BY created_at
+            """)
+        return rows.compactMap { row in
+            let path = text(row, "path")
+            guard !path.isEmpty else { return nil }   // 路径空的行走不到任何事, 当脏数据跳过
+            return KnowledgeBase(id: text(row, "id"),
+                                 path: path,
+                                 description: text(row, "description"),
+                                 enabled: int(row["enabled"] ?? .null) == 1,
+                                 isBuiltin: false,
+                                 createdAt: Date(timeIntervalSince1970: double(row, "created_at")),
+                                 updatedAt: Date(timeIntervalSince1970: double(row, "updated_at")))
+        }
+    }
+
+    /// 插入或更新（同样不用 `INSERT OR REPLACE` —— 唯一索引冲突时它会**删掉另一行**, 见
+    /// `upsertKnowledge` 的说明; 这里唯一约束是 `path`, 撞了必须由 store 层先拒）。
+    func upsertKnowledgeBase(_ base: KnowledgeBase) throws {
+        try db.run("""
+            INSERT INTO knowledge_bases (id, path, description, enabled, created_at, updated_at)
+            VALUES (?,?,?,?,?,?)
+            ON CONFLICT(id) DO UPDATE SET
+             path = excluded.path, description = excluded.description,
+             enabled = excluded.enabled, updated_at = excluded.updated_at
+            """, [.text(base.id), .text(base.path), .text(base.description),
+                  .int(base.enabled ? 1 : 0),
+                  .real(base.createdAt.timeIntervalSince1970),
+                  .real(base.updatedAt.timeIntervalSince1970)])
+    }
+
+    func deleteKnowledgeBase(id: String) throws {
+        try db.run("DELETE FROM knowledge_bases WHERE id = ?", [.text(id)])
     }
 
     // MARK: - Custom models (P5.1 菜单自主)

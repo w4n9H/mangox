@@ -30,6 +30,55 @@ ZH_TABLE = os.path.join(APP, 'Resources/zh-Hans.lproj/Localizable.strings')
 
 CJK = re.compile(r'[\u4e00-\u9fff]')
 
+# 查表调用的**前缀** (只允许空白): 字面量紧跟在 `L(` / `LK(` 之后即视为"作者声明它是文案"。
+#
+# 为什么是"前缀"而不是"把整个实参抠出来": 实参里可能嵌插值 (`L("删除会话「\(x ?? "未命名")」？")`),
+# 朴素正则会切在那个内层引号上, 生成一条**永不命中的假 key**。改为复用 `scan_literals`
+# (它本来就是插值深度感知的) + 用本正则判"这个字面量前面是不是查表调用", 一份扫描逻辑两处用。
+#
+# `\b` 是必需的: `URL(` / `foo_L(` 都不该命中 (`L` 前是词字符 ⇒ 无边界)。
+LOOKUP_CALL = re.compile(r'\bLK?\($')
+
+
+def strip_line_comment(code):
+    """去行尾注释 —— **字符串字面量感知**。
+
+    ⚠️ 这里曾长期是朴素的 `code.split('//')[0]`。它把**字面量里的** `//` 当成注释起点,
+    于是以 `//` 开头的文案被切成个残句:
+      `L("// 文件过大 (>1 MB), 暂不支持预览")` → 只留下 `… return L("`
+    ⇒ 抽出来的是一个**未闭合的空字面量**, 这条串在词表门/接线门/指纹里**全都看不见**
+    (实测 2026-09-22: 5 条文案的英文界面一直在静默回落中文, 而词表对账 564/564 全绿)。
+
+    判据: **只在字符串外**才认 `//`; 串内照抄 (含 `\\"` 转义)。本函数是全脚本唯一的注释剥离器,
+    `scan_wiring` / `wire_strings` 共用它 —— 两份实现迟早对同一行给出不同判定。
+    """
+    out = []
+    in_str = False
+    escaped = False
+    i = 0
+    while i < len(code):
+        c = code[i]
+        if in_str:
+            out.append(c)
+            if escaped:
+                escaped = False
+            elif c == '\\':
+                escaped = True
+            elif c == '"':
+                in_str = False
+            i += 1
+            continue
+        if c == '"':
+            in_str = True
+            out.append(c)
+            i += 1
+            continue
+        if c == '/' and i + 1 < len(code) and code[i + 1] == '/':
+            break
+        out.append(c)
+        i += 1
+    return ''.join(out)
+
 
 def scan_literals(line):
     """扫描一行里的字符串字面量 —— **插值深度感知**。
@@ -76,9 +125,26 @@ def scan_literals(line):
 EXCLUDE_FILES = {
     'mangox/Persistence/PersistenceStore.swift',   # 落库日志标签
     'mangox/Models/MailboxReply.swift',            # 回执正文与主题 (邮件协议面)
-    'mangox/State/KnowledgeStore.swift',           # 注入 pi 的知识块
+    # ⚠️ 本文件**同时**拼注入面文本(必须恒中文)与载荷表数据。排除它的代价实测过 (2026-09-22):
+    #    在这里写 `L()` 的 key **永远进不了词表** ⇒ 英文界面静默回落中文, 而且本文件被跳过、
+    #    连"已废弃"都不报 —— **三道 l10n 门全都看不见**。所以告警/文案一律在 View 侧拼,
+    #    本文件只出**数据** (`KnowledgeStore.KnowledgeWarning`)。
+    'mangox/State/KnowledgeStore.swift',           # 注入 pi 的知识块 + 载荷表数据 (文案在 View 侧)
+    # ⚠️ P11.4 (2026-09-22): 本文件**生成的就是 prompt 字节** —— 索引段的 token (`[知识库]`)、
+    #    段头、`路径:`/`说明:`/`文件 (…)` 前缀全部逐字进 L0 注入块。三条理由排除它:
+    #      ① 它们**不是 UI 文案**, 本地化 = 让用户的界面语言改掉注入进 prompt 的字节 (同
+    #         `KnowledgeKind.tag` 的理由, 见 wiring_allow.txt F 组), 会破稳定段的逐字节稳定性;
+    #      ② UI 侧的"索引预览"是**逐字预览** prompt 字节 —— 若在这里取词, 预览就与真实注入不同源,
+    #         而"预览说 12 个文件、agent 看到 9 个"正是 P11.4 要防的那个病;
+    #      ③ 本文件的中文**全部**在 `KnowledgeBaseScan` 里 (模型层只出数据, 无文案)。
+    #    代价 (同上面那行, 实测过): 在此文件里写 `L()` 的 key 永远进不了词表, 三道门全都看不见。
+    #    ⇒ **要加 UI 文案请写在 View 侧** (拒绝原因的人话就归 `KnowledgeView`)。
+    'mangox/Models/KnowledgeBase.swift',           # 注入 pi 的索引段字节 (无 UI 文案)
     'mangox/State/SchedulerService.swift',         # 注入 pi 的指令文本
     'mangox/mangoxApp.swift',                      # 不参与冒烟编译, 无文案
+    # 语言名自带 (中文 / English 必须原样), 故整体跳过。**但其 `AppLanguage.label` 里的 `L("跟随系统")`
+    # 是靠 `Theme/AppAppearance.swift` 的同名字面量才活在词表里的** —— 改这句话要两边一起改,
+    # 或把它从本名单里拿掉 (代价: 中文/English 两个必须原样的语言名会被拖进词表)。
     'mangox/Localization/AppLanguage.swift',       # 语言名自带, 不查表
 }
 EXCLUDE_PAT = re.compile(r'\[MGOX|\[DONE|\[FAILED|\[BLOCKED|\[RUNNING|BODY\[\]|已省略|已截断|邮件未被受理')
@@ -238,7 +304,28 @@ def interpolation_parts(text):
 
 
 def source_keys():
-    """源码里所有会被查表的中文串 → {key: [位置]}"""
+    """源码里所有会被查表的串 → {key: [位置]}
+
+    **两条收集路径, 缺一不可** (2026-09-22 补):
+
+    ① **显式查表调用的实参** —— `L("…")` / `LK("…")`, **无条件收, 不看是否含汉字**。
+       实现是"字面量开引号前的同前缀结尾是否匹配 `LOOKUP_CALL`", 不是把实参正则抠出来 ——
+       见 `LOOKUP_CALL` 处的注释 (实参可嵌插值, 抠出来会得到假 key)。
+    ② **含汉字的字面量** —— 原来的路径, 用来抓"该接线还没接线"的中文串。
+
+    为什么必须加 ①: 那两道 CJK 门是为了避开 `"PASS"` / `"Chat"` / 正则串这类
+    "恰好不含汉字、也不是文案"的字面量 —— 但 `L("priority %lld")` 这种**形如纯英文的 key**
+    会被一并躲过去, 于是**三道门全都看不见它**: 词表门不收 (英文界面静默回落)、接线门只判
+    含汉字字面量、指纹只遍历词表里的 key。判据改成 **"调用查表函数 = 作者声明它是文案"** ——
+    这比"含不含汉字"可靠, 也正是它该有的判据。
+
+    **剩余边界 (可接受, 但要知道)**: 一条**纯英文、又没裹 `L()`** 的 UI 文案仍然三道门全看不见。
+    这是静态分析的本质不可判定 (任何英文字面量都可能是文案、也可能是标识符), 不打算用启发式去糊。
+    真正的兜底是"UI 文案一律走 `L()`"这条写法纪律本身。
+
+    另: 本函数依赖 `strip_line_comment` 而非裸 `split('//')` —— 后者会把 `L("// 空文件")`
+    切成未闭合残句, 这条文案会在**本门里静默失踪** (实测踩过, 5 条)。
+    """
     out = {}
     for dirpath, _, filenames in os.walk(APP):
         for name in sorted(filenames):
@@ -249,12 +336,16 @@ def source_keys():
             if rel in EXCLUDE_FILES:
                 continue
             for lineno, line in enumerate(open(full, encoding='utf-8'), 1):
-                code = line.split('//')[0]
-                if not CJK.search(code) or EXCLUDE_PAT.search(code) or EXCLUDE_LINE.search(code):
+                code = strip_line_comment(line)
+                if EXCLUDE_PAT.search(code) or EXCLUDE_LINE.search(code):
                     continue
-                for text, _ in scan_literals(code):
-                    if not CJK.search(text):
-                        continue
+                texts = set()
+                for text, start in scan_literals(code):
+                    if LOOKUP_CALL.search(code[:start]):
+                        texts.add(text)
+                    elif CJK.search(text):
+                        texts.add(text)
+                for text in texts:
                     key = to_format_key(text)
                     if LOG_KEY.match(key) or is_regex_key(key):
                         continue
@@ -348,8 +439,14 @@ def main():
         for key in sorted(deferred):
             print(f'  ~ {key[:48]}…    [{src[key][0]}]')
     print(f'已废弃 (词表有、源码无, 无害但该清): {len(stale)}')
-    for key in stale[:15]:
+    # 上限与 `missing` 对齐 (40 + 省略提示)。曾硬编码 `[:15]` 且**不告知截断** ——
+    # 于是门说"17 条该清"却只列 15 条, 照单清理就会漏掉 2 条, 而漏掉不会有任何红灯。
+    # 门的列表要么列全, 要么明说自己截了 (2026-09-22 实测踩到: 漏的正是 `身份键（可选）`
+    # 与 `这条能发给模型吗？` 两条 —— 它们是 P11.2c 撤下的 UI 里最后两个残余)。
+    for key in stale[:40]:
         print(f'  - {key}')
+    if len(stale) > 40:
+        print(f'  ... 另 {len(stale) - 40} 条')
 
     if '--check' in args and missing:
         print('\nFAIL - 存在未翻译条目', file=sys.stderr)

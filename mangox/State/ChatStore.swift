@@ -472,6 +472,8 @@ final class ChatStore: ObservableObject {
             projects = (try? store.loadProjects()) ?? []
             chats = (try? store.loadChats()) ?? []
             knowledgeItems = (try? store.loadKnowledge()) ?? []
+            // P11.4: 知识库挂载记录 (用户挂的那批)。内置库不落库、由 `builtinKnowledgeBases` 现算。
+            knowledge.knowledgeBases = (try? store.loadKnowledgeBases()) ?? []
             scheduledTasks = (try? store.loadScheduled()) ?? []
             customModels = (try? store.loadCustomModels()) ?? []   // P5.1
             // P7-M3: custom_models 一次性迁入 models 表 (幂等), 再加载自管真源
@@ -1586,11 +1588,50 @@ final class ChatStore: ObservableObject {
         knowledge.buildKnowledgeBlock()
     }
 
-    func addKnowledge(title: String, content: String, scope: KnowledgeScope, projectId: UUID?) {
-        knowledge.addKnowledge(title: title, content: content, scope: scope, projectId: projectId)
+    /// 左列「自定义」区 (2026-09-22 起按**来源**分区, 不再是按层分区):
+    /// 已审核 + 生效作用域的 DB 条目, **含被关掉的**(可见 ≠ 会被注入, 见 `KnowledgeStore.customKnowledge`)。
+    var customKnowledge: [KnowledgeItem] { knowledge.customKnowledge }
+    /// 左列「知识库」区: 带**真实生效态**的库列表(内置库的停用已折算进 `enabled`)。
+    var effectiveKnowledgeBases: [KnowledgeBase] { knowledge.effectiveKnowledgeBases }
+    func knowledgeBase(id: String) -> KnowledgeBase? { knowledge.knowledgeBase(id: id) }
+    /// 挂载 / 改描述 / 启停 / 摘库 —— 返回 nil = 成功; 非 nil = 拒绝原因(**数据**, 文案在 View 侧拼)。
+    @discardableResult
+    func addKnowledgeBase(path: String, description: String) -> KnowledgeBaseRejection? {
+        knowledge.addKnowledgeBase(path: path, description: description)
+    }
+    @discardableResult
+    func updateKnowledgeBase(id: String, description: String? = nil,
+                             enabled: Bool? = nil) -> KnowledgeBaseRejection? {
+        knowledge.updateKnowledgeBase(id: id, description: description, enabled: enabled)
+    }
+    func toggleKnowledgeBase(id: String) { knowledge.toggleKnowledgeBase(id: id) }
+    func deleteKnowledgeBase(id: String) { knowledge.deleteKnowledgeBase(id: id) }
+    /// 载荷条 (P11.1 A 块) 所需: 最近一次组装结果 + 告警 (**数据**; 文案在 View 侧拼)。
+    var lastInjection: KnowledgeStore.KnowledgeInjection { knowledge.lastInjection }
+    var injectionWarnings: [KnowledgeStore.KnowledgeWarning] { knowledge.injectionWarnings }
+    /// persona pack 目录。key 保留集合不再对外转发 —— 它的唯一消费者是编辑器的 key 输入口,
+    /// 而那个口已在 P11.2c 撤下 (见 `KnowledgeStore` 里同位置的说明)。
+    var personaPackDir: String { knowledge.personaPackDir }
+    /// persona pack 全文 (P11.2a: 只读展示 + 组装第一段)。
+    var personaPack: PersonaPack { knowledge.personaPack }
+    /// App 外改了人格文件后重建快照 (磁盘为准, 但不指望用户重启 App)。
+    func reloadPersonaPackAndRefresh() { knowledge.reloadPersonaPackAndRefresh() }
+
+    /// 返回 nil = 成功; 非 nil = 拒绝原因 (**数据**; 文案在 View 侧拼, 见 `KeyRejection`)。
+    /// 缺省值必须与 `KnowledgeStore.addKnowledge` **逐字一致** (这里是纯转发) ——
+    /// 包括 `layer = .always` (P11.2d: 新建即生效), 否则 facade 与实现会给出两套缺省。
+    @discardableResult
+    func addKnowledge(title: String, content: String, scope: KnowledgeScope, projectId: UUID?,
+                      kind: KnowledgeKind = .fact, layer: KnowledgeLayer = .always,
+                      priority: Int = 0, key: String? = nil,
+                      trigger: String? = nil, counterfactual: String? = nil) -> KnowledgeStore.KeyRejection? {
+        knowledge.addKnowledge(title: title, content: content, scope: scope, projectId: projectId,
+                               kind: kind, layer: layer, priority: priority, key: key,
+                               trigger: trigger, counterfactual: counterfactual)
     }
 
-    func updateKnowledge(_ item: KnowledgeItem) {
+    @discardableResult
+    func updateKnowledge(_ item: KnowledgeItem) -> KnowledgeStore.KeyRejection? {
         knowledge.updateKnowledge(item)
     }
 
@@ -1616,8 +1657,9 @@ final class ChatStore: ObservableObject {
         knowledge.distillMemoryFromCurrentSession()
     }
 
-    /// 审核采纳: pending → active。
-    func adoptKnowledge(id: UUID) {
+    /// 审核采纳: pending → active。返回 nil = 成功; 非 nil = 拒绝原因 (**数据**)。
+    @discardableResult
+    func adoptKnowledge(id: UUID) -> KnowledgeStore.KeyRejection? {
         knowledge.adoptKnowledge(id: id)
     }
 

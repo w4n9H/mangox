@@ -139,7 +139,6 @@ VALUES = {
     '关闭提示': 'Dismiss',
     '其他…': 'Other…',
     '具备标准模式全部能力, 并挂载全部业务扩展, 扩展注册的工具一并进入工具池。': 'Everything Standard offers, plus every business extension mounted — tools they register join the tool pool.',
-    '内容…': 'Content…',
     '内置审批扩展, 不可停用': 'Built-in approval extension, cannot be disabled',
     '写可判定的标准, 如: 官网发布 X 的正式公告页 (相关新闻不算)…': 'State a checkable criterion, e.g. the official announcement page for X goes live on the vendor site (related news does not count)…',
     '写回磁盘, 下次运行生效': 'Written to disk; takes effect on the next run',
@@ -260,7 +259,6 @@ VALUES = {
     '当前会话未绑定项目目录': 'This session has no project directory',
     '当前模型不支持图片输入, 请在设置中改用多模态模型后再发': 'The current model does not accept images — switch to a multimodal model in settings and send again',
     '待审批': 'Needs approval',
-    '待审核 · %lld 条提炼候选': 'To review · %lld distilled candidates',
     '待审核 · 提炼候选': 'To review · distilled candidates',
     '待运行': 'Pending',
     '快捷键 %@ 被其他 App 占用, 请在设置中更改捕获热键': 'The hotkey %@ is taken by another app — change the capture hotkey in settings',
@@ -333,7 +331,6 @@ VALUES = {
     '暂无回合': 'No turns yet',
     '暂无在途任务': 'No tasks in flight',
     '暂无拒收记录。': 'No rejections recorded.',
-    '暂无条目\\n点右上角 + 新建': 'No entries yet\\nUse + in the top right to create one',
     '暂无调用明细': 'No call details yet',
     '更新于 %@': 'Updated %@',
     '更早': 'Earlier',
@@ -362,7 +359,6 @@ VALUES = {
     '来信驱动的无人值守 agent: 按间隔收信, 过鉴权四道闸后起会话执行': 'A mail-driven unattended agent: checks the inbox on an interval and starts a session once the mail passes the four gates',
     '来自 %@': 'From %@',
     '来自「%@」的快照 · 含 %lld 轮上下文': 'Snapshot from “%@” · %lld turns of context',
-    '标题': 'Title',
     '模型': 'Model',
     '模型与思考强度 (选中即期望, 下一回合生效)': 'Model and reasoning effort (a preference; applies to the next turn)',
     '模型由 MangoX 自管, spawn 时物化到 ~/.mangox/pi-config 供 pi 消费 (不碰 ~/.pi/agent)': 'MangoX owns the model list; it is materialized into ~/.mangox/pi-config at spawn time for pi to consume (your ~/.pi/agent is untouched)',
@@ -505,4 +501,146 @@ VALUES = {
     '首次运行前为空; agent 运行后会把关键进展写在这里, 也可手动编辑干预任务方向…': 'Empty before the first run; the agent writes key progress here and you can edit it by hand to steer the task…',
     '高 · 每 5 分钟': 'High · every 5 minutes',
     '高级': 'Advanced',
+
+    # ---- P11.1 注入与记忆 (载荷表 / 五类标签 / key 保留集合) ----
+    '(无注入内容)': '(no injected content)',
+    '复制全文': 'Copy full text',
+    '整篇拿走 —— markdown 预览里的选中是逐块的, 没有一次选完整篇的选法': 'Take the whole thing — selection in the markdown preview is per block, so there is no way to select it all in one go',
+    '用户': 'User',
+    '事实': 'Fact',
+    '人格': 'Persona',
+    '只读显示本轮真正发出去的注入块 —— 门禁绿 ≠ 改对了': 'Read-only view of the injection block actually sent this turn — a green gate does not mean it is right',
+    '命中统计将在启用后生效': 'Hit stats take effect once enabled',
+    '改动未生效 · 重启引擎': 'Changes not live · restart the engine',
+    '教训': 'Lesson',
+    '本次注入 (只读)': "This turn's injection (read-only)",
+    '查看本次注入': "View this turn's injection",
+    '注入块在 spawn 期生效; 点此重启引擎立刻生效': 'The injection block takes effect at spawn; restart the engine to apply it now',
+    '硬规': 'Rule',
+
+    # ---- 编辑器 (P11.2d 2026-09-22: 「更多设置」折叠区整块撤下, 只剩作用域+标题+正文; 见 KnowledgeView) ----
+    '标题（可留空）': 'Title (optional)',
+    '写点值得记住的东西…': 'Write down something worth remembering…',
+    '每轮都带上': 'Every turn',
+    '需要时才查': 'On demand',
+    '每轮都带上 %lld 条 · %lld 字 / %lld 字': '%lld every turn · %lld / %lld chars',
+    '需要时才查 %lld 条 · 不占预算': '%lld on demand · off budget',
+
+    # ---- 组装告警 (2026-09-22: 由 KnowledgeStore 只出数据, 文案移到 View 侧拼) ----
+    '常驻超限: %lld 条未进本轮 prompt (按 priority 从低到高降级): %@': "Over resident budget: %lld items skipped this turn's prompt (lowest priority dropped first): %@",
+    '%lld 条与 persona pack 的 key 冲突, 已跳过注入: %@': '%lld items collide with a persona pack key and were skipped: %@',
+    '去调 priority, 或把它改成「需要时才查」': 'Raise its priority, or switch it to “On demand”',
+
+    # ---- P11.2a: persona pack 只读面 + 组装自检 ----
+    # 自检告警 (①稳定段缺条 / ③静默丢弃 / ⑤persona 不在偏移 0)
+    '人格段没有落在注入块最前 — 这是代码问题, 请反馈': 'The persona segment is not at the very front of the injection block — this is a code issue, please report it',
+    'P11 §3.2: persona 段必须是独立第一段, 不参与排序与截尾': 'P11 §3.2: the persona segment must be the first standalone segment — it takes no part in ordering or truncation',
+    '%lld 个人格文件 frontmatter 破损, 未注入且已禁止新建 key: %@': '%lld persona files have broken frontmatter — not injected, and creating keys is blocked: %@',
+    '修好文件开头的 --- 收尾后自动恢复; 点行尾「文件」去打开目录': 'Closing the opening --- restores it automatically; click “File” at the row’s end to open the folder',
+    '常驻硬规 %lld 条没进 prompt: %@': '%lld always-on rules did not make it into the prompt: %@',
+    '稳定段永不参与降级 — 出现这条说明组装有 bug, 请反馈': 'The stable segment never takes part in degradation — seeing this means an assembly bug; please report it',
+    '%lld 条常驻条目被静默丢弃: %@': '%lld always-on items were silently dropped: %@',
+    '既不在 prompt 内、也不在降级清单里 — 这是 P11 要根除的那个缺陷': 'Neither in the prompt nor in the degraded list — exactly the defect P11 set out to remove',
+    # P11.4 知识库档: 索引段的两条告警 (文案在 View 侧拼 —— 组装器只出数据)
+    '知识库索引整段未进本轮 prompt (体积超预算): %@': 'The knowledge-base index did not fit this turn (over budget): %@',
+    '索引宁缺勿残 — 残缺的索引会让你以为资料只有这些; 摘掉或停用一两个库即可恢复': 'A partial index is worse than none — it would read as “these are all the materials”. Unmount or disable a base or two to restore it',
+    '已挂载的知识库 %lld 个没进索引: %@': '%lld mounted knowledge bases did not make it into the index: %@',
+    '既不在索引里、也不是因预算缺席 — 这是组装 bug, 请反馈': 'Neither in the index nor skipped for budget — this is an assembly bug; please report it',
+    # 左列 pack 行 / pack 只读编辑器
+    '文件': 'File',
+    '人格文件是只读真源, 去 Finder 打开编辑': 'Persona files are the read-only source of truth — open in Finder to edit',
+    'frontmatter 破损': 'broken frontmatter',
+    '打开目录': 'Open folder',
+    '在 Finder 打开': 'Open in Finder',
+    'frontmatter 破损 (开头的 --- 没有收尾): 该文件不进 prompt, 且已保守禁止新建 key。修好即恢复。': 'Broken frontmatter (the opening --- is never closed): this file is not injected, and creating any key is blocked. Fixing it restores both.',
+    '(正文为空)': '(empty body)',
+    # pack 编辑器那一行元信息 (原来的 chips 排已于 2026-09-22 删除, 见 KnowledgeView.packFactsRow)
+    '占用 %lld 个保留 key': 'holds %lld reserved key(s)',
+    '它没有声明 key（不锁任何名字）': 'It declares no keys (locks no names)',
+    '它锁住这些 key，DB 条目里不能再用:': 'It locks these keys, which DB items can no longer use:',
+    # 敏感档 (§5.3)
+    # key 被拒 (域层只回数据, 文案在这里拼)
+    '人格文件 frontmatter 破损 — 修好开头的 --- 收尾后再建带 key 的条目': 'Persona file frontmatter is broken — close the opening --- before creating items with a key',
+    '该 key 由 persona pack 持有': 'This key is held by the persona pack',
+    '请直接改那个文件': 'Please edit that file directly',
+    'key 已被另一条占用': 'That key is already taken by another item',
+    'key 全局唯一': 'keys are globally unique',
+    '在 App 外改完文件后点这里; 已开着的会话仍需重启引擎才生效': 'Click here after editing files outside the app; running sessions still need an engine restart',
+
+    # ---- 2026-09-22: 门修复后新显形的 7 条「活的漏译」 ----
+    # 它们此前在**三道门里同时失明**, 原因是门本身的缺陷 (不是漏翻译):
+    #   ① 纯 ASCII key (`priority %lld` / `Inbox「%@」: %@`) —— 旧判据是"字面量含汉字",
+    #      于是三道门全都看不见 ⇒ 英文界面静默回落中文。
+    #      (`priority %lld` 已于同日随 pack 编辑器 chips 清理下线 —— 案例留在这里, 条目不再需要)
+    #   ② 以 `//` 开头的 key —— 旧注释剥离器是裸 `code.split('//')[0]`, 把字面量里的
+    #      `//` 当注释起点, 字面量被切成未闭合的残句。词表对账 564/564 全绿而实际漏 5 条。
+    # 两条都已按"改门, 不改症状"修在 `gen_strings.py` (LOOKUP_CALL 前缀判定 + strip_line_comment)。
+    'Inbox「%@」: %@': 'Inbox “%@”: %@',
+    '// 无法读取源码': '// Cannot read the source',
+    '// 文件过大 (>1 MB), 暂不支持预览': '// File too large (>1 MB) — preview not supported yet',
+    '// 二进制文件 (%@), 图片预览将在后续版本提供': '// Binary file (%@); image preview is coming in a later version',
+    '// 二进制文件或暂不支持的编码': '// Binary file, or an encoding not supported yet',
+    '// 空文件': '// Empty file',
+
+    # ---- 2026-09-22: P11.4b 三区结构 (常驻 / 自定义 / 知识库) ----
+    # 左列分区轴从"层"换成"来源"后新增的三区标题。层降为**行内标记**, 且只在
+    # "按需"(非缺省)时出现 —— 常驻是这两个区的常态, 每行都标一遍就是噪声。
+    '常驻': 'Always on',
+    '知识库': 'Knowledge base',
+    # ---- 2026-09-22: P11.4b 知识库区 (挂载 / 描述必填 / 摘库) ----
+    '挂载知识库': 'Mount knowledge base',
+    '挂一个目录当资料库: App 只读, 只把描述与文件清单给 agent': 'Mount a directory as a knowledge base: the app only reads it, handing the agent the description and the file list',
+    '挂载': 'Mount',
+    '挂载目录…': 'Mount folder…',
+    '选一个目录当资料库 — App 只读, 不会改动里面的任何文件': 'Pick a directory as a knowledge base — the app only reads it and never touches any file inside',
+    '这个目录里放的是什么资料？': 'What kind of material is in this directory?',
+    '例: 2024 年各渠道的复盘文档': 'e.g. 2024 channel retrospectives',
+    '这句话会进每轮 prompt 的索引 —— agent 靠它判断要不要来查这个目录。': 'This sentence goes into the index of every prompt — the agent uses it to decide whether to look into this directory.',
+    '描述': 'Description',
+    '描述不能是空的 — 索引里只有文件名的话, agent 拿到的是没有语义的字符串': 'The description cannot be empty — with only file names in the index the agent gets a string that means nothing',
+    '描述太长 (上限 %lld 字, 它是一句话不是摘要)': 'Description is too long (limit %lld characters — it is one sentence, not a summary)',
+    '这个目录已经挂过了 (%@)': 'That directory is already mounted (%@)',
+    '不是一个目录, 或者它已经不存在了': 'Not a directory, or it no longer exists',
+    '扫到 %lld 个文档 (md / txt / html, 深度 ≤ 3)': '%lld documents found (md / txt / html, depth ≤ 3)',
+    '这个目录里没有可读的文档': 'No readable documents in this directory',
+    '已停用 —— 索引里不出现这个库': 'Disabled — this base does not appear in the index',
+    '内置': 'Built-in',
+    'L1 落盘目录, 自动挂载: 不可删, 描述由 App 写死': 'The L1 working directory, mounted automatically: cannot be deleted, description is hard-coded',
+    '内置库不可修改 — 它跟着 L1 落盘目录自动出现': 'Built-in bases cannot be edited — this one appears automatically with the L1 working directory',
+    '摘掉这个库': 'Unmount this base',
+    '摘掉知识库「%@」？': 'Unmount knowledge base “%@”?',
+    '摘掉': 'Unmount',
+    '只是不再挂载, 目录与里面的文件一个都不动。': 'It is only unmounted — the directory and every file inside stay untouched.',
+    # ---- 2026-09-22: P11.4b 索引预览 (与注入同源) ----
+    # 「逐字就是 agent 收到的」那句话是这一块存在的全部理由: 预览必须与注入调同一个函数,
+    # 否则"预览说有 12 个文件、agent 实际看到 9 个"会安静地长出来。
+    '索引预览': 'Index preview',
+    '显示 %lld / 折省略 %lld · %lld 字': 'showing %lld / folded %lld · %lld chars',
+    '这一段会进每轮 prompt 的索引段, 逐字就是 agent 收到的': 'This section goes into the index of every prompt, word for word as the agent receives it',
+    '此刻不在 prompt 里 —— 索引整段进或整段不进, 它超出了本轮预算': 'Not in the prompt right now — the index goes in whole or not at all, and this one exceeded the round budget',
+    '草稿还没保存 —— 下面的索引预览显示的是已保存的那句': 'Draft not saved yet — the index preview below shows the saved sentence',
+    # ---- 2026-09-22: P11.4b pack 里 ondemand 文件的点名告警 (§3.2) ----
+    # 措辞不许写成"不注入": 那听着正常。病在于它同时进不了索引 ⇒ 对模型隐形。
+    '%lld 个人格文件是「按需」的, 模型不知道它们存在: %@': '%lld persona files are “on demand” — the model does not know they exist: %@',
+    '它们不进 prompt, 也进不了知识库索引 (pack 目录不在任何库的扫描路径下)。挂成知识库即可, 做法同 PROJECTS.md': 'They stay out of the prompt, and they cannot reach the knowledge index either (the pack directory is not under any base’s scan path). Mount them as a knowledge base — the same move as with PROJECTS.md',
+    # ---- 2026-09-23: persona 段为空 / pack 文件读不出来 (§3.2) ----
+    # 措辞不许写成"目录是空的": 那听着像个中性状态。真相是**人格本体一个字都没进 prompt**,
+    # 所以两条主句都落在"本轮 prompt 里没有「我」"上 —— 那是这件事的实际后果。
+    '人格目录不在 — 本轮 prompt 里没有「我」': 'The persona folder is not there — there is no “me” in this round’s prompt',
+    '点「常驻」区头的文件夹按钮: 目录不在时会就地建出来; 若那个位置被同名文件占着, 请先移走它': 'Click the folder button in the “Always on” header: it creates the folder if it is missing; if a file of the same name occupies that spot, move it away first',
+    '人格目录里没有可载入的 .md — 本轮 prompt 里没有「我」': 'No loadable .md in the persona folder — there is no “me” in this round’s prompt',
+    '只收 .md (大小写敏感); 若你刚要删或改名, 这条就是唯一的线索': 'Only .md is picked up (case-sensitive); if you just deleted or renamed something, this line is the only trace of it',
+    '%lld 个人格文件读不出来 (权限或编码), 内容未进 prompt: %@': '%lld persona files cannot be read (permissions or encoding) — their content is not in the prompt: %@',
+    '文件还在磁盘上 — 用文本编辑器另存为 UTF-8 即可': 'The files are still on disk — re-save them as UTF-8 in a text editor',
+    '还没有常驻内容\\n点右上角 + 新建条目, 或用上面两段的入口放入文件': 'Nothing always-on yet\\nUse + in the top right to add an entry, or the entries in the two sections above to put files in place',
+    # ---- 2026-09-23: 行文案 = 文件名 + 出厂固定表（boss: "直接固定化就行"）----
+    # 这三条是**出厂文案本身**，不是说明；英文侧刻意与文档里的官方口径对齐
+    # （SOUL = persona/tone/boundaries → "Who I Am"）。顺序无所谓，表在 PersonaRowText 里。
+    '我是谁': 'Who I Am',
+    '我必须怎么做': 'My Rules',
+    '你是谁': 'Who You Are',
+    # 副标那半截：字数。不带千分位（与面板汇总的数字保持同一种写法，便于对照）
+    '%lld 字': '%lld chars',
+    # 缺省标题（无 "summary" 契约，故措辞是"是……"而不是"没写会怎样"）
+    '行标题是文件名加上一句固定说明（如 SOUL.md - 我是谁）；表外的文件就只有文件名': 'A row title is the file name plus a fixed description (e.g. SOUL.md - Who I Am); files outside the list show only the file name',
 }
