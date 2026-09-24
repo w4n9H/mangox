@@ -235,10 +235,6 @@ final class ChatStore: ObservableObject {
         get { model.availableModels }
         set { model.availableModels = newValue }
     }
-    var customModels: [CustomModel] {
-        get { model.customModels }
-        set { model.customModels = newValue }
-    }
     var managedModels: [ManagedModel] {
         get { model.managedModels }
         set { model.managedModels = newValue }
@@ -475,8 +471,8 @@ final class ChatStore: ObservableObject {
             // P11.4: 知识库挂载记录 (用户挂的那批)。内置库不落库、由 `builtinKnowledgeBases` 现算。
             knowledge.knowledgeBases = (try? store.loadKnowledgeBases()) ?? []
             scheduledTasks = (try? store.loadScheduled()) ?? []
-            customModels = (try? store.loadCustomModels()) ?? []   // P5.1
             // P7-M3: custom_models 一次性迁入 models 表 (幂等), 再加载自管真源
+            // (P5.1 的自定义模型内存层已于 2026-09-23 删除; 表保留以兼容旧版本库)
             _ = (try? store.migrateLegacyCustomModels()) ?? 0
             managedModels = (try? store.loadManagedModels()) ?? []
             // P10.3v2: 启动恢复 — 先载 App 默认 KV; 选中会话存过配置用自己的,
@@ -1486,54 +1482,19 @@ final class ChatStore: ObservableObject {
 
     // MARK: - Model / effort (P9.1c: 状态/菜单/物化在 ModelStore, 此处仅转发)
 
-    /// 菜单条目 (模型 × 思考级别)。
-    var modelMenuEntries: [ModelMenuEntry] { model.modelMenuEntries }
-
-    /// 自定义条目对应的 AgentModelInfo (全级别)。
-    var customModelInfos: [AgentModelInfo] { model.customModelInfos }
-
-    /// pi 目录条目 (排除被自定义条目覆盖者)。
-    var catalogModels: [AgentModelInfo] { model.catalogModels }
-
-    /// 菜单全集 (自管优先, 回落 pi 目录 + 自定义)。
+    /// 菜单全集 (自管优先, 回落 pi 上报目录; 纯模型列表 —— 级别的笛卡尔积展开已删)。
     var menuModels: [AgentModelInfo] { model.menuModels }
 
-    /// 指定模型集的菜单条目展开 (模型 × 级别)。
-    func menuEntries(for models: [AgentModelInfo]) -> [ModelMenuEntry] {
-        model.menuEntries(for: models)
-    }
+    /// 当前选中组合 (composer 药丸初值)。
+    var currentChoice: ModelChoice { model.currentChoice }
 
-    /// 菜单条目是否为当前选中组合。
-    func isCurrent(_ entry: ModelMenuEntry) -> Bool {
-        model.isCurrent(entry)
-    }
-
-    /// pi 目录中存在的 provider 集合 (从能力上报推导)。
-    var validProviders: Set<String> { model.validProviders }
-
-    /// provider 校验: 上报未到达时不做拦截 (无法判定), 否则必须命中目录。
-    func isValidProvider(_ provider: String) -> Bool {
-        model.isValidProvider(provider)
-    }
-
-    /// 自定义条目显示名 (药丸优先显示自定义 label; 设计 §3.3 拍板)。
+    /// 条目显示名 (自管条目优先; 含 legacy 迁移条目)。
     func customLabel(provider: String, modelId: String) -> String? {
         model.customLabel(provider: provider, modelId: modelId)
     }
 
-    /// 当前选中模型的显示名: 自定义 label 优先, 回落 id 末段。
+    /// 当前选中模型的显示名: 自管 label 优先, 回落 id 末段。
     var currentModelDisplayName: String { model.currentModelDisplayName }
-
-    /// 新增/覆盖自定义模型 (落库 + 刷菜单)。返回 false = provider 不在 pi 目录中。
-    @discardableResult
-    func addCustomModel(provider: String, modelId: String, label: String = "") -> Bool {
-        model.addCustomModel(provider: provider, modelId: modelId, label: label)
-    }
-
-    /// 删除自定义模型 (落库 + 刷菜单; 当前选中项不强制切回, 仅不再出现在菜单)。
-    func removeCustomModel(_ model: CustomModel) {
-        self.model.removeCustomModel(model)
-    }
 
     /// 物化产物下发 (探测实例 + 注入实例 + 全部会话实例; 模型变更/启动时调用)。
     func refreshPIConfig() {
@@ -1564,15 +1525,15 @@ final class ChatStore: ObservableObject {
         model.providerKey(provider: provider)
     }
 
-    /// 选中自管模型 (settings 行"启用"; thinking 级别放开全级别, pi 侧 clamp 收敛)。
+    /// 选中自管模型 (settings 行"启用"; 级别收敛到该模型支持的档位)。
     func selectManagedModel(_ m: ManagedModel) {
         model.selectManagedModel(m)
     }
 
-    /// 选中组合: 全局期望更新 (新实例由 transportFor 补发) + 选中会话实例即时下发
-    /// (pi 侧各自动回读 get_state 同步 UI; P4.0.2 spawn 期参数随该会话下回合生效)。
-    func selectModel(_ model: AgentModelInfo, level: ThinkingLevel?) {
-        self.model.selectModel(model, level: level)
+    /// 选中组合 (整体写入; 级别由 `ModelPicker` 收敛为合法停靠点):
+    /// 全局期望更新 (新实例由 transportFor 补发) + 选中会话实例即时下发。
+    func selectModel(_ pick: ModelChoice) {
+        model.selectModel(pick)
     }
 
     // MARK: - Knowledge (P3.7; P9.1c 起状态与逻辑在 KnowledgeStore, 此处仅转发)

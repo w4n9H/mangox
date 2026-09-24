@@ -39,6 +39,10 @@ mangox/Models/DayBucket.swift|更早
 # 键恒定; 显示点改 Text(LK(d.key)) / detailLine(LK(d.key), …)
 mangox/Agent/PiRpcTransport.swift|输出
 mangox/Views/Chat/ToolCallCardView.swift|输出
+# `细节` 同理 (2026-09-24 补): 它是 `details` 兜底行的 key, 由 `ToolDetail("细节", …)` 造出,
+# 显示点同走 `Text(LK(d.key))` → 真的会取词。扫描器只看得见本行前缀 `ToolDetail(`,
+# 看不到跨文件的 LK(d.key) ⇒ 这是**真阳性豁免**, 不是漏译。
+mangox/Agent/PiRpcTransport.swift|细节
 
 # ── D. Mock 传输层的假模型回复 (模拟模型输出, 与真实模型一样不随 UI 语言变) ──────
 mangox/Mock/MockTransport.swift|已拒绝

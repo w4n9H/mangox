@@ -15,8 +15,6 @@ final class ModelStore: ObservableObject {
     // P3.5: 对端能力上报
     /// 可用模型清单 (pi get_available_models; 空 = 尚未上报, 菜单只显示当前模型)。
     @Published var availableModels: [AgentModelInfo] = []
-    /// P5.1: 自定义模型条目 (菜单自主 — 与 pi 目录展示名解耦; 同名时覆盖 pi 条目)。
-    @Published var customModels: [CustomModel] = []
     /// P7-M3: 自管模型条目 (settings 页管理, 物化给 pi; 真源 models 表)。
     @Published var managedModels: [ManagedModel] = []
     /// 当前模型 (provider/id 分量), composer 模型菜单的数据源。
@@ -44,72 +42,35 @@ final class ModelStore: ObservableObject {
         return m.inputModalities.contains("image")
     }
 
-    // MARK: - 模型菜单 (P3.5/P5.1/P7-M3)
+    // MARK: - 模型菜单 (P7-M3)
 
-    /// 菜单条目 = 每个模型 × 其支持的思考级别 (无级别的模型单条)。
-    /// 条目 id 含级别分量, 笛卡尔积下同模型多条不会 ForEach 撞 id。
-    var modelMenuEntries: [ModelMenuEntry] {
-        menuEntries(for: menuModels)
-    }
-
-    /// 自定义条目对应的 AgentModelInfo (全级别)。
-    var customModelInfos: [AgentModelInfo] {
-        customModels.map(\.asAgentModelInfo)
-    }
-
-    /// pi 目录条目 (排除被自定义条目覆盖者 —— P5.1 拍板: 同名 provider/id 时 custom 覆盖)。
-    var catalogModels: [AgentModelInfo] {
-        let overridden = Set(customModels.map(\.id))
-        return availableModels.filter { !overridden.contains("\($0.provider)/\($0.id)") }
-    }
+    /// pi 上报目录 (裸态回落的唯一来源; 由 capabilityProbe 的 get_available_models 写入)。
+    var catalogModels: [AgentModelInfo] { availableModels }
 
     /// 菜单全集 (P7-M3 拍板: 有自管模型时只显示 enabled 自管条目, pi 上报目录退出菜单;
-    /// 一个都没配时回落 pi 目录 + P5.1 自定义, 保证可用性)。
+    /// 一个都没配时回落 pi 目录, 保证可用性)。
+    /// (2026-09-23: "模型 × 级别"笛卡尔积展开已删 —— 级别改由 `ModelPicker` 滑轨选,
+    ///  菜单回归**纯模型列表**; 展开只为 `ForEach` 唯 id 而存在, 控件换 popover 后不再需要。)
     var menuModels: [AgentModelInfo] {
         let managed = managedModels.filter(\.enabled).map(\.asAgentModelInfo)
-        if !managed.isEmpty { return managed }
-        return customModelInfos + catalogModels
+        return managed.isEmpty ? catalogModels : managed
     }
 
-    /// 指定模型集的菜单条目展开 (模型 × 级别)。
-    func menuEntries(for models: [AgentModelInfo]) -> [ModelMenuEntry] {
-        models.flatMap { m in
-            let levels: [ThinkingLevel?] = m.supportedLevels.isEmpty ? [nil] : m.supportedLevels
-            return levels.map { ModelMenuEntry(id: "\(m.provider)/\(m.id)#\($0?.rawValue ?? "-")",
-                                               model: m, level: $0) }
-        }
+    /// 当前选中组合 (composer 药丸的初值; 视图不必逐个读三个字段)。
+    var currentChoice: ModelChoice {
+        ModelChoice(provider: currentProvider, modelId: currentModelId, level: thinkingLevel)
     }
 
-    /// 菜单条目是否为当前选中组合。
-    func isCurrent(_ entry: ModelMenuEntry) -> Bool {
-        guard let store else { return false }
-        return entry.model.provider == store.currentProvider && entry.model.id == store.currentModelId &&
-            (entry.level == nil || entry.level == store.thinkingLevel)
-    }
+    // (P5.1 自定义模型层已于 2026-09-23 删除: 生产 UI 零入口 —— Settings 页只走自管模型,
+    //  且启动时 migrateLegacyCustomModels 已把 custom_models 行搬进 models 表。
+    //  custom_models 表保留, 用于兼容旧版本写的库。)
 
-    // MARK: - P5.1 自定义模型 (菜单自主, 运行时借壳)
-
-    /// pi 目录中存在的 provider 集合 (从能力上报推导)。
-    var validProviders: Set<String> {
-        Set(availableModels.map(\.provider))
-    }
-
-    /// provider 校验: 上报未到达时不做拦截 (无法判定), 否则必须命中目录。
-    func isValidProvider(_ provider: String) -> Bool {
-        let p = provider.trimmingCharacters(in: .whitespaces)
-        guard !p.isEmpty else { return false }
-        return availableModels.isEmpty || validProviders.contains(p)
-    }
-
-    /// 自定义条目显示名 (药丸优先显示自定义 label; 设计 §3.3 拍板)。
+    /// 条目显示名 (自管条目优先; 含 legacy 迁移条目)。
     func customLabel(provider: String, modelId: String) -> String? {
-        if let m = managedModels.first(where: { $0.provider == provider && $0.modelId == modelId }) {
-            return m.displayNameOrId   // P7-M3: 自管条目优先 (含 legacy 迁移)
-        }
-        return customModels.first { $0.provider == provider && $0.modelId == modelId }?.displayName
+        managedModels.first { $0.provider == provider && $0.modelId == modelId }?.displayNameOrId
     }
 
-    /// 当前选中模型的显示名: 自定义 label 优先, 回落 id 末段。
+    /// 当前选中模型的显示名: 自管 label 优先, 回落 id 末段。
     var currentModelDisplayName: String {
         guard let store else { return "model" }
         if let label = customLabel(provider: store.currentProvider, modelId: store.currentModelId) {
@@ -119,29 +80,6 @@ final class ModelStore: ObservableObject {
             return store.currentModelId.components(separatedBy: "/").last ?? store.currentModelId
         }
         return "model"
-    }
-
-    /// 新增/覆盖自定义模型 (落库 + 刷菜单)。返回 false = provider 不在 pi 目录中。
-    @discardableResult
-    func addCustomModel(provider: String, modelId: String, label: String = "") -> Bool {
-        let p = provider.trimmingCharacters(in: .whitespaces)
-        let m = modelId.trimmingCharacters(in: .whitespaces)
-        guard isValidProvider(p), !m.isEmpty else { return false }
-        let item = CustomModel(provider: p, modelId: m,
-                               label: label.trimmingCharacters(in: .whitespaces))
-        try? store?.persistence?.upsertCustomModel(item)
-        if let idx = customModels.firstIndex(where: { $0.id == item.id }) {
-            customModels[idx] = item          // 覆盖: label 更新
-        } else {
-            customModels.insert(item, at: 0)
-        }
-        return true
-    }
-
-    /// 删除自定义模型 (落库 + 刷菜单; 当前选中项不强制切回, 仅不再出现在菜单)。
-    func removeCustomModel(_ model: CustomModel) {
-        try? store?.persistence?.deleteCustomModel(provider: model.provider, modelId: model.modelId)
-        customModels.removeAll { $0.id == model.id }
     }
 
     // MARK: - P7-M3 模型自管 (settings 页真源 + 物化推送)
@@ -191,23 +129,27 @@ final class ModelStore: ObservableObject {
         store?.modelKeyStore.key(account: provider)
     }
 
-    /// 选中自管模型 (settings 行"启用"; thinking 级别放开全级别, pi 侧 clamp 收敛)。
+    /// 选中自管模型 (settings 行"启用")。级别收敛到该模型支持的档位 —— 旧实现传 `nil`
+    /// (级别不变, 靠 pi 侧 clamp), 于是有"胶囊显示 xhigh、实际跑 off"的割裂 (P8 实测)。
     func selectManagedModel(_ m: ManagedModel) {
-        selectModel(m.asAgentModelInfo, level: nil)
+        let info = m.asAgentModelInfo
+        selectModel(ModelChoice(provider: info.provider, modelId: info.id,
+                                level: clampLevel(thinkingLevel, to: info)))
     }
 
-    /// 选中组合: 全局期望更新 (新实例由 transportFor 补发) + 选中会话实例即时下发
+    /// 选中组合 (**整体写入**, 级别已是合法停靠点 —— 收敛在 `ModelPicker` / `clampLevel` 一处完成):
+    /// 全局期望更新 (新实例由 transportFor 补发) + 选中会话实例即时下发
     /// (pi 侧各自动回读 get_state 同步 UI; P4.0.2 spawn 期参数随该会话下回合生效)。
-    func selectModel(_ model: AgentModelInfo, level: ThinkingLevel?) {
+    func selectModel(_ pick: ModelChoice) {
         guard let store else { return }
-        store.currentProvider = model.provider
-        store.currentModelId = model.id
+        store.currentProvider = pick.provider
+        store.currentModelId = pick.modelId
         store.userThinkingLevelPinned = true   // 期望钉死: 探测上报不再回写级别
-        if let level { store.thinkingLevel = level }
+        store.thinkingLevel = pick.level
         guard let sid = store.selectedConversationId else { return }
         let t = store.transportFor(sid)
-        t.setModel(provider: model.provider, modelId: model.id)
-        if let level { t.setThinkingLevel(level.rawValue) }
+        t.setModel(provider: pick.provider, modelId: pick.modelId)
+        t.setThinkingLevel(pick.level.rawValue)
         store.stampSessionConfig()   // P10.3: 写穿选中会话配置
     }
 }

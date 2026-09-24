@@ -58,19 +58,20 @@ struct ManagedModel: Identifiable, Hashable, Codable {
 
     var displayNameOrId: String { displayName.isEmpty ? modelId : displayName }
 
-    /// 菜单支持的思考级别 (pi 语义): 非 reasoning 只 off;
-    /// reasoning 无 map → 默认 off..high; 有 map → off + map 中非 null 项 (null = 明确不支持)。
+    /// 菜单支持的思考级别 (语义唯一实现在 `ThinkingLevel.supported`)。
+    /// ⚠️ 2026-09-23 修: 原实现只收 map 里"非空字符串"的项 (白名单语义), 与自身注释
+    /// (以及 pi `getSupportedThinkingLevels` 的"默认支持 + 显式 null 剔除")不符 ——
+    /// **map 缺键**时会把本该支持的级别漏掉。现与 pi 上报侧统一走黑名单语义。
     var supportedLevels: [ThinkingLevel] {
-        guard reasoning else { return [.off] }
+        ThinkingLevel.supported(reasoning: reasoning, map: thinkingLevelMap)
+    }
+
+    /// `thinkingLevelMapJSON` 的解析结果 (解析失败 / 无 map = 空字典 = 全默认支持)。
+    private var thinkingLevelMap: [String: Any] {
         guard let raw = thinkingLevelMapJSON, let data = raw.data(using: .utf8),
-              let map = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            return [.off, .minimal, .low, .medium, .high]
-        }
-        var levels: [ThinkingLevel] = [.off]
-        for level in ThinkingLevel.allCases where level != .off {
-            if let v = map[level.rawValue] as? String, !v.isEmpty { levels.append(level) }
-        }
-        return levels
+              let map = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else { return [:] }
+        return map
     }
 
     /// 构造选中/菜单用的 AgentModelInfo (级别按 pi thinkingLevelMap 语义收敛)。

@@ -223,6 +223,12 @@ final class PersistenceStore {
         // 旧库补列: 先查 PRAGMA table_info, 列已存在就不发 ALTER
         // (无条件 ALTER 会被 try? 吞掉异常, 但 SQLite 自己仍往 stderr 吐 duplicate column 日志)
         addColumnIfMissing("mailbox_sentinels", "require_secret", "INTEGER NOT NULL DEFAULT 1")
+        // 2026-09-24: 哨兵的任务级模型 (P10.4 的 `scheduled_tasks.config` 同语义, 但**不用 JSON blob**:
+        // 本表的 agent_mode/approval 已是独立列, 再塞一份 SessionConfig 会造出第二个真源)。
+        // 空串 = 尚未 pin ⇒ 跟随当前会话; thinking_level 可空 = 未手动选过 (不钉死)。
+        addColumnIfMissing("mailbox_sentinels", "provider", "TEXT NOT NULL DEFAULT ''")
+        addColumnIfMissing("mailbox_sentinels", "model_id", "TEXT NOT NULL DEFAULT ''")
+        addColumnIfMissing("mailbox_sentinels", "thinking_level", "TEXT")
         addColumnIfMissing("projects", "path", "TEXT")
         // P7-M3: models 表补 reasoning 显式列 (M2 首版靠 map 有无推导, MiniMax 系 map=null 误判)
         addColumnIfMissing("models", "reasoning", "INTEGER NOT NULL DEFAULT 0")
@@ -785,35 +791,9 @@ final class PersistenceStore {
         try db.run("DELETE FROM knowledge_bases WHERE id = ?", [.text(id)])
     }
 
-    // MARK: - Custom models (P5.1 菜单自主)
-
-    func loadCustomModels() throws -> [CustomModel] {
-        let rows = try db.query("""
-            SELECT provider, model_id, label, created_at
-            FROM custom_models ORDER BY created_at DESC
-            """)
-        return rows.map { row in
-            CustomModel(provider: text(row, "provider"),
-                        modelId: text(row, "model_id"),
-                        label: text(row, "label"),
-                        createdAt: Date(timeIntervalSince1970: double(row, "created_at")))
-        }
-    }
-
-    func upsertCustomModel(_ model: CustomModel) throws {
-        try db.run("""
-            INSERT OR REPLACE INTO custom_models (provider, model_id, label, created_at)
-            VALUES (?,?,?,?)
-            """, [.text(model.provider),
-                  .text(model.modelId),
-                  .text(model.label),
-                  .real(model.createdAt.timeIntervalSince1970)])
-    }
-
-    func deleteCustomModel(provider: String, modelId: String) throws {
-        try db.run("DELETE FROM custom_models WHERE provider = ? AND model_id = ?",
-                   [.text(provider), .text(modelId)])
-    }
+    // (P5.1 的 custom_models 读写 API 已于 2026-09-23 删除 —— 生产路径已无写入者。
+    //  custom_models 表与 migrateLegacyCustomModels (本文件下方) 保留: 旧版本 MangoX 写的库
+    //  仍需在启动时把行搬进 models 表, 且 DROP 表会让旧版本打开新库直接崩。)
 
     // MARK: - Managed models (P7-M2 模型自管真源)
 
@@ -1026,7 +1006,8 @@ final class PersistenceStore {
     func loadMailboxSentinels() throws -> [MailboxSentinel] {
         let rows = try db.query("""
             SELECT id, name, account_id, project_id, whitelist, require_secret, poll_interval,
-                   agent_mode, approval, probe_url, enabled, last_poll_at, last_error
+                   agent_mode, approval, probe_url, enabled, last_poll_at, last_error,
+                   provider, model_id, thinking_level
             FROM mailbox_sentinels ORDER BY created_at ASC
             """)
         return rows.map { row in
@@ -1041,6 +1022,9 @@ final class PersistenceStore {
                 agentMode: AgentMode(rawValue: text(row, "agent_mode")) ?? .full,
                 approval: ApprovalMode(rawValue: text(row, "approval")) ?? .autoJudge,
                 intranetProbeURL: text(row, "probe_url"),
+                provider: text(row, "provider"),
+                modelId: text(row, "model_id"),
+                thinkingLevel: optionalText(row, "thinking_level"),
                 enabled: int(row["enabled"] ?? .null) == 1,
                 lastPollAt: optionalDate(row, "last_poll_at"),
                 lastError: optionalText(row, "last_error"))
@@ -1058,8 +1042,9 @@ final class PersistenceStore {
         try db.run("""
             INSERT OR REPLACE INTO mailbox_sentinels
             (id, name, account_id, project_id, whitelist, require_secret, poll_interval,
-             agent_mode, approval, probe_url, enabled, last_poll_at, last_error, created_at)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+             agent_mode, approval, probe_url, enabled, last_poll_at, last_error, created_at,
+             provider, model_id, thinking_level)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             """, [.text(s.id.uuidString),
                   .text(s.name),
                   .text(s.accountId.uuidString),
@@ -1073,7 +1058,10 @@ final class PersistenceStore {
                   .int(s.enabled ? 1 : 0),
                   s.lastPollAt.map { .real($0.timeIntervalSince1970) } ?? .null,
                   s.lastError.map { .text($0) } ?? .null,
-                  .real(createdAt.timeIntervalSince1970)])
+                  .real(createdAt.timeIntervalSince1970),
+                  .text(s.provider),
+                  .text(s.modelId),
+                  s.thinkingLevel.map { .text($0) } ?? .null])
     }
 
     /// 删哨兵连带清掉它的线程映射与拒收日志 (两者都以 sentinel_id 归属, 留悬空行只会在 UI 里变孤儿)。

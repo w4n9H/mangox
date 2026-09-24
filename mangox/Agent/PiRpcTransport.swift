@@ -636,24 +636,58 @@ final class PiRpcTransport: AgentTransport {
             // P6.1.1: 顶层累计 usage → 状态栏实时 tick (500ms 节流; 无顶层 usage 则忽略)
             if let u = dict["usage"] as? [String: Any] { noteLiveUsage(u) }
             guard let ev = dict["assistantMessageEvent"] as? [String: Any] else { return }
-            // P6.2.1: toolcall_start 提前出卡 (queued; 参数未知 → title=工具名)。
-            // tool_execution_start 携同一 callId 到达时按现有逻辑整卡替换转 running。
-            if ev["type"] as? String == "toolcall_start" {
+            // ⚠️ pi 的 JSON 层会**改写**这个事件 (json-event.js `toJsonAssistantMessageEvent`):
+            // 剥掉 `partial`, 并给 `toolcall_start` 补上 `id` + `toolName` (取自 partial.content)。
+            // 所以下面读不到 `partial` 是协议如此, 不是解析漏了。
+            switch ev["type"] as? String {
+            case "toolcall_start":
+                // P6.2.1: 提前出卡 (queued; 参数未知 → title=工具名)。
+                // tool_execution_start 携同一 callId 到达时整卡替换转 running。
                 guard let callId = ev["id"] as? String else { return }
                 let name = ev["toolName"] as? String ?? "bash"
                 let card = ToolCall(kind: kindFor(name), title: name, command: nil, phase: .queued)
                 toolCards[callId] = card
                 emit(.toolUpdated(card))
-                return
-            }
-            let delta = ev["delta"] as? String ?? ""
-            guard !delta.isEmpty else { return }
-            switch ev["type"] as? String {
+
+            case "toolcall_end":
+                // ③ 权威参数到手: `toolCall{id,name,arguments}`。不接它 = 把参数静默丢掉 ——
+                // 卡头会一直停在 "BASH  bash  等待" 直到 tool_execution_start 才补齐,
+                // 而审批/排队期间用户看不到自己要批的是什么。
+                guard let tc = ev["toolCall"] as? [String: Any],
+                      let callId = tc["id"] as? String else { return }
+                let name = tc["name"] as? String ?? "bash"
+                let kind = kindFor(name)
+                let head = Self.toolHead(kind: kind, name: name,
+                                         args: tc["arguments"] as? [String: Any] ?? [:])
+                // 缺 start (流被打断 / 提前卡没出) 也要**补一张**, 而不是 return:
+                // 这一步是权威数据, 丢掉它等于把参数彻底丢了。相态仍记 queued (是否真执行由
+                // tool_execution_start 决定, 不在这里替它断言)。
+                var card = toolCards[callId]
+                    ?? ToolCall(kind: kind, title: name, command: nil, phase: .queued)
+                card.kind = kind
+                card.title = String(head.title.prefix(120))
+                card.command = head.command
+                toolCards[callId] = card
+                emit(.toolUpdated(card))
+
             case "text_delta":
+                let delta = ev["delta"] as? String ?? ""
+                guard !delta.isEmpty else { return }
                 emit(.textChunk(messageID: lazyID(&textMessageID), delta: delta))
+
             case "thinking_delta":
+                let delta = ev["delta"] as? String ?? ""
+                guard !delta.isEmpty else { return }
                 emit(.thoughtChunk(messageID: lazyID(&thinkMessageID), delta: delta))
+
             default:
+                // 显式忽略 (原先统一 `break`, 事后看不出是"不需要"还是"忘了接")。
+                // 已逐个核对 pi-ai/types.d.ts:400-456 的 12 种事件:
+                //   start / text_start / text_end / thinking_start / thinking_end / done / error
+                //     → 正文与思考的权威值随 `message_end` 走 rollMessageBoundary 落定, 无需在此重复。
+                //   toolcall_delta
+                //     → 内容是 toolcall_end.arguments 的**原始 JSON 碎片** (未转义), 渲染出来
+                //       是一串引号花括号, 且随即被 toolcall_end 覆盖 ⇒ 噪声, 不是信息。
                 break
             }
 
@@ -661,14 +695,14 @@ final class PiRpcTransport: AgentTransport {
             guard let callId = dict["toolCallId"] as? String else { return }
             let args = dict["args"] as? [String: Any] ?? [:]
             let name = dict["toolName"] as? String ?? "bash"
-            let cmd = args["command"] as? String
-            let title = (args["path"] as? String) ?? cmd ?? name
+            let kind = kindFor(name)
+            let head = Self.toolHead(kind: kind, name: name, args: args)
             // P6.2.1: toolcall_start 提前卡已存在 → 沿用其 id 整卡升级 (否则旧 queued 卡
             // 永不落定 + 同一调用两张卡, 轨迹里被连续同类分组误并)
             let card = ToolCall(id: toolCards[callId]?.id ?? UUID(),
-                                kind: kindFor(name),
-                                title: String(title.prefix(120)),
-                                command: (cmd != nil && title == cmd) ? nil : cmd,
+                                kind: kind,
+                                title: String(head.title.prefix(120)),
+                                command: head.command,
                                 phase: .running)
             toolCards[callId] = card
             toolStartAt[callId] = arrivedAt
@@ -677,9 +711,13 @@ final class PiRpcTransport: AgentTransport {
         case "tool_execution_update":
             guard let callId = dict["toolCallId"] as? String,
                   var card = toolCards[callId] else { return }
-            if let out = outputString(dict["partialResult"]) {
+            // partialResult 是**快照不是增量** (bash 每次 onUpdate 给全量 output.snapshot) ⇒ 整行替换。
+            let parsed = parseToolResult(dict["partialResult"])
+            if let out = parsed.text {
                 card = card.withDetails([ToolDetail("输出", out)])
             }
+            // 流式期不落图片 (partial 里的 image 块每次重发同一张, 会一遍遍写盘);
+            // 图片只认 tool_execution_end。
             toolCards[callId] = card
             emit(.toolUpdated(card))
 
@@ -687,17 +725,22 @@ final class PiRpcTransport: AgentTransport {
             guard let callId = dict["toolCallId"] as? String,
                   var card = toolCards[callId] else { return }
             let isError = dict["isError"] as? Bool ?? false
+            let parsed = parseToolResult(dict["result"])
             if isError {
-                let msg = outputString(dict["result"]) ?? L("工具执行失败")
+                // 失败的 result 也是 AgentToolResult (content[0].text = 真错误文本,
+                // 见 agent-loop.js createErrorToolResult) ⇒ 取真话, 不再一律打印兜底文案。
+                let msg = parsed.text ?? L("工具执行失败")
                 card = card.withPhase(.error(String(msg.prefix(200))))
             } else {
-                if let out = outputString(dict["result"]) {
-                    card = card.withDetails([ToolDetail("输出", out)])
+                var rows: [ToolDetail] = []
+                if let out = parsed.text { rows.append(ToolDetail("输出", out)) }
+                // 正文缺失时才用 details 兜底 (详见 flattenDetails 的判据)
+                if parsed.text == nil, let det = parsed.detailsSummary {
+                    rows.append(ToolDetail("细节", det))
                 }
+                let images = persistToolImages(parsed.images, owner: imageOwnerId)
                 let ms = toolStartAt[callId].map { Int(Date().timeIntervalSince($0) * 1000) }
-                card = ToolCall(id: card.id, kind: card.kind, title: card.title,
-                                command: card.command, details: card.details,
-                                phase: .done, durationMs: ms)
+                card = card.finalized(details: rows, imagePaths: images, durationMs: ms)
             }
             toolCards[callId] = card
             emit(.toolUpdated(card))
@@ -946,25 +989,13 @@ final class PiRpcTransport: AgentTransport {
                 let infos: [AgentModelInfo] = models.compactMap { m -> AgentModelInfo? in
                     guard let provider = m["provider"] as? String,
                           let id = m["id"] as? String else { return nil }
-                    // 逐条复刻 pi getSupportedThinkingLevels (pi-ai models.js):
-                    // reasoning=false → [off]; reasoning=true → off..high 默认支持
-                    // (显式 null 剔除), xhigh 仅在 thinkingLevelMap 显式给出时支持。
-                    let levelMap = (m["thinkingLevelMap"] as? [String: Any]) ?? [:]
-                    let reasoning = (m["reasoning"] as? Bool) ?? false
-                    let levels: [ThinkingLevel]
-                    if !reasoning {
-                        levels = [.off]
-                    } else {
-                        levels = ThinkingLevel.allCases.filter { lv in
-                            let mapped = levelMap[lv.rawValue]
-                            if let v = mapped, v is NSNull { return false }
-                            if lv == .xhigh && mapped == nil { return false }
-                            return true
-                        }
-                    }
-                    return AgentModelInfo(provider: provider, id: id,
-                                          name: m["name"] as? String ?? "",
-                                          supportedLevels: levels)
+                    // 级别语义的唯一实现在 ThinkingLevel.supported (本文件曾是两份拷贝之一)
+                    return AgentModelInfo(
+                        provider: provider, id: id,
+                        name: m["name"] as? String ?? "",
+                        supportedLevels: ThinkingLevel.supported(
+                            reasoning: (m["reasoning"] as? Bool) ?? false,
+                            map: (m["thinkingLevelMap"] as? [String: Any]) ?? [:]))
                 }
                 delegate?.transport(self, didReportModels: infos)
             }
@@ -1044,6 +1075,33 @@ final class PiRpcTransport: AgentTransport {
         delegate?.transport(self, didEmit: event)
     }
 
+    /// 卡头两列 (title / command) 的**唯一**推导处 —— `toolcall_end` 与 `tool_execution_start`
+    /// 都调它。两处各写一套必然分叉 (前者是"参数已定", 后者是"开始执行"), 分叉后的症状是
+    /// 卡片在两步之间**跳一下**、或者审批时看到的命令和随后执行的不是一条。
+    private static func toolHead(kind: ToolKind, name: String, args: [String: Any])
+        -> (title: String, command: String?) {
+        let cmd = args["command"] as? String
+        let path = args["path"] as? String
+        // 未知工具 (kind == .other) 的卡头标签恒为 "OTHER", 标签本身不携带真名 ⇒ 真名必须
+        // 占 title, 否则用户看不出跑的是哪个扩展工具 (args 退到 command 列)。
+        if kind == .other { return (name, cmd ?? path ?? firstScalarArg(args)) }
+        let title = path ?? cmd ?? name
+        return (title, (cmd != nil && title == cmd) ? nil : cmd)
+    }
+
+    /// 未知工具的参数兜底: 取**第一个标量参数**渲染成 `key=value`。
+    /// 对未知工具"哪个参数重要"是不可知的, 但"它有参数"是事实 —— 丢掉才是隐瞒。
+    /// 按 key 排序取首个 ⇒ 同一调用**幂等** (两次推导必得同一结果, 卡头不会跳)。
+    private static func firstScalarArg(_ args: [String: Any]) -> String? {
+        for key in args.keys.sorted() {
+            guard let v = args[key] else { continue }
+            if let s = v as? String, !s.isEmpty { return "\(key)=\(s)" }
+            if let b = v as? Bool { return "\(key)=\(b)" }
+            if let n = v as? NSNumber { return "\(key)=\(n)" }
+        }
+        return nil
+    }
+
     private func kindFor(_ toolName: String) -> ToolKind {
         switch toolName {
         case "bash", "powershell": return .bash   // P6.0④: powershell 是 Windows 同族
@@ -1056,24 +1114,116 @@ final class PiRpcTransport: AgentTransport {
         case "fetch": return .fetch
         case "search": return .search
         case "image": return .image
-        default: return .read
+        case "delegate": return .delegate         // pi 0.85.1 无内置生产方, 留位给扩展
+        // ⚠️ **不许再 return .read** —— 那是谎报: 装了 web-search / subagents 这类扩展后,
+        // 卡片标签会**读作 READ**, 轨迹页 chip 更连**颜色一起错** (`defaultColor` 只在轨迹页用;
+        // 卡片标签色走 `railColor`, 由相态决定 ⇒ 那里错的是文字不是颜色)。
+        // 且落库的 kind 已失真、事后分不出"真 read"和"未知工具"。
+        // 中性 OTHER 难看, 但它是诚实的; 真名由 `toolHead` 放进 title (见下)。
+        default: return .other
         }
     }
 
-    /// partialResult/result 形状因工具而异, 保守提取字符串。
-    private nonisolated func outputString(_ v: Any?) -> String? {
-        if let s = v as? String { return s }
-        guard let d = v as? [String: Any] else { return nil }
-        for k in ["output", "content", "text", "result"] {
-            if let s = d[k] as? String, !s.isEmpty { return s }
-        }
-        return nil
+    /// pi 的工具结果是 **`AgentToolResult`**, 不是裸字符串:
+    ///   `{ content: (TextContent | ImageContent)[], details: T, usage?, terminate? }`
+    ///   `TextContent  = { type: "text",  text: String }`
+    ///   `ImageContent = { type: "image", data: String(base64), mimeType: String }`
+    /// (pi-agent-core/types.d.ts:317-331 · pi-ai/types.d.ts:251-255 · 实测 read.js:85 返回图片块)
+    ///
+    /// ⚠️ **旧版 `outputString` 只在顶层找字符串键** ⇒ `content[]` 整个没看 ⇒ 每张卡
+    /// `"details":[]`(连成功的 `cat` 也没输出), 失败时只剩一句兜底文案。**这是丢数据, 不是没数据。**
+    private struct ParsedToolResult {
+        var text: String?
+        var images: [(data: String, mimeType: String)] = []
+        /// `details` 的可读折平 (各工具自定结构: bash 有 truncation/fullOutputPath)。
+        var detailsSummary: String?
     }
-}
 
-extension ToolCall {
-    func withDetails(_ details: [ToolDetail]) -> ToolCall {
-        ToolCall(id: id, kind: kind, title: title, command: command,
-                 details: details, phase: phase, durationMs: durationMs)
+    private func parseToolResult(_ v: Any?) -> ParsedToolResult {
+        var out = ParsedToolResult()
+        // 老/异形形状兜底: 扩展可能直接给字符串
+        if let s = v as? String {
+            out.text = s.isEmpty ? nil : s
+            return out
+        }
+        guard let d = v as? [String: Any] else { return out }
+
+        if let blocks = d["content"] as? [Any] {
+            var texts: [String] = []
+            for case let block as [String: Any] in blocks {
+                switch block["type"] as? String {
+                case "text":
+                    if let t = block["text"] as? String, !t.isEmpty { texts.append(t) }
+                case "image":
+                    if let data = block["data"] as? String, !data.isEmpty {
+                        out.images.append((data, block["mimeType"] as? String ?? "image/png"))
+                    }
+                default:
+                    break
+                }
+            }
+            if !texts.isEmpty { out.text = texts.joined(separator: "\n") }
+        }
+        // 无 content[] 的结果: 退回顶层字符串键 (旧口径, 保留)
+        if out.text == nil {
+            for k in ["output", "text", "result"] {
+                if let s = d[k] as? String, !s.isEmpty { out.text = s; break }
+            }
+        }
+        if let det = d["details"] {
+            out.detailsSummary = Self.flattenDetails(det)
+        }
+        return out
+    }
+
+    /// `details` 折成一行可读文本 (`key=value · key.sub=1`)。
+    /// **只在正文缺失时才有资格上屏** —— `content[].text` 已是给模型的摘要 (含
+    /// "[Showing lines 1-50 of 300…]" 这类续读提示), 常见情形下 details 是它的子集, 同时
+    /// 显示只会多一行噪声。
+    private static func flattenDetails(_ v: Any) -> String? {
+        var parts: [String] = []
+        flatten(v, prefix: "", into: &parts)
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
+    }
+
+    private static func flatten(_ v: Any, prefix: String, into out: inout [String]) {
+        if let d = v as? [String: Any] {
+            for k in d.keys.sorted() {
+                let key = prefix.isEmpty ? k : "\(prefix).\(k)"
+                flatten(d[k] as Any, prefix: key, into: &out)
+            }
+        } else if let a = v as? [Any] {
+            for (i, item) in a.enumerated() { flatten(item, prefix: "\(prefix)[\(i)]", into: &out) }
+        } else if v is NSNull {
+            return                                   // 空值不占位 (JSON null = 无此项)
+        } else if let b = v as? Bool {
+            out.append("\(prefix)=\(b)")
+        } else if let n = v as? NSNumber {
+            out.append("\(prefix)=\(n)")
+        } else if let s = v as? String, !s.isEmpty {
+            out.append("\(prefix)=\(s)")
+        }
+    }
+
+    /// 工具产出图片的落盘位置键。有会话绑定用会话 id (这样"删会话"的
+    /// `ImagePipeline.removeSessionAttachments` 一并覆盖); 无绑定 (任务 fire 的
+    /// --no-session 回合) 退到 transport 实例 id —— 这类会话本来就没有 UI, 不必回收。
+    private let transportInstanceId = UUID()
+    private var imageOwnerId: UUID { desiredSessionId ?? transportInstanceId }
+
+    /// base64 图片块 → 落盘 → 返回本机路径。落盘失败返回 nil (**不猜、不留半张**)。
+    private func persistToolImages(_ images: [(data: String, mimeType: String)],
+                                   owner: UUID) -> [String] {
+        var paths: [String] = []
+        for img in images {
+            guard let data = Data(base64Encoded: img.data) else { continue }
+            let ext = ImagePipeline.sniffExtension(data)
+                ?? img.mimeType.split(separator: "/").last.map(String.init)
+                ?? "png"
+            if let saved = try? ImagePipeline.saveOriginal(data, fileExtension: ext, sessionID: owner) {
+                paths.append(saved.path)
+            }
+        }
+        return paths
     }
 }

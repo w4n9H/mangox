@@ -7,7 +7,7 @@
    **本文件由 scripts/l10n/gen_strings.py --write 生成, 别手改** ——
    译文改 scripts/l10n/en_values.py 的 VALUES, 再跑 --write。
 
-   条数: 589
+   条数: 593
 */
 
 " [附件: %@]" = " [Attachment: %@]";
@@ -218,6 +218,7 @@
 "发送 (Enter)" = "Send (Enter)";
 "发送失败: %@" = "Send failed: %@";
 "取消" = "Cancel";
+"只作用于这个 Inbox 起的会话, 不改变你当前会话的模型与档位" = "Applies only to sessions started by this Inbox; your current session's model and mode are untouched.";
 "只收 .md (大小写敏感); 若你刚要删或改名, 这条就是唯一的线索" = "Only .md is picked up (case-sensitive); if you just deleted or renamed something, this line is the only trace of it";
 "只是不再挂载, 目录与里面的文件一个都不动。" = "It is only unmounted — the directory and every file inside stay untouched.";
 "只读命令静默放行, 其余弹审批卡等待点击。" = "Read-only commands pass silently; anything else raises an approval card and waits for a click.";
@@ -238,6 +239,7 @@
 "回合完成通知" = "Turn completion notifications";
 "回执发送失败: %@" = "Could not send the receipt: %@";
 "回执未发出: Inbox「%@」的账号/收件实现不可用" = "No receipt sent: the account or receiving path for Inbox “%@” is unavailable";
+"图片: %@" = "Image: %@";
 "图片已不存在 (附件文件被移动或删除)" = "The image is gone (the file was moved or deleted)";
 "在 App 外改完文件后点这里; 已开着的会话仍需重启引擎才生效" = "Click here after editing files outside the app; running sessions still need an engine restart";
 "在 Finder 打开" = "Open in Finder";
@@ -250,6 +252,7 @@
 "复制全文" = "Copy full text";
 "复制全部输出" = "Copy all output";
 "外观" = "Appearance";
+"外链图片不在应用内加载" = "Remote images are not loaded in the app";
 "多久看一次收件箱 (全局串行: 同一时刻只跑一个远程任务)" = "How often to check the inbox (global serial: only one remote task runs at a time)";
 "好" = "OK";
 "好的,先记下「%@」的需求,我会在下一轮把上下文喂给模型,再回执计划。" = "Got it. Noting the \"%@\" request; I will feed the context to the model on the next turn and reply with a plan.";
@@ -336,6 +339,7 @@
 "按频率轻检查触发条件, 条件成立才执行动作 (条件驱动)" = "Lightweight checks of the trigger condition at an interval; the action runs only once it holds (condition-driven)";
 "捕获消息落库" = "Persist captured messages";
 "捕获追加落库" = "Persist appended captures";
+"换行" = "Wrap";
 "授权码" = "App password";
 "授权码 / 客户端专用密码" = "App password / client-specific password";
 "授权码已设置" = "App password set";
@@ -490,7 +494,7 @@
 "等待审批" = "Awaiting approval";
 "索引宁缺勿残 — 残缺的索引会让你以为资料只有这些; 摘掉或停用一两个库即可恢复" = "A partial index is worse than none — it would read as “these are all the materials”. Unmount or disable a base or two to restore it";
 "索引预览" = "Index preview";
-"级别" = "Effort";
+"细节" = "Details";
 "给 MangoX 发消息…" = "Message MangoX…";
 "编辑" = "Edit";
 "编辑内容后采纳, 转为正式条目 (需重启引擎生效)" = "Edit and accept to turn it into a proper entry (restart the engine to apply)";
@@ -509,7 +513,6 @@
 "自定义模型与模式" = "Custom model and mode";
 "草稿还没保存 —— 下面的索引预览显示的是已保存的那句" = "Draft not saved yet — the index preview below shows the saved sentence";
 "行标题是文件名加上一句固定说明（如 SOUL.md - 我是谁）；表外的文件就只有文件名" = "A row title is the file name plus a fixed description (e.g. SOUL.md - Who I Am); files outside the list show only the file name";
-"要求密钥" = "Require secret";
 "解析失败: %@" = "Parsing failed: %@";
 "触发条件 (每轮轻检查)" = "Trigger condition (checked lightly each round)";
 "触发条件与动作为必填" = "Trigger condition and action are required";
@@ -585,6 +588,7 @@
 "重新读取" = "Reread";
 "重试 %lld/%lld · %llds 后" = "Retry %lld/%lld · in %llds";
 "错误" = "Error";
+"长行折行显示" = "Fold long lines";
 "间隔" = "Interval";
 "阿里云邮箱" = "Alibaba Cloud Mail";
 "附加文件…" = "Attach files…";

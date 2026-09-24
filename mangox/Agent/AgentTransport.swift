@@ -111,18 +111,42 @@ struct AgentModelInfo: Hashable {
     var label: String { name.isEmpty ? id : name }
 }
 
-/// 菜单条目 = 模型 × 思考级别 (笛卡尔积)。Identifiable 的 id 必须含级别分量——
-/// 同一模型的 high/xhigh 两条若共用 model.id 作 ForEach id 会撞车, 渐染成重复行。
-struct ModelMenuEntry: Identifiable {
-    let id: String
-    let model: AgentModelInfo
-    let level: ThinkingLevel?
-}
-
 /// P3.5: pi 支持的思考级别全集 (--thinking 文档与 set_thinking_level 一致)。
 enum ThinkingLevel: String, CaseIterable, Identifiable {
     case off, minimal, low, medium, high, xhigh
     var id: String { rawValue }
+
+    /// 界面标签。**英文常量, 不走 `L()`** —— 与 `AgentMode.displayName` 同款口径
+    /// (档位名保持单一写法, 不随界面语言变)。`rawValue` 是**契约 token** (spawn 的
+    /// `--thinking` 与 `set_thinking_level` 逐字使用), 任何显示都不得回写它。
+    var displayName: String {
+        switch self {
+        case .off: "Off"
+        case .minimal: "Minimal"
+        case .low: "Low"
+        case .medium: "Medium"
+        case .high: "High"
+        case .xhigh: "Extra High"
+        }
+    }
+
+    /// pi `getSupportedThinkingLevels` 语义的**唯一实现**。
+    /// (2026-09-23 合并: 此前 `ManagedModel` 与 `PiRpcTransport` 各抄一份, 靠注释维持同步 ——
+    ///  两份实现在 map **缺键**时结果不同, 已经漂移。)
+    ///
+    /// - `reasoning == false` → 仅 `.off`
+    /// - `reasoning == true`  → `off..high` **默认支持**, map 中显式 `null` 剔除
+    /// - `xhigh` 例外: 仅在 map **显式给出该键**时支持 (pi 侧默认不开放)
+    /// - ⚠️ **map 缺键 = 未提及 = 默认支持** —— 这是黑名单语义, 不是"只列出的才支持"
+    static func supported(reasoning: Bool, map: [String: Any]) -> [ThinkingLevel] {
+        guard reasoning else { return [.off] }
+        return allCases.filter { lv in
+            let mapped = map[lv.rawValue]
+            if let v = mapped, v is NSNull { return false }
+            if lv == .xhigh && mapped == nil { return false }
+            return true
+        }
+    }
 }
 
 @MainActor

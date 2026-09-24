@@ -334,9 +334,19 @@ struct ChatComposer: View {
     // MARK: - Bottom-right: model picker + send
 
     private var modelMenu: some View {
-        // P9.1e (#8): 菜单数据直订 ModelStore —— 流式 chunk (store.messages) 不再触发菜单重算。
-        ModelMenuSection(model: store.model) { model, level in
-            store.selectModel(model, level: level)
+        // P9.1e (#8): 控件数据直订 ModelStore —— 流式 chunk (store.messages) 不再触发菜单重算。
+        // 2026-09-23: 换受控 `ModelPicker` (popover: 模型列表 + 强度滑轨), 级别收敛在控件内,
+        // 这里只负责"把结果写成全局期望"。
+        ModelPicker(
+            models: store.model.menuModels,
+            choice: store.model.currentChoice,
+            title: { m in
+                store.model.customLabel(provider: m.provider, modelId: m.id) ?? m.label
+            },
+            fallbackTitle: store.model.currentModelDisplayName,
+            helpText: L("模型与思考强度 (选中即期望, 下一回合生效)")
+        ) { pick in
+            store.selectModel(pick)
         }
     }
 
@@ -653,59 +663,5 @@ struct CompactTextEditor: NSViewRepresentable {
                             used.height + textView.textContainerInset.height * 2))
             parent.onHeightChange(h)
         }
-    }
-}
-
-// P9.1e (#8): 模型菜单独立子视图 —— 直订 ModelStore, 流式 chunk 不再重算菜单数据。
-private struct ModelMenuSection: View {
-    @ObservedObject var model: ModelStore
-    let onSelect: (AgentModelInfo, ThinkingLevel?) -> Void
-
-    private var shortModelName: String {
-        // 药丸与菜单勾选同源 (期望选中): 引擎实际模型随 per-turn spawn 下回合生效,
-        // 若显示上报值会出现「勾选 V4.1 药丸还是 V4」的割裂 (已实证)。
-        // P5.1: 自定义条目优先显示其 label。
-        model.currentModelDisplayName
-    }
-
-    var body: some View {
-        // P7-M3: 菜单只认 settings 配置的自管模型 (无自管时 menuModels 回落 pi 目录);
-        // 不再自行拼 customModelInfos + catalogModels (曾绕过 menuModels 导致全量目录泄漏)。
-        let entries = model.modelMenuEntries
-        return Menu {
-            // 条目 = 每个模型 × 其支持的思考级别; 未上报时只显示当前项。
-            if entries.isEmpty {
-                Button(shortModelName) {}
-            } else {
-                ForEach(entries) { entry in
-                    Button(menuTitle(entry)) {
-                        onSelect(entry.model, entry.level)
-                    }
-                }
-            }
-        } label: {
-            // ⚠️ borderlessButton Menu 的 label 只渲染"首个 Image + 首个 Text", HStack 多子视图
-            // 会被静默丢弃 (级别/chevron 消失, 离屏渲染实测)。必须拼成单个 Text (SF Symbol 可内嵌)。
-            (Text(Image(systemName: "bolt.fill"))
-                .font(.system(size: Tune.boltIconSize)).foregroundColor(CodexTheme.textMuted)
-             + Text(" \(shortModelName)")
-                .font(CodexTheme.fontSmall).foregroundColor(CodexTheme.textTertiary)
-             + Text(" \(model.thinkingLevel.rawValue)")
-                .font(.system(size: Tune.levelFontSize, weight: .semibold)).foregroundColor(CodexTheme.textPrimary)
-             + Text(Image(systemName: "chevron.down"))
-                .font(.system(size: Tune.chevronIconSize, weight: .semibold)).foregroundColor(CodexTheme.textMuted))
-            .frame(height: Tune.pillHeight)
-            .contentShape(Rectangle())
-        }
-        .menuStyle(.borderlessButton)
-        .menuIndicator(.hidden)
-        .fixedSize()
-        .help("模型与思考强度 (选中即期望, 下一回合生效)")
-    }
-
-    /// 菜单项标题 (✓ = 当前选中组合)。
-    private func menuTitle(_ entry: ModelMenuEntry) -> String {
-        let base = entry.level.map { "\(entry.model.label)（\($0.rawValue)）" } ?? entry.model.label
-        return model.isCurrent(entry) ? "✓ " + base : base
     }
 }

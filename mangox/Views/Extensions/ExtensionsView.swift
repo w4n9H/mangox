@@ -200,7 +200,7 @@ struct ExtensionsView: View {
             }
             .padding(.horizontal, 32)
             .padding(.vertical, 24)
-            .frame(maxWidth: Tune.knowledgeEditorMaxWidth, alignment: .leading)
+            .frame(maxWidth: Tune.extensionEditorMaxWidth, alignment: .leading)
             .frame(maxWidth: .infinity, alignment: .center)
         }
     }

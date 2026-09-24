@@ -392,7 +392,8 @@ final class MailboxSentinelService: ObservableObject {
         store.beginTurn(sid: sid, prompt: pending.prompt, ephemeral: false,   // 拍板 5: 真 session, 与 Scheduled 不同路
                         cwd: cwd, unattended: true,
                         modeOverride: sentinel.agentMode,                  // 拍板 7: full (含全部托管扩展)
-                        approvalOverride: sentinel.approval)               // 拍板 8: autoJudge (拒且不阻塞)
+                        approvalOverride: sentinel.approval,               // 拍板 8: autoJudge (拒且不阻塞)
+                        modelOverride: sentinel.modelOverride)             // 2026-09-24: 任务级模型 (空 = 跟随当前会话)
     }
 
     /// 入队一个待执行回合 (`currentlyRunning` = 此刻占着串行位的 taskId, 空闲传 nil)。

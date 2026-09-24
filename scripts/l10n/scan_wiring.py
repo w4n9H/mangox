@@ -81,13 +81,22 @@ SUSPECT_KINDS = [
         r'|\bof\s*:\s*$'),
      '逻辑比较 / 前后缀匹配 / 替换源 —— **绝不可**加 L() (会破坏协议判定或替换逻辑),'
      ' 应登记进 wiring_allow.txt'),
-    ('EMBEDDED', re.compile(r'.'),
-     '位于**多行字符串字面量**内 (注入给 pi 的扩展 JS 等) —— 包了 L() 会变成非法代码,'
-     ' 应登记进 wiring_allow.txt'),
     ('INTERP', re.compile(r'^"'), '实际是插值片段 (前有引号未闭合)'),
     ('ARG', re.compile(r'[,(]\s*$'), '普通实参 —— 取决于形参类型, 需人工确认'),
     ('OTHER', re.compile(r'.'), '其它形态 —— 需人工确认'),
 ]
+
+# 类别的说明表 (打印用)。⚠️ **`EMBEDDED` 刻意不在这张分类表里** ——
+# 它**不由 `analyze` 产生**, 只由 `suspects()` 里那条**真·多行字符串区间**判定产生
+# (见 `embedded_ranges`)。曾经它在表里带一条 `re.compile(r'.')`, 那是**万能匹配**:
+# 于是所有没落进 ASSIGN/FORMAT_ARG/LOGIC 的可疑项都被打上 "位于多行字符串字面量内",
+# 连带给出**错误的修法建议** (去登记豁免, 而正确动作是加 `L()`)。实测踩过 (2026-09-24):
+# 一条 `ToolDetail("细节", …)` 被报成"在扩展 JS 里", 查了半天才确认根本不在多行串内。
+# ⇒ 判据本身错了, 比没有判据更坏: 它会把人指向**相反**的修法。
+KIND_DESC = {k: d for k, _, d in SUSPECT_KINDS}
+KIND_DESC['EMBEDDED'] = (
+    '位于**多行字符串字面量**内 (注入给 pi 的扩展 JS 等) —— 包了 L() 会变成非法代码,'
+    ' 应登记进 wiring_allow.txt')
 
 # ── 内联实参豁免 (实测依据) ─────────────────────────────────────────────────
 #
@@ -437,6 +446,7 @@ def main():
         print('可疑类别 (越靠前越确定「必须加 L()」):')
         for kind, _, desc in SUSPECT_KINDS:
             print(f'  {kind:14s} {desc}')
+        print(f'  {"EMBEDDED":14s} {KIND_DESC["EMBEDDED"]}')
         print('\n另有第二类判据「冻结取词」: L()/LK() 落在**存储属性**里')
         print('  (static let / 文件级 let) —— 首次访问求值一次, 切语言不再跟随。')
         print('  安全形态: 计算属性 static var x: T { L(…) } / 函数体局部变量。')
@@ -451,14 +461,14 @@ def main():
     for rel, lineno, kind, key, tail in found:
         by_kind.setdefault(kind, []).append((rel, lineno, key, tail))
 
-    order = [k for k, _, _ in SUSPECT_KINDS]
+    order = [k for k, _, _ in SUSPECT_KINDS] + ['EMBEDDED']
     total = len(found)
     print(f'可疑未接线字面量: {total}')
     for kind in order:
         items = by_kind.get(kind)
         if not items:
             continue
-        print(f'\n-- {kind} ({len(items)})  {dict((k, d) for k, _, d in SUSPECT_KINDS)[kind]}')
+        print(f'\n-- {kind} ({len(items)})  {KIND_DESC[kind]}')
         for rel, lineno, key, tail in items:
             shown = key if len(key) <= 40 else key[:39] + '…'
             print(f'   {rel}:{lineno}  {shown}')

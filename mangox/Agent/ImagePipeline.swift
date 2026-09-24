@@ -118,10 +118,25 @@ enum ImagePipeline {
 
     // MARK: - 落盘 (原图留档; baseDirectory 冒烟注入用, 默认 ~/.mangox/attachments)
 
+    /// 冒烟注入: **进程级**重定向附件根目录 (在 `run()` 起手设一次)。
+    ///
+    /// ⚠️ 为什么必须是进程级: `baseDirectory:` 是**函数级**参数, 只有显式传它的调用点才受控。
+    /// 生产路径 (`ChatStore` 落用户贴的图 · `PiRpcTransport` 落工具产出的图) 都不传这个参数 ⇒
+    /// 夹具会写进用户**真实**的 `~/.mangox/attachments/`, 而且**零红灯**。
+    /// 同一类失效在本项目已经实锤过一次 (KnowledgeStore 的 L1 落盘), 故照抄「进程级 override +
+    /// 守卫断言」这一套, 不再靠各处自觉。
+    nonisolated(unsafe) static var attachmentsRootOverride: URL?
+
+    /// 当前生效的附件根 (随 override 变化; 守卫断言读它 —— **政策与解析拆开**, 否则守卫变自证)。
+    static var attachmentsRoot: URL {
+        attachmentsRootOverride
+            ?? FileManager.default.homeDirectoryForCurrentUser
+                .appendingPathComponent(".mangox/attachments", isDirectory: true)
+    }
+
     static func attachmentsDirectory(sessionID: UUID, baseDirectory: URL? = nil) -> URL {
-        let base = baseDirectory ?? FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".mangox/attachments", isDirectory: true)
-        return base.appendingPathComponent(sessionID.uuidString, isDirectory: true)
+        (baseDirectory ?? attachmentsRoot)
+            .appendingPathComponent(sessionID.uuidString, isDirectory: true)
     }
 
     @discardableResult

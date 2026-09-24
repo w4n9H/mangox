@@ -406,7 +406,8 @@ struct MessageBlockView: View {
             if message.role == .user {
                 userBubble(s)
             } else {
-                MarkdownView(text: s, isStreaming: message.isStreaming)
+                MarkdownView(text: s, isStreaming: message.isStreaming,
+                             basePath: store.activeProjectPath)
             }
         case .think(let s):
             ThinkingCardView(text: s, id: message.id, isStreaming: message.isStreaming)

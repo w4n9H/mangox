@@ -198,65 +198,40 @@ struct SparseAgentEditor: View {
 
     private var rulesCard: some View {
         VStack(alignment: .leading, spacing: 10) {
-            field("发件人白名单", hint: "一行一个地址; 名单外的信静默丢弃并移入 Trash") {
-                VStack(alignment: .leading, spacing: 2) {
-                    TextEditor(text: $whitelistText)
-                        .font(CodexFonts.monoFont(12))
-                        .frame(height: 56)
-                        .scrollContentBackground(.hidden)
-                        .padding(4)
-                        .background(CodexTheme.bgInput)
-                        .clipShape(RoundedRectangle(cornerRadius: 6))
-                }
+            field("发件人白名单", hint: "一行一个地址; 名单外的信静默丢弃并移入 Trash", shape: .block) {
+                whitelistEditor
             }
             field("轮询间隔", hint: "多久看一次收件箱 (全局串行: 同一时刻只跑一个远程任务)") {
+                // 值就该长成"值"的样子: 首版用 `accent`(暖橙红) 画这个数字, 在一张表单里像条没接线的
+                // 链接 —— 这套语言里暖色是给"动作/强调"的, 不是给读数的。
                 Stepper(value: $draft.pollInterval, in: 15...300, step: 15) {
                     Text("\(draft.pollInterval) 秒")
                         .font(CodexFonts.monoFont(12))
-                        .foregroundStyle(CodexTheme.accent)
+                        .foregroundStyle(CodexTheme.textPrimary)
                 }
                 .fixedSize()
             }
-            field("密钥闸", hint: "首封主题里必须带这串密钥 (清洗剥掉后不落库)") {
-                VStack(alignment: .leading, spacing: 4) {
-                    Toggle(isOn: $draft.requireSecret) { Text("要求密钥") }
-                        .toggleStyle(.switch)
-                        .controlSize(.small)
-                        .labelsHidden()
-                        .fixedSize()
-                    if draft.requireSecret {
-                        SecureField(store.hasMailboxSentinelSecret(sentinelId: draft.id)
-                                    ? L("已设置 (留空不修改)") : L("共享密钥"), text: $secretInput)
-                            .textFieldStyle(.roundedBorder)
-                            .font(CodexFonts.monoFont(12))
-                            .frame(maxWidth: 260)
-                    }
-                }
-            }
+            secretRow
             if !draft.requireSecret {
                 Text("⚠️ 关掉密钥闸后只剩白名单 + 服务商过滤, 建议名单内各域都已配 DMARC")
                     .font(CodexTheme.fontSmall)
                     .foregroundStyle(CodexTheme.toolRunning)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            field("高级", hint: "工具面与危险命令裁决 (无人值守路径没有审批 UI)") {
-                HStack(spacing: 12) {
-                    Picker("", selection: $draft.agentMode) {
-                        ForEach(AgentMode.allCases) { m in Text(m.displayName).tag(m) }
-                    }
-                    .pickerStyle(.menu).labelsHidden().fixedSize()
-
-                    Picker("", selection: $draft.approval) {
-                        ForEach(ApprovalMode.allCases) { m in Text(m.displayName).tag(m) }
-                    }
-                    .pickerStyle(.menu).labelsHidden().fixedSize()
-                    .help(draft.approval.subtitle)
-                }
+            field("模型", hint: "只作用于这个 Inbox 起的会话, 不改变你当前会话的模型与档位") {
+                inboxModelPicker
             }
-            field("探测地址", hint: "可选: 执行前先探这个 URL, 不通则不跑 (空 = 不探)") {
-                TextField("https://…", text: $draft.intranetProbeURL)
-                    .textFieldStyle(.roundedBorder)
-                    .font(CodexFonts.monoFont(11))
+            field("高级", hint: "工具面与危险命令裁决 (无人值守路径没有审批 UI)") {
+                HStack(spacing: 6) {
+                    agentModePill
+                    approvalPill
+                }
+                // ⚠️ `CodexPillMenu` 里是 `Menu(.borderlessButton)` —— 宽度是**弹性**的: 不给
+                // `fixedSize` 它会一路撑开、把紧跟其后的提示顶走 (P10.4 那轮踩过同一个坑)。
+                .fixedSize()
+            }
+            field("探测地址", hint: "可选: 执行前先探这个 URL, 不通则不跑 (空 = 不探)", shape: .block) {
+                probeField
             }
             if effectiveExistingId != nil {
                 Text("改配置不影响已建线程 —— 它们吃首封快照 (项目目录也随之固定)。")
@@ -268,6 +243,82 @@ struct SparseAgentEditor: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(CodexTheme.bgElevated)
         .clipShape(RoundedRectangle(cornerRadius: 8))
+    }
+
+    // MARK: - 规则卡里的小件 (2026-09-24 第二版: 系统控件全部换成自家的)
+
+    /// 白名单输入井。面与另外两个输入井**同一种** (`bgInput` + 圆角 6)。
+    private var whitelistEditor: some View {
+        TextEditor(text: $whitelistText)
+            .font(CodexFonts.monoFont(12))
+            .frame(height: 56)
+            .scrollContentBackground(.hidden)
+            .padding(4)
+            .background(CodexTheme.bgInput)
+            .clipShape(RoundedRectangle(cornerRadius: 6))
+    }
+
+    /// 密钥闸: **开关跟在标签同一行**, 密钥井落在下一行的**控件列**上。
+    /// 首版把开关与井竖着堆在右边缘 —— 右对齐的是整个 `VStack`, 而 `VStack` 内部仍是左对齐 ⇒
+    /// 开关贴左、井在右, 成了个"台阶" (boss 截图里最乱的一行)。
+    private var secretRow: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            field("密钥闸", hint: "首封主题里必须带这串密钥 (清洗剥掉后不落库)") {
+                // 与编辑器头部那个「启用」**同一个控件** —— 系统 `.switch` 的蓝在这套界面里是外来色。
+                CodexMiniToggle(isOn: $draft.requireSecret)
+            }
+            if draft.requireSecret {
+                SecureField(store.hasMailboxSentinelSecret(sentinelId: draft.id)
+                            ? L("已设置 (留空不修改)") : L("共享密钥"), text: $secretInput)
+                    .textFieldStyle(.plain)
+                    .font(CodexFonts.monoFont(12))
+                    .padding(.horizontal, 7)
+                    .padding(.vertical, 5)
+                    .background(CodexTheme.bgInput)
+                    .clipShape(RoundedRectangle(cornerRadius: 6))
+                    .frame(maxWidth: 260)
+                    // 与控件列同一条左边缘 (首版它起于 745, 而这一列起于 96 —— 差着一格)。
+                    .padding(.leading, Self.labelColumnWidth + 8)
+            }
+        }
+    }
+
+    /// 探测地址输入井 —— 与白名单**同一个面**。
+    /// 首版这里用 `.roundedBorder` (系统白底描边)、而白名单用 `bgInput`: 一张卡里两种输入面 = 脏。
+    private var probeField: some View {
+        TextField("https://…", text: $draft.intranetProbeURL)
+            .textFieldStyle(.plain)
+            .font(CodexFonts.monoFont(11))
+            .padding(.horizontal, 7)
+            .padding(.vertical, 5)
+            .background(CodexTheme.bgInput)
+            .clipShape(RoundedRectangle(cornerRadius: 6))
+    }
+
+    /// 工具面 (`AgentMode`)。首版是系统 `.menu` `Picker`, 渲染成 AppKit 默认的**蓝色双箭头弹窗** ——
+    /// 在这套全自绘胶囊的界面里最扎眼的一处 (boss 截图: "太丑了这个样式")。
+    private var agentModePill: some View {
+        CodexPillMenu {
+            ForEach(AgentMode.allCases) { mode in
+                Button(mode.displayName) { draft.agentMode = mode }
+            }
+        } label: {
+            Image(systemName: "switch.2")
+            Text(draft.agentMode.displayName)
+        }
+    }
+
+    /// 危险命令裁决 (`ApprovalMode`) —— 同上。`displayName` 是契约侧常量, 不走本地化。
+    private var approvalPill: some View {
+        CodexPillMenu {
+            ForEach(ApprovalMode.allCases) { mode in
+                Button(mode.displayName) { draft.approval = mode }
+            }
+        } label: {
+            Image(systemName: "checkmark.shield")
+            Text(draft.approval.displayName)
+        }
+        .help(draft.approval.subtitle)
     }
 
     // MARK: - 运行态卡 (全局串行 + 该 agent 的收信状态)
@@ -392,21 +443,118 @@ struct SparseAgentEditor: View {
         .clipShape(RoundedRectangle(cornerRadius: 8))
     }
 
+    // MARK: - 任务级模型 (2026-09-24, 与 Cron/Watch 的 `taskModelPicker` 同一条契约)
+
+    /// 受控 `ModelPicker`: **值进值出** —— 只写 `draft`, 绝不碰 `store.model.currentChoice`。
+    /// 文案里那句"不改变你当前会话"就是这条的技术含义 (与 Cron/Watch 侧逐字对齐)。
+    private var inboxModelPicker: some View {
+        ModelPicker(
+            models: store.model.menuModels,
+            choice: draftChoice,
+            title: { m in
+                store.model.customLabel(provider: m.provider, modelId: m.id) ?? m.label
+            },
+            fallbackTitle: inboxFallbackTitle,
+            helpText: L("只作用于这个 Inbox 起的会话, 不改变你当前会话的模型与档位"),
+            pillChrome: true   // 与 Cron/Watch 侧同一个控件、同一种形态
+        ) { pick in
+            // 三件套**整体**落定 —— 只改级别而模型仍空, `MailboxSentinel.modelOverride`
+            // 会整体返回 nil 把级别丢掉 (那是静默失效, 不是"跟随")。
+            draft.provider = pick.provider
+            draft.modelId = pick.modelId
+            draft.thinkingLevel = pick.level.rawValue
+        }
+    }
+
+    /// 控件显示值。空分量 (老库的行 / 新建草稿) 按**当前全局值**补 —— 未 pin 的哨兵在 fire 时
+    /// 走 `modelOverride: nil`, 落到日志会话自己的 transport 上 ≈ 当前会话的模型, 显示即为此。
+    /// 与 Cron/Watch 侧同一条: 控件表达不了"未指定", 但**没动过就不写回** (保存后仍是空 = 继续跟随)。
+    private var draftChoice: ModelChoice {
+        ModelChoice(provider: draft.provider.isEmpty ? store.currentProvider : draft.provider,
+                    modelId: draft.modelId.isEmpty ? store.currentModelId : draft.modelId,
+                    level: draft.thinkingLevel.flatMap(ThinkingLevel.init(rawValue:))
+                        ?? store.model.thinkingLevel)
+    }
+
+    /// 药丸文案: 已 pin 用它的名字; 未 pin 用当前全局模型名 (与 `draftChoice` 补的一致)。
+    private var inboxFallbackTitle: String {
+        guard !draft.modelId.isEmpty else { return store.model.currentModelDisplayName }
+        return store.model.customLabel(provider: draft.provider, modelId: draft.modelId) ?? draft.modelId
+    }
+
     // MARK: - 小件
 
-    private func field<C: View>(_ label: LocalizedStringKey, hint: LocalizedStringKey?,
+    /// 标签列宽 —— **全卡唯一**。所有行的标签都占这一列, 控件列因此有统一的左边缘。
+    /// 取 88pt: 最长标签「发件人白名单」(6 字 @11pt ≈ 66pt) + 余量 ⇒ 标签**永不折行**。
+    private static let labelColumnWidth: CGFloat = 88
+
+    /// 行的形状 —— 判据是**控件能不能被一行装下**。
+    private enum FieldShape {
+        /// 有本征宽度的控件 (Stepper / 开关 / 药丸 / 菜单): 一行放 [标签][控件][提示]。
+        case inline
+        /// 要占满控件列的控件 (TextEditor / TextField): [标签][提示] 一行, 控件在下一行。
+        case block
+    }
+
+    /// 一条表单行。
+    ///
+    /// **两版迭代的教训 (都留着, 别再走回去)** —— boss 两次截图:
+    ///   · 首版「96pt 固定标签列 + 控件列 `maxWidth: .infinity`」: 26 字的提示被塞进 96pt ⇒
+    ///     折成 3~4 行 (**左挤**); 控件靠左摆而右侧整段空着 (boss: "左侧拥挤, 右侧留白又太多")。
+    ///   · 二版把控件**推到右边缘**想治"右空" ⇒ 换来更坏的病 (boss: "太丑了这个样式"):
+    ///     **控件列的左边缘没了**。每行控件起点都不同 (开关 745 / 密钥井 745 / 步进器 1030 /
+    ///     药丸 845 / 两个菜单 818) ⇒ 读起来是一排"浮着的控件"; 提示与控件之间还横着一条
+    ///     贯穿卡片的空道 (提示止于 470、控件起于 820)。
+    ///     **"推右"只是把空道从行尾挪到了行中, 而且用一条对齐换来的。**
+    /// ⇒ 现在: **两列共用**, 与同页 Cron/Watch 编辑器的 `cronRow` 同语言 (那是本页既有的写法):
+    ///   ① 标签列固定 `labelColumnWidth` ⇒ 永不折行 (**治"左挤"**);
+    ///   ② 控件列从同一个 x 起 ⇒ 所有控件共用一条左边缘 (**二版丢的就是它**);
+    ///   ③ 提示**紧跟控件后面**, 不在中间留空道 —— 正是 `cronRow` 里「= 检查频率 (…)」的排法。
+    @ViewBuilder
+    private func field<C: View>(_ label: LocalizedStringKey,
+                                hint: LocalizedStringKey? = nil,
+                                shape: FieldShape = .inline,
                                 @ViewBuilder control: () -> C) -> some View {
-        HStack(alignment: .top, spacing: 10) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(label).font(.system(size: 11)).foregroundStyle(CodexTheme.textSecondary)
-                if let hint {
-                    Text(hint).font(.system(size: 10)).foregroundStyle(CodexTheme.textMuted)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
+        switch shape {
+        case .inline:
+            HStack(alignment: .center, spacing: 8) {
+                labelText(label)
+                control()
+                if let hint { hintText(hint) }
+                Spacer(minLength: 0)
             }
-            .frame(width: 96, alignment: .leading)
-            control().frame(maxWidth: .infinity, alignment: .leading)
+        case .block:
+            VStack(alignment: .leading, spacing: 5) {
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    labelText(label)
+                    if let hint { hintText(hint) }
+                    Spacer(minLength: 0)
+                }
+                // 控件也缩进到控件列 —— 否则整张卡会有**两个**左边缘 (标签一个、输入井一个)。
+                control()
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.leading, Self.labelColumnWidth + 8)
+            }
         }
+    }
+
+    /// 标签: 定宽不折行 —— 控件列的左边缘就由它定。
+    private func labelText(_ label: LocalizedStringKey) -> some View {
+        Text(label)
+            .font(.system(size: 11))
+            .foregroundStyle(CodexTheme.textSecondary)
+            .lineLimit(1)
+            .frame(width: Self.labelColumnWidth, alignment: .leading)
+    }
+
+    /// 提示: 跟在控件后面 (或 `.block` 的标题行里)。**永不截断**, 只在真放不下时折行。
+    /// ⚠️ 别给它 `layoutPriority`: 那会让提示比**控件**强势 —— 窄窗口下它先吃满宽度, 把旁边
+    /// 没有 `fixedSize` 的药丸挤成截断态。截断药丸是功能损失, 提示折行只是观感, 该让控件先取。
+    private func hintText(_ hint: LocalizedStringKey) -> some View {
+        Text(hint)
+            .font(.system(size: 10))
+            .foregroundStyle(CodexTheme.textMuted)
+            .fixedSize(horizontal: false, vertical: true)
     }
 
     // MARK: - 草稿装配

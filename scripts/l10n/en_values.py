@@ -100,6 +100,7 @@ VALUES = {
     '五': 'Fri',
     '仅 read / bash / write / edit 四个内置工具, 不挂业务扩展 — 轻装跑定时任务与快速问答。': 'Only the four built-in tools (read / bash / write / edit) and no business extensions — a lean setup for scheduled tasks and quick questions.',
     '仅作用于本任务运行 (日志会话), 不改变你当前会话的模型与档位。': "Applies only to this task's run (its log session); your current session's model and mode are untouched.",
+    '只作用于这个 Inbox 起的会话, 不改变你当前会话的模型与档位': "Applies only to sessions started by this Inbox; your current session's model and mode are untouched.",
     '仅显示前 80 条, 继续输入缩小范围': 'Showing the first 80 — keep typing to narrow it down',
     '仅项目会话可用 (在输入框上方选择项目)': 'Available in project sessions only (pick a project above the composer)',
     '今天': 'Today',
@@ -405,7 +406,6 @@ VALUES = {
     '立即备份': 'Back up now',
     '等待': 'Waiting',
     '等待审批': 'Awaiting approval',
-    '级别': 'Effort',
     '给 MangoX 发消息…': 'Message MangoX…',
     '编辑': 'Edit',
     '编辑内容后采纳, 转为正式条目 (需重启引擎生效)': 'Edit and accept to turn it into a proper entry (restart the engine to apply)',
@@ -422,7 +422,6 @@ VALUES = {
     '自定义 provider: 填 Base URL, 可选测试': 'Custom provider: fill in the base URL, testing is optional',
     '自定义…': 'Custom…',
     '自定义模型与模式': 'Custom model and mode',
-    '要求密钥': 'Require secret',
     '解析失败: %@': 'Parsing failed: %@',
     '触发条件 (每轮轻检查)': 'Trigger condition (checked lightly each round)',
     '触发条件与动作为必填': 'Trigger condition and action are required',
@@ -643,4 +642,15 @@ VALUES = {
     '%lld 字': '%lld chars',
     # 缺省标题（无 "summary" 契约，故措辞是"是……"而不是"没写会怎样"）
     '行标题是文件名加上一句固定说明（如 SOUL.md - 我是谁）；表外的文件就只有文件名': 'A row title is the file name plus a fixed description (e.g. SOUL.md - Who I Am); files outside the list show only the file name',
+    # ---- 2026-09-24: markdown 渲染层 (表格列对齐 / 图片块 / 代码块折行) ----
+    # 折行开关：药丸标签是**名词**(开关名), 不写成动词短语 —— 亮起=开, 所以标签不随状态变
+    '换行': 'Wrap',
+    '长行折行显示': 'Fold long lines',
+    # 外链图片：照实说明"没加载"，而不是静默留白
+    '外链图片不在应用内加载': 'Remote images are not loaded in the app',
+    # ---- 2026-09-24: 工具结果面 (传输层按 AgentToolResult 取 content[] 之后) ----
+    # `细节` 是工具 `details` 兜底的**行标签** (只在正文缺失时出现 —— 见 PiRpcTransport.flattenDetails)
+    '细节': 'Details',
+    # 复制全部输出时图片的入列格式 (复制的内容跟随语言, 故这里的占位符也要进词表)
+    '图片: %@': 'Image: %@',
 }

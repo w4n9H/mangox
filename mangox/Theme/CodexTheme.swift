@@ -89,6 +89,22 @@ enum CodexTheme {
     static let info         = adaptive(light: 0x0969DA, dark: 0x7DA3F0)
     static let blocked      = adaptive(light: 0xB07A12, dark: 0xE0A030) // amber awaiting-approval (P8-T26)
 
+    // MARK: - 思考强度轨 (2026-09-24 boss 拍板: 蓝→紫→洋红, **亮暗共用一套**)
+    // 判据 = 这段色**从色相环的冷端跨到暖端** (227°→306°), 两种底色都托得住; 实测最紧 2.8:1
+    //   (蓝端压暗色卡面 2.79 / 洋红端压亮色输入井 2.88 —— 轨道是 320×20 的大实色块,
+    //    不是细边或小图标, 这一档够用; 想更保险就抬亮色端饱和度)。
+    //   · 曾试过"亮暖(琥珀→玫红)/暗冷"两套色系, **已撤回** —— 同一个控件换底色就换性格, 反而像漂移。
+    // ⚠️ 于是**全应用唯一一处"非品牌暖色"的彩色面** —— 这是**决定的**, 不是漂移:
+    //    它只住在 `ModelPicker` 面板里 (滑轨 + 停靠点), 不与暖橙红 `accent` 同屏争主色。
+    // ⚠️ 中段不许退化成两端的近似值 —— 三点渐变里 mid 恰在 50%, 取近似值 ⇒ 后半条轨是平的
+    //    (踩过: `#E2679B`/`#DC5A8E` 只差 6/13/13, 结果"越高越X"有一半看不见)。
+    /// 轨左端 (最低档)。
+    static let railStart = adaptive(light: 0x4E62D2, dark: 0x4E62D2)
+    /// 轨中段 (中档)。
+    static let railMid   = adaptive(light: 0xA054E8, dark: 0xA054E8)
+    /// 轨右端 (顶档)。
+    static let railEnd   = adaptive(light: 0xE05CC0, dark: 0xE05CC0)
+
     // MARK: - Text
     static let textPrimary   = adaptive(light: 0x24292F, dark: Dark.textPrimary) // 柔和近黑 (0x1F2328 太硬)
     static let textSecondary = adaptive(light: 0x57606A, dark: Dark.textSecondary)
@@ -314,7 +330,17 @@ enum Tune {
     static let distillMaterialCharLimit: Int = 12000   // 记忆提炼: 对话材料总量截断
     static let distillTimeoutSeconds: Double = 60      // 记忆提炼: 一次性 pi 轮超时
     static let knowledgeListWidth: CGFloat   = 240     // 面板左列宽 (与 sidebarWidth 同量级)
-    static let knowledgeEditorMaxWidth: CGFloat = 760  // 编辑区内容列宽 (与消息列同语言)
+    // 编辑区内容列宽 —— **2026-09-24 拆成三个 token** (原先三页共用一个 `knowledgeEditorMaxWidth`)。
+    // 拆的判据: 三处只是**当下取值相同**, 不是同一条约束 —— 知识条目是长文编辑器, 扩展是清单+源码
+    // 预览, Schedule 是表单。共用会让"只想动其中一页"的人先要确认另外两页是否被牵连
+    // (boss 原话: "尽量分开吧, 别共用, 计算都是 1080 也分开")。
+    // ⇒ 改任何一页**只动它自己那一行**, 别为了"一致性"把三个数调回一致。
+    // 值的来历: 760 → 1080 (boss 对着 Inbox 编辑区截图: "留白太多了, 其实可以往两边拉一下");
+    // 1080 在 boss 当前窗口 (~943pt 可用) 下**不触发上限 ⇒ 直接填满**, 只有更宽的窗口才会收回来。
+    // ⚠️ 这是**表单型**编辑区的列宽, 不是阅读栏宽 —— 阅读栏宽另开 token, 别拿这个去收窄正文面。
+    static let scheduleEditorMaxWidth: CGFloat  = 1080   // Schedule 编辑区 (Cron / Watch / Inbox 三种编辑器共用同一 wrapper)
+    static let extensionEditorMaxWidth: CGFloat = 1080   // 扩展编辑区
+    static let knowledgeEditorMaxWidth: CGFloat = 1080   // 知识条目编辑器
     static let knowledgeTitleFontSize: CGFloat  = 17   // 编辑器标题字号
 
     // 定时任务 (P3.6/P3.9)

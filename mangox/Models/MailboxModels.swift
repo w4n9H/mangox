@@ -42,6 +42,12 @@ struct MailboxSentinel: Codable, Equatable, Identifiable {
     var agentMode: AgentMode = .full           // 工具面 (拍板 7)
     var approval: ApprovalMode = .autoJudge    // 裁决 (拍板 8)
     var intranetProbeURL: String = ""          // 可选前置探测 (默认空 = 不探)
+    // 任务级模型 (2026-09-24, 与 `ScheduledTask.config` 同语义): 只作用于**这个 Inbox 起的会话**,
+    // 绝不写全局 —— 全局期望归 composer 药丸。空串 = 尚未 pin (老库的行) ⇒ 回落"跟随当前会话"。
+    var provider: String = ""
+    var modelId: String = ""
+    /// nil = 未手动选过级别 (不钉死, 与 `SessionConfig.thinkingLevel` 同口径)。
+    var thinkingLevel: String?
     var enabled: Bool = false
     var lastPollAt: Date?
     var lastError: String?
@@ -49,7 +55,8 @@ struct MailboxSentinel: Codable, Equatable, Identifiable {
     init(id: UUID = UUID(), name: String, accountId: UUID, projectId: UUID? = nil,
          whitelist: [String] = [], requireSecret: Bool = true, pollInterval: Int = 30,
          agentMode: AgentMode = .full, approval: ApprovalMode = .autoJudge,
-         intranetProbeURL: String = "", enabled: Bool = false,
+         intranetProbeURL: String = "", provider: String = "", modelId: String = "",
+         thinkingLevel: String? = nil, enabled: Bool = false,
          lastPollAt: Date? = nil, lastError: String? = nil) {
         self.id = id
         self.name = name
@@ -61,9 +68,22 @@ struct MailboxSentinel: Codable, Equatable, Identifiable {
         self.agentMode = agentMode
         self.approval = approval
         self.intranetProbeURL = intranetProbeURL
+        self.provider = provider
+        self.modelId = modelId
+        self.thinkingLevel = thinkingLevel
         self.enabled = enabled
         self.lastPollAt = lastPollAt
         self.lastError = lastError
+    }
+
+    /// 下发到 `beginTurn(modelOverride:)` 的三件套。
+    /// ⚠️ `modelId` 为空 ⇒ **整体返回 nil**, 而不是"只下发级别": 空模型 = 跟随当前会话,
+    /// 此时若单发级别就会与"跟随"自相矛盾; 而 `ChatStore.beginTurn` 也只认完整三件套。
+    /// ⇒ **UI 侧不能出现"模型仍空、只改过档位"的状态** —— 落档时必须把模型一并具体化,
+    /// 否则级别会被这里静默丢弃 (`ModelPicker` 的宿主传 `choice:` 时已解析成具体值即为此)。
+    var modelOverride: (provider: String, modelId: String, thinking: String?)? {
+        guard !modelId.isEmpty else { return nil }
+        return (provider: provider, modelId: modelId, thinking: thinkingLevel)
     }
 }
 

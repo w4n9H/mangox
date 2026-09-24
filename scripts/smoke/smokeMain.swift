@@ -109,6 +109,14 @@ struct SmokeMain {
         //    以后指着编号说话必然对错人。2026-09-23 更正为 21 (文档 §7 同步)。
         check(KnowledgeStore.agentRoot.hasPrefix(NSTemporaryDirectory()),
               "守卫 21: 冒烟期 agent 落盘根重定向到临时目录 (实测 \(KnowledgeStore.agentRoot))")
+        // ⚠️ **进程级**重定向图片附件根 (用户贴的图 + 工具产出的图)。与 agent 根同一个理由:
+        //    生产调用点 (`ChatStore` / `PiRpcTransport`) 都不传 `baseDirectory:` 参数,
+        //    函数级注入管不到它们 ⇒ 夹具会写进用户真实 `~/.mangox/attachments/` 且零红灯。
+        let attachTmp = dir + "/attachments-root"
+        try? FileManager.default.createDirectory(atPath: attachTmp, withIntermediateDirectories: true)
+        ImagePipeline.attachmentsRootOverride = URL(fileURLWithPath: attachTmp)
+        check(ImagePipeline.attachmentsRoot.path.hasPrefix(NSTemporaryDirectory()),
+              "守卫 22: 冒烟期图片附件根重定向到临时目录 (实测 \(ImagePipeline.attachmentsRoot.path))")
         // ⚠️ 共享 mock 只服务本段 (T1~T20): ChatStore.init 会把 mock.delegate 指到自己,
         // 而 T22/T22b/T23/T23b/T24/T24b 各节用**同一个 mock** 建自己的 store → delegate 被后建者抢走
         // (链尾 = store24b, :1172)。在 :1172 之后再用顶层 store 发回合 (beginTurn/runScheduledFire),
@@ -398,72 +406,49 @@ struct SmokeMain {
                   "T12 token 格式化 k 缩写")
         }
 
-        // ---- T13 P5.1: 自定义模型 (菜单自主, 运行时借壳) ----
+        // ---- T13 模型选择契约 (P7-M3 菜单来源 + 2026-09-23 受控选择值/级别收敛) ----
+        // (P5.1 自定义模型层与"模型 × 级别"笛卡尔积展开均已删; 级别改由 ModelPicker 滑轨选,
+        //  本节守的是: 裸态回落不变 · 停靠点口径 · clamp 就近 · 选中透传真实 provider/id)
         do {
-            let db = dir + "/custom.db"
+            let db = dir + "/menu.db"
             let s = ChatStore(transport: MockTransport(), dbPath: db,
                               managedExtensionsDir: dir + "/ext")
-            check(s.customModels.isEmpty, "T13 初始自定义条目为空")
-            check(s.validProviders == ["deepseek", "openai"], "T13 provider 集合来自 pi 上报")
-            check(s.isValidProvider("deepseek") && !s.isValidProvider("aliyun")
-                  && !s.isValidProvider("  "), "T13 provider 前缀校验")
+            check(s.managedModels.isEmpty, "T13 新库无自管模型")
+            check(s.menuModels.count == 3
+                  && Set(s.menuModels.map(\.provider)) == ["deepseek", "openai"],
+                  "T13 无自管模型时菜单回落 pi 上报目录")
 
-            // 治本场景: 目录条目名与 API 名错位 → 自定义覆盖
-            check(s.addCustomModel(provider: "deepseek", modelId: "deepseek-v4.1-flash",
-                                   label: "DeepSeek V4.1 Flash"), "T13 添加自定义条目")
-            check(s.customModels.count == 1
-                  && s.customModelInfos[0].label == "DeepSeek V4.1 Flash",
-                  "T13 自定义条目入菜单 (label 生效)")
-            check(s.customModelInfos[0].supportedLevels.count == ThinkingLevel.allCases.count,
-                  "T13 自定义条目 thinking 全级别")
+            // 停靠点: 上报无 supportedLevels (裸态) ⇒ 全集 —— 空集会让滑轨退化成单点、级别再也调不了
+            let bare = s.menuModels[0]
+            check(bare.supportedLevels.isEmpty, "T13 上报条目无 supportedLevels (前置)")
+            check(thinkingStops(for: bare) == ThinkingLevel.allCases,
+                  "T13 裸态停靠点 = 全集 (空 ≠ 无级别可选)")
 
-            // 校验拦截: provider 不在目录中 / model id 为空
-            check(!s.addCustomModel(provider: "aliyun", modelId: "qwen3-max"),
-                  "T13 非法 provider 拒绝添加")
-            check(!s.addCustomModel(provider: "deepseek", modelId: "  "),
-                  "T13 空 model id 拒绝添加")
-            check(s.customModels.count == 1, "T13 拒绝后条目数不变")
+            // 停靠点: 有 supportedLevels ⇒ 严格取之 (不补齐)
+            var restricted = bare
+            restricted.supportedLevels = [.off, .high]
+            check(thinkingStops(for: restricted) == [.off, .high],
+                  "T13 有上报级别时停靠点严格取之")
+            check(clampLevel(.xhigh, to: restricted) == .high
+                  && clampLevel(.minimal, to: restricted) == .off,
+                  "T13 clamp 越界落到最近端点")
+            check(clampLevel(.high, to: restricted) == .high,
+                  "T13 clamp 已合法则原样")
+            // 并列取更低档 (宁少想不多想): [low, high] 对 medium 等距 ⇒ low
+            var tie = bare
+            tie.supportedLevels = [.low, .high]
+            check(clampLevel(.medium, to: tie) == .low,
+                  "T13 clamp 并列取更低档")
 
-            // 覆盖 pi 目录同名条目 (provider/id 相同 → 隐藏目录条目, 不全并重复)
-            check(s.addCustomModel(provider: "deepseek", modelId: "deepseek-v4-flash",
-                                   label: "V4 Flash 别名"), "T13 覆盖同名目录条目")
-            check(!s.catalogModels.contains { $0.id == "deepseek-v4-flash" },
-                  "T13 同名目录条目被覆盖隐藏")
-            let entries = s.modelMenuEntries
-            check(Set(entries.map(\.id)).count == entries.count,
-                  "T13 菜单条目 id 无撞车")
-            check(entries.filter { $0.model.id == "deepseek-v4-flash" }.count
-                  == ThinkingLevel.allCases.count,
-                  "T13 覆盖后同名只出现一份 (全级别)")
-
-            // label 更新 (同 PK upsert 不新增)
-            check(s.addCustomModel(provider: "deepseek", modelId: "deepseek-v4.1-flash",
-                                   label: "V4.1 Flash"), "T13 同 PK 再添加 = 覆盖")
-            check(s.customModels.count == 2
-                  && s.customModels.first { $0.modelId == "deepseek-v4.1-flash" }?
-                      .label == "V4.1 Flash",
-                  "T13 label 更新而非新增")
-
-            // 药丸显示名: 自定义 label 优先
-            s.selectModel(s.customModelInfos.first { $0.id == "deepseek-v4.1-flash" }!,
-                          level: .high)
-            check(s.currentModelDisplayName == "V4.1 Flash",
-                  "T13 药丸显示自定义 label")
-            check(s.currentModelId == "deepseek-v4.1-flash" && s.currentProvider == "deepseek",
-                  "T13 选中仍透传真实 provider/id")
-
-            // 持久化 roundtrip
-            let s2 = ChatStore(transport: MockTransport(), dbPath: db,
-                               managedExtensionsDir: dir + "/ext")
-            check(s2.customModels.count == 2
-                  && s2.customModels.contains { $0.modelId == "deepseek-v4.1-flash" },
-                  "T13 自定义条目落库 roundtrip")
-
-            // 删除收敛
-            s.removeCustomModel(s.customModels.first { $0.modelId == "deepseek-v4-flash" }!)
-            check(s.customModels.count == 1
-                  && s.catalogModels.contains { $0.id == "deepseek-v4-flash" },
-                  "T13 删除后目录条目回归")
+            // 选中透传真实 provider/id; 药丸回落 id 末段 (无自管条目可查 label)
+            s.selectModel(ModelChoice(provider: bare.provider, modelId: bare.id, level: .high))
+            check(s.currentProvider == "deepseek" && s.currentModelId == "deepseek-v4-flash",
+                  "T13 选中透传真实 provider/id")
+            check(s.currentModelDisplayName == "deepseek-v4-flash",
+                  "T13 无自管条目时药丸回落 id 末段")
+            check(s.currentChoice == ModelChoice(provider: "deepseek",
+                                                 modelId: "deepseek-v4-flash", level: .high),
+                  "T13 currentChoice 与选中一致 (控件初值来源)")
         }
 
         // ---- T14 P6.0: 缺陷修复 (settled 语义 / fire-and-forget / cost / 工具标签) ----
@@ -731,6 +716,176 @@ struct SmokeMain {
                   && exportPath.hasSuffix(".html"), "T17 导出路径格式 (sessionId-时间戳.html)")
         }
 
+        // ---- T-TOOL 工具结果面: 不再谎报 kind · 不再丢 content[] 文本 · 收图片 · toolcall_end 权威参数 ----
+        // 覆盖的是"传输层从 pi 拿到什么"。这一层此前**零断言** —— md 层同样零覆盖 (T-MD 补齐)。
+        do {
+            final class Sink: AgentTransportDelegate {
+                var events: [AgentEvent] = []
+                func transport(_ t: any AgentTransport, didEmit event: AgentEvent) { events.append(event) }
+            }
+            let sink = Sink()
+            let pi = PiRpcTransport()
+            pi.delegate = sink
+            func lastTool(_ s: Sink) -> ToolCall?? {
+                s.events.compactMap { e -> ToolCall?? in
+                    if case .toolUpdated(let t) = e { return .some(t) }
+                    return nil
+                }.last ?? nil
+            }
+            func detail(_ t: ToolCall?, _ key: String) -> String? {
+                t?.details.first { $0.key == key }?.value
+            }
+
+            // ① kindFor: 未登记的工具落中性 .other, **不许谎报 read**
+            // (旧版 default 把 web-search/subagents 这类扩展工具全标成 READ, 标签+颜色一起错)
+            pi.handleRPCLine(#"{"type":"tool_execution_start","toolCallId":"o1","toolName":"webfetch","args":{"url":"https://x"}}"#)
+            let unk = lastTool(sink).flatMap { $0 }
+            check(unk?.kind == .other, "T-TOOL 未登记工具 → .other (不再谎报 read, 实测 \(String(describing: unk?.kind)))")
+            check(unk?.title == "webfetch", "T-TOOL 未知工具用真名占 title (OTHER 标签不携带名字)")
+            check(unk?.command == "url=https://x", "T-TOOL 未知工具的 args 退到 command 列 (取首个标量参数, 信息不丢)")
+
+            // delegate 按名归位 (pi 0.85.1 无内置生产方, 但扩展可用)
+            pi.handleRPCLine(#"{"type":"tool_execution_start","toolCallId":"d1","toolName":"delegate","args":{}}"#)
+            check(lastTool(sink).flatMap { $0 }?.kind == .delegate, "T-TOOL delegate 按名归位 (不落 other)")
+            // 内置 8 个仍全部正确 (回归)
+            for (name, kind) in [("read", ToolKind.read), ("bash", .bash), ("edit", .edit),
+                                 ("write", .write), ("find", .find), ("grep", .grep), ("ls", .ls)] {
+                pi.handleRPCLine(#"{"type":"tool_execution_start","toolCallId":"k-\#(name)","toolName":"\#(name)","args":{}}"#)
+                check(lastTool(sink).flatMap { $0 }?.kind == kind, "T-TOOL 内置工具 \(name) 归类不变")
+            }
+
+            // ② AgentToolResult.content[] 的文本**必须**被收下 (旧版只找顶层字符串 ⇒ 每张卡 details=[])
+            pi.handleRPCLine(#"{"type":"tool_execution_start","toolCallId":"r1","toolName":"bash","args":{"command":"cat t.txt"}}"#)
+            pi.handleRPCLine(#"{"type":"tool_execution_end","toolCallId":"r1","toolName":"bash","result":{"content":[{"type":"text","text":"hello\nworld"}],"details":{}},"isError":false}"#)
+            let okCard = lastTool(sink).flatMap { $0 }
+            check(detail(okCard, "输出") == "hello\nworld",
+                  "T-TOOL 成功结果取 content[].text (旧版这里是空的 —— 丢的是真数据)")
+            check(okCard?.phase == .done && okCard?.durationMs != nil, "T-TOOL 成功卡落 done + 时长")
+
+            // ③ 多块文本按序合并 (read 工具会先给一行说明再给正文)
+            pi.handleRPCLine(#"{"type":"tool_execution_start","toolCallId":"r2","toolName":"read","args":{"path":"a.swift"}}"#)
+            pi.handleRPCLine(#"{"type":"tool_execution_end","toolCallId":"r2","toolName":"read","result":{"content":[{"type":"text","text":"Read image file"},{"type":"text","text":"1234 bytes"}],"details":null},"isError":false}"#)
+            check(detail(lastTool(sink).flatMap { $0 }, "输出") == "Read image file\n1234 bytes",
+                  "T-TOOL 多块 text 按序合并 (只取第一块会丢后半段)")
+
+            // ④ 失败: 用**真错误文本**替换兜底文案 (旧的失败卡只剩『工具执行失败』, 看不出原因)
+            pi.handleRPCLine(#"{"type":"tool_execution_start","toolCallId":"r3","toolName":"bash","args":{"command":"boom"}}"#)
+            pi.handleRPCLine(#"{"type":"tool_execution_end","toolCallId":"r3","toolName":"bash","result":{"content":[{"type":"text","text":"Command exited with code 127"}],"details":{}},"isError":true}"#)
+            let errCard = lastTool(sink).flatMap { $0 }
+            if case .error(let msg) = errCard?.phase {
+                check(msg == "Command exited with code 127", "T-TOOL 失败取真错误文本 (实测 \(msg))")
+            } else { check(false, "T-TOOL 失败卡应为 .error") }
+
+            // ⑤ 正文缺失时才用 details 兜底 (常见情形 details 是正文的子集, 同显是噪声)
+            pi.handleRPCLine(#"{"type":"tool_execution_start","toolCallId":"r4","toolName":"bash","args":{}}"#)
+            pi.handleRPCLine(#"{"type":"tool_execution_end","toolCallId":"r4","toolName":"bash","result":{"content":[],"details":{"truncation":{"truncated":true},"fullOutputPath":"/tmp/full.log"}},"isError":false}"#)
+            let detCard = lastTool(sink).flatMap { $0 }
+            check(detail(detCard, "输出") == nil, "T-TOOL 无正文时不造空的『输出』行")
+            check(detail(detCard, "细节")?.contains("fullOutputPath=/tmp/full.log") == true
+                  && detail(detCard, "细节")?.contains("truncation.truncated=true") == true,
+                  "T-TOOL details 兜底折平 (实测 \(detail(detCard, "细节") ?? "nil"))")
+            // 交集: 有正文时 details 不再上屏
+            pi.handleRPCLine(#"{"type":"tool_execution_start","toolCallId":"r5","toolName":"bash","args":{}}"#)
+            pi.handleRPCLine(#"{"type":"tool_execution_end","toolCallId":"r5","toolName":"bash","result":{"content":[{"type":"text","text":"out"}],"details":{"fullOutputPath":"/tmp/f.full"}},"isError":false}"#)
+            check(detail(lastTool(sink).flatMap { $0 }, "细节") == nil,
+                  "T-TOOL 有正文时 details 不上屏 (子集不重复显示)")
+
+            // ⑥ 图片块: base64 落盘为文件 + 挂 imagePaths (存路径不存 base64 —— payload 不膨胀)
+            // (T24 里的 makePNG 是本段外的局部函数, 这里自建一份 —— 跨段借函数的耦合不值得)
+            func tinyPNG() -> Data {
+                let ctx = CGContext(data: nil, width: 8, height: 6,
+                                    bitsPerComponent: 8, bytesPerRow: 0,
+                                    space: CGColorSpaceCreateDeviceRGB(),
+                                    bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue)!
+                ctx.setFillColor(CGColor(red: 0.9, green: 0.3, blue: 0.2, alpha: 1))
+                ctx.fill(CGRect(x: 0, y: 0, width: 8, height: 6))
+                let buf = NSMutableData()
+                let dest = CGImageDestinationCreateWithData(buf, UTType.png.identifier as CFString, 1, nil)!
+                CGImageDestinationAddImage(dest, ctx.makeImage()!, nil)
+                CGImageDestinationFinalize(dest)
+                return buf as Data
+            }
+            let png = tinyPNG()
+            let b64 = png.base64EncodedString()
+            pi.handleRPCLine(#"{"type":"tool_execution_start","toolCallId":"r6","toolName":"read","args":{"path":"pic.png"}}"#)
+            pi.handleRPCLine(#"{"type":"tool_execution_end","toolCallId":"r6","toolName":"read","result":{"content":[{"type":"text","text":"Read image file [image/png]"},{"type":"image","data":"\#(b64)","mimeType":"image/png"}],"details":null},"isError":false}"#)
+            let imgCard = lastTool(sink).flatMap { $0 }
+            let imgPath = imgCard?.imagePaths.first
+            check((imgCard?.imagePaths.count ?? 0) == 1, "T-TOOL 图片块被收下 (实测 \(imgCard?.imagePaths.count ?? 0) 张)")
+            check(imgPath.map { FileManager.default.fileExists(atPath: $0) } == true, "T-TOOL 图片真的落到磁盘")
+            // 落盘位置必须是**冒烟重定向后**的临时根 —— 写进用户真实目录时这条会红
+            check(imgPath?.hasPrefix(NSTemporaryDirectory()) == true,
+                  "守卫 22 生效: 工具产出的图片没有写进用户真实 ~/.mangox/attachments")
+            check(imgPath?.hasSuffix(".png") == true, "T-TOOL 落盘扩展名来自图片自身嗅探 (mimeType 只作兜底)")
+            // 坏 base64 不产半张图 (照实留空, 不猜)
+            pi.handleRPCLine(#"{"type":"tool_execution_start","toolCallId":"r7","toolName":"read","args":{}}"#)
+            pi.handleRPCLine(#"{"type":"tool_execution_end","toolCallId":"r7","toolName":"read","result":{"content":[{"type":"image","data":"!!!not-base64!!!","mimeType":"image/png"}],"details":null},"isError":false}"#)
+            check(lastTool(sink).flatMap { $0 }?.imagePaths.isEmpty == true, "T-TOOL 坏 base64 不产半张图")
+
+            // ⑦ 流式 partialResult: 也是 AgentToolResult, 且是**快照**(整行替换)
+            pi.handleRPCLine(#"{"type":"tool_execution_start","toolCallId":"r8","toolName":"bash","args":{"command":"long"}}"#)
+            pi.handleRPCLine(#"{"type":"tool_execution_update","toolCallId":"r8","toolName":"bash","partialResult":{"content":[{"type":"text","text":"line 1"}],"details":null}}"#)
+            check(detail(lastTool(sink).flatMap { $0 }, "输出") == "line 1", "T-TOOL 流式 partialResult 的 content[] 被收下")
+            pi.handleRPCLine(#"{"type":"tool_execution_update","toolCallId":"r8","toolName":"bash","partialResult":{"content":[{"type":"text","text":"line 1\nline 2"}],"details":null}}"#)
+            check(detail(lastTool(sink).flatMap { $0 }, "输出") == "line 1\nline 2",
+                  "T-TOOL 流式是快照 (整行替换, 不是追加 —— 追加会把同一段打印两遍)")
+            // 流式期不落图片: partial 每次重发同一张图, 逐次写盘会灌满磁盘
+            pi.handleRPCLine(#"{"type":"tool_execution_update","toolCallId":"r8","toolName":"bash","partialResult":{"content":[{"type":"image","data":"\#(b64)","mimeType":"image/png"}],"details":null}}"#)
+            check(lastTool(sink).flatMap { $0 }?.imagePaths.isEmpty == true, "T-TOOL 流式期不落图片 (只在 end 收)")
+
+            // ⑧ toolcall_end 带**权威** toolCall{id,name,arguments} → queued 卡头即刻升级
+            let beforeZ = sink.events.count
+            pi.handleRPCLine(#"{"type":"message_update","assistantMessageEvent":{"type":"toolcall_start","contentIndex":0,"id":"call_z1","toolName":"bash"}}"#)
+            let zEarly = lastTool(sink).flatMap { $0 }
+            check(zEarly?.title == "bash", "T-TOOL toolcall_start 出 queued 卡 (参数未知 → title=工具名)")
+            pi.handleRPCLine(#"{"type":"message_update","assistantMessageEvent":{"type":"toolcall_end","contentIndex":0,"toolCall":{"type":"toolCall","id":"call_z1","name":"bash","arguments":{"command":"du -sh ."}}}}"#)
+            let z = lastTool(sink).flatMap { $0 }
+            check(z?.title == "du -sh .", "T-TOOL toolcall_end 权威参数补进卡头 (旧版静默丢, 卡一直显示 'bash')")
+            if case .queued = z?.phase {} else { check(false, "T-TOOL toolcall_end 不改相态 (仍是 queued, 尚未执行)") }
+            check(z?.id == zEarly?.id, "T-TOOL toolcall_end 沿用同一张卡 (不新增)")
+            check(sink.events.count - beforeZ == 2, "T-TOOL toolcall 两步恰出两张事件 (start + end, 没有第三张孤儿卡)")
+            // toolcall_end 的卡头推导必须与 execution_start **同源** (参数相同 ⇒ 结果逐字相同)
+            pi.handleRPCLine(#"{"type":"tool_execution_start","toolCallId":"call_z1","toolName":"bash","args":{"command":"du -sh ."}}"#)
+            let z2 = lastTool(sink).flatMap { $0 }
+            check(z2?.title == z?.title && z2?.command == z?.command,
+                  "T-TOOL 两步的卡头推导同源 (分叉的症状是卡片跳一下)")
+            // 未知工具的同一路径: 真名占 title 的规则在 toolcall_end 也成立
+            // (而且**缺 start 也要补卡** —— 权威参数不能因为少了一条前置事件就丢掉)
+            pi.handleRPCLine(#"{"type":"message_update","assistantMessageEvent":{"type":"toolcall_end","contentIndex":0,"toolCall":{"type":"toolCall","id":"call_z2","name":"webfetch","arguments":{"url":"https://y"}}}}"#)
+            let z3 = lastTool(sink).flatMap { $0 }
+            check(z3?.title == "webfetch" && z3?.kind == .other,
+                  "T-TOOL toolcall_end 对未知工具同样用真名 (实测 \(z3?.title ?? "nil"))")
+            check(z3?.id != z?.id, "T-TOOL 缺 start 时 toolcall_end 补一张新卡 (不覆盖别人)")
+
+            // ⑨ 解码宽松: 老载荷无 imagePaths; 陌生 kind 不炸整条
+            let legacy = #"{"id":"3F2504E0-4F89-11D3-9A0C-0305E82C3301","kind":"bash","title":"t","details":[],"phase":{"done":{}}}"#
+            let decoded = try? JSONDecoder().decode(ToolCall.self, from: Data(legacy.utf8))
+            check(decoded?.imagePaths.isEmpty == true, "T-TOOL 老载荷无 imagePaths 字段 → 空数组 (不炸)")
+            let alien = #"{"id":"3F2504E0-4F89-11D3-9A0C-0305E82C3301","kind":"web_search","title":"t","details":[],"phase":{"done":{}}}"#
+            check((try? JSONDecoder().decode(ToolCall.self, from: Data(alien.utf8)))?.kind == .other,
+                  "T-TOOL 陌生 kind 降级 .other (不让一条旧/新数据把整条载荷解码搞崩)")
+
+            // ⑩ 图像路径解析 —— **正文图块与工具产出图共用的唯一来源**, 纯函数, 能机器验就别靠眼睛。
+            // 两份实现漂移的症状是"同一路径在正文能显示、在工具卡报无法读取", 而这种漂移**不会**编译报错。
+            let home = NSHomeDirectory()
+            check(ImagePresentation.resolvedPath("/tmp/a.png", basePath: nil) == "/tmp/a.png",
+                  "T-TOOL 图像路径: 绝对路径原样")
+            check(ImagePresentation.resolvedPath("~/x.png", basePath: nil) == home + "/x.png",
+                  "T-TOOL 图像路径: ~ 展开")
+            check(ImagePresentation.resolvedPath("file:///tmp/b.png", basePath: nil) == "/tmp/b.png",
+                  "T-TOOL 图像路径: file:// 取 path")
+            check(ImagePresentation.resolvedPath("pic.png", basePath: "/proj") == "/proj/pic.png",
+                  "T-TOOL 图像路径: 相对路径按 basePath 拼")
+            check(ImagePresentation.resolvedPath("pic.png", basePath: nil) == nil,
+                  "T-TOOL 图像路径: 无基准的相对路径判为不可解析 (不猜)")
+            check(ImagePresentation.resolvedPath("https://x/y.png", basePath: "/proj") == nil,
+                  "T-TOOL 图像路径: 外链不解析成本地路径 (否则会拿 URL 去 open 文件)")
+            check(ImagePresentation.isRemote("https://x/y.png")
+                  && !ImagePresentation.isRemote("file:///tmp/a.png")
+                  && !ImagePresentation.isRemote("/tmp/a.png"),
+                  "T-TOOL 外链判定: 只有带非 file scheme 的才算外链")
+        }
+
         // ---- T18 P6.3.1: Side chat (fork 快照截断 / 绑定决策 / 回读归并 / 失败清孤儿) ----
         do {
             // ① 快照截断纯函数: 3 轮源 (每轮 = user + assistant), 截到第 2 轮
@@ -957,8 +1112,14 @@ struct SmokeMain {
             check(((try? mdb.loadManagedModels()) ?? []).count == 2, "T21 delete 生效")
             try? mdb.upsertManagedModel(mC)
 
-            try? mdb.upsertCustomModel(CustomModel(provider: "deepseek", modelId: "deepseek-chat", label: "DeepSeek Chat"))
-            try? mdb.upsertCustomModel(CustomModel(provider: "kimi", modelId: "kimi-k2"))
+            // 旧表写入用底层句柄: 生产路径已无写入者 (P5.1 层已删), 这里造"旧版本 MangoX 写的库"
+            let t21Path = dir + "/t21.db"
+            if let raw = try? Database(path: t21Path) {
+                try? raw.run("INSERT INTO custom_models (provider, model_id, label, created_at) VALUES (?,?,?,?)",
+                             [.text("deepseek"), .text("deepseek-chat"), .text("DeepSeek Chat"), .real(1)])
+                try? raw.run("INSERT INTO custom_models (provider, model_id, label, created_at) VALUES (?,?,?,?)",
+                             [.text("kimi"), .text("kimi-k2"), .text(""), .real(2)])
+            }
             let migrated = (try? mdb.migrateLegacyCustomModels()) ?? -1
             check(migrated == 2, "T21 legacy 迁移 2 条")
             let afterMig = (try? mdb.loadManagedModels()) ?? []
@@ -966,7 +1127,12 @@ struct SmokeMain {
             check(legacy != nil && legacy?.apiType == "openai-completions" && legacy?.baseURL == nil,
                   "T21 legacy 条目 source/apiType/无 baseURL")
             check(((try? mdb.migrateLegacyCustomModels()) ?? -1) == 0, "T21 迁移幂等 (重跑 0)")
-            check(((try? mdb.loadCustomModels()) ?? []).count == 2, "T21 旧表保留")
+            var t21LegacyKept = 0
+            if let afterDb = try? Database(path: t21Path, readonly: true),
+               let rows = try? afterDb.query("SELECT provider FROM custom_models") {
+                t21LegacyKept = rows.count
+            }
+            check(t21LegacyKept == 2, "T21 旧表保留")
 
             let keys = InMemoryModelKeyStore()
             try? keys.setKey("sk-test-123", account: "mangox-gw")
@@ -1043,10 +1209,13 @@ struct SmokeMain {
                   "T22 有自管时菜单只显示自管条目")
             check(store22.menuModels.allSatisfy { $0.supportedLevels == [.off] },
                   "T22 无 thinkingLevelMap 的 chat 模型菜单只给 off")
-            var mReason = m2; mReason.reasoning = true; mReason.thinkingLevelMapJSON = "{\"minimal\":null,\"low\":null,\"high\":\"high\",\"max\":\"max\"}"
+            var mReason = m2; mReason.reasoning = true
+            // ⚠️ 本用例故意让 map **缺 medium 键** —— 守的是"缺键 = 未提及 = 默认支持"(黑名单语义)。
+            // 2026-09-23 之前 ManagedModel 走白名单实现 ("只收非空字符串项"), 在这里会漏掉 medium。
+            mReason.thinkingLevelMapJSON = "{\"minimal\":null,\"low\":null,\"high\":\"high\",\"max\":\"max\"}"
             store22.upsertManagedModel(mReason)
-            check(store22.menuModels.first { $0.id == "m2" }?.supportedLevels == [.off, .high],
-                  "T22 有 map 按非 null 项收敛 (off/high)")
+            check(store22.menuModels.first { $0.id == "m2" }?.supportedLevels == [.off, .medium, .high],
+                  "T22 有 map: 显式 null 剔除 + 缺键默认支持 (off/medium/high)")
             let mDefault = ManagedModel(provider: "t22prov", modelId: "m3", displayName: "M3",
                                         apiType: "openai-completions", reasoning: true,
                                         baseURL: "https://t22.invalid/v1", keyRef: "t22prov")
@@ -1059,14 +1228,24 @@ struct SmokeMain {
             check(store22.menuModels.contains { $0.provider == "deepseek" },
                   "T22 清空后菜单回落 pi 目录")
 
-            if let legacyStore = try? PersistenceStore(path: dir + "/t22legacy.db") {
+            let t22LegacyPath = dir + "/t22legacy.db"
+            if let legacyStore = try? PersistenceStore(path: t22LegacyPath) {
                 try? legacyStore.migrate()
-                try? legacyStore.upsertCustomModel(CustomModel(provider: "legprov", modelId: "legmodel", label: "Legacy"))
             }
-            let store22b = ChatStore(transport: mock, dbPath: dir + "/t22legacy.db", modelKeyStore: keys22)
+            // 旧表写入用底层句柄 (生产路径已无写入者; 造"旧版本 MangoX 写的库")
+            if let raw = try? Database(path: t22LegacyPath) {
+                try? raw.run("INSERT INTO custom_models (provider, model_id, label, created_at) VALUES (?,?,?,?)",
+                             [.text("legprov"), .text("legmodel"), .text("Legacy"), .real(1)])
+            }
+            let store22b = ChatStore(transport: mock, dbPath: t22LegacyPath, modelKeyStore: keys22)
             check(store22b.managedModels.contains { $0.source == .legacy && $0.provider == "legprov" },
                   "T22 init 自动迁移 legacy 条目")
-            check(store22b.customModels.contains { $0.provider == "legprov" }, "T22 旧表仍保留")
+            var t22LegacyKept = 0
+            if let afterDb = try? Database(path: t22LegacyPath, readonly: true),
+               let rows = try? afterDb.query("SELECT provider FROM custom_models") {
+                t22LegacyKept = rows.count
+            }
+            check(t22LegacyKept == 1, "T22 旧表仍保留")
 
             let openaiJSON = Data("{\"data\":[{\"id\":\"a\"},{\"id\":\"b\"}]}".utf8)
             check(ModelCatalogFetcher.parseModelIds(openaiJSON) == ["a", "b"], "T22 OpenAI /models 解析")
@@ -2595,6 +2774,36 @@ struct SmokeMain {
         check(!sstore.removeMailboxAccount(sAcc.id) && sstore.mailboxAccounts.count == 1,
               "T-MAILBOX-S 被哨兵引用的账号不可删 (删除按钮置灰的域层依据)")
 
+        // —— 任务级模型 (2026-09-24, 与 Cron/Watch 的 taskModelPicker 同一契约) ——
+        check(MailboxSentinel(name: "x", accountId: sAcc.id).modelOverride == nil,
+              "T-MAILBOX-S 未 pin 模型 ⇒ modelOverride 整体为 nil (跟随当前会话, 不下发指令)")
+        var pinned = MailboxSentinel(name: "x", accountId: sAcc.id,
+                                     provider: "pi", modelId: "deepseek/v4", thinkingLevel: "high")
+        check(pinned.modelOverride?.provider == "pi" && pinned.modelOverride?.modelId == "deepseek/v4"
+              && pinned.modelOverride?.thinking == "high",
+              "T-MAILBOX-S 已 pin ⇒ 三件套原样透传 (provider/modelId/thinking)")
+        pinned.thinkingLevel = nil
+        check(pinned.modelOverride?.modelId == "deepseek/v4" && pinned.modelOverride?.thinking == nil,
+              "T-MAILBOX-S 级别未选过 (nil) 只丢级别、不丢模型 —— 与 SessionConfig.thinkingLevel 同口径")
+        // 只设级别不设模型 ⇒ 整体失效。这条正是 UI 侧"落档必须把模型一并具体化"的依据:
+        // 否则用户只拖了滑轨, 级别会被 modelOverride 静默丢掉 (看起来像生效, 实际没下发)。
+        check(MailboxSentinel(name: "x", accountId: sAcc.id, thinkingLevel: "xhigh").modelOverride == nil,
+              "T-MAILBOX-S 只设级别不设模型 ⇒ 整体 nil (UI 不许出现这种半截状态)")
+
+        sS1.provider = "pi"
+        sS1.modelId = "deepseek/v4"
+        sS1.thinkingLevel = "medium"
+        check(sstore.upsertMailboxSentinel(sS1), "T-MAILBOX-S 带任务级模型的哨兵保存成功")
+        let modelReload = ChatStore(transport: MockTransport(), dbPath: sdir + "/mbxs.db",
+                                    managedExtensionsDir: sdir + "/ext")
+        modelReload.mailbox.stopScheduler()
+        check(modelReload.mailboxSentinels.first?.provider == "pi"
+              && modelReload.mailboxSentinels.first?.modelId == "deepseek/v4"
+              && modelReload.mailboxSentinels.first?.thinkingLevel == "medium",
+              "T-MAILBOX-S 新 store 读回任务级模型 (三列确实落库, 非内存幻觉)")
+        check(modelReload.mailboxSentinels.first?.modelOverride?.modelId == "deepseek/v4",
+              "T-MAILBOX-S 读回后 modelOverride 可用 (fire 路径拿到的就是它)")
+
         // —— 密钥闸开关 + Keychain 缝 ——
         sstore.setMailboxSentinelSecret("SEC-1", sentinelId: sS1.id)
         check(sstore.hasMailboxSentinelSecret(sentinelId: sS1.id), "T-MAILBOX-S 哨兵密钥写凭据缝")
@@ -3952,6 +4161,67 @@ struct SmokeMain {
                   "T-KB 索引缺席时自检仍全绿 (① 稳定段一条不少 / ⑦ 段序)")
         } else {
             check(false, "T-KB 预算夹具: knowledgeIndexSegment 非 nil")
+        }
+
+        // ===== T-MD (2026-09-24): markdown 块级解析 (表格列对齐 / 图片块) =====
+        // 这层此前**零覆盖** —— `MarkdownBlock.table` 加了关联值也不会红。补上是为了让
+        // "数字列按 `:` 右对齐"与"整行图才成块"这两条新约定有能红的门, 而不是只靠肉眼看图。
+        do {
+            let right = MarkdownParser.parse("| 渠道 | 昨日装机 |\n|---|--:|\n| 华为 | 128,430 |")
+            check(right == [.table(header: ["渠道", "昨日装机"], rows: [["华为", "128,430"]],
+                                   aligns: [.leading, .trailing])],
+                  "T-MD 表格: 分隔行 `--:` ⇒ 该列右对齐 (实测 \(right))")
+
+            let centered = MarkdownParser.parse("| a | b |\n|:---:|---|\n| 1 | 2 |")
+            check(centered == [.table(header: ["a", "b"], rows: [["1", "2"]],
+                                      aligns: [.center, .leading])],
+                  "T-MD 表格: `:---:` ⇒ 居中, `---` ⇒ 缺省左对齐")
+
+            let plain = MarkdownParser.parse("| a | b |\n|---|---|\n| 1 | 2 |")
+            check(plain == [.table(header: ["a", "b"], rows: [["1", "2"]],
+                                   aligns: [.leading, .leading])],
+                  "T-MD 表格: 无 `:` ⇒ 一律左对齐 (缺省口径与 GitHub 一致)")
+
+            // 列数不齐在真实模型输出里很常见。**必须对齐到表头列数** —— 渲染侧是按下标取
+            // `aligns[i]` 的, 少一格就整列错位、多一格也没人读。
+            let shorter = MarkdownParser.parse("| a | b | c |\n|---|---|\n| 1 | 2 | 3 |")
+            check(shorter == [.table(header: ["a", "b", "c"], rows: [["1", "2", "3"]],
+                                     aligns: [.leading, .leading, .leading])],
+                  "T-MD 表格: 分隔行比表头少 ⇒ 补 leading 到表头列数")
+
+            let longer = MarkdownParser.parse("| a | b |\n|---|---|---|\n| 1 | 2 |")
+            check(longer == [.table(header: ["a", "b"], rows: [["1", "2"]],
+                                    aligns: [.leading, .leading])],
+                  "T-MD 表格: 分隔行比表头多 ⇒ 截到表头列数")
+
+            check(MarkdownParser.parse("![趋势](/tmp/dau.png)")
+                    == [.image(alt: "趋势", source: "/tmp/dau.png")],
+                  "T-MD 图片: **整行** `![alt](src)` 成 image 块")
+            check(MarkdownParser.parse("![趋势](/tmp/dau.png \"标题\")")
+                    == [.image(alt: "趋势", source: "/tmp/dau.png")],
+                  "T-MD 图片: 带 `\"title\"` 时只取 URL")
+            check(MarkdownParser.parse("![a](</tmp/a b.png>)")
+                    == [.image(alt: "a", source: "/tmp/a b.png")],
+                  "T-MD 图片: 尖括号包裹的含空格路径")
+
+            // 反例三条 —— 判据是"**整行**才是图", 这三条必须**不**成块:
+            check(MarkdownParser.parse("看这张 ![趋势](/tmp/dau.png) 图")
+                    == [.paragraph(text: "看这张 ![趋势](/tmp/dau.png) 图")],
+                  "T-MD 图片: 行内图不成块 (成块会把一句话拆成三段)")
+            check(MarkdownParser.parse("[趋势](/tmp/dau.png)")
+                    == [.paragraph(text: "[趋势](/tmp/dau.png)")],
+                  "T-MD 图片: 少了 `!` 是链接, 不是图")
+            check(MarkdownParser.parse("![a]()") == [.paragraph(text: "![a]()")],
+                  "T-MD 图片: 空源不成块 (渲染不出东西, 留原文更有用)")
+
+            // 回归: 新 case 的插入位置不能吃掉既有块型 (它排在表格/列表/引用之前)
+            check(MarkdownParser.parse("```swift\nlet a = 1\n```")
+                    == [.codeBlock(language: "swift", code: "let a = 1")],
+                  "T-MD 回归: 代码围栏仍是 codeBlock")
+            check(MarkdownParser.parse("# 标题") == [.heading(level: 1, text: "标题")],
+                  "T-MD 回归: 标题仍是 heading")
+            check(MarkdownParser.parse("- 一条") == [.listItem(indent: 0, ordered: false, index: 0, text: "一条")],
+                  "T-MD 回归: 列表仍是 listItem")
         }
 
         report()    }

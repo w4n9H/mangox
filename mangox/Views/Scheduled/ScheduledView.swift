@@ -371,7 +371,7 @@ struct ScheduledView: View {
             }
             .padding(.horizontal, 32)
             .padding(.vertical, 24)
-            .frame(maxWidth: Tune.knowledgeEditorMaxWidth, alignment: .leading)
+            .frame(maxWidth: Tune.scheduleEditorMaxWidth, alignment: .leading)
             .frame(maxWidth: .infinity, alignment: .center)
         }
     }
@@ -600,9 +600,14 @@ struct ScheduledView: View {
             .buttonStyle(.plain)
             if draftUseCustomConfig {
                 HStack(spacing: 8) {
-                    configModelPicker
-                    configThinkingPicker
-                    configModePicker
+                    taskModelPicker    // 模型 + 思考强度合一 (2026-09-24; 原 configModelPicker + configThinkingPicker)
+                    // ⚠️ `CodexPillMenu` 里是 `Menu(.borderlessButton)` —— **宽度是弹性的**。
+                    // HStack 里没有任何东西吸收余量时它会一路撑到卡片最右, 于是"模式"看着比"模型"
+                    // 宽出一大截 (2026-09-24 boss 截图实锤)。收窄靠 `fixedSize`, `Spacer` 兜住剩余量 ——
+                    // 与 `SparseAgentEditor` 里那两个 Picker 同款手法。
+                    configModePicker   // 模式**独立**保留 —— 它不是"模型链路"的一环
+                        .fixedSize()
+                    Spacer(minLength: 0)
                 }
                 Text("仅作用于本任务运行 (日志会话), 不改变你当前会话的模型与档位。")
                     .font(CodexTheme.fontSmall)
@@ -615,32 +620,42 @@ struct ScheduledView: View {
         .clipShape(RoundedRectangle(cornerRadius: 8))
     }
 
-    private var configModelPicker: some View {
-        CodexPillMenu {
-            ForEach(Array(store.model.menuModels.enumerated()), id: \.offset) { _, m in
-                Button(store.model.customLabel(provider: m.provider, modelId: m.id) ?? m.id) {
-                    draftProvider = m.provider
-                    draftModelId = m.id
-                }
-            }
-        } label: {
-            Image(systemName: "cpu")
-            Text(store.model.customLabel(provider: draftProvider, modelId: draftModelId)
-                 ?? (draftModelId.isEmpty ? L("选择模型") : draftModelId))
+    /// 任务级「模型 + 思考强度」(2026-09-24): 复用受控 `ModelPicker`, 替掉原先两个 `CodexPillMenu`。
+    /// **值进值出**: 只吐 `onPick` 写进草稿, 绝不碰 `store.model.currentChoice` —— 这是
+    /// 与 composer 药丸的**唯一**区别, 也是这段文案("不改变你当前会话")的技术含义。
+    private var taskModelPicker: some View {
+        ModelPicker(
+            models: store.model.menuModels,
+            // 传**解析后**的具体值而不是裸草稿: 控件没有"未指定"这个状态, 而 `taskChoice`
+            // 把 nil 分量补成当前全局值 ⇒ 落档时三件套天然齐全 (级别不会被 `modelOverride` 丢掉)。
+            choice: taskChoice,
+            title: { m in
+                store.model.customLabel(provider: m.provider, modelId: m.id) ?? m.label
+            },
+            fallbackTitle: taskFallbackTitle,
+            // 与下方那行说明**逐字节同句** (含句末句号) —— 复用同一条译文, 免得同一句话出现两种译法。
+            helpText: L("仅作用于本任务运行 (日志会话), 不改变你当前会话的模型与档位。"),
+            pillChrome: true   // 嵌在 pill 行里 ⇒ 要真胶囊底 (默认裸标签是给 composer 底栏用的)
+        ) { pick in
+            draftProvider = pick.provider
+            draftModelId = pick.modelId
+            draftThinking = pick.level.rawValue
         }
     }
 
-    private var configThinkingPicker: some View {
-        CodexPillMenu {
-            ForEach(ThinkingLevel.allCases) { level in
-                Button(level.rawValue) {
-                    draftThinking = level.rawValue
-                }
-            }
-        } label: {
-            Image(systemName: "brain")
-            Text(LK(draftThinking ?? "级别"))
-        }
+    /// 滑轨/药丸的显示值。⚠️ `draftThinking == nil` (旧库、或"设置自定义"开关刚打开) 时
+    /// 按**当前全局档**落位 —— 控件表达不了"未指定"。**只有落过档才写回具体值**:
+    /// 没动过的任务保存后仍是 nil, 与 `SessionConfig.thinkingLevel` 的"不钉死"约定一致。
+    private var taskChoice: ModelChoice {
+        ModelChoice(provider: draftProvider, modelId: draftModelId,
+                    level: draftThinking.flatMap(ThinkingLevel.init(rawValue:))
+                        ?? store.model.thinkingLevel)
+    }
+
+    /// 草稿模型不在 `menuModels` 里 (未配 / pi 尚未上报) 时的药丸文案。
+    private var taskFallbackTitle: String {
+        store.model.customLabel(provider: draftProvider, modelId: draftModelId)
+            ?? (draftModelId.isEmpty ? L("选择模型") : draftModelId)
     }
 
     private var configModePicker: some View {

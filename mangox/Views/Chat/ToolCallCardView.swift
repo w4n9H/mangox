@@ -48,8 +48,8 @@ struct ToolCallCardView: View {
             .padding(.horizontal, 12)
             .padding(.vertical, 9)
 
-            // Optional detail rows (path / 输出 / ...)
-            if expanded, !tool.details.isEmpty {
+            // Optional detail rows (path / 输出 / ...) + 工具产出的图片
+            if expanded, !tool.details.isEmpty || !tool.imagePaths.isEmpty {
                 Rectangle()
                     .fill(CodexTheme.divider)
                     .frame(height: 1)
@@ -102,6 +102,13 @@ struct ToolCallCardView: View {
                                 .fixedSize(horizontal: false, vertical: true)
                             Spacer()
                         }
+                    }
+
+                    // 工具产出的图片 (读图工具 / 生成图工具): 排在文本输出之后。
+                    // 不另起小标题 —— 缩略图自明, 多一行标签只会把卡片读成两段。
+                    if !tool.imagePaths.isEmpty {
+                        ToolOutputImages(paths: tool.imagePaths)
+                            .padding(.top, tool.details.isEmpty ? 0 : 2)
                     }
                 }
                 .padding(.horizontal, 12)
@@ -196,11 +203,14 @@ struct ToolCallCardView: View {
     // MARK: - Helpers
 
     private func copyAllOutput() {
-        let text = tool.details
-            .map { "\($0.key): \($0.value)" }
-            .joined(separator: "\n")
+        // 复制出去的内容**跟随语言** —— 详情键在界面上本来就是查表显示的 (LK(d.key)),
+        // 若复制出来恒是中文, 英文界面下就成了另一种不一致。`L()` 收运行时字符串, 未命中回落原串。
+        var lines = tool.details.map { "\(L($0.key)): \($0.value)" }
+        // 图片按路径入列 —— 只有图片没有文本时 (典型: read 一张截图) 复制也**不会是个空操作**。
+        // ⚠️ 带插值的串必须写 `String(format: L("…%@…"), x)` (禁令 ⑤: L() 禁插值)。
+        lines.append(contentsOf: tool.imagePaths.map { String(format: L("图片: %@"), $0) })
         NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(text, forType: .string)
+        NSPasteboard.general.setString(lines.joined(separator: "\n"), forType: .string)
         copied = true
         Task { @MainActor in
             try? await Task.sleep(nanoseconds: 1_500_000_000)
