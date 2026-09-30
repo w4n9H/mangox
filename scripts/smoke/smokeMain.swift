@@ -1620,7 +1620,18 @@ struct SmokeMain {
                   "T27 追加档位跟随会话 (不强改 Minimal)")
             check(await waitUntil { store27.runningTurns.isEmpty }, "T27 普通追加收尾")
             // ⑤ 拒绝路径: 在途 / 已删除
-            mock27.scriptedReply = { _ in String(repeating: "慢回复。", count: 200) }
+            //
+            // 回复长度是**墙钟预算**, 不是数据量: MockTransport 逐字符发, 每字硬睡 18ms
+            // (mangox/Mock/MockTransport.swift), 所以耗时 ≈ 字符数 × 18ms, 而上面那个
+            // waitUntil 的预算是 20s。count=200 × 4 字 = 800 字符 = 14.4s, 吃掉 72% 预算,
+            // 只剩 5.6s 要扛 800 次 textChunk 的开销 —— 本机 (M2) 稳过, CI runner (3-4
+            // vCPU 共享) 每次 Task.sleep 都会多调度几毫秒, 线性累加直接超时。2026-09 首次
+            // 跑 CI 就是死在这里 (x86_64 / arm64 两路同因, 各只红这一项)。
+            //
+            // 这里只需要"回合还在途", 而那个状态由 sendDraft() 同步发出的 streamStarted
+            // 保证, 与回复多长无关 —— 上面那条"在途追加拒绝"紧接着就查了它。所以 40 字
+            // (2.9s) 足够, 留 7 倍余量。
+            mock27.scriptedReply = { _ in String(repeating: "慢回复。", count: 40) }
             store27.draft = "占用中"
             store27.sendDraft()
             check(store27.submitCapture(text: "此时追加", target: .append(sessionId: sid27d)) == nil,

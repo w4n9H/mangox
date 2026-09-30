@@ -1,0 +1,407 @@
+name: Release
+
+# 推 tag → 跑全部门禁 → 用 xcodebuild 编出**未签名** .app → 模拟一次「用户下载后本地重签」
+# → 发 Release。
+#
+# 为什么产物是**未签名**的: GitHub 的 macOS runner 拿不到你的 Apple 开发者证书。在那里
+# 签名是纯负债 —— 签名绑定那台机器上随机生成的密钥对, 用户的机器不但不认, 还得先把它
+# 覆盖掉。所以构建显式关掉签名, 让用户的本地 ad-hoc 重签成为该 bundle 的**第一次**签名。
+# 详见 README「下载与本地签名」。
+#
+# Release 只能来自 tag push: workflow_dispatch 永远只跑门禁、不发版, 保证
+# 「有 Release ⇔ 有 tag」这个不变量不被手动触发破坏。
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: '要校验的版本号, 如 0.1.13。留空 = 只跑门禁, 不校验版本, 不发 Release'
+        required: false
+        type: string
+
+# 发 Release 需要写 contents。刻意不给别的权限。
+permissions:
+  contents: write
+
+# 同一条 ref 的重跑**不**互相取消: 半路取消的构建会留下一个既没 release 也没 tag 记录的
+# 空白, 比多等一会儿难查得多。
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  PROJECT: mangox.xcodeproj
+  TARGET: mangox
+
+jobs:
+  # ── 编包 (双架构并行) ─────────────────────────────────────
+  # 只上传 artifact, 不碰 release —— 两个 job 同时 gh release create 必有一个 409,
+  # 那个 409 会把整条 workflow 标红, 看起来像"编译挂了"。发版交给下面的 publish 单 job。
+  build:
+    name: build (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: arm64
+            runner: macos-15          # Apple Silicon (M1)
+          - arch: x86_64
+            runner: macos-15-intel   # Intel。注意: macos-15 本身现在是 arm64, Intel 镜像是这个标签
+    steps:
+      - uses: actions/checkout@v4
+
+      # 架构标签语义会漂 (macos-15 曾经是 Intel, 后来变成 arm64)。这个断言的意义是:
+      # 一旦漂了, 产物文件名会标着 x86_64 而里面装的是 arm64 二进制 —— 下载的人
+      # 得到一个根本起不来的包, 而且只有他们会发现。宁可当场红。
+      - name: 核对 runner 架构
+        run: |
+          set -euo pipefail
+          actual="$(uname -m)"
+          echo "runner=${{ matrix.runner }}  uname -m=$actual  期望=${{ matrix.arch }}"
+          [[ "$actual" == "${{ matrix.arch }}" ]] || {
+            echo "::error::runner 架构与 matrix 不符 ($actual != ${{ matrix.arch }})"
+            exit 1
+          }
+
+      # 版本号: tag push 取 tag 里的号; 手动触发取输入 (可空)。空 = 只跑门禁。
+      - name: 确定版本号
+        id: ver
+        run: |
+          set -euo pipefail
+          if [[ "${{ github.ref_type }}" == "tag" ]]; then
+            raw="${{ github.ref_name }}"
+          else
+            raw="${{ inputs.version }}"
+          fi
+          ver="${raw#v}"
+          publish=false
+          if [[ -z "$ver" ]]; then
+            echo "::notice::未提供版本号 —— 跑完整门禁, 跳过版本一致性校验, 不发 Release"
+          elif [[ ! "$ver" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::版本号格式不对 (期望 x.y.z): $raw"
+            exit 1
+          elif [[ "${{ github.ref_type }}" == "tag" ]]; then
+            publish=true
+          else
+            echo "::notice::手动触发 + 填了版本号 —— 校验版本一致性, 但不创建 Release"
+          fi
+          echo "version=$ver" >> "$GITHUB_OUTPUT"
+          echo "publish=$publish" >> "$GITHUB_OUTPUT"
+
+      # tag 与工程里的 MARKETING_VERSION 不等就红。发出去才发现"tag 0.1.13 但
+      # 关于里写着 0.1.12"是那种没法补救的丢脸事 (tag 不能重推)。
+      - name: 版本一致性门禁
+        if: steps.ver.outputs.version != ''
+        run: |
+          set -euo pipefail
+          pbx="$(awk '/MARKETING_VERSION = /{gsub(/[;"]/,""); print $3; exit}' \
+                 "$PROJECT/project.pbxproj")"
+          want="${{ steps.ver.outputs.version }}"
+          echo "tag 版本    : $want"
+          echo "pbxproj 版本: $pbx"
+          if [[ "$want" != "$pbx" ]]; then
+            echo "::error::版本不一致 —— 先把 $PROJECT 里 MARKETING_VERSION 改成 $want 并提交, 再打 tag"
+            exit 1
+          fi
+
+      # 797 项语义冒烟。scripts/smoke/run.sh 按 uname -m 推导 target, 两路都能跑;
+      # 它只用 swiftc + SDK, 不需要完整 Xcode, 也不参与签名。
+      - name: 语义冒烟门禁
+        run: scripts/smoke/run.sh
+
+      # -scheme 走版本库里的共享 scheme (mangox.xcodeproj/xcshareddata/xcschemes/mangox.xcscheme),
+      # 而不是靠 Xcode 从同名 target 推断 —— 推断是隐式的, 哪天 target 改名或出现同名冲突
+      # 就会静默换一套构建配置。显式 scheme + -derivedDataPath 也让产物路径不再依赖
+      # SYMROOT 的默认推导。
+      #
+      # ARCHS 必须显式钉死: 工程只在 Debug 里设了 ONLY_ACTIVE_ARCH = YES, Release 走默认
+      # (NO) + ARCHS = $(ARCHS_STANDARD), 而 macOS 的 ARCHS_STANDARD 自 Xcode 12 起就是
+      # arm64 + x86_64 —— 不钉的话**两路 runner 都编出 universal 包**, matrix 白做、
+      # 编译时间翻倍, 还会产出两个内容相同却分别标着 -arm64/-x86_64 的包。显式钉还顺带
+      # 防住 Apple 改默认值的那天。
+      #
+      # 关签名: CODE_SIGN_STYLE = Automatic, 无 DEVELOPMENT_TEAM 时 xcodebuild 会报
+      # "requires a development team"; 空 DEVELOPMENT_TEAM + 三个 CODE_SIGN* 一起覆盖掉。
+      # 注意这**不足以**产出未签名包 —— Xcode 16 对 macOS target 仍会跑一次 ad-hoc 签名
+      # (CODE_SIGN_IDENTITY="" 是"指定 ad-hoc 身份"而非"不签"), 下一道门禁负责剥掉。
+      - name: 编译 (xcodebuild, 不签名)
+        run: |
+          set -euo pipefail
+          echo "xcodebuild: $(xcodebuild -version | tr '\n' ' ')"
+          dd="$RUNNER_TEMP/DerivedData"
+          set -o pipefail
+          xcodebuild \
+            -project "$PROJECT" \
+            -scheme mangox \
+            -configuration Release \
+            -derivedDataPath "$dd" \
+            ARCHS="${{ matrix.arch }}" \
+            ONLY_ACTIVE_ARCH=NO \
+            DEVELOPMENT_TEAM="" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            build \
+            | { if command -v xcbeautify >/dev/null 2>&1; then xcbeautify; else cat; fi; }
+          app="$dd/Build/Products/Release/$TARGET.app"
+          [[ -d "$app" ]] || { echo "::error::没找到产物: $app"; exit 1; }
+          mkdir -p dist
+          cp -pR "$app" dist/$TARGET.app
+          ls -lh dist/$TARGET.app/Contents/MacOS/
+
+      # 产物里的架构必须**恰好**是这一路标的那个, 且只有一个 —— 与第 1 道的 uname -m
+      # 断言配对: 那个拦"runner 给错了", 这个拦"编译没听话"。错标架构的包只会在
+      # 下载者的机器上失败 (Rosetta 缺失 / unexpected platform), 只有他们会发现。
+      - name: 断言产物架构
+        run: |
+          set -euo pipefail
+          bin="dist/$TARGET.app/Contents/MacOS/$TARGET"
+          got="$(lipo -archs "$bin")"
+          want="${{ matrix.arch }}"
+          echo "  产物架构: $got   期望: $want"
+          if [[ "$got" != "$want" ]]; then
+            echo "::error::产物架构不对 —— 包名标着 $want, 里面装的是 '$got'"
+            exit 1
+          fi
+
+      # 两条"沉默的坏"在这里被机器拦住:
+      #   1. **剥掉 Xcode 的 ad-hoc 签名**。Xcode 16 对 macOS target 仍会跑一次 codesign,
+      #      而 CODE_SIGN_IDENTITY="" 恰恰是"指定 ad-hoc 身份" (构建日志里那句
+      #      "note: Using codesigning identity override:" 就是证据), 所以光给
+      #      CODE_SIGNING_ALLOWED=NO 不足以保证产物无签名。不剥的后果是发布出去的包带一份
+      #      属于那台 runner 的陌生 ad-hoc 签名 —— 用户机器不认, 还得先把它覆盖掉, 正是
+      #      "让用户本地重签成为该 bundle 的**第一次**签名"要避免的事。
+      #      这里不改成"设法让 Xcode 别签"(那是猜 Xcode 的 macOS 签名默认值, 会随版本漂),
+      #      而是**剥掉并把剥之前的签名详情打进日志** —— 哪天默认值变了, 日志里能直接看到。
+      #   2. 断言产物的**身份** (bundle id + 版本号)。这条替代了原先的 "Assets.car 在" ——
+      #      后者是错的判据: 本工程的 Assets.xcassets 只含一个 AccentColor.colorset, 而图标
+      #      是手工放的 Resources/AppIcon.icns 走 CFBundleIconFile (工程从未设
+      #      ASSETCATALOG_COMPILER_APPICON_NAME)。actool 编一个没有任何需要产出内容的
+      #      catalog, **合法地不产出 .car** (2026-09 实测: actool 跑了、中间产物
+      #      assetcatalog_generated_info.plist 在, 但 Assets.car 不存在)。拿 .car 的有无当
+      #      "actool 跑过"的证据, 是在验一个不存在的要求。
+      #      而 bundle id 是真要保证的: 它决定钥匙串 ACL 与后续升级能否覆盖安装, 错了
+      #      不崩溃、只是静默读不到 key。
+      - name: 剥掉 ad-hoc 签名 + 断言产物身份
+        run: |
+          set -euo pipefail
+          app="dist/$TARGET.app"
+          plist="$app/Contents/Info.plist"
+          if codesign -dv "$app" >/dev/null 2>&1; then
+            echo "  剥签名前: $(codesign -dvv "$app" 2>&1 | grep -E '^(Identifier|Signature|TeamIdentifier)=' | tr '\n' ' ')"
+            codesign --remove-signature "$app"
+          else
+            echo "  xcodebuild 本身就没签 (CODE_SIGNING_ALLOWED=NO 生效了)"
+          fi
+          # 剥完再断言一次: 剥不掉是静默失败 (--remove-signature 失败也不会毁掉产物)
+          if codesign -dv "$app" >/dev/null 2>&1; then
+            echo "::error::剥掉签名后仍带签名 —— 产物不能带着陌生身份发出去"
+            exit 1
+          fi
+          echo "  未签名 ✓"
+
+          pb="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$plist" 2>/dev/null || echo "<读不到>")"
+          if [[ "$pb" != "moofs.mangox" ]]; then
+            echo "::error::CFBundleIdentifier = '$pb', 期望 moofs.mangox"
+            echo "::error::  错了不崩, 只是钥匙串 ACL 与后续升级覆盖会静默失效"
+            exit 1
+          fi
+          echo "  CFBundleIdentifier = $pb ✓"
+
+          # 版本号与 tag 对账。MARKETING_VERSION 是构建设置, tag 来自 git ref, 两者只在
+          # 人和 git 的一致性上会合流 —— 这里把它钉死, 让"tag 说 0.1.13 而包里写着别的"
+          # 在发布前红, 而不是发出去之后。
+          want_ver="${{ steps.ver.outputs.version }}"
+          if [[ -n "$want_ver" ]]; then
+            got_ver="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$plist" 2>/dev/null || echo "<读不到>")"
+            if [[ "$got_ver" != "$want_ver" ]]; then
+              echo "::error::CFBundleShortVersionString = '$got_ver', tag 是 '$want_ver'"
+              exit 1
+            fi
+            echo "  CFBundleShortVersionString = $got_ver ✓ (与 tag 一致)"
+          else
+            echo "  (无版本号输入, 跳过版本对账)"
+          fi
+
+      # 资源可达性: 用真 NSBundle 按 App 自己的三条查法把每份资源查一遍。三条都静默降级
+      # (模型目录 miss → 裸默认表 / 字体 miss → 回落 SF Mono / lproj miss → 英文回落中文
+      # key), 界面照跑, 极难归因。期望清单每次从源码树现推, 不回来改脚本。
+      - name: 资源可达性门禁
+        run: scripts/diag/resource-gate.sh dist/$TARGET.app
+
+      # 模拟一次「朋友从 Release 下载」: 打上 quarantine, 然后走**真实交付脚本**。
+      # 这条把「请在本地签名」从文档承诺变成每次 tag 都验过的门禁 —— 重签脚本哪天
+      # 坏了, 在这里就红, 而不是等朋友来报「双击没反应」。
+      - name: 模拟下载者 · 隔离属性 + 重签 + 校验 + 启动
+        run: |
+          set -euo pipefail
+          work="$RUNNER_TEMP/download-sim"
+          rm -rf "$work"; mkdir -p "$work/src" "$work/installed"
+          cp -pR dist/$TARGET.app "$work/src/MangoX.app"
+
+          echo "打上 quarantine (模拟浏览器下载)"
+          find "$work/src/MangoX.app" -exec /usr/bin/xattr -w \
+            com.apple.quarantine '0083;5f0000;Safari;MangoX-CI-Sim' {} \; 2>/dev/null || true
+          /usr/bin/xattr -p com.apple.quarantine "$work/src/MangoX.app/Contents/MacOS/$TARGET"
+
+          echo "走真实交付脚本"
+          scripts/install-from-release.sh "$work/src/MangoX.app" -o "$work/installed" --no-open
+
+          echo "断言: 安装出来的副本签名有效且无 quarantine"
+          codesign --verify --strict "$work/installed/MangoX.app"
+          if /usr/bin/xattr -p com.apple.quarantine "$work/installed/MangoX.app" >/dev/null 2>&1; then
+            echo "::error::重签后 quarantine 仍在 —— Gatekeeper 一定会拦"
+            exit 1
+          fi
+          id="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' \
+                 "$work/installed/MangoX.app/Contents/Info.plist")"
+          [[ "$id" == "moofs.mangox" ]] || { echo "::error::bundle id 漂了: $id"; exit 1; }
+          # 启动验证由 install-from-release.sh 内部完成 (进程存活), 失败它自己会红。
+          pkill -f "$work/installed/MangoX.app/Contents/MacOS/" 2>/dev/null || true
+
+      # 这里**不**算 sha256: 每架构各出一份的话, 资产就是 2 个 zip + 2 个 .sha256,
+      # 而两份校验和的正文在"哪一个对应哪个架构"这件事上要靠文件名, 读的人得自己配对。
+      # 单个 checksums.txt (两个架构都在里面) 交给下面的 publish job 出 —— 它反正要等
+      # 两路都绿, 顺手就在一处算了。代价是这个 job 的 artifact 里只有裸 zip, 没有校验和。
+      - name: 打包
+        run: |
+          set -euo pipefail
+          ver="${{ steps.ver.outputs.version }}"
+          ver="${ver:-0.0.0-dev}"
+          rm -rf "$RUNNER_TEMP/stage"; mkdir -p "$RUNNER_TEMP/stage"
+          cp -pR dist/$TARGET.app "$RUNNER_TEMP/stage/MangoX.app"
+          name="MangoX-$ver-${{ matrix.arch }}"
+          # ditto 而非 zip: zip 在跨卷解压时会丢 Mach-O 的执行位, 症状是下载后双击没反应。
+          ditto -c -k --sequesterRsrc --keepParent "$RUNNER_TEMP/stage/MangoX.app" "dist/$name.zip"
+          ls -lh dist/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bundle-${{ matrix.arch }}
+          path: dist/*.zip
+          retention-days: 7
+
+  # ── 发版 (单 job, 等所有架构都绿) ─────────────────────────
+  publish:
+    name: publish release
+    needs: build
+    runs-on: ubuntu-latest      # 只是拼 zip + 调 gh, 不需要 macOS
+    if: github.ref_type == 'tag'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 取回两个架构的包
+        uses: actions/download-artifact@v4
+        with:
+          pattern: bundle-*
+          path: dist
+          merge-multiple: true
+
+      - name: 组装资产
+        id: pack
+        run: |
+          set -euo pipefail
+          ver="${{ github.ref_name }}"
+          ver="${ver#v}"
+          echo "version=$ver" >> "$GITHUB_OUTPUT"
+          cp scripts/install-from-release.sh "dist/MangoX-$ver-install.sh"
+          cp mangox/mangox.entitlements "dist/mangox.entitlements"
+          chmod +x "dist/MangoX-$ver-install.sh"
+          ls -lh dist/
+
+      # 一份 checksums.txt 覆盖两个架构的 zip, 而不是每包一个 .sha256。
+      #
+      # 为什么挪到这里而不是各自的 build job: 单文件清单必须等**两个**架构都绿才存在。
+      # 在 build job 里各算各的, 出来的就是 2 个 .sha256 —— 那两份正文要靠文件名去配对
+      # "哪个 hash 属于哪个架构", 而文件名正是最容易在改动里漂掉的那一环。
+      #
+      # 只覆盖 zip: install.sh 与 entitlements 不进清单。用户跑的**唯一**东西是那个脚本,
+      # 但清单的作用是"确认下载没损坏 / 资产没被换掉" —— 它防不住有人连脚本一起换
+      # (那需要动的是 release 本身, 属于另一个量级的威胁), 也不需要防。
+      #
+      # 格式: sha256sum 的 "<hash>␠␠<name>" 是 coreutils 惯例, 但 macOS **没有**
+      # sha256sum —— 用户那边是 `shasum -a 256 -c checksums.txt`。两者格式互通
+      # (实测), 所以这个文件在 mac 和 Linux 上都能验。清单里只写文件名不写路径,
+      # 是为了让用户能 `cd ~/Downloads && shasum -a 256 -c checksums.txt` 原地验。
+      - name: 生成 checksums.txt
+        run: |
+          set -euo pipefail
+          # 数量对账: 少了说明某个 artifact 传空了 (upload-artifact 在路径全空时是
+          # warning 不是 error), 多了说明 dist/ 里混进了别的东西。两样都会让清单
+          # 名不副实 —— 所以在这里钉住, 而不是靠"看起来有两个"。
+          n="$(ls -1 dist/*.zip | wc -l | tr -d ' ')"
+          if [[ "$n" != 2 ]]; then
+            echo "::error::期望 2 个 zip (arm64 + x86_64), 实际 $n 个 —— dist/ 内容:"
+            ls -l dist/
+            exit 1
+          fi
+          ( cd dist && sha256sum *.zip > checksums.txt )
+          cat dist/checksums.txt
+          # 自校验: 刚写出来的清单当场验一遍。清单写错格式 / 名字打错, 在这里红,
+          # 而不是等用户下载完发现 `shasum -c` 报 "no properly formatted checksum"。
+          ( cd dist && sha256sum -c checksums.txt )
+
+      # 正文 = CHANGELOG 对应版本段 + 固定后缀 (安装说明 / 运行时依赖 / 签名警告)。
+      # CHANGELOG 是 Keep a Changelog 格式, 版本段机器可解析, 不用维护第二份文案。
+      - name: 生成 Release 正文
+        run: |
+          set -euo pipefail
+          ver="${{ steps.pack.outputs.version }}"
+          section="$RUNNER_TEMP/section.md"
+          # 判据用 index(...)==1 而不是正则: 版本号里的 . 在正则里是通配, 0.1.1 会
+          # 误匹配 0.1.10; index 精确, 且天然不碰正则转义。
+          awk -v want="$ver" '
+            index($0, "## [" want "]") == 1 { inblock = 1; print; next }
+            inblock && /^## \[/ { exit }
+            inblock { print }
+          ' CHANGELOG.md > "$section"
+          if [[ ! -s "$section" ]]; then
+            echo "::error::CHANGELOG.md 里没有 [$ver] 这一段 —— 补了再打 tag"
+            exit 1
+          fi
+          sed "s|<ver>|$ver|g" .github/release-notes-suffix.md > "$RUNNER_TEMP/suffix.md"
+          if grep -q '<ver>' "$RUNNER_TEMP/suffix.md"; then
+            echo "::error::后缀里有没替换掉的 <ver> 占位符"
+            exit 1
+          fi
+          { cat "$section"
+            echo
+            echo "---"
+            echo
+            cat "$RUNNER_TEMP/suffix.md"
+          } > "$RUNNER_TEMP/notes.md"
+          echo "=== 正文前 25 行 ==="
+          head -25 "$RUNNER_TEMP/notes.md"
+
+      - name: 创建 draft → 传资产 → 发布
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          notes="$RUNNER_TEMP/notes.md"
+          # draft 优先: 传完所有资产再 publish, 朋友绝不会看到只有一半的 release。
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "release 已存在 (重跑), 覆盖资产与正文"
+            gh release edit "$TAG" --notes-file "$notes"
+            # upload 只会加/覆盖, **不会删**。同一个 tag 从"每包一个 .sha256"改成
+            # "一份 checksums.txt" 之后重跑, 旧的两个 .sha256 会原地留下, 变成
+            # 4 个校验类资产里挑 1 个用 —— 而那 2 份的 hash 覆盖的还是被 --clobber
+            # 换掉的新 zip, 验不过。这是"重跑半路失败"的场景下才发生的事, 正因为
+            # 不常发生才危险: 没人会因为 Release 页面上多两个文件而去核。
+            stale="$(gh release view "$TAG" --json assets --jq '.assets[].name' \
+                     | grep -E '\.sha256$' || true)"
+            for a in $stale; do
+              echo "  删掉上一轮遗留的校验和资产: $a"
+              gh release delete-asset "$TAG" "$a"
+            done
+          else
+            gh release create "$TAG" --draft --title "$TAG" --notes-file "$notes"
+          fi
+          gh release upload "$TAG" dist/* --clobber
+          gh release edit "$TAG" --draft=false
+          gh release view "$TAG" --json url,isDraft,assets --jq '{url, isDraft, assets: [.assets[].name]}'

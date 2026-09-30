@@ -5,6 +5,31 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [0.1.13] - 2026-09-28
+
+本版**不含产品功能改动** —— App 与 0.1.12 行为完全一致。主线 = 构建与发版链路收口到 Xcode 一条路径 + 推 tag 自动出包。
+
+### Added
+
+- **推 tag 自动出包**：`.github/workflows/release.yml`，arm64 与 x86_64 两路并行编，全绿才发 Release。产物为双架构 zip + 一份 `checksums.txt` + 安装脚本
+- **`scripts/install-from-release.sh`**：解包 → 清隔离属性 → ad-hoc 重签 → 校验 → 检查 `pi`/`node` → 启动验证。Release 上的包是未签名的，这是给用户的安装路径
+- **共享 scheme 进版本库**（`mangox.xcodeproj/xcshareddata/xcschemes/mangox.xcscheme`）：clone 下来即可用 `xcodebuild -scheme mangox`
+- **资源可达性门禁独立成工具**（`scripts/diag/resource-gate.sh`）：用真 `NSBundle` 按 App 自己的查法逐份验资源。模型目录 / 字体 / lproj 三条 miss 都会静默降级（界面照跑但字形、语言、模型表悄悄换掉），期望清单每次从源码树现推
+- **发版前 9 道门禁**：runner 架构 · tag 与 `MARKETING_VERSION` 一致 · 语义冒烟 · xcodebuild · 产物架构 · 产物身份 · 资源可达性 · 模拟下载者重签 · 打包
+
+### Changed
+
+- **每包一个 `.sha256` → 一份 `checksums.txt`**：两份独立校验和的正文要靠文件名配对「哪个 hash 属于哪个架构」，而文件名正是最容易漂的一环。改由 `publish` job 在两路都绿后统一出，落库前当场 `sha256sum -c` 自校验。清单只写文件名，macOS 侧 `shasum -a 256 -c checksums.txt` 原地可验（两边格式互通）。重跑时自动删掉上一轮遗留的 `.sha256` 资产 —— `gh release upload` 只加不删
+- **构建二选一 → 只支持 Xcode**：`open mangox.xcodeproj` 与 `xcodebuild` 成为唯一构建路径，**本机必须装完整 Xcode**（冒烟与资源门禁在 CLT 上仍可跑）
+- **CI 改用 `-scheme` + `-derivedDataPath`**，产物路径不再依赖 `SYMROOT` 默认推导
+- **「请在本地签名」是门禁而非文档承诺**：CI 走一遍真实交付路径（含 `quarantine`、重签、启动），全过才发 Release
+
+### Fixed
+
+- **Release 包会带一份属于 runner 的签名**：Xcode 16 对 macOS target 仍会跑 ad-hoc 签名，`CODE_SIGN_IDENTITY=""` 是"指定 ad-hoc 身份"而非"不签"。改为编完显式剥掉并留证
+- **T27「占用回合收尾」在 CI 上超时**：mock 逐字符发每字 18ms，脚本化回复吃掉 `waitUntil` 20s 预算的 72%，本机稳过而 CI 越线。已缩短
+- **双架构 matrix 会编出两个 universal 包**：Release 走默认 `ARCHS = $(ARCHS_STANDARD)`，而 macOS 的标准架构集自 Xcode 12 起含两个架构。已显式钉 `ARCHS` 并加 `lipo` 断言
+
 ## [0.1.12] - 2026-09-24
 
 本版主线 = **模型链路的简化与控件解耦 + 渲染面补齐（图片 / 表格 / 折行）**：把"选模型"从一张笛卡尔积菜单收成一颗**受控的模型控件**（单面板 + 力量滑轨），同一个控件既驱动 composer 的「全局期望」，也驱动定时任务与邮箱哨兵的「仅本任务」；渲染面补齐 markdown 图片块、表格列对齐与宽表横滚、代码块折行开关，并把**工具产出的图片**接上屏。全量冒烟 **797 项 ALL PASS** + `xcodebuild` BUILD SUCCEEDED 零 warning。

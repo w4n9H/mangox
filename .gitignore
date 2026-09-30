@@ -74,3 +74,8 @@ icon_work/
 # 构建产物
 build/
 DerivedData/
+
+# 本地agent配置
+.agents/
+skills-lock.json
+

@@ -2,7 +2,10 @@
 
 macOS 原生 AI Agent 客户端（SwiftUI），对标 Codex Desktop 的交互形态，底层对接 [pi CLI](https://github.com/earendil-works/pi) 作为推理引擎。
 
-![version](https://img.shields.io/badge/version-0.1.12-orange)
+![version](https://img.shields.io/badge/version-0.1.13-orange)
+![release](https://github.com/w4n9H/mangox/actions/workflows/release.yml/badge.svg)
+
+> 下载安装包请看[「下载与本地签名」](#下载与本地签名必读) —— **包需要你本机签一次名才能开**，原因和做法都在那节。
 
 ## 功能
 
@@ -58,6 +61,7 @@ macOS 原生 AI Agent 客户端（SwiftUI），对标 Codex Desktop 的交互形
 **工程化**
 - SQLite 持久化（WAL），事件流重放式加载；退出时 WAL checkpoint + 终止在途 pi 进程
 - 冒烟门禁：`scripts/smoke/run.sh` 一条命令跑 797 项语义冒烟（事件归并/并发路由/fire 后台化/上限拒绝/落库对拍/轨迹派生/settled 语义/状态栏数据链/过程态胶囊/Trace v2/侧问 fork/离开摘要/自动命名/模型物化/元数据目录/模式矩阵/附件管线/发送门控/日分组/审批阻塞/热键配置/捕获链路/备份引擎/重放缓存/无人值守 fire/审批分级裁决/BashRiskEvaluator 语料/邮箱哨兵四道闸/主题与正文清洗/MIME 解析与回执组装/多轮并发与续跑/会话配置恢复/任务级配置/连接失效重建/外观三态与侧栏几何/暗色板舒适区与正文面层级/注入分层与可预测降级与 key 保留集合/persona pack 解析与人格段结构性首位与 L1 一条一文件/知识库扫描契约与索引段段序与只读红线/索引预览与注入同源/按需 pack 文件点名告警未迁走则响/persona 段为空与 pack 文件读不出来的点名告警与改名后缀陷阱/常驻行文案(标题=文件名+出厂固定表, 副标=persona+content字数)与表外文件只剩文件名/知识条目关闭注入后仍在面板且不进 prompt 且回收 L1/知识面板三区结构(常驻·自定义·知识库)与待审核候选与知识库区恒不判空/Markdown 块级渲染(图片块·表格列对齐与宽表横滚·代码块折行开关)/工具结果面(内容契约提取与图片落盘与陌生 kind 归中性档与 delta 白名单)/模型选择值逻辑(ModelChoice 与档位收敛与滑轨停靠点)/哨兵任务级模型(未 pin→nil 与三列往返与只丢级别则整体 nil)）
+- 打包门禁：`scripts/diag/resource-gate.sh` 对编出来的 `.app` 跑资源可达性探针 `scripts/diag/bundle_probe.swift` —— 用真 `NSBundle` 按 App 自己的查法把每份资源查一遍，任一 miss 即阻断。原因是这三条查法**都静默降级**：模型目录 miss → 退回裸默认表；`JetBrainsMono-*.ttf` miss → 字形悄悄回落 SF Mono（界面照跑，最难归因）；`<lang>.lproj` miss → 英文界面回落中文 key。探针的期望清单从源码树推出（新加资源自动进清单），并已量出一条红线：**`Bundle.url(forResource:)` 在 macOS 上不递归子目录**，所以资源必须拍平在 `Contents/Resources` 根，放进 `Fonts/` 这种看起来没毛病的摆法就是查不到。工程用 Xcode 16 的 `PBXFileSystemSynchronizedRootGroup`（资源靠同步组**隐式**纳入，`project.pbxproj` 里没有文件列表可查），所以这道门禁的真正价值是**证明同步组那份隐式纳入的结果恰好是代码期待的摆法**。与构建器无关：xcodebuild 的产物、CI 里编的包都能验；只要 SDK + swiftc，CLT 上也能跑
 - 扩展管理：内置 mangox-approval（源码内嵌, 每次 spawn 自动校验重建，换机器零影响），托管扩展启停/导入/删除
 - 内置 JetBrains Mono（SIL OFL），等宽三级字体链
 - 本地化三道门禁：`gen_strings.py --check`（词表对账）+ `scan_wiring.py --check`（接线判定 + 冻结取词：`L()` 落进存储属性会让译文冻在首次访问，切语言不再跟随）+ `e2e_probe.py`（端到端渲染指纹，含 1 条反例）
@@ -66,10 +70,41 @@ macOS 原生 AI Agent 客户端（SwiftUI），对标 Codex Desktop 的交互形
 - 渲染出图：`scripts/diag/md_preview.py`（markdown 层 + 表格铺满列宽的**机器量宽**；`--counterexample` 能一键造反例，自证判据确实会红）· `scripts/diag/toolcard_preview.py`（工具卡三态与调色板）—— 都编译**真源码**、用 `NSHostingView` 离屏跑真实 layout，画的是 App 里那一份，不是示意图
 - 数据层探针：`scripts/diag/db_upgrade_probe.py` —— 在**真库副本**上把表退回升级前形态，验迁移补列 + 用真 payload 回放旧会话（真库只读）
 
+## 下载与本地签名（必读）
+
+安装包在 [Releases](https://github.com/w4n9H/mangox/releases)，按机器选 `arm64`（Apple Silicon）或 `x86_64`（Intel）。
+
+**下载完不能直接双击** —— 要先在本机签一次名。把脚本和 zip 放在同一个目录，然后：
+
+```bash
+shasum -a 256 -c checksums.txt                             # 先验完整性
+bash MangoX-<ver>-install.sh MangoX-<ver>-arm64.zip        # 或 -x86_64.zip
+```
+
+它会解包 → 清隔离属性 → 重签 → 校验 → 启动。
+
+`checksums.txt` 覆盖两个架构的 zip。它在 `publish` job 生成（那里反正要等两路都绿），落库前当场自校验一遍；只写文件名不写路径，所以下载完在同一个目录里直接 `shasum -a 256 -c checksums.txt` 就能验。macOS 没有 `sha256sum`（用 `shasum -a 256`），但两边格式互通，Linux 上 `sha256sum -c` 同样能验。
+
+**为什么要签名**：CI 的 macOS runner 拿不到你的开发者证书，出的包是未签名的。浏览器下载的文件带 quarantine 标记，Gatekeeper 会直接拒绝启动，报「无法打开，因为无法验证开发者」。
+
+手动做等价于：
+
+```bash
+/usr/bin/xattr -cr MangoX.app
+codesign --force --sign - --timestamp=none --entitlements mangox.entitlements MangoX.app
+open MangoX.app
+```
+
+> 改脚本时注意 `xattr` 要写 `/usr/bin/xattr` 绝对路径 —— PATH 里那个可能是不认 `-r` 的 shim。
+
+ad-hoc 签名只解除 Gatekeeper 的发布者校验，不做身份认证、不走公证，适合自己和同事用。要分发给陌生用户，得配 Apple Developer 证书 + 公证。
+
+App **不带 pi CLI**，需自己装（[pi](https://github.com/earendil-works/pi) + node）并配好 API key —— 详见「要求」。
+
 ## 要求
 
 - macOS 14.8+
-- Xcode 16（构建）
+- **Xcode 16 或更新版本**（构建 `.app` 的唯一路径；`xcodebuild` 在只装了 CommandLineTools 的机器上直接不可用）
 - [pi CLI](https://github.com/earendil-works/pi) 已安装且在 `PATH`（缺 pi 时 App 会显示引擎不可用横幅，不会假装在回复）
 - pi 侧已配置模型 provider 与 API key
 
@@ -79,13 +114,44 @@ macOS 原生 AI Agent 客户端（SwiftUI），对标 Codex Desktop 的交互形
 open mangox.xcodeproj   # Xcode 里 Cmd+R
 ```
 
-## 已知限制 (v0.1.12)
+命令行等价（CI 用的就是这条）：
+
+```bash
+xcodebuild -project mangox.xcodeproj -scheme mangox -configuration Release \
+           -derivedDataPath out ARCHS=arm64 ONLY_ACTIVE_ARCH=NO \
+           DEVELOPMENT_TEAM="" \
+           CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" build
+# 产物: out/Build/Products/Release/mangox.app
+```
+
+> `ARCHS` 要显式钉，否则会编出 universal 包。完整 Xcode 也是硬要求 —— 只装 CommandLineTools 时 `xcodebuild` 不可用（冒烟与资源门禁仍能在 CLT 上跑）。
+
+### 发版（CI）
+
+```bash
+# 1. 改 project.pbxproj 的 MARKETING_VERSION + 写 CHANGELOG 段, 提交
+# 2. 打 tag 推上去 —— Actions 编包 + 跑门禁 + 发 Release
+git tag v0.1.13 && git push origin v0.1.13
+```
+
+`.github/workflows/release.yml` 分 arm64 / Intel 两路并行编，任一路失败就不发。发 tag 前 CI 跑 9 道门禁（架构对账、tag 与版本号一致、语义冒烟、编译、产物架构与签名、资源可达性、模拟下载者重签、打包），**全绿才 publish** —— 逐条判据见该文件。
+
+tag 推了却没 Release = 构建挂了，而 tag 不能重推，删掉重打：
+
+```bash
+git tag -d v0.1.13 && git push origin :refs/tags/v0.1.13
+git tag v0.1.13 && git push origin v0.1.13
+```
+
+## 已知限制 (v0.1.13)
 
 - **知识面板的「命中」列恒显示 `—`（有意）**：命中统计（触发即命中 / 读取即命中、归档建议）的消费点尚未实现（P11.3 教训回路已冻结 —— 库里启用的条目为 0，它的输入还不存在），在那之前这一列是**诚实的占位**，不是没做完的 bug
 - **知识条目不能在界面里改「常驻 / 按需」**：编辑器只留作用域 + 标题 + 正文，新建即常驻；升级前已落成按需的旧条目想改成常驻，只能删掉重建
 - **persona 行的标题不可自定义**：固定为「文件名 + 出厂文案」（`SOUL.md - 我是谁`），因为它回答的是"这三份分别是什么"这个产品问题，不读文件内容
 - **漏译表现为回落中文，不报错**：缺项回落 key 本身（= 中文原文），所以英文界面可能出现中英混排；想收口就把 `gen_strings.py --check` 换成逐语言对账
 - **新增语言尚未完全泛化**：译文真源 `scripts/l10n/en_values.py` 仍是单份字典、`e2e_probe.py` 硬编码 en / zh-Hans —— 加语言要补「译文真源 + 探针」两处（`AppLanguage` 加 case、新建 `<lang>.lproj` 已在门禁覆盖内）
+- **首次从 Release 装的 App 可能弹一次钥匙串授权**：本机 Xcode 编的那份（Apple Development 签名）与 Release 重签的那份（ad-hoc）签名身份不同，Keychain 按身份判 ACL。点「始终允许」即长期通行；读不到就重填一次 Key
+- **别同时开两个 App 实例**：per-turn 引擎与 WAL 虽能扛，但两边的 UI 状态会互相盖
 - **长会话上下文线性增长**：pi transcript 无 compaction，单会话建议控制在几十轮内，过长后每次拉起的 token 成本与延迟都会上升
 - **并发资源占用**：每个在途任务是一个独立 pi 进程（约 50MB）+ 一路 LLM 流，满并发 10 个任务时请留意机器负载（设置页可调上限）
 - **agent 改文件后文件树不自动刷新**：工作区栏有手动刷新按钮；自动增量刷新在路线图上
