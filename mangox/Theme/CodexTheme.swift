@@ -329,6 +329,11 @@ enum Tune {
     static let knowledgeTotalCharLimit: Int  = 64000   // 注入块总量预算
     static let distillMaterialCharLimit: Int = 12000   // 记忆提炼: 对话材料总量截断
     static let distillTimeoutSeconds: Double = 60      // 记忆提炼: 一次性 pi 轮超时
+    /// P12.1a: 引擎启动后"一句话都没说"的容忍时长。pi spawn 后正常会立刻回
+    /// get_state / get_available_models / get_session_stats ⇒ 到这个点仍零上行就是启动失败。
+    /// 取 8s 与 `settleStatsTask` 同量级: 冷启动 Node + 载扩展在慢盘上可能数秒,
+    /// 定太短会对"只是慢"的机器误报 (宁可慢一拍, 不可误报)。
+    static let engineSilenceSeconds: Double = 8
     static let knowledgeListWidth: CGFloat   = 240     // 面板左列宽 (与 sidebarWidth 同量级)
     // 编辑区内容列宽 —— **2026-09-24 拆成三个 token** (原先三页共用一个 `knowledgeEditorMaxWidth`)。
     // 拆的判据: 三处只是**当下取值相同**, 不是同一条约束 —— 知识条目是长文编辑器, 扩展是清单+源码

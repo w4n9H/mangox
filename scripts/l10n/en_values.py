@@ -653,4 +653,20 @@ VALUES = {
     '细节': 'Details',
     # 复制全部输出时图片的入列格式 (复制的内容跟随语言, 故这里的占位符也要进词表)
     '图片: %@': 'Image: %@',
+    # ---- 2026-10-04: P12.1 引擎起不来的可见性 (pi 1.0 升级适配) ----
+    # 三条判据: ① 说清**谁**死了 ② 带上可执行的下一步线索 (stderr / 路径) ③ 不承诺"重启就好"
+    'Agent 引擎启动后立即退出 (退出码 %d)。': 'The agent engine exited right after starting (exit code %d).',
+    'Agent 引擎已启动但一直没有响应。': 'The agent engine started but has not responded at all.',
+    'Agent 引擎启动失败。': 'The agent engine failed to start.',
+    '引擎 stderr 末尾几行:': 'Last lines of engine stderr:',
+    '引擎没有输出任何 stderr。': 'The engine wrote nothing to stderr.',
+    # 自查报告: 用户按 README 自己装了 pi 却仍判"不可用"时, 这行是他唯一的对照表
+    '未找到可执行的 pi。已按顺序查找:': 'No executable pi found. Looked in this order:',
+    'PATH 里没有 pi 时, App 发现不了托管安装以外的位置 (Nix / 自定义 prefix)。': 'If pi is not on PATH, the app cannot find locations outside the hosted install (Nix / custom prefix).',
+    # 扩展抛错: 这是**引擎自己报的错**被原样上抛 (原实现把它落进 default 静默丢弃)。
+    # 三个占位符 = 扩展名 / 事件名 / 引擎给的 error 正文 —— 一个都不能省, 否则用户无从下手。
+    '扩展 %@ 在处理 %@ 时出错: %@': 'Extension %@ failed while handling %@: %@',
+    # P12.2: 第三方扩展请求了 MangoX 不处理的界面方法 —— 回的是"取消"而不是瞎答。
+    # 必须点名方法, 否则用户不知道是哪个提问被吞了。
+    '扩展请求了 MangoX 不处理的「%@」界面, 已按「取消」应答。': 'Extension requested a "%@" prompt the app does not handle; answered "Cancel".',
 }

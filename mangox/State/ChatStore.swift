@@ -74,6 +74,9 @@ final class ChatStore: ObservableObject {
     @Published var pendingImages: [PendingImage] = []
     /// 引擎不可用 (pi CLI 缺失): Release 下不静默降级, UI 横幅明示 + 发送守卫。
     @Published var engineMissing: Bool = false
+    /// P12.1a: 引擎**装着的但起不来**的诊断 (启动即退 / 启动后沉默)。
+    /// 常驻 (不自清): 这是不可自愈的状态, 8s 横幅会让用户错过; 引擎真正跑通一轮后清空。
+    @Published var engineDiagnosis: String? = nil
 
     // Sidebar (Codex: projects 嵌套 + chats 平铺)
     @Published var projects: [ProjectGroup] = SampleSession.projects
@@ -1796,7 +1799,10 @@ extension ChatStore: AgentTransportDelegate {
 
         switch event {
         case .streamStarted:
-            break   // runningTurns 在 beginTurn 即插入 (这里仅确认, 不重复维护)
+            // runningTurns 在 beginTurn 即插入 (这里仅确认, 不重复维护)。
+            // P12.1a: 引擎真跑起来了一条流 ⇒ 清掉上次的启动失败诊断 (判据用"能开工",
+            // 不用"进程在"—— 半死的进程照样在)。
+            engineDiagnosis = nil
 
         case .textChunk(let id, let delta):
             // P10.5: 无宿主 chunk 丢弃 —— 回合已落定 (或被替换) 后的迟到 chunk 若新建消息会成单字残块
@@ -2094,6 +2100,12 @@ extension ChatStore: AgentTransportDelegate {
     func transport(_ transport: any AgentTransport, didReportSessionStats stats: SessionStats) {
         guard let sid = sessionOf(transport), sid == selectedConversationId else { return }
         applySessionStats(stats)
+    }
+
+    /// P12.1a: 引擎启动失败诊断 —— **有意不设 `sessionOf` 守卫**: 起不来是全局事实,
+    /// 探测实例上的失败同样必须让用户看见 (原实现丢 stderr ⇒ 这就是那条静默失败的终点)。
+    func transport(_ transport: any AgentTransport, didFailEngineWithDiagnosis diagnosis: String) {
+        engineDiagnosis = diagnosis
     }
 
     private func applySessionStats(_ s: SessionStats) {

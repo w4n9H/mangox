@@ -24,6 +24,25 @@ final class PiRpcTransport: AgentTransport {
     private let lock = NSLock()
     private nonisolated(unsafe) var lineBuffer = Data()
 
+    // P12.1a: pi 的**致命错误只走 stderr**。实测 (`-e builtin:<未知名>`):
+    //   stdout 全空 + stderr 一行 `Error: Failed to load extension …` + 进程退出。
+    // 原实现把 stderr 丢进 nullDevice ⇒ 参数不被这个版本接受时, 用户看到的是
+    // "发了消息什么都不发生", 零可归因信息。这里留**尾部若干行**供启动失败时上报。
+    private var errPipe: Pipe?
+    /// 尾部 stderr 行 (后台读取线程写, 加锁; 上限见 `stderrTailLimit` ⇒ 绝不无界增长)。
+    private nonisolated(unsafe) var stderrTail: [String] = []
+    /// `nonisolated`: 读它的是 `enqueueStderr` (后台线程), 不是主线程。
+    private nonisolated static let stderrTailLimit = 4
+    /// 本次 spawn 是否已经收到过**任何** RPC 行。
+    /// 判据用它而不是 `turnActive`: 正常 spawn 会立刻回 get_state / get_available_models /
+    /// get_session_stats, **一句话都不说**就是启动失败。
+    private var sawAnyRPC = false
+    /// spawn 代数 (延迟上报要认朝代: 0.5s 内可能已经换了进程)。
+    private var spawnGeneration = 0
+    private var startupWatchdog: Task<Void, Never>?
+    /// 本次 spawn 是否已报过启动失败 (看门狗与退出回调都会触发, 只报一次)。
+    private var engineFailureReported = false
+
     // 回合状态
     private var turnActive = false
     /// P6.0①: 最近一次 agent_end 的 willRetry (P6.1.2 过程态消费; 冒烟断言用 internal)。
@@ -97,16 +116,85 @@ final class PiRpcTransport: AgentTransport {
 
     static func available() -> Bool { findBinary() != nil }
 
-    private static func findBinary() -> String? {
-        for p in ["/opt/homebrew/bin/pi", "/usr/local/bin/pi"] where FileManager.default.isExecutableFile(atPath: p) {
-            return p
-        }
-        let pathEnv = ProcessInfo.processInfo.environment["PATH"] ?? ""
-        for dir in pathEnv.split(separator: ":") {
+    /// P12.1c: pi 二进制候选表 (**顺序即优先级**)。
+    /// pi 1.0 起安装路径不再只有 npm 全局 —— pi.dev 托管安装器把入口放在
+    /// `~/.pi/agent/bin` 或 `~/.local/bin` (见 docs/P12 §3.2), 而这两个**都不在
+    /// Finder / Xcode 启动的 App 的 PATH 里** ⇒ 只靠 PATH 兜底会判成"引擎不可用",
+    /// 而 pi 明明装着。
+    static func binaryCandidates(home: String = NSHomeDirectory(),
+                                 pathEnv: String = ProcessInfo.processInfo.environment["PATH"] ?? "") -> [String] {
+        // 前四项与 PATH 无关 (homebrew 两条 + 托管安装两条), 放在前面保证确定性;
+        // PATH 扫描放最后, 兜住自定义 prefix / 版本管理器这类未知位置。
+        var out = ["/opt/homebrew/bin/pi",
+                   "/usr/local/bin/pi",
+                   home + "/.pi/agent/bin/pi",
+                   home + "/.local/bin/pi"]
+        for dir in pathEnv.split(separator: ":") where !dir.isEmpty {
             let p = "\(dir)/pi"
-            if FileManager.default.isExecutableFile(atPath: p) { return p }
+            if !out.contains(p) { out.append(p) }
         }
+        return out
+    }
+
+    private static func findBinary() -> String? {
+        for p in binaryCandidates() where FileManager.default.isExecutableFile(atPath: p) { return p }
         return nil
+    }
+
+    /// P12.1c: 引擎不可用时的自查报告 —— 找过哪些路径、命中谁。
+    /// 存在的理由: README 把"装 pi"定为**用户义务**, 那 App 就必须让用户能自救。
+    /// 原来只有一句「未找到 pi CLI」⇒ 用户无从知道该查哪里 (托管安装 / Nix / 自定义 prefix)。
+    /// ⚠️ 逐次现算 (不落存储属性): 文案要跟随界面语言, 冻进实例属性就违反 L10n 的取词纪律。
+    static func binarySearchReport() -> String {
+        let home = NSHomeDirectory()
+        var lines = [L("未找到可执行的 pi。已按顺序查找:")]
+        for p in binaryCandidates() {
+            let mark = FileManager.default.isExecutableFile(atPath: p) ? "✅" : "·"
+            lines.append("\(mark) " + abbreviateHome(p, home: home))
+        }
+        lines.append(L("PATH 里没有 pi 时, App 发现不了托管安装以外的位置 (Nix / 自定义 prefix)。"))
+        return lines.joined(separator: "\n")
+    }
+
+    /// 报告里把 home 前缀折成 `~` (纯函数, 冒烟直测)。
+    /// ⚠️ 必须按**路径分量**匹配, 不能按字符串前缀 —— `hasPrefix("/Users/x")` 会把
+    /// `/Users/xy/bin/pi` 折成 `~y/bin/pi`, 报告里出现一个不存在的 `~y` 比不折更坏。
+    static func abbreviateHome(_ path: String, home: String) -> String {
+        var base = home
+        while base.count > 1 && base.hasSuffix("/") { base.removeLast() }
+        guard !base.isEmpty else { return path }
+        guard path == base || path.hasPrefix(base + "/") else { return path }
+        return "~" + String(path.dropFirst(base.count))
+    }
+
+    /// 扩展的**身份是它的目录名**, 不是 `index.js` —— `index.*` 是所有扩展共用的入口
+    /// 文件名, 本身不含身份信息 (`~/.mangox/extensions/mangox-approval/index.js` 报成
+    /// "`index.js`" 等于什么都没说)。单文件扩展 (`foo.ts` 直接放在扩展目录下) 没有这一层,
+    /// 就原样用文件名。纯函数, 冒烟直测。
+    static func extensionLabel(path: String) -> String {
+        let parts = path.split(separator: "/").map(String.init)
+        guard let last = parts.last else { return "?" }
+        if last.hasPrefix("index."), parts.count >= 2 { return parts[parts.count - 2] }
+        return last
+    }
+
+    /// P12.1b: `llama.cpp` 在 pi 里既是**内置扩展**也是一个 **provider**。
+    /// ⚠️ **契约 token** —— 逐字进 spawn 参数, 名字由 pi 定, 不得本地化 / 改写 / 拆分。
+    static let builtinLlamaExtension = "builtin:llama.cpp"
+
+    /// P3.11 + P12.1b: spawn 期的扩展参数 (纯函数, 冒烟直测)。三段顺序即理由:
+    ///   ① `--no-extensions` 关掉**自动发现** (只加载 MangoX 认可的扩展);
+    ///   ② `--extension builtin:llama.cpp` —— ⚠️ **不可省**: pi **0.99.0** 起
+    ///      `--no-extensions` 连**内置扩展**一起关, 而 llama.cpp 是 provider ⇒ 不补回来,
+    ///      `get_available_models` 里整族本地模型直接消失。
+    ///      这是 MangoX 唯一主动开的内置扩展; 另三个 (`codemode` / `tool-search` / `mcp`)
+    ///      **有意不开** —— 它们绕过审批桥 (理由见 docs/P12 §七)。
+    ///   ③ MangoX 托管扩展 (审批桥恒挂; 业务扩展按模式档位, 由调用方过滤后传进来)。
+    static func extensionArguments(hostedExtensionPath: String, enabled: [String]) -> [String] {
+        var args = ["--no-extensions", "--extension", builtinLlamaExtension,
+                    "--extension", hostedExtensionPath]
+        for path in enabled { args += ["--extension", path] }
+        return args
     }
 
     /// pi 是 node 脚本 (shebang #!/usr/bin/env node)。直接 spawn 它时 env 要在
@@ -427,6 +515,10 @@ final class PiRpcTransport: AgentTransport {
     private func teardownProcess() {
         guard let p = process else { return }
         outPipe?.fileHandleForReading.readabilityHandler = nil
+        errPipe?.fileHandleForReading.readabilityHandler = nil
+        errPipe = nil
+        startupWatchdog?.cancel()   // P12.1a: 主动拆进程 ≠ 启动失败, 看门狗必须一起撤
+        startupWatchdog = nil
         p.terminate()   // terminationHandler 会走 processDidExit, 靠身份守卫不误伤
         process = nil
         stdinHandle = nil
@@ -435,19 +527,12 @@ final class PiRpcTransport: AgentTransport {
     private func spawnProcess(cwd: String) {
         guard let spec = Self.launchSpec() else { return }
         let extPath = Self.ensureExtensionFile()
-        let p = Process()
-        p.executableURL = URL(fileURLWithPath: spec.executable)
-        // P7-M3: 自管模型物化 — 有自管模型才注入 (覆盖整个配置目录, 与 ~/.pi/agent 互不相干);
-        // 指纹不变由 writeIfNeeded 跳写, 避免 spawn 期磁盘搅动。
-        if let cfg = piConfig, cfg.modelCount > 0 {
-            let dir = ModelMaterializer.configDirectory()
-            if (try? ModelMaterializer.writeIfNeeded(cfg, to: dir)) != nil {
-                p.environment = ProcessInfo.processInfo.environment
-                p.environment?["PI_CODING_AGENT_DIR"] = dir.path
-            }
-        }
-        var args = spec.scriptArgs + ["--mode", "rpc",
-                                      "--no-extensions", "--extension", extPath]
+        var args = spec.scriptArgs + ["--mode", "rpc"]
+        // P12.1b: 扩展参数 (关自动发现 + 补回内置 provider + 挂托管扩展)。
+        // 业务扩展仅完整档挂载 (P7-M4); 系统扩展 (审批桥) 三档恒挂。
+        args += Self.extensionArguments(
+            hostedExtensionPath: extPath,
+            enabled: desiredMode.mountsBusinessExtensions ? desiredExtensions : [])
         if let fork = desiredForkSource {
             // P6.3.1: 侧问首回合 — fork 源快照 (互斥分支: 不带 --session/--no-session)。
             // --session-dir 把产物收进托管目录 (否则落 pi 默认 ~/.pi/agent/sessions);
@@ -478,13 +563,6 @@ final class PiRpcTransport: AgentTransport {
             // ephemeral: 任务 fire 轮次等, transcript 仅存进程内存
             args += ["--no-session"]
         }
-        // P3.11: 托管扩展按启用列表逐个 --extension 追加 (--no-extensions 已关自动发现);
-        // P7-M4: 业务扩展仅完整档挂载 (极简/常规不挂, 系统扩展已固定内置不受影响)。
-        if desiredMode.mountsBusinessExtensions {
-            for extPath in desiredExtensions {
-                args += ["--extension", extPath]
-            }
-        }
         // P7-M4: 极简档 --tools 白名单裁内置工具 (常规/完整不传, pi 默认即全量)
         args += AgentMode.spawnArguments(for: desiredMode, businessExtensions: [])
         // P3.7: 知识注入块挂在 spawn 参数上 (--append-system-prompt 可重复传; 会话内不可改)
@@ -496,19 +574,39 @@ final class PiRpcTransport: AgentTransport {
             args += ["--model", model]
         }
         args += ["--thinking", desiredThinking.rawValue]
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: spec.executable)
+        // P7-M3: 自管模型物化 — 有自管模型才注入 (覆盖整个配置目录, 与 ~/.pi/agent 互不相干);
+        // 指纹不变由 writeIfNeeded 跳写, 避免 spawn 期磁盘搅动。
+        if let cfg = piConfig, cfg.modelCount > 0 {
+            let dir = ModelMaterializer.configDirectory()
+            if (try? ModelMaterializer.writeIfNeeded(cfg, to: dir)) != nil {
+                p.environment = ProcessInfo.processInfo.environment
+                p.environment?["PI_CODING_AGENT_DIR"] = dir.path
+            }
+        }
         p.arguments = args
         p.currentDirectoryURL = URL(fileURLWithPath: cwd)   // App cwd=/ 问题的正式修复
         let inPipe = Pipe()
         let outPipe = Pipe()
+        let errPipe = Pipe()
         p.standardInput = inPipe
         p.standardOutput = outPipe
-        p.standardError = FileHandle.nullDevice
+        p.standardError = errPipe   // P12.1a: 不再丢 nullDevice — 启动失败的唯一线索在 stderr
         do { try p.run() } catch { return }
         process = p
         spawnedCwd = cwd
         self.outPipe = outPipe
+        self.errPipe = errPipe
         stdinHandle = inPipe.fileHandleForWriting
-        lock.lock(); lineBuffer.removeAll(); lock.unlock()
+        lock.lock()
+        lineBuffer.removeAll()
+        stderrTail.removeAll()      // 上一次 spawn 的残留不能混进这次的归因
+        lock.unlock()
+        sawAnyRPC = false
+        engineFailureReported = false
+        spawnGeneration += 1
+        let generation = spawnGeneration
 
         outPipe.fileHandleForReading.readabilityHandler = { [weak self] fh in
             let data = fh.availableData
@@ -518,10 +616,27 @@ final class PiRpcTransport: AgentTransport {
             }
             self?.enqueue(data)
         }
+        errPipe.fileHandleForReading.readabilityHandler = { [weak self] fh in
+            let data = fh.availableData
+            guard !data.isEmpty else {
+                fh.readabilityHandler = nil
+                return
+            }
+            self?.enqueueStderr(data)
+        }
         p.terminationHandler = { [weak self] _ in
             DispatchQueue.main.async {
                 MainActor.assumeIsolated { self?.processDidExit(p) }
             }
+        }
+        // P12.1a: 启动沉默看门狗 —— 正常 spawn 立刻就有 response, 一条都没有就说明
+        // 进程没起来 / 参数不被这个版本接受 / 入口不是 node 脚本。进程若已自己退出,
+        // 交给 processDidExit 报 (那边能带上退出码), 这里只管"还活着但沉默"。
+        startupWatchdog?.cancel()
+        startupWatchdog = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(Tune.engineSilenceSeconds * 1_000_000_000))
+            guard let self, self.spawnGeneration == generation, self.process != nil else { return }
+            self.reportEngineSilence(exitStatus: nil)
         }
         // P3.5: 能力上报 — spawn 后立即拉当前模型状态与可用模型清单
         sendCommand(["id": "req-\(nextRequestId())", "type": "get_state"])
@@ -533,6 +648,20 @@ final class PiRpcTransport: AgentTransport {
     /// 身份守卫: 只有当前 process 引用退出才清理 (teardown 重启时旧进程退出不误伤新进程)。
     private func processDidExit(_ proc: Process) {
         guard process === proc else { return }
+        // P12.1a: 能走到这里 = pi **自己退出**的 (teardownProcess 先把 process 置 nil, 上面那条
+        // 身份守卫会把主动拆除挡掉)。若它到死**一句话都没说过**, 那就是启动失败, 必须报。
+        // ⚠️ 位置在下面 `guard turnActive` **之前** —— 引擎在首个回合还没开起来就死时
+        // turnActive 仍是 false, 那条守卫会把这唯一的线索吞掉。
+        // 延后 0.5s 再判: 进程退出时 stdout 缓冲区里可能还有没派发到主线程的 response,
+        // 当场断言"一句话没说"会误报。
+        let status = proc.terminationStatus
+        let generation = spawnGeneration
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+            MainActor.assumeIsolated {
+                guard let self, self.spawnGeneration == generation else { return }
+                self.reportEngineSilence(exitStatus: status)
+            }
+        }
         process = nil
         stdinHandle = nil
         if exportPending { finishExport(path: nil) }   // P6.2.3: 导出中进程死亡 → 上报失败
@@ -608,6 +737,61 @@ final class PiRpcTransport: AgentTransport {
         }
     }
 
+    // MARK: - P12.1a: stderr 尾部缓冲
+
+    /// 后台读取线程回调 (与 `enqueue` 同款: readabilityHandler 不在主线程)。
+    /// 只留尾部 `stderrTailLimit` 行 —— 启动失败的线索几乎都在**最后一两行**,
+    /// 而 pi 跑起来后 stderr 可能有大量进度/告警 ⇒ 不设上限会让这个数组无界增长。
+    /// 这里的 stderr **不丢弃**: 进程活着时它是噪音, 进程死时它是**唯一**的归因来源。
+    /// internal 供冒烟直接投喂 (与 `handleRPCLine` 同款: 不起进程也能验归因逻辑)。
+    nonisolated func enqueueStderr(_ data: Data) {
+        guard let text = String(data: data, encoding: .utf8), !text.isEmpty else { return }
+        // 拆行在锁外做 (纯字符串运算, 不碰共享状态), 只把追加动作留在锁内。
+        let lines = text.split(separator: "\n", omittingEmptySubsequences: false).map { raw -> String in
+            let l = String(raw)
+            return l.hasSuffix("\r") ? String(l.dropLast()) : l
+        }.filter { !$0.isEmpty }
+        guard !lines.isEmpty else { return }
+        lock.lock()
+        stderrTail.append(contentsOf: lines)
+        if stderrTail.count > Self.stderrTailLimit {
+            stderrTail.removeFirst(stderrTail.count - Self.stderrTailLimit)
+        }
+        lock.unlock()
+    }
+
+    /// P12.1a: 引擎"启动即死 / 启动后一声不吭"的上报 (看门狗与退出回调共用, 只报一次)。
+    /// - Parameter exitStatus: nil = 进程**还活着但沉默** (看门狗触发); 非 nil = 进程已自行退出。
+    /// 判据不是 `turnActive`: 引擎在首个回合开起来之前就死时它仍是 false。
+    /// internal 供冒烟 (看门狗 8s 太慢, 直接调它验判据与文案)。
+    func reportEngineSilence(exitStatus: Int32?) {
+        guard !engineFailureReported, !sawAnyRPC else { return }
+        engineFailureReported = true
+        lock.lock()
+        let tail = stderrTail
+        lock.unlock()
+
+        var lines: [String] = []
+        if let exitStatus {
+            lines.append(String(format: L("Agent 引擎启动后立即退出 (退出码 %d)。"), exitStatus))
+        } else {
+            lines.append(L("Agent 引擎已启动但一直没有响应。"))
+        }
+        if tail.isEmpty {
+            lines.append(L("引擎没有输出任何 stderr。"))
+        } else {
+            lines.append(L("引擎 stderr 末尾几行:"))
+            lines.append(contentsOf: tail)
+        }
+        lines.append(Self.binarySearchReport())
+        // 不走 extensionNotify: 那条通道 8s 自清, 而引擎起不来是**不可自愈**的状态,
+        // 用户错过 8s 就回到"什么都不发生"的原点。这里走常驻诊断位。
+        var report = lines.joined(separator: "\n")
+        // 兜底: stderr 可能有超长单行, 不让它把 UI 拖垮
+        if report.count > 4000 { report = String(report.prefix(4000)) + "…" }
+        delegate?.transport(self, didFailEngineWithDiagnosis: report)
+    }
+
     // MARK: - 事件解析 (MainActor)
 
     /// internal 供冒烟测试直接投喂 JSONL 行。
@@ -616,6 +800,9 @@ final class PiRpcTransport: AgentTransport {
         guard let data = line.data(using: .utf8),
               let obj = try? JSONSerialization.jsonObject(with: data),
               let dict = obj as? [String: Any] else { return }
+        // P12.1a: 只要 pi 回过**任何**一条合法 JSONL, 就说明进程真的活着 ⇒ 启动失败判据失效。
+        // 位置在解析成功之后: 半行/乱码不算"说话了"。
+        sawAnyRPC = true
         switch dict["type"] as? String {
         case "agent_start":
             turnActive = true
@@ -739,7 +926,15 @@ final class PiRpcTransport: AgentTransport {
                     rows.append(ToolDetail("细节", det))
                 }
                 let images = persistToolImages(parsed.images, owner: imageOwnerId)
-                let ms = toolStartAt[callId].map { Int(Date().timeIntervalSince($0) * 1000) }
+                // P12.3: 时长**优先用引擎上报值** —— pi 1.1.0 起 `tool_execution_end` 带
+                // `durationMs`（`Math.round(performance.now() - startedAt)`，**单调时钟**、
+                // 只测 `execute()` 本体）；缺席时回落自算墙钟（含排队 / 流式 / 审批等待 ⇒ 偏大）。
+                // ⚠️ 取值用 `NSNumber` 而非 `as? Int`: 契约是 TS `number`（不承诺整数），
+                // 浮点形态也该被采用而不是被丢掉; 两种失败都保持**回落**。
+                // 引擎侧写明 "absent when the tool did not run" ⇒ **缺席是正常语义, 不是异常**。
+                // 失败分支 (上面 `isError`) 当前不记时长 —— 与改造前一致, 是有意边界。
+                let engineMs = (dict["durationMs"] as? NSNumber)?.intValue
+                let ms = engineMs ?? toolStartAt[callId].map { Int(Date().timeIntervalSince($0) * 1000) }
                 card = card.finalized(details: rows, imagePaths: images, durationMs: ms)
             }
             toolCards[callId] = card
@@ -759,26 +954,7 @@ final class PiRpcTransport: AgentTransport {
         case "agent_settled":
             // P6.0①: 会话级彻底落定 (无重试/压缩重试/排队后续) — 唯一拆进程点。
             guard turnActive else { return }
-            turnActive = false
-            finalizeTrackedMessages(usage: nil)   // 正常路径 usage 已随 message_end 落定, 此处仅为兜底
-            emit(.phaseChanged(.idle))            // P6.1.2: 过程态归位
-            emit(.streamEnded)
-            if process != nil {
-                // P6.1.1: 拆进程前拉一次会话统计 (context% 以 pi 口径为准), 响应到达再拆;
-                // 2s 无响应兜底强拆。期间若用户已开新回合, turnActive 守卫防误拆。
-                settleStatsPending = true
-                sendCommand(["id": "req-\(nextRequestId())", "type": "get_session_stats"])
-                settleStatsTask = Task { [weak self] in
-                    try? await Task.sleep(nanoseconds: 2_000_000_000)
-                    guard let self, self.settleStatsPending else { return }
-                    self.settleStatsPending = false
-                    if !self.turnActive { self.teardownProcess() }
-                }
-            } else {
-                // per-turn: 回合结束即退出 (transcript 已持久化到 --session 文件;
-                // 下回合 spawn 恢复, 天然隔离 + 无常驻内存/串味问题)
-                teardownProcess()
-            }
+            settleTurn()
 
         // ---- P6.1.2: 过程态事件 (rpc.md §auto_retry/compaction/queue/summarization) ----
         case "auto_retry_start":
@@ -811,8 +987,65 @@ final class PiRpcTransport: AgentTransport {
             let count = steering.count + followUp.count
             emit(.phaseChanged(count > 0 ? .queued(count: count) : .streaming))
 
+        case "extension_error":
+            // 扩展处理某个事件时抛错 (1.0.2 里包含 `turn_end` 边界解析失败:
+            // "turn_end could not resolve the persisted assistant entry ID")。
+            // ⚠️ 这条**两版都有**(0.85.1 的 rpc.md 事件表末行), 但 **1.0.2 的 docs/json.md
+            // 没有它的条目** —— 字段形状只能读 `rpc-mode.js` 的 `onError`。
+            // 原实现落进 default 静默丢弃 ⇒ **引擎自己报的错没人知道** (同 P12.1a 的病)。
+            let ext = Self.extensionLabel(path: dict["extensionPath"] as? String ?? "")
+            let evt = dict["event"] as? String ?? "?"
+            let err = dict["error"] as? String ?? ""
+            let text = String(format: L("扩展 %@ 在处理 %@ 时出错: %@"), ext, evt, err)
+            emit(.extensionNotify(type: "error", message: String(text.prefix(200))))
+
         default:
+            // 有意忽略的事件 (逐个核过, 不是漏接)。
+            //  - `turn_start` / `turn_end`: 一轮 = 一次 assistant 回复 + 它的工具调用。
+            //    ⚠️ 它们**不是 1.0 新增** —— 0.85.1 的 rpc.md 事件表与 json.md 都列着,
+            //    `agent-session.js` 一直在转发 (所以 MangoX 一直在收)。不接的三条理由:
+            //      ① 携带的信息 MangoX 已从**更细**的粒度拿到 (`message_end` 的权威消息 +
+            //         usage、`tool_execution_end` 的工具结果) ⇒ `turn_end` 的
+            //         `message`/`toolResults` 是**重复的聚合视图**;
+            //      ② 它**不是回合结束** —— 拿它在 `agent_settled` 之前拆进程 = 腰斩自动重试
+            //         (P6.0① 已实证的坑);
+            //      ③ 0.87.0 起 `turn_end` 变成**可动作边界** (扩展可注入 entries 并 `continue: true`
+            //         再跑一次 provider) ⇒ "`turn_end` 之后还有输出"是**正常**情况, 更不能用它判结束。
+            //  - `bash_execution_update`: 只在客户端用 `bash` 命令时才有; MangoX 不发该命令
+            //    (只发 prompt / abort / get_* / set_* / export_html / extension_ui_response) ⇒ 收不到。
             break
+        }
+    }
+
+    // MARK: - 回合落定
+
+    /// 归位过程态 + 拉会话统计 + 拆进程。**调用点必须只有两个**:
+    ///   ① `agent_settled` —— 引擎说"会话级彻底落定"(P6.0① 的唯一拆进程点);
+    ///   ② `prompt` 响应的 `handled` disposition —— 引擎说"这一回合**根本没有 run**"
+    ///      (`agent-session.js:1522-1538`: 扩展命令就地执行 / 扩展 input handler 吃掉输入),
+    ///      因此**不会有 `agent_settled`** ⇒ 不在这里落定, `turnActive` 会一直挂着
+    ///      (胶囊永远停在 streaming, 进程也不拆)。
+    /// ⚠️ 其余任何事件都不得调它 —— 尤其 `turn_end`(0.87.0 起它之后还能继续跑, 见上面的 `default`)。
+    private func settleTurn() {
+        turnActive = false
+        finalizeTrackedMessages(usage: nil)   // 正常路径 usage 已随 message_end 落定, 此处仅为兜底
+        emit(.phaseChanged(.idle))            // P6.1.2: 过程态归位
+        emit(.streamEnded)
+        if process != nil {
+            // P6.1.1: 拆进程前拉一次会话统计 (context% 以 pi 口径为准), 响应到达再拆;
+            // 2s 无响应兜底强拆。期间若用户已开新回合, turnActive 守卫防误拆。
+            settleStatsPending = true
+            sendCommand(["id": "req-\(nextRequestId())", "type": "get_session_stats"])
+            settleStatsTask = Task { [weak self] in
+                try? await Task.sleep(nanoseconds: 2_000_000_000)
+                guard let self, self.settleStatsPending else { return }
+                self.settleStatsPending = false
+                if !self.turnActive { self.teardownProcess() }
+            }
+        } else {
+            // per-turn: 回合结束即退出 (transcript 已持久化到 --session 文件;
+            // 下回合 spawn 恢复, 天然隔离 + 无常驻内存/串味问题)
+            teardownProcess()
         }
     }
 
@@ -902,12 +1135,30 @@ final class PiRpcTransport: AgentTransport {
     private static let fireAndForgetMethods: Set<String> =
         ["notify", "setStatus", "setWidget", "setTitle", "set_editor_text"]
 
+    /// P12.2: 非审批扩展 UI 请求的应答形状 (**纯函数, 冒烟直测**)。
+    /// 形状合法性来源: `rpc-mode.js:84-86`(select/confirm/input) 与 `:174-187`(editor)
+    /// 都把 `{cancelled:true}` 解析成"用户没答"。
+    static func unattendedExtensionUIResponse(id: String) -> [String: Any] {
+        ["type": "extension_ui_response", "id": id, "cancelled": true]
+    }
+
+    /// P12.2: 对**非 MangoX 审批**的扩展 UI 请求自动应答 —— 一律回**合法的"没答"**。
+    ///
+    /// ⚠️ 原实现对 `confirm` 回 `confirmed:true`、其余一律回 `value:"Allow"`。后半个分支是
+    /// **语义错答**: `input`(要一段文本) / `editor`(要整段编辑文本) 收到 `"Allow"` 就是
+    /// "把一段文本当成 Allow" —— 现在不炸, 只因为 MangoX 只挂自己的审批扩展(只用 `select`)
+    /// ⇒ **是"只挂自己扩展"这个前提撑着的侥幸**, 一旦用户挂了第三方扩展就会出怪事。
+    ///
+    /// 为什么是 `cancelled` 而不是"不回"或"回一个空串":
+    ///   ① **形状合法**: 见 `unattendedExtensionUIResponse`;
+    ///   ② **不回会挂死**: `editor`(`rpc-mode.js:174-187`) **没有 timeout**, 不回就是永久 pending;
+    ///   ③ **不发明同意**: MangoX 对第三方扩展的提问没有任何依据作答 —— 回 `Allow` 等于替用户点了同意。
+    /// 同时**上抛告警**: "未识别的方法"与"用户没答"是两件事, 必须留痕(宁可留痕, 不要瞎答)。
     private func autoRespondExtensionUI(_ reqId: String, method: String) {
-        if method == "confirm" {
-            sendCommand(["type": "extension_ui_response", "id": reqId, "confirmed": true])
-        } else {
-            sendCommand(["type": "extension_ui_response", "id": reqId, "value": "Allow"])
-        }
+        sendCommand(Self.unattendedExtensionUIResponse(id: reqId))
+        emit(.extensionNotify(type: "warning",
+                              message: String(format: L("扩展请求了 MangoX 不处理的「%@」界面, 已按「取消」应答。"),
+                                              method)))
     }
 
     /// 发送审批响应。Allow 时重置计时起点: 时长口径 = 允许决定之后的真实执行,
@@ -1011,6 +1262,21 @@ final class PiRpcTransport: AgentTransport {
         case "set_model", "set_thinking_level":
             // 切换成功后回读 get_state, 以 pi 侧状态为准同步 UI
             sendCommand(["id": "req-\(nextRequestId())", "type": "get_state"])
+        case "prompt":
+            // P12.2: 1.0 起 prompt 的**成功**响应带 `data.disposition`
+            // (`agent-session.d.ts:168` = "started" | "queued" | "handled")。原先走 default 丢弃。
+            // 三态各自的处置(逐个核过, 不是漏接):
+            //  - `started` → **有意不动作**: 权威的"开跑了"是紧接着的 `agent_start`
+            //    (`:807-810` 已在它上面发 `.phaseChanged(.streaming)`), 这里再发一次是重复。
+            //  - `queued`  → **不可达**: 只有 pi 侧正在流式时才返回它, 而 MangoX 在会话有回合
+            //    在途时**根本不发 prompt**(`ChatStore.sendDraft` 的 `runningTurns` 守卫, P4.0.2) ⇒
+            //    留着不处理; 队列显示由权威的 `queue_update` 负责。
+            //  - `handled` → **必须处理**: 扩展命令就地执行 / 扩展 input handler 吃掉输入 ⇒
+            //    没有 run、**没有 `agent_settled`** ⇒ 不落定就是胶囊永远 streaming + 进程不拆。
+            switch data["disposition"] as? String {
+            case "handled": if turnActive { settleTurn() }
+            default: break
+            }
         default:
             break
         }

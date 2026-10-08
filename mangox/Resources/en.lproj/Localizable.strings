@@ -7,7 +7,7 @@
    **本文件由 scripts/l10n/gen_strings.py --write 生成, 别手改** ——
    译文改 scripts/l10n/en_values.py 的 VALUES, 再跑 --write。
 
-   条数: 593
+   条数: 602
 */
 
 " [附件: %@]" = " [Attachment: %@]";
@@ -34,6 +34,9 @@
 "AI 回复生成中…" = "Generating reply…";
 "AI 记忆文件 = 该会话的对话上下文 (<uuid>.jsonl); 误删不可恢复。" = "The AI memory file is this session's conversation context (<uuid>.jsonl); deleting it cannot be undone.";
 "API Key (存入 Keychain)" = "API key (stored in Keychain)";
+"Agent 引擎启动后立即退出 (退出码 %d)。" = "The agent engine exited right after starting (exit code %d).";
+"Agent 引擎启动失败。" = "The agent engine failed to start.";
+"Agent 引擎已启动但一直没有响应。" = "The agent engine started but has not responded at all.";
 "Agent 正在运行…" = "Agent is running…";
 "App 在后台时, 回合结束弹出系统通知; 前台使用时不弹, 点击通知跳回对应会话" = "Posts a system notification when a turn finishes while the app is in the background; no notification while you are using it. Click it to jump back to that session.";
 "Chat: 对话 · Trace: 结构化事件回放" = "Chat: conversation · Trace: structured event replay";
@@ -56,6 +59,7 @@
 "L1 落盘目录, 自动挂载: 不可删, 描述由 App 写死" = "The L1 working directory, mounted automatically: cannot be deleted, description is hard-coded";
 "MangoX 自动裁决拦下: %@" = "Blocked by MangoX auto-judge: %@";
 "P11 §3.2: persona 段必须是独立第一段, 不参与排序与截尾" = "P11 §3.2: the persona segment must be the first standalone segment — it takes no part in ordering or truncation";
+"PATH 里没有 pi 时, App 发现不了托管安装以外的位置 (Nix / 自定义 prefix)。" = "If pi is not on PATH, the app cannot find locations outside the hosted install (Nix / custom prefix).";
 "QQ 邮箱" = "QQ Mail";
 "SMTP 主机" = "SMTP host";
 "UID %lld 未取到邮件正文" = "No message body returned for UID %lld";
@@ -304,6 +308,8 @@
 "并发回合上限" = "Concurrent turn limit";
 "并发已达上限 (%lld), 捕获未发送" = "Concurrency limit reached (%lld); capture not sent";
 "并发已达上限 (%lld), 请等待任务结束或在设置中调高" = "Concurrency limit reached (%lld) — wait for a task to finish or raise the limit in settings";
+"引擎 stderr 末尾几行:" = "Last lines of engine stderr:";
+"引擎没有输出任何 stderr。" = "The engine wrote nothing to stderr.";
 "引用工作区文件" = "Reference a workspace file";
 "当前" = "Current";
 "当前会话 %lld 轮" = "Current session: %lld turns";
@@ -324,6 +330,8 @@
 "打开目录" = "Open folder";
 "打开知识面板的待审核分组" = "Open the review group in the knowledge panel";
 "托管" = "Managed";
+"扩展 %@ 在处理 %@ 时出错: %@" = "Extension %@ failed while handling %@: %@";
+"扩展请求了 MangoX 不处理的「%@」界面, 已按「取消」应答。" = "Extension requested a \"%@\" prompt the app does not handle; answered \"Cancel\".";
 "扫到 %lld 个文档 (md / txt / html, 深度 ≤ 3)" = "%lld documents found (md / txt / html, depth ≤ 3)";
 "把会话数据库 (含知识库) 与图片附件、会话记录完整拷贝到目标目录的 mangox-backup-<时间戳>/ 子目录, 供人工保管" = "Copies the session database (including the knowledge base), image attachments and session logs into a mangox-backup-<timestamp>/ folder in the target directory for safekeeping.";
 "拉取失败 (%@), 已回落预设清单" = "Fetch failed (%@); fell back to the built-in preset list";
@@ -420,6 +428,7 @@
 "未发现任何扩展\n点右上角 + 导入" = "No extensions found\nUse + in the top right to import";
 "未找到 pi CLI, Agent 引擎不可用。请安装 pi 后重启 MangoX。" = "pi CLI not found; the agent engine is unavailable. Install pi and restart MangoX.";
 "未找到 pi CLI, 捕获未发送" = "pi CLI not found; capture not sent";
+"未找到可执行的 pi。已按顺序查找:" = "No executable pi found. Looked in this order:";
 "未知" = "Unknown";
 "未知失败" = "Unknown failure";
 "未知错误" = "Unknown error";

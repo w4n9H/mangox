@@ -25,6 +25,9 @@ final class MemoryDistiller {
     private var collected: String = ""
     private var finish: ((String?) -> Void)?
     private var watchdog: DispatchWorkItem?
+    /// P12.1a: 提炼轮的 stderr 尾部 (只留最后几行, 用于"没产出"时的归因)。
+    private var stderrTail: [String] = []
+    private static let stderrTailLimit = 4
 
     var isRunning: Bool { process != nil }
 
@@ -41,23 +44,40 @@ final class MemoryDistiller {
         finish = completion
         let p = Process()
         p.executableURL = URL(fileURLWithPath: spec.executable)
-        var args = spec.scriptArgs + ["--mode", "rpc", "--no-extensions",
-                                      "--extension", extPath, "--no-session"]
+        var args = spec.scriptArgs + ["--mode", "rpc"]
+        // P12.1b: 与 PiRpcTransport **同一份**扩展参数 (含补回内置 llama.cpp provider)。
+        // 走同一个纯函数而不是各写一份 —— 两条引擎路径的扩展集不许悄悄分叉。
+        args += PiRpcTransport.extensionArguments(hostedExtensionPath: extPath, enabled: [])
+        args += ["--no-session"]
         if let model { args += ["--model", model] }
         if let thinking { args += ["--thinking", thinking] }
         p.arguments = args
         p.currentDirectoryURL = URL(fileURLWithPath: NSHomeDirectory())
         let inPipe = Pipe()
         let outPipe = Pipe()
+        let errPipe = Pipe()
         p.standardInput = inPipe
         p.standardOutput = outPipe
-        p.standardError = FileHandle.nullDevice
+        // P12.1a: 不再丢 nullDevice —— 提炼失败最常见的两类 ("参数不认" / "LLM 配置错")
+        // 都只在 stderr 里说得清; 丢了就只剩一句"没有产出"。
+        p.standardError = errPipe
+        stderrTail = []
         do { try p.run() } catch {
             print("[MemoryDistiller] spawn 失败: \(error)")
             complete(nil); return
         }
         process = p
         stdinHandle = inPipe.fileHandleForWriting
+        errPipe.fileHandleForReading.readabilityHandler = { [weak self] fh in
+            let data = fh.availableData
+            guard !data.isEmpty else {
+                fh.readabilityHandler = nil
+                return
+            }
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated { self?.consumeStderr(data) }
+            }
+        }
         outPipe.fileHandleForReading.readabilityHandler = { [weak self] fh in
             let data = fh.availableData
             guard !data.isEmpty else {
@@ -76,8 +96,9 @@ final class MemoryDistiller {
         send(["id": "req-1", "type": "prompt", "message": prompt])
         // 看门狗: 单轮总时长上限 (到点强杀, 静默放弃)
         let wd = DispatchWorkItem { [weak self] in
-            print("[MemoryDistiller] 看门狗超时 (\(Int(Tune.distillTimeoutSeconds))s), 强杀放弃")
-            self?.complete(nil)
+            guard let self else { return }
+            print("[MemoryDistiller] 看门狗超时 (\(Int(Tune.distillTimeoutSeconds))s), 强杀放弃; stderr: \(self.stderrSummary)")
+            self.complete(nil)
         }
         watchdog = wd
         DispatchQueue.main.asyncAfter(deadline: .now() + Tune.distillTimeoutSeconds, execute: wd)
@@ -117,6 +138,23 @@ final class MemoryDistiller {
         }
     }
 
+    /// P12.1a: stderr 尾部 (主线程, 与 consume 同款派发)。只留最后几行。
+    private func consumeStderr(_ data: Data) {
+        guard process != nil, let text = String(data: data, encoding: .utf8) else { return }
+        for raw in text.split(separator: "\n", omittingEmptySubsequences: true) {
+            let line = String(raw).trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !line.isEmpty else { continue }
+            stderrTail.append(line)
+            if stderrTail.count > Self.stderrTailLimit { stderrTail.removeFirst() }
+        }
+    }
+
+    /// P12.1a: "没产出"时的归因串 (stderr 尾部; 空则说明 pi 自己也没吭声)。
+    /// **纯 ASCII** —— 它只进 `print()` 日志, 不是界面文案, 不该占词表一条。
+    private var stderrSummary: String {
+        stderrTail.isEmpty ? "(no stderr output)" : stderrTail.joined(separator: " | ")
+    }
+
     private func handleLine(_ line: String) {
         guard let data = line.data(using: .utf8),
               let obj = try? JSONSerialization.jsonObject(with: data),
@@ -138,7 +176,9 @@ final class MemoryDistiller {
             }
         case "agent_settled":
             // P6.0①: 只认彻底落定 — agent_end(willRetry) 后面还有重试, 提前收会腰斩提炼。
-            if collected.isEmpty { print("[MemoryDistiller] agent_settled 但无文本产出 (检查 --model 参数与 LLM 配置)") }
+            if collected.isEmpty {
+                print("[MemoryDistiller] agent_settled 但无文本产出 (检查 --model 参数与 LLM 配置); stderr: \(stderrSummary)")
+            }
             complete(collected.isEmpty ? nil : collected)
         default:
             break

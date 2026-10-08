@@ -822,6 +822,34 @@ struct SmokeMain {
             pi.handleRPCLine(#"{"type":"tool_execution_end","toolCallId":"r7","toolName":"read","result":{"content":[{"type":"image","data":"!!!not-base64!!!","mimeType":"image/png"}],"details":null},"isError":false}"#)
             check(lastTool(sink).flatMap { $0 }?.imagePaths.isEmpty == true, "T-TOOL 坏 base64 不产半张图")
 
+            // ⑥b P12.3: 时长来源 —— 引擎上报优先, 缺席/取不到才回落自算墙钟。
+            // (pi 1.1.0 起 `tool_execution_end` 带 `durationMs` = `Math.round(performance.now()-startedAt)`,
+            //  单调时钟、只测 `execute()` 本体; MangoX 自算是墙钟, 含排队/流式/审批等待 ⇒ 偏大)
+            pi.handleRPCLine(#"{"type":"tool_execution_start","toolCallId":"d-eng","toolName":"bash","args":{}}"#)
+            pi.handleRPCLine(#"{"type":"tool_execution_end","toolCallId":"d-eng","toolName":"bash","result":{"content":[{"type":"text","text":"x"}],"details":{}},"isError":false,"durationMs":4242}"#)
+            check(lastTool(sink).flatMap { $0 }?.durationMs == 4242,
+                  "T-TOOL 引擎上报的 durationMs 优先于自算 (改造前必红: 自算在同一 tick 恒为 0)")
+            // 浮点形态也照收 (契约是 TS `number`; 用 `as? Int` 会在小数上失败并静默退回墙钟)
+            pi.handleRPCLine(#"{"type":"tool_execution_start","toolCallId":"d-flt","toolName":"bash","args":{}}"#)
+            pi.handleRPCLine(#"{"type":"tool_execution_end","toolCallId":"d-flt","toolName":"bash","result":{"content":[{"type":"text","text":"x"}],"details":{}},"isError":false,"durationMs":4242.9}"#)
+            check(lastTool(sink).flatMap { $0 }?.durationMs == 4242,
+                  "T-TOOL 引擎值的浮点形态不被丢弃 (实测 \(String(describing: lastTool(sink).flatMap { $0 }?.durationMs)))")
+            // 显式 null ⇒ 回落 (关键: 不能让值变成 nil)
+            pi.handleRPCLine(#"{"type":"tool_execution_start","toolCallId":"d-nul","toolName":"bash","args":{}}"#)
+            pi.handleRPCLine(#"{"type":"tool_execution_end","toolCallId":"d-nul","toolName":"bash","result":{"content":[{"type":"text","text":"x"}],"details":{}},"isError":false,"durationMs":null}"#)
+            check(lastTool(sink).flatMap { $0 }?.durationMs != nil,
+                  "T-TOOL 引擎值显式 null ⇒ 回落自算 (删掉回落这条必红)")
+            // 整个键缺席 —— pi 1.0.x 与"工具没跑"都是这个形态
+            pi.handleRPCLine(#"{"type":"tool_execution_start","toolCallId":"d-non","toolName":"bash","args":{}}"#)
+            pi.handleRPCLine(#"{"type":"tool_execution_end","toolCallId":"d-non","toolName":"bash","result":{"content":[{"type":"text","text":"x"}],"details":{}},"isError":false}"#)
+            check(lastTool(sink).flatMap { $0 }?.durationMs != nil,
+                  "T-TOOL 无 durationMs 键 (1.0.x / 工具没跑) ⇒ 回落自算")
+            // 失败分支当前不记时长 —— **有意边界**, 将来补它时要改这条
+            pi.handleRPCLine(#"{"type":"tool_execution_start","toolCallId":"d-err","toolName":"bash","args":{}}"#)
+            pi.handleRPCLine(#"{"type":"tool_execution_end","toolCallId":"d-err","toolName":"bash","result":{"content":[{"type":"text","text":"boom"}],"details":{}},"isError":true,"durationMs":999}"#)
+            check(lastTool(sink).flatMap { $0 }?.durationMs == nil,
+                  "T-TOOL 失败卡不记时长 (有意边界: 引擎在 catch 分支也给 durationMs, MangoX 尚未消费)")
+
             // ⑦ 流式 partialResult: 也是 AgentToolResult, 且是**快照**(整行替换)
             pi.handleRPCLine(#"{"type":"tool_execution_start","toolCallId":"r8","toolName":"bash","args":{"command":"long"}}"#)
             pi.handleRPCLine(#"{"type":"tool_execution_update","toolCallId":"r8","toolName":"bash","partialResult":{"content":[{"type":"text","text":"line 1"}],"details":null}}"#)
@@ -1214,8 +1242,8 @@ struct SmokeMain {
             // 2026-09-23 之前 ManagedModel 走白名单实现 ("只收非空字符串项"), 在这里会漏掉 medium。
             mReason.thinkingLevelMapJSON = "{\"minimal\":null,\"low\":null,\"high\":\"high\",\"max\":\"max\"}"
             store22.upsertManagedModel(mReason)
-            check(store22.menuModels.first { $0.id == "m2" }?.supportedLevels == [.off, .medium, .high],
-                  "T22 有 map: 显式 null 剔除 + 缺键默认支持 (off/medium/high)")
+            check(store22.menuModels.first { $0.id == "m2" }?.supportedLevels == [.off, .medium, .high, .max],
+                  "T22 有 map: 显式 null 剔除 + 缺键默认支持 (off/medium/high/max)")
             let mDefault = ManagedModel(provider: "t22prov", modelId: "m3", displayName: "M3",
                                         apiType: "openai-completions", reasoning: true,
                                         baseURL: "https://t22.invalid/v1", keyRef: "t22prov")
@@ -4233,6 +4261,261 @@ struct SmokeMain {
                   "T-MD 回归: 标题仍是 heading")
             check(MarkdownParser.parse("- 一条") == [.listItem(indent: 0, ordered: false, index: 0, text: "一条")],
                   "T-MD 回归: 列表仍是 listItem")
+        }
+
+        // ===== P12.1: 扩展参数 / 二进制发现 / 引擎启动失败归因 =====
+        do {
+            // --- 扩展参数矩阵 (纯函数) ---
+            // ⚠️ 这门**不再做版本门控** (2026-10-05 boss 拍板: 「只需要兼容最新版本的 pi,
+            // 不用管兼容问题」) ⇒ 内置 provider 的补回是**无条件**的。删门控的同时必须
+            // 把这条钉住: 它从"版本判断的结果"变成"恒定契约", 更需要断言守着。
+            let ext = PiRpcTransport.extensionArguments(hostedExtensionPath: "/tmp/mangox-approval.js",
+                                                        enabled: [])
+            check(ext == ["--no-extensions",
+                          "--extension", "builtin:llama.cpp",
+                          "--extension", "/tmp/mangox-approval.js"],
+                  "P12 扩展参数: 关自动发现 → 补内置 provider → 挂托管扩展 (顺序即语义)")
+            check(PiRpcTransport.builtinLlamaExtension == "builtin:llama.cpp",
+                  "P12 扩展参数: llama.cpp 是契约 token (逐字进 spawn, 不得本地化/改写)")
+            let ext2 = PiRpcTransport.extensionArguments(hostedExtensionPath: "/tmp/a.js",
+                                                         enabled: ["/x/b.js", "/x/c.js"])
+            check(ext2.suffix(4) == ["--extension", "/x/b.js", "--extension", "/x/c.js"],
+                  "P12 扩展参数: 业务扩展按序追加在最后")
+            check(ext2.filter { $0 == "builtin:llama.cpp" }.count == 1,
+                  "P12 扩展参数: 内置 provider 只出现一次 (业务扩展再多也不重复)")
+
+            // --- 二进制候选表: 顺序即优先级 ---
+            let cands = PiRpcTransport.binaryCandidates(home: "/Users/x",
+                                                        pathEnv: "/opt/homebrew/bin:/usr/bin")
+            check(Array(cands.prefix(4)) == ["/opt/homebrew/bin/pi", "/usr/local/bin/pi",
+                                            "/Users/x/.pi/agent/bin/pi", "/Users/x/.local/bin/pi"],
+                  "P12 发现: 前四项固定顺序 (homebrew ×2 + 托管安装 ×2)")
+            check(cands.last == "/usr/bin/pi", "P12 发现: PATH 扫描排在最后 (兜未知位置)")
+            check(cands.filter { $0 == "/opt/homebrew/bin/pi" }.count == 1,
+                  "P12 发现: PATH 命中硬编码项要去重")
+            check(!PiRpcTransport.binaryCandidates(home: "/Users/x", pathEnv: ":/usr/bin:").contains("/pi"),
+                  "P12 发现: 空 PATH 段不产生 /pi")
+            check(PiRpcTransport.abbreviateHome("/Users/x/.local/bin/pi", home: "/Users/x") == "~/.local/bin/pi",
+                  "P12 发现: home 前缀折成 ~")
+            check(PiRpcTransport.abbreviateHome("/opt/homebrew/bin/pi", home: "/Users/x") == "/opt/homebrew/bin/pi",
+                  "P12 发现: 非 home 路径原样保留")
+            check(PiRpcTransport.abbreviateHome("/Users/xy/bin/pi", home: "/Users/x") == "/Users/xy/bin/pi",
+                  "P12 发现: 前缀只按**路径分量**匹配, 不按字符串 (xy 不是 x 的子路径)")
+            check(PiRpcTransport.abbreviateHome("/Users/x", home: "/Users/x") == "~",
+                  "P12 发现: home 自身折成 ~")
+            check(PiRpcTransport.abbreviateHome("/Users/x/.local/bin/pi", home: "/Users/x/") == "~/.local/bin/pi",
+                  "P12 发现: home 带尾斜杠也能折")
+            let report = PiRpcTransport.binarySearchReport()
+            check(report.contains("~/.pi/agent/bin/pi") && report.contains("~/.local/bin/pi"),
+                  "P12 自查报告: 列出托管安装路径")
+            check(report.split(separator: "\n").count >= 5, "P12 自查报告: 逐条列出找过的地方")
+
+            // --- 启动失败归因 (看门狗 8s 太慢, 直接调判据本体) ---
+            final class DiagSink: AgentTransportDelegate {
+                var events: [AgentEvent] = []
+                var diagnoses: [String] = []
+                func transport(_ t: any AgentTransport, didEmit event: AgentEvent) { events.append(event) }
+                func transport(_ t: any AgentTransport, didFailEngineWithDiagnosis d: String) { diagnoses.append(d) }
+            }
+
+            // ① 进程自己退出 + 有 stderr ⇒ 报退出码 + stderr 尾部
+            let pi1 = PiRpcTransport()
+            let sink1 = DiagSink()
+            pi1.delegate = sink1
+            pi1.enqueueStderr(Data("Error: Failed to load extension \"builtin:nope\"\nUnknown built-in extension\n".utf8))
+            pi1.reportEngineSilence(exitStatus: 1)
+            check(sink1.diagnoses.count == 1, "P12 归因: 启动即死 ⇒ 上报一条")
+            check(sink1.diagnoses.first?.contains("Unknown built-in extension") == true,
+                  "P12 归因: 带上 stderr 尾部 (原实现丢 nullDevice ⇒ 零归因)")
+            check(sink1.diagnoses.first?.contains("退出码 1") == true, "P12 归因: 带上退出码")
+            check(sink1.diagnoses.first?.contains("~/.pi/agent/bin/pi") == true,
+                  "P12 归因: 带上二进制自查报告")
+            pi1.reportEngineSilence(exitStatus: 1)
+            pi1.reportEngineSilence(exitStatus: nil)
+            check(sink1.diagnoses.count == 1, "P12 归因: 看门狗与退出回调重复触发只报一次")
+
+            // ② 说过话的进程不算启动失败 (正常退出不误报) —— 反例很关键:
+            //    这是"静默看门狗"与"正常回合结束"的唯一分界。
+            let pi2 = PiRpcTransport()
+            let sink2 = DiagSink()
+            pi2.delegate = sink2
+            pi2.handleRPCLine(#"{"type":"get_available_models","models":[]}"#)
+            pi2.reportEngineSilence(exitStatus: 0)
+            check(sink2.diagnoses.isEmpty, "P12 归因反例: 回过一条 RPC ⇒ 不是启动失败")
+
+            // ③ 还活着但沉默 + 无 stderr ⇒ 也要报 (文案走另一支)
+            let pi3 = PiRpcTransport()
+            let sink3 = DiagSink()
+            pi3.delegate = sink3
+            pi3.reportEngineSilence(exitStatus: nil)
+            check(sink3.diagnoses.count == 1
+                    && sink3.diagnoses.first?.contains("没有输出任何 stderr") == true,
+                  "P12 归因: 活着但沉默 ⇒ 报「无响应」并说明 stderr 为空")
+
+            // ④ stderr 尾部有上限 (无界增长是同类老问题的复发点: 长会话 stderr 是连续的)
+            let pi4 = PiRpcTransport()
+            let sink4 = DiagSink()
+            pi4.delegate = sink4
+            for i in 1...6 { pi4.enqueueStderr(Data("line\(i)\n".utf8)) }
+            pi4.reportEngineSilence(exitStatus: 9)
+            let d4 = sink4.diagnoses.first ?? ""
+            check(d4.contains("line6") && d4.contains("line3")
+                    && !d4.contains("line2") && !d4.contains("line1"),
+                  "P12 归因: 只保留 stderr 尾部 4 行 (不留最早的两行)")
+
+            check(Tune.engineSilenceSeconds >= 3 && Tune.engineSilenceSeconds <= 30,
+                  "P12 看门狗: 容忍时长在合理区间 (太短误报慢机器, 太长让用户干等)")
+
+            // ⑤ P12 审计: `extension_error` 是**引擎自己报的错**, 不许静默 (同 P12.1a 的病)
+            let pi5 = PiRpcTransport()
+            let sink5 = DiagSink()
+            pi5.delegate = sink5
+            func notices(_ s: DiagSink) -> [(String, String)] {
+                s.events.compactMap { e in
+                    if case .extensionNotify(let t, let m) = e { return (t, m) }
+                    return nil
+                }
+            }
+            pi5.handleRPCLine(#"{"type":"extension_error","extensionPath":"/tmp/mangox-approval/index.js","event":"turn_end","error":"could not resolve the persisted assistant entry ID"}"#)
+            let n5 = notices(sink5)
+            check(n5.count == 1 && n5.first?.0 == "error",
+                  "P12 扩展错误: 上抛一条 error 横幅 (原先落 default 静默丢弃)")
+            check(n5.first?.1.contains("could not resolve the persisted assistant entry ID") == true,
+                  "P12 扩展错误: 带上引擎给的 error 正文")
+            check(n5.first?.1.contains("mangox-approval") == true,
+                  "P12 扩展错误: 扩展名取**目录名** (index.js 是共用入口名, 报它等于没说)")
+            check(n5.first?.1.contains("turn_end") == true, "P12 扩展错误: 带上出错的事件名")
+            pi5.handleRPCLine(#"{"type":"extension_error"}"#)
+            check(notices(sink5).count == 2 && notices(sink5).last?.1.isEmpty == false,
+                  "P12 扩展错误: 字段缺失也不崩 (走占位符)")
+            check(PiRpcTransport.extensionLabel(path: "/a/b/mangox-approval/index.js") == "mangox-approval",
+                  "P12 扩展名: 目录式扩展取目录名")
+            check(PiRpcTransport.extensionLabel(path: "/x/extensions/foo.ts") == "foo.ts",
+                  "P12 扩展名: 单文件扩展原样用文件名 (父目录 extensions 没有信息量)")
+            check(PiRpcTransport.extensionLabel(path: "") == "?",
+                  "P12 扩展名: 空路径 → ? (不出现「扩展  在处理」这种空洞文案)")
+
+            // ⑥ P12 审计: `turn_start` / `turn_end` **有意忽略** —— 这条断言是**回归哨**:
+            //    `turn_end` 一旦被接成 `streamEnded` / 拆进程信号, 这里立刻变红 (那正是
+            //    "腰斩自动重试" 那个已实证的坑)。
+            let pi6 = PiRpcTransport()
+            let sink6 = DiagSink()
+            pi6.delegate = sink6
+            pi6.handleRPCLine(#"{"type":"turn_start","turnIndex":0,"timestamp":1}"#)
+            pi6.handleRPCLine(#"{"type":"turn_end","turnIndex":0,"message":{"role":"assistant"},"toolResults":[]}"#)
+            check(sink6.events.isEmpty,
+                  "P12 有意忽略: turn_start / turn_end 不产生任何事件 (不接不是漏接, 且绝不能当回合结束)")
+        }
+
+        // ===== P12.2: 思考级别补 max / 扩展 UI 不瞎答 / prompt disposition =====
+        do {
+            final class P122Sink: AgentTransportDelegate {
+                var events: [AgentEvent] = []
+                func transport(_ t: any AgentTransport, didEmit event: AgentEvent) { events.append(event) }
+                func transport(_ t: any AgentTransport, didFailEngineWithDiagnosis d: String) {}
+            }
+            func uiNotices(_ s: P122Sink) -> [(String, String)] {
+                s.events.compactMap { e in
+                    if case .extensionNotify(let t, let m) = e { return (t, m) }
+                    return nil
+                }
+            }
+            func ended(_ s: P122Sink) -> Int {
+                s.events.filter { if case .streamEnded = $0 { return true }; return false }.count
+            }
+            func isIdle(_ s: P122Sink) -> Bool {
+                s.events.contains { if case .phaseChanged(.idle) = $0 { return true }; return false }
+            }
+
+            // --- 6.1 ThinkingLevel 补 max ---
+            check(ThinkingLevel.allCases == [.off, .minimal, .low, .medium, .high, .xhigh, .max],
+                  "P12.2 思考级别: 全集七档, max 在**末位** (顺序 = 滑轨停靠序, 与 pi 规范序逐字一致)")
+            check(ThinkingLevel.max.rawValue == "max",
+                  "P12.2 思考级别: rawValue 是契约 token (逐字进 --thinking / set_thinking_level)")
+            check(ThinkingLevel.max.displayName == "Max", "P12.2 思考级别: 显示名 Max (英文常量, 不走 L())")
+            check(ThinkingLevel.supported(reasoning: false, map: [:]) == [.off],
+                  "P12.2 supported: 非 reasoning 模型只有 off")
+            check(ThinkingLevel.supported(reasoning: true, map: [:]) == [.off, .minimal, .low, .medium, .high],
+                  "P12.2 supported: 缺键 = 默认支持 (黑名单语义), 但 xhigh / max 例外")
+            // xhigh 与 max **同规则** —— 依据是 pi-ai dist/models.js:
+            // `if (level === "xhigh" || level === "max") return mapped !== undefined;`
+            let onlyMax = ThinkingLevel.supported(reasoning: true, map: ["max": "max"])
+            check(onlyMax.contains(.max) && !onlyMax.contains(.xhigh),
+                  "P12.2 supported: 给了 max 没给 xhigh ⇒ 只支持 max (两档各自独立, 不联动)")
+            let onlyX = ThinkingLevel.supported(reasoning: true, map: ["xhigh": "xhigh"])
+            check(onlyX.contains(.xhigh) && !onlyX.contains(.max),
+                  "P12.2 supported: 给了 xhigh 没给 max ⇒ 只支持 xhigh")
+            let nulledMax = ThinkingLevel.supported(reasoning: true, map: ["max": NSNull(), "xhigh": "xhigh"])
+            check(!nulledMax.contains(.max) && nulledMax.contains(.xhigh),
+                  "P12.2 supported: 显式 null 剔除**优先于**例外 (给了键但值为 null ⇒ 不支持)")
+            // 死数据复活: 预设里本来就写着 {"max":"max"}, 补档前它在 UI 上永远出不来
+            if let seed = ProviderPresets.preset(id: "deepseek")?.seedModels.first(where: { $0.id == "deepseek-flash" }),
+               let raw = seed.thinkingLevelMap,
+               let map = try? JSONSerialization.jsonObject(with: Data(raw.utf8)) as? [String: Any] {
+                check(ThinkingLevel.supported(reasoning: seed.reasoning, map: map).contains(.max),
+                      "P12.2 死数据复活: 预设里写的 max 现在真能出现在滑轨上 (原先是恒不可达的映射)")
+            } else {
+                // 取不到夹具必须**变红** —— 否则断言会因为"没数据"而静默通过。
+                check(false, "P12.2 死数据复活: 取不到 deepseek-flash 预设 (夹具缺失, 不是通过)")
+            }
+
+            // --- 6.2 扩展 UI: 未识别方法不再瞎答 ---
+            let shape = PiRpcTransport.unattendedExtensionUIResponse(id: "u1")
+            check(shape["type"] as? String == "extension_ui_response" && shape["id"] as? String == "u1",
+                  "P12.2 扩展 UI: 应答带 type/id")
+            check(shape["cancelled"] as? Bool == true,
+                  "P12.2 扩展 UI: 回 cancelled —— 唯一的「没答」合法形状 (rpc-mode.js:84-86 解析它)")
+            check(shape["value"] == nil && shape["confirmed"] == nil,
+                  "P12.2 扩展 UI: 不再回 value「Allow」/ confirmed:true (对 input/editor 是语义错答)")
+            let ui = PiRpcTransport()
+            let uiSink = P122Sink()
+            ui.delegate = uiSink
+            ui.handleRPCLine(#"{"type":"extension_ui_request","id":"u2","method":"input","title":"Name?"}"#)
+            check(ui.sentCommands.contains {
+                ($0["type"] as? String) == "extension_ui_response" && ($0["id"] as? String) == "u2"
+            }, "P12.2 扩展 UI: input 也必须应答 (不回 = editor 无 timeout, 永久挂死)")
+            check(uiNotices(uiSink).count == 1 && uiNotices(uiSink).first?.0 == "warning",
+                  "P12.2 扩展 UI: 上抛 warning 留痕 (宁可留痕, 不要瞎答)")
+            check(uiNotices(uiSink).first?.1.contains("input") == true,
+                  "P12.2 扩展 UI: 告警点名是哪个方法 (否则用户不知道什么被吞了)")
+
+            // --- 6.3 prompt 响应的 disposition ---
+            // `started` 有意不动作: 权威的"开跑了"是紧接着的 agent_start。
+            let p1 = PiRpcTransport()
+            let s1 = P122Sink()
+            p1.delegate = s1
+            p1.handleRPCLine(#"{"type":"agent_start"}"#)
+            let base1 = s1.events.count
+            p1.handleRPCLine(#"{"type":"response","command":"prompt","success":true,"data":{"disposition":"started"}}"#)
+            check(s1.events.count == base1 && ended(s1) == 0,
+                  "P12.2 disposition: started 不额外发事件 (agent_start 已发过 streaming, 重复发是噪音)")
+            // `queued` 不可达 (MangoX 在回合在途时不发 prompt) ⇒ 不做动作。
+            p1.handleRPCLine(#"{"type":"response","command":"prompt","success":true,"data":{"disposition":"queued"}}"#)
+            check(ended(s1) == 0, "P12.2 disposition: queued 不落定 (队列显示归 queue_update 管)")
+            // `handled` 是**真缺口**: 没有 run 就没有 agent_settled, 不落定则胶囊永远 streaming。
+            let p2 = PiRpcTransport()
+            let s2 = P122Sink()
+            p2.delegate = s2
+            p2.handleRPCLine(#"{"type":"agent_start"}"#)
+            p2.handleRPCLine(#"{"type":"response","command":"prompt","success":true,"data":{"disposition":"handled"}}"#)
+            check(ended(s2) == 1, "P12.2 disposition: handled ⇒ 主动落定 (否则等不到 agent_settled)")
+            check(isIdle(s2), "P12.2 disposition: handled ⇒ 过程态归位 idle")
+            // 回归哨: 落定过之后引擎再发 agent_settled 不许重复落定 (turnActive 守卫)。
+            p2.handleRPCLine(#"{"type":"agent_settled"}"#)
+            check(ended(s2) == 1, "P12.2 disposition: handled 已落定 ⇒ 随后的 agent_settled 不重复落定")
+            // 反例: 没开回合时收到 handled 不许凭空落定。
+            let p3 = PiRpcTransport()
+            let s3 = P122Sink()
+            p3.delegate = s3
+            p3.handleRPCLine(#"{"type":"response","command":"prompt","success":true,"data":{"disposition":"handled"}}"#)
+            check(ended(s3) == 0, "P12.2 disposition 反例: 回合未开时 handled 不落定 (turnActive 守卫)")
+            // 失败响应不消费 (既有语义: 失败静默)。
+            let p4 = PiRpcTransport()
+            let s4 = P122Sink()
+            p4.delegate = s4
+            p4.handleRPCLine(#"{"type":"agent_start"}"#)
+            p4.handleRPCLine(#"{"type":"response","command":"prompt","success":false,"error":"boom"}"#)
+            check(ended(s4) == 0, "P12.2 disposition: 失败响应不消费 (仍走既有静默语义)")
         }
 
         report()    }

@@ -106,14 +106,19 @@ struct AgentModelInfo: Hashable {
     var name: String = ""
     /// 模型支持的思考级别 (按 pi getSupportedThinkingLevels 语义计算:
     /// reasoning=false → 仅 off; reasoning=true → off..high 默认支持 (显式 null 才剔除),
-    /// xhigh 仅在 thinkingLevelMap 显式给出时支持); 空 = 单条菜单。
+    /// xhigh / max 仅在 thinkingLevelMap 显式给出时支持); 空 = 单条菜单。
     var supportedLevels: [ThinkingLevel] = []
     var label: String { name.isEmpty ? id : name }
 }
 
 /// P3.5: pi 支持的思考级别全集 (--thinking 文档与 set_thinking_level 一致)。
+/// ⚠️ **顺序 = 滑轨停靠顺序**, 且与 pi 侧规范序 `EXTENDED_THINKING_LEVELS` 逐字一致
+/// (`pi-ai` dist/models.js) ⇒ **新档位只能追加在末尾** (插中间会挪位; 档位落库落的是
+/// `rawValue` 文本而非序号, 故追加无迁移风险)。
 enum ThinkingLevel: String, CaseIterable, Identifiable {
-    case off, minimal, low, medium, high, xhigh
+    // P12.2: 补 `max`。0.83.0 起 `--thinking` 就有这档, MangoX 自 P3.5 起一直缺
+    // ⇒ `ProviderPresets` 给 DeepSeek 写的 `{"max":"max"}` 是**死数据** (UI 上永远出不来)。
+    case off, minimal, low, medium, high, xhigh, max
     var id: String { rawValue }
 
     /// 界面标签。**英文常量, 不走 `L()`** —— 与 `AgentMode.displayName` 同款口径
@@ -127,6 +132,7 @@ enum ThinkingLevel: String, CaseIterable, Identifiable {
         case .medium: "Medium"
         case .high: "High"
         case .xhigh: "Extra High"
+        case .max: "Max"
         }
     }
 
@@ -136,14 +142,16 @@ enum ThinkingLevel: String, CaseIterable, Identifiable {
     ///
     /// - `reasoning == false` → 仅 `.off`
     /// - `reasoning == true`  → `off..high` **默认支持**, map 中显式 `null` 剔除
-    /// - `xhigh` 例外: 仅在 map **显式给出该键**时支持 (pi 侧默认不开放)
+    /// - `xhigh` / `max` 例外: 仅在 map **显式给出该键**时支持
+    ///   (P12.2 读 `pi-ai` dist/models.js 实证: `if (level === "xhigh" || level === "max")
+    ///    return mapped !== undefined;` —— **两档同规则**, 原先只写 `xhigh` 是照抄来的猜测)
     /// - ⚠️ **map 缺键 = 未提及 = 默认支持** —— 这是黑名单语义, 不是"只列出的才支持"
     static func supported(reasoning: Bool, map: [String: Any]) -> [ThinkingLevel] {
         guard reasoning else { return [.off] }
         return allCases.filter { lv in
             let mapped = map[lv.rawValue]
             if let v = mapped, v is NSNull { return false }
-            if lv == .xhigh && mapped == nil { return false }
+            if (lv == .xhigh || lv == .max) && mapped == nil { return false }
             return true
         }
     }
@@ -163,6 +171,10 @@ protocol AgentTransportDelegate: AnyObject {
     func transport(_ transport: any AgentTransport, didFinishExportHTMLPath path: String?)
     /// P6.3.1: fork 产物路径回读 (get_state.sessionFile)。nil = 回读失败 (进程退出前未拿到)。
     func transport(_ transport: any AgentTransport, didReadSessionFile path: String?)
+    /// P12.1a: 引擎启动失败 (spawn 后一直无上行, 或启动即退出)。
+    /// **非会话归属** —— 引擎能不能起来是全局事实, 探测实例与池实例都会走这里;
+    /// diagnosis 已拼好 (退出码 / stderr 尾部 / 找过的二进制路径), 供 UI 原样展示。
+    func transport(_ transport: any AgentTransport, didFailEngineWithDiagnosis diagnosis: String)
 }
 
 extension AgentTransportDelegate {
@@ -173,6 +185,7 @@ extension AgentTransportDelegate {
     func transport(_ transport: any AgentTransport, didReportSessionStats stats: SessionStats) {}
     func transport(_ transport: any AgentTransport, didFinishExportHTMLPath path: String?) {}
     func transport(_ transport: any AgentTransport, didReadSessionFile path: String?) {}
+    func transport(_ transport: any AgentTransport, didFailEngineWithDiagnosis diagnosis: String) {}
 }
 
 extension AgentTransport {

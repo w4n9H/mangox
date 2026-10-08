@@ -10,8 +10,8 @@ struct ChatBottomBar: View {
     @ObservedObject var store: ChatStore
 
     var body: some View {
-        if store.engineMissing {
-            engineMissingBanner
+        if store.engineMissing || store.engineDiagnosis != nil {
+            engineIssueBanner
         }
         if let outcome = store.distillOutcome {
             noticeBanner(outcome,
@@ -28,16 +28,32 @@ struct ChatBottomBar: View {
         ChatComposer(store: store)
     }
 
-    /// pi 缺失横幅: Release 不静默降级 Mock, 缺引擎必须可见。
-    private var engineMissingBanner: some View {
-        HStack(spacing: 8) {
+    /// 引擎不可用 / 起不来的横幅: Release 不静默降级 Mock, 缺引擎必须可见。
+    /// P12.1c: 从一句"请装 pi"升级为**自查报告** —— README 把装 pi 定为用户义务,
+    /// 那 App 就得让用户能自己定位问题 (找过哪些路径 / 引擎 stderr 说了什么)。
+    /// 常驻 (非 8s 自清): 两种情形都不会自己好, 消失只会让用户以为修好了。
+    private var engineIssueBanner: some View {
+        let title = store.engineMissing
+            ? L("未找到 pi CLI, Agent 引擎不可用。请安装 pi 后重启 MangoX。")
+            : L("Agent 引擎启动失败。")
+        // engineDiagnosis 由 transport 拼好 (退出码 + stderr 尾部 + 路径清单);
+        // 只有"根本没找到 pi"时才现算路径清单 (那时不会有 diagnosis)。
+        let detail = store.engineDiagnosis ?? PiRpcTransport.binarySearchReport()
+        return HStack(alignment: .top, spacing: 8) {
             Image(systemName: "exclamationmark.triangle.fill")
                 .font(.system(size: 11))
                 .foregroundStyle(CodexTheme.toolRunning)
-            Text("未找到 pi CLI, Agent 引擎不可用。请安装 pi 后重启 MangoX。")
-                .font(CodexTheme.fontSmall)
-                .foregroundStyle(CodexTheme.textPrimary)
-            Spacer()
+            VStack(alignment: .leading, spacing: 4) {
+                Text(title)
+                    .font(CodexTheme.fontSmall)
+                    .foregroundStyle(CodexTheme.textPrimary)
+                Text(detail)
+                    .font(CodexTheme.fontMonoSm)
+                    .foregroundStyle(CodexTheme.textSecondary)
+                    .textSelection(.enabled)   // 允许复制去搜索/贴 issue
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 0)
         }
         .padding(.horizontal, Tune.chatHPadding)
         .padding(.vertical, 8)
