@@ -5,7 +5,7 @@
 import Foundation
 import SwiftUI
 
-enum ToolKind: String, Hashable, Codable {
+enum ToolKind: String, Hashable, Codable, CaseIterable {
     case bash
     case read
     case grep
@@ -19,23 +19,38 @@ enum ToolKind: String, Hashable, Codable {
     /// 留位: pi 0.85.1 内置 8 个工具 (read/bash/edit/write/find/grep/ls/powershell) **无 delegate**,
     /// 全项目当前**零生产方** —— 保留是为了让"扩展给的子代理工具"有确定归处, 不落 `other`。
     case delegate
+    /// P13: codemode —— 模型**唯一**被暴露的工具, 自己是一段 JS 脚本, 在沙箱里内层调用别的工具。
+    ///
+    /// ⚠️ 它是**独立的一档范式**(换的是"模型怎么调工具"), 不是 bash 的同义tool ⇒ 必须有自己的
+    /// 标签; 落 `other` 的后果不止"标签难看": `toolHead` 对 `.other` 走的是"真名占 title + args
+    /// 退居 command"的兜底路, 而 codemode 的真名恒为 `codemode` ⇒ 卡头会变成
+    /// `OTHER · codemode · code=…`(boss 实测报"codemode 显示不对"就是这个)。
+    case codemode
     /// 未知工具的中性归类。**存在的意义 = 不再谎报**: 旧版 `kindFor` 的 `default` 把任何
     /// 未登记的工具一律标成 `read` ⇒ 装了 web-search / subagents 这类扩展后, 标签与颜色
     /// **一起错**, 且落库的 `kind` 已失真、事后无法分辨。宁可是诚实的 `OTHER`。
     case other
 
-    /// 展示用名 —— **全大写英文**，与轨迹页的 `USER` / `ASSISTANT` 标签同一种写法
-    /// (2026-09-21 boss: "trace 那里, 统一全大写英文")。四个消费点都吃这个属性:
-    /// 轨迹工具名 chip / "BASH × 5" 折叠行 / 工具卡片的 kind tag (Chat + 轨迹同源)。
+    /// 展示用名 = **原样工具名**（`rawValue`，小写；多词名自然成驼峰，如 `searchTools`）。
+    ///
+    /// ⚠️ **2026-10-09 boss 翻案**：原先这里是 `rawValue.uppercased()`（全大写），出自 2026-09-21
+    /// 那条「trace 那里, 统一全大写英文」—— **该决定已废**, 不要再按它把这里改回大写。
+    /// 改成原样的理由：标签与 pi 上报的工具名**逐字一致**，可以照着直接 grep 日志/会话文件；
+    /// 全大写是"转写"，多一次映射就多一处对不上的可能。
+    /// ⚠️ 范围：**只改工具标签**。轨迹页的 `USER` / `ASSISTANT` / `LLM` 是硬编码字符串
+    /// （`TrajectoryView.swift:427/468/492/679`），**不吃这个属性**，仍是全大写（boss 同批拍板）。
+    ///
+    /// 四个消费点都吃这个属性：轨迹工具名 chip / 「`bash` × 5」折叠行 / 工具卡片的 kind tag
+    /// (Chat + 轨迹**同源**) / `scripts/diag/toolcard_preview.py`。
     ///
     /// ⚠️ **只动展示, 不动 `rawValue`** —— 小写的 rawValue 既作 `Codable` 编解码键,
-    /// 又是 pi 上报的工具名 (比对/派发都用它), 跟着大写会把落库数据和工具识别一起打坏。
-    var label: String { rawValue.uppercased() }
+    /// 又是 pi 上报的工具名 (比对/派发都用它), 改它会同时打坏落库数据与工具识别。
+    var label: String { rawValue }
 
     /// Default phase color (overridable per card via `phase`).
     var defaultColor: Color {
         switch self {
-        case .bash, .delegate: return CodexTheme.accent
+        case .bash, .delegate, .codemode: return CodexTheme.accent   // 执行族: codemode 也是"把活干出去"
         case .read, .grep, .find, .ls, .fetch, .search: return CodexTheme.info
         case .edit, .write: return CodexTheme.toolDone
         case .image: return CodexTheme.thinking

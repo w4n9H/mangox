@@ -217,13 +217,13 @@ MainActor.assumeIsolated {
     ]
 
     render("kind-compare", VStack(alignment: .leading, spacing: 18) {
-        caption("旧: `kindFor` 的 default 一律落 READ",
-                "同一批陌生工具全读作 READ —— 谎报在**文字**上; 落库的 kind 也已失真, 事后分不出")
+        caption("旧: `kindFor` 的 default 一律落 read",
+                "同一批陌生工具全读作 read —— 谎报在**文字**上; 落库的 kind 也已失真, 事后分不出")
         ForEach(strangers, id: \.0) { name, _ in
             sample("\(name)  ·  旧渲染", ToolCall(kind: .read, title: name, command: nil, phase: .done))
         }
 
-        caption("新: 中性 OTHER + 真名占 title + 首个标量参数退到 command",
+        caption("新: 中性 other + 真名占 title + 首个标量参数退到 command",
                 "command 走 `cmd ?? path ?? firstScalarArg`; 后者按 key 排序取首个 ⇒ 同一调用重放两次必得同一结果 (卡头不跳)")
         ForEach(strangers, id: \.0) { name, args in
             sample("\(name)  ·  新渲染", ToolCall(kind: .other, title: name, command: args, phase: .done))
@@ -232,8 +232,8 @@ MainActor.assumeIsolated {
         caption("⚠️ 颜色错在**轨迹页**, 不在卡片",
                 "卡片标签色 = `railColor` = f(相态) ⇒ 上面两组同为 done, 颜色本来就一样。轨迹页 chip 吃 `kind.defaultColor`, 那里才变色")
         HStack(spacing: 10) {
-            kindChip("READ", ToolKind.read.defaultColor)
-            kindChip("OTHER", ToolKind.other.defaultColor)
+            kindChip(ToolKind.read.label, ToolKind.read.defaultColor)
+            kindChip(ToolKind.other.label, ToolKind.other.defaultColor)
             Text(verbatim: "← 同一个陌生工具: 旧 chip / 新 chip")
                 .font(.system(size: 11))
                 .foregroundStyle(CodexTheme.textMuted)
@@ -300,7 +300,7 @@ MainActor.assumeIsolated {
                 "⚠️ 这是**轨迹页 chip** 的取色; 卡片上的标签色来自相态 (`railColor`), 不取这里")
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 8) {
-                ForEach([ToolKind.bash, .read, .grep, .find, .ls, .edit, .write], id: \.self) { k in
+                ForEach([ToolKind.bash, .codemode, .read, .grep, .find, .ls, .edit, .write], id: \.self) { k in
                     Text(k.label)
                         .font(.system(size: 11, weight: .semibold))
                         .foregroundStyle(k.defaultColor)
@@ -324,7 +324,7 @@ MainActor.assumeIsolated {
 
     print("")
     print("判据:")
-    print("  kind-compare   旧组三张读作 READ; 新组读作 OTHER 且标题是真名、command 是首参。")
+    print("  kind-compare   旧组三张读作 read; 新组读作 other 且标题是真名、command 是首参。")
     print("                 卡片标签色两组同为 done 的素色 (相态决定) —— 颜色差只在那排轨迹页 chip。")
     print("  output-three   ①⑥ 有箭头 ②③④⑤ 无箭头; ③ 只有缩略条没有文本行; ⑤ 显示文件名不空白")
     print("  phase-and-kind 色带里 bash=accent / read 组=info / edit·write=完成绿 / other=素色")

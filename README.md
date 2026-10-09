@@ -2,7 +2,7 @@
 
 macOS 原生 AI Agent 客户端（SwiftUI），对标 Codex Desktop 的交互形态，底层对接 [pi CLI](https://github.com/earendil-works/pi) 作为推理引擎。
 
-![version](https://img.shields.io/badge/version-0.1.14-orange)
+![version](https://img.shields.io/badge/version-0.1.15-orange)
 ![release](https://github.com/w4n9H/mangox/actions/workflows/release.yml/badge.svg)
 
 > 下载安装包请看[「下载与本地签名」](#下载与本地签名必读) —— **包需要你本机签一次名才能开**，原因和做法都在那节。
@@ -16,16 +16,16 @@ macOS 原生 AI Agent 客户端（SwiftUI），对标 Codex Desktop 的交互形
 - **状态栏与过程态**：底部 4 项纯展示（重试/压缩/排队过程态胶囊、上下文 %、Token ↑↓、会话轮数）+ 压缩完成横幅
 - **Side chat（侧问）**：一键 fork 当前会话快照开新会话（`pi --fork`，截到指定轮也可）——模型带着源会话上下文独立作答，主线不受污染；快照提示条常驻说明边界
 - **离开摘要**：切走会话 / 失焦期间后台完成的回合，回来时底部悬浮胶囊一句话带过（完成 N 轮 · 最近回复首句），点击滚底；零 LLM 成本
-- **模型自管**：设置页选预设填 Key 即接入（Keychain 存储），测试连接直拉 provider `/models`，勾选启用；SQLite 真源，spawn 物化 `models.json`/`auth.json` 注入 `PI_CODING_AGENT_DIR`，全程不碰 `~/.pi/agent`
-- **模型元数据目录**：models.dev 三层自有化（bundled 快照 > 7 天 TTL 缓存 > 裸默认），思考强度/上下文窗口/价格自动补全，`thinkingLevelMap` 按 pi 语义收敛思考档位（含 `Max`）
-- **模式选择器**：Minimal / Standard / Full 三档能力预设（工具集 + 业务扩展挂载），按项目记忆，与审批开关正交；下回合 spawn 生效
+- **模型自管**：设置页选预设填 Key 即接入（Keychain 存储），测试连接直拉 provider `/models` 并与本地保留的种子取并集（后者标「本地」），勾选启用；SQLite 真源，spawn 物化 `models.json`/`auth.json` 注入 `PI_CODING_AGENT_DIR`，全程不碰 `~/.pi/agent`
+- **模型元数据目录**：models.dev 三层自有化（bundled 快照 > 7 天 TTL 缓存 > 裸默认），思考强度/上下文窗口/价格自动补全，模型清单按**发布日期**倒序（新版在前），`thinkingLevelMap` 按 pi 语义收敛思考档位（含 `Max`）
+- **模式选择器**：Codemode / Minimal / Standard / Full 四档能力预设（工具集 + 业务扩展挂载），按项目记忆，与审批开关正交；下回合 spawn 生效。其中 **Codemode 是另一个维度**（模型只留 codemode 一个工具、其余工具经脚本内层调用），选择器里独占上层、三个老档在下层
 - **模型选择控件**：一颗药丸打开单面板 —— 上半模型清单、下半一根**力量滑轨**（拖到底 = 想得最多，档位越高末端越紫，到不了的高档不画刻度）。**受控、值进值出**：同一个控件既驱动当前会话的「全局期望」，也能给定时任务 / 邮箱哨兵设「**仅本任务**」的模型与档位而不动全局；换模型后的档位收敛由控件自己完成
 - 会话持久化：`--session` 挂载 `<uuid>.jsonl`，重启 App / 切会话 / 切项目不失忆
 - **会话配置持久化**：模型 / 思考档 / 模式 / 审批随会话落库 —— 重启、切走再切回、切项目后仍是原来那套（NULL 行回落 App 默认配置，不跟随可变全局）
 - **会话切换零阻塞**：重放缓存增量维护，切换时命中同步上屏、未命中先切再经独立只读连接后台解码合并（实测切屏 0.1ms / 后台就绪 0.4ms）；长会话列表虚拟化 + 缓存 LRU 上限
 - 审批流：bash 只读白名单静默放行，edit/write 审批卡带红绿块对照 diff 预览；无人值守任务自动关审批
 - **引擎起不来时能自查**：横幅**常驻**（不自清，直到引擎真跑通一轮），给退出码 + stderr 末尾几行 + 按顺序找过的路径清单，可选中复制去搜索 / 贴 issue
-- 工具卡：bash / read / edit / write / fetch 全事件上屏，含真实执行时长（引擎上报值：只算工具本体，不含审批等待与结果回传）；**工具输出（文本 + 图片）同步上屏** —— 产出的图片在「输出」区成横排缩略条、点开看大图；认不出的工具归中性档，不再冒充 READ
+- 工具卡：bash / read / edit / write / fetch / codemode 全事件上屏（codemode 卡原样展示整段脚本），含真实执行时长（引擎上报值：只算工具本体，不含审批等待与结果回传）；**工具输出（文本 + 图片）同步上屏** —— 产出的图片在「输出」区成横排缩略条、点开看大图；认不出的工具归中性档，不再冒充 READ
 - **Markdown 渲染**：图片块（本地路径 / `~/` / 尖括号含空格路径，相对路径按会话项目目录解析；外链只给说明不抓取；点击看大图）· 表格（`:` 三态列对齐、列宽按内容收、超宽横滚）· 代码块（语言标签 + 复制 + 高亮 + `↵ 换行` 开关，默认关 = 横滚）
 - **多模态传图**：⌘V / 拖拽 / 附件按钮三入口，暂存 chips ≤4 张；原图落盘留档、发送带压缩副本（png/gif/webp 未超限透传保动图，其余 ≤1536px JPEG）；text-only 模型发送时拦截提示；用户消息缩略图行 + 大图预览，重开同源渲染
 - **审批阻塞提示**：会话工具卡停在待审批时侧栏行显示琥珀色 🖐（替代转圈，阻塞优先）——并发场景不再有"审批卡沉在别的会话里"的隐形死锁
@@ -33,7 +33,7 @@ macOS 原生 AI Agent 客户端（SwiftUI），对标 Codex Desktop 的交互形
 - **手动备份**：Settings 一键把数据库（含知识库）+ 附件 + pi 会话记录直拷到带时间戳的备份目录（WAL 先 checkpoint）；目录与上次备份结果持久记忆
 
 **界面**
-- **中英双语**：Settings → 外观 切换（跟随系统 / 中文 / English），即时生效、重启记住；词表 602 条，命令名与角色标签（Chat / Trace / USER / ASSISTANT / TOOL）原样保留英文
+- **中英双语**：Settings → 外观 切换（跟随系统 / 中文 / English），即时生效、重启记住；词表 614 条，命令名与角色标签（Chat / Trace / USER / ASSISTANT / TOOL）原样保留英文
 - **外观三态**：跟随系统（真正交回系统，跟随系统级切换）/ 浅色 / 深色；老配置无需迁移，缺失值回落浅色
 - **暗色主视觉重算**：正文面与页面底分层（正文不再坐在页面底上），卡片严格亮于正文面，面层级链显式单调；正文对比度 9.37:1 落在舒适区，地板不碰纯黑；同一面板内只允许一种底色（聊天页从顶到底零硬边）；交互态（悬停 / 选中）改半透明叠加，选中比悬停实
 - **侧栏层级**：项目内会话行缩进 34pt + 1px 引导线，顶层与子级一眼可分
@@ -61,7 +61,7 @@ macOS 原生 AI Agent 客户端（SwiftUI），对标 Codex Desktop 的交互形
 
 **工程化**
 - SQLite 持久化（WAL），事件流重放式加载；退出时 WAL checkpoint + 终止在途 pi 进程
-- 冒烟门禁：`scripts/smoke/run.sh` 一条命令跑 857 项语义冒烟（事件归并/并发路由/fire 后台化/上限拒绝/落库对拍/轨迹派生/settled 语义/状态栏数据链/过程态胶囊/Trace v2/侧问 fork/离开摘要/自动命名/模型物化/元数据目录/模式矩阵/附件管线/发送门控/日分组/审批阻塞/热键配置/捕获链路/备份引擎/重放缓存/无人值守 fire/审批分级裁决/BashRiskEvaluator 语料/邮箱哨兵四道闸/主题与正文清洗/MIME 解析与回执组装/多轮并发与续跑/会话配置恢复/任务级配置/连接失效重建/外观三态与侧栏几何/暗色板舒适区与正文面层级/注入分层与可预测降级与 key 保留集合/persona pack 解析与人格段结构性首位与 L1 一条一文件/知识库扫描契约与索引段段序与只读红线/索引预览与注入同源/按需 pack 文件点名告警未迁走则响/persona 段为空与 pack 文件读不出来的点名告警与改名后缀陷阱/常驻行文案(标题=文件名+出厂固定表, 副标=persona+content字数)与表外文件只剩文件名/知识条目关闭注入后仍在面板且不进 prompt 且回收 L1/知识面板三区结构(常驻·自定义·知识库)与待审核候选与知识库区恒不判空/Markdown 块级渲染(图片块·表格列对齐与宽表横滚·代码块折行开关)/工具结果面(内容契约提取与图片落盘与陌生 kind 归中性档与 delta 白名单)/模型选择值逻辑(ModelChoice 与档位收敛与滑轨停靠点)/哨兵任务级模型(未 pin→nil 与三列往返与只丢级别则整体 nil)/P12 引擎升级适配(启动失败诊断三态与候选路径清单与说过话就不报/扩展错上抛与未知界面回执形状/落定双入口 agent_settled 与 disposition=handled 且不双落定/思考档 max 全集与四种 map 形态/工具时长引擎值优先与缺席回落))
+- 冒烟门禁：`scripts/smoke/run.sh` 一条命令跑 909 项语义冒烟（事件归并/并发路由/fire 后台化/上限拒绝/落库对拍/轨迹派生/settled 语义/状态栏数据链/过程态胶囊/Trace v2/侧问 fork/离开摘要/自动命名/模型物化/元数据目录/模式矩阵/附件管线/发送门控/日分组/审批阻塞/热键配置/捕获链路/备份引擎/重放缓存/无人值守 fire/审批分级裁决/BashRiskEvaluator 语料/邮箱哨兵四道闸/主题与正文清洗/MIME 解析与回执组装/多轮并发与续跑/会话配置恢复/任务级配置/连接失效重建/外观三态与侧栏几何/暗色板舒适区与正文面层级/注入分层与可预测降级与 key 保留集合/persona pack 解析与人格段结构性首位与 L1 一条一文件/知识库扫描契约与索引段段序与只读红线/索引预览与注入同源/按需 pack 文件点名告警未迁走则响/persona 段为空与 pack 文件读不出来的点名告警与改名后缀陷阱/常驻行文案(标题=文件名+出厂固定表, 副标=persona+content字数)与表外文件只剩文件名/知识条目关闭注入后仍在面板且不进 prompt 且回收 L1/知识面板三区结构(常驻·自定义·知识库)与待审核候选与知识库区恒不判空/Markdown 块级渲染(图片块·表格列对齐与宽表横滚·代码块折行开关)/工具结果面(内容契约提取与图片落盘与陌生 kind 归中性档与 delta 白名单)/模型选择值逻辑(ModelChoice 与档位收敛与滑轨停靠点)/哨兵任务级模型(未 pin→nil 与三列往返与只丢级别则整体 nil)/P12 引擎升级适配(启动失败诊断三态与候选路径清单与说过话就不报/扩展错上抛与未知界面回执形状/落定双入口 agent_settled 与 disposition=handled 且不双落定/思考档 max 全集与四种 map 形态/工具时长引擎值优先与缺席回落/codemode 档位与工具面(codemode 工具声明与自建扩展 only 模式与三老档扩展段逐字节不变/codemode 卡取 code 字段与工具标签同 rawValue 不变式)/档位持久化改 rawValue 与冻结旧顺序表反解/候选模型并集(线上目录 ∪ 未列出种子并标「本地」)/provider 级 samplingParams 物化展开且不入库))
 - 打包门禁：`scripts/diag/resource-gate.sh` 对编出来的 `.app` 跑资源可达性探针 `scripts/diag/bundle_probe.swift` —— 用真 `NSBundle` 按 App 自己的查法把每份资源查一遍，任一 miss 即阻断。原因是这三条查法**都静默降级**：模型目录 miss → 退回裸默认表；`JetBrainsMono-*.ttf` miss → 字形悄悄回落 SF Mono（界面照跑，最难归因）；`<lang>.lproj` miss → 英文界面回落中文 key。探针的期望清单从源码树推出（新加资源自动进清单），并已量出一条红线：**`Bundle.url(forResource:)` 在 macOS 上不递归子目录**，所以资源必须拍平在 `Contents/Resources` 根，放进 `Fonts/` 这种看起来没毛病的摆法就是查不到。工程用 Xcode 16 的 `PBXFileSystemSynchronizedRootGroup`（资源靠同步组**隐式**纳入，`project.pbxproj` 里没有文件列表可查），所以这道门禁的真正价值是**证明同步组那份隐式纳入的结果恰好是代码期待的摆法**。与构建器无关：xcodebuild 的产物、CI 里编的包都能验；只要 SDK + swiftc，CLT 上也能跑
 - 扩展管理：内置 mangox-approval（源码内嵌, 每次 spawn 自动校验重建，换机器零影响），托管扩展启停/导入/删除
 - 内置 JetBrains Mono（SIL OFL），等宽三级字体链
@@ -132,7 +132,7 @@ xcodebuild -project mangox.xcodeproj -scheme mangox -configuration Release \
 ```bash
 # 1. 改 project.pbxproj 的 MARKETING_VERSION + 写 CHANGELOG 段, 提交
 # 2. 打 tag 推上去 —— Actions 编包 + 跑门禁 + 发 Release
-git tag v0.1.14 && git push origin v0.1.14
+git tag v0.1.15 && git push origin v0.1.15
 ```
 
 `.github/workflows/release.yml` 分 arm64 / Intel 两路并行编，任一路失败就不发。发 tag 前 CI 跑 9 道门禁（架构对账、tag 与版本号一致、语义冒烟、编译、产物架构与签名、资源可达性、模拟下载者重签、打包），**全绿才 publish** —— 逐条判据见该文件。
@@ -140,12 +140,14 @@ git tag v0.1.14 && git push origin v0.1.14
 tag 推了却没 Release = 构建挂了，而 tag 不能重推，删掉重打：
 
 ```bash
-git tag -d v0.1.14 && git push origin :refs/tags/v0.1.14
-git tag v0.1.14 && git push origin v0.1.14
+git tag -d v0.1.15 && git push origin :refs/tags/v0.1.15
+git tag v0.1.15 && git push origin v0.1.15
 ```
 
-## 已知限制 (v0.1.14)
+## 已知限制 (v0.1.15)
 
+- **工具标签是原样小写（有意）**：`read` / `bash` / `other`，不是 `READ` —— 上一版曾统一全大写，现改为按工具名原样展示；看着"不够响亮"是有意的
+- **Codemode 档调不到业务扩展（有意）**：这一档只注册 codemode 一个工具，业务扩展**根本没挂载** ⇒ 脚本里调不到。这是该档位的定义，不是配置漏了
 - **引擎不可用的横幅是常驻的（有意）**：不会自己消失 —— 「找不到 pi」与「pi 起不来」都不会自愈，横幅一闪而过只会让人以为已经修好。引擎真正跑通一轮后自动清空
 - **第三方扩展请求的界面一律回「取消」（有意）**：MangoX 只处理自己的审批卡，对扩展发来的输入框 / 编辑器请求**没有依据替用户作答**，所以回「取消」并在界面点名被吞掉的是哪个方法；扩展侧会表现为「没反应」
 - **知识面板的「命中」列恒显示 `—`（有意）**：命中统计（触发即命中 / 读取即命中、归档建议）的消费点尚未实现（P11.3 教训回路已冻结 —— 库里启用的条目为 0，它的输入还不存在），在那之前这一列是**诚实的占位**，不是没做完的 bug

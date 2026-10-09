@@ -1,0 +1,764 @@
+<!DOCTYPE html>
+<html lang="zh-Hans">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>P13 — codemode 接入：第四个维度</title>
+<!-- @style:begin · generated from docs/assets/design-doc.css — 请勿手改 -->
+<style>
+/* ============================================================================
+   design-doc.css —— MangoX 对齐文档统一样式
+   ----------------------------------------------------------------------------
+   ⚠️ 这是**唯一手改的样式源**。任何 docs/*.html 都不得自己写样式。
+      各文档里的 style 块由 scripts/docs/design_doc_css.py 从本文件生成：
+          python3 scripts/docs/design_doc_css.py --apply    # 同步
+          python3 scripts/docs/design_doc_css.py --check    # 不同步就退码 1
+      改完样式必须重跑 --apply，否则文档里的副本是旧的。
+
+   为什么不用外链：预览面板只服务单个文件（同级路径返回 403），
+   外链样式在面板里会静默失效 ⇒ 必须内联。单一来源靠脚本保证，不靠链接。
+
+   主题：跟随系统（prefers-color-scheme），两套色板都在 :root 里。
+   字号：正文 14px；标题 30 / 19 / 14；说明 12~13px。**不要小于 11px。**
+
+   —— 类名清单（骨架 = .wrap + 章节 h2，其余按需） ——
+   骨架   .wrap .eyebrow h1(.small) .metaline .tag h2(.n .en) h3
+   文本   .lead p code pre(.c .k) .foot ul.tight .kv .cite
+   强调块 .call(.lbl)  变体：.call.ok / .call.warn / .call.bad
+          .tldr > .tl(> .tln)
+   状态   .chip  变体：.c-ok .c-bad .c-warn .c-info .c-acc .c-mute
+   卡片   .grid(.g2 .g3) > .v(> .face > span)
+   对照   .flow > .lyr(.name .code .st)  + .arrowdown
+   条形   .bars > .bar(.on) > .track > .fill / .bv   + .barnote
+   表格   .tbl / .tw  > table > th/td(.num .sub)
+   待办   .todos > .todo(.blocked) > .tn / .tbody > .tt .td   + .cite
+   折叠   details.fold > summary
+   ============================================================================ */
+
+:root{
+  --bg:#fbfbf9; --card:#ffffff; --soft:#f4f4f0;
+  --fg:#1b1b19; --mute:#6a6a64; --faint:#9c9c95;
+  --line:#e5e4df; --line2:#d2d1cb;
+  --ok:#0f6e56; --okbg:#e3f5ee; --okbd:#9fe1cb;
+  --bad:#a32d2d; --badbg:#fcebeb; --badbd:#f7c1c1;
+  --warn:#82500b; --warnbg:#faeeda; --warnbd:#fac775;
+  --info:#185fa5; --infobg:#e8f1fb; --infobd:#b5d4f4;
+  --acc:#4a41b0; --accbg:#eeedfe; --accbd:#cecbf6;
+  --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
+}
+@media (prefers-color-scheme:dark){
+  :root{
+    --bg:#141417; --card:#1d1d21; --soft:#232328;
+    --fg:#ececea; --mute:#a2a29b; --faint:#74746e;
+    --line:#2e2e33; --line2:#414148;
+    --ok:#8adcbc; --okbg:#0e2f27; --okbd:#1d6e57;
+    --bad:#f4a4a4; --badbg:#361818; --badbd:#8f3b3b;
+    --warn:#f2c47f; --warnbg:#332610; --warnbd:#8a5f19;
+    --info:#9bc9f2; --infobg:#132539; --infobd:#255f94;
+    --acc:#b6b1f4; --accbg:#231f3e; --accbd:#4a41b0;
+  }
+}
+
+*{box-sizing:border-box}
+html{-webkit-text-size-adjust:100%}
+body{
+  margin:0;background:var(--bg);color:var(--fg);
+  font:14px/1.65 -apple-system,BlinkMacSystemFont,"PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;
+}
+.wrap{max-width:1060px;margin:0 auto;padding:44px 28px 72px}
+
+/* ---------- 页头 ---------- */
+.eyebrow{font:500 12px/1 var(--mono);letter-spacing:.08em;text-transform:uppercase;color:var(--faint)}
+h1{font-size:30px;line-height:1.25;font-weight:600;margin:12px 0 10px;letter-spacing:-.01em}
+h1 small{display:block;font-size:15px;font-weight:400;color:var(--mute);margin-top:8px;letter-spacing:0}
+.metaline{display:flex;flex-wrap:wrap;gap:8px;margin-top:18px}
+.tag{font:12px/1 var(--mono);padding:6px 10px;border:1px solid var(--line2);border-radius:999px;color:var(--mute);background:var(--card)}
+.tag b{color:var(--fg);font-weight:500}
+
+/* ---------- 章节 ---------- */
+h2{font-size:19px;font-weight:600;margin:52px 0 4px;padding-bottom:10px;border-bottom:1px solid var(--line);letter-spacing:-.01em}
+h2 .n{font:500 12px/1 var(--mono);color:var(--faint);margin-right:10px;vertical-align:2px}
+h2 .en{font:400 11px/1 var(--mono);color:var(--faint);letter-spacing:.06em;margin-left:10px;vertical-align:2px}
+h3{font-size:14px;font-weight:600;margin:28px 0 10px;color:var(--fg)}
+
+/* ---------- 文本 ---------- */
+p{margin:12px 0}
+.lead{color:var(--mute);font-size:13px;margin:8px 0 0}
+code{font:12.5px/1.5 var(--mono);background:var(--soft);padding:2px 5px;border-radius:5px;color:var(--fg)}
+pre{font:12.5px/1.7 var(--mono);background:var(--soft);border:1px solid var(--line);border-left:3px solid var(--accbd);
+    padding:14px 16px;border-radius:10px;overflow-x:auto;margin:12px 0;color:var(--fg)}
+pre .c{color:var(--faint)}
+pre .k{color:var(--acc)}
+.foot{color:var(--faint);font-size:12px;margin-top:44px;padding-top:18px;border-top:1px solid var(--line);font-family:var(--mono)}
+ul.tight{margin:12px 0;padding-left:20px}
+ul.tight li{margin:7px 0;font-size:13.5px}
+ul.tight li b{font-weight:600}
+.kv{display:grid;grid-template-columns:96px 1fr;gap:6px 14px;font-size:13px;margin:14px 0}
+.kv dt{color:var(--faint);font-family:var(--mono);font-size:11.5px;padding-top:2px}
+.kv dd{margin:0}
+.cite{font:11.5px/1.5 var(--mono);color:var(--faint);white-space:nowrap}
+hr{border:none;border-top:1px solid var(--line);margin:40px 0}
+
+/* ---------- 强调块 ---------- */
+.call{border:1px solid var(--accbd);background:var(--accbg);border-radius:12px;padding:16px 18px;margin:20px 0}
+.call .lbl{font:500 11px/1 var(--mono);letter-spacing:.08em;text-transform:uppercase;color:var(--acc);margin-bottom:8px}
+.call p{margin:0;font-size:14px}
+.call+.call{margin-top:10px}
+.call.ok{border-color:var(--okbd);background:var(--okbg)}   .call.ok .lbl{color:var(--ok)}
+.call.warn{border-color:var(--warnbd);background:var(--warnbg)} .call.warn .lbl{color:var(--warn)}
+.call.bad{border-color:var(--badbd);background:var(--badbg)}   .call.bad .lbl{color:var(--bad)}
+
+.tldr{display:flex;flex-direction:column;gap:1px;background:var(--line);border:1px solid var(--line);border-radius:12px;overflow:hidden;margin:10px 0 0}
+.tldr .tl{display:flex;gap:12px;align-items:flex-start;background:var(--card);padding:12px 16px;font-size:13.5px}
+.tldr .tl .tln{flex:none;color:var(--acc);font:500 13px/1.6 var(--mono)}
+.tldr .tl b{font-weight:600}
+
+/* ---------- 状态 chip ---------- */
+.chip{display:inline-block;font-size:11.5px;font-weight:500;padding:4px 9px;border-radius:999px;border:1px solid;white-space:nowrap}
+.c-ok{color:var(--ok);background:var(--okbg);border-color:var(--okbd)}
+.c-bad{color:var(--bad);background:var(--badbg);border-color:var(--badbd)}
+.c-warn{color:var(--warn);background:var(--warnbg);border-color:var(--warnbd)}
+.c-info{color:var(--info);background:var(--infobg);border-color:var(--infobd)}
+.c-acc{color:var(--acc);background:var(--accbg);border-color:var(--accbd)}
+.c-mute{color:var(--mute);background:var(--soft);border-color:var(--line2)}
+
+/* ---------- 卡片 ---------- */
+.grid{display:grid;gap:10px;margin:18px 0}
+.g2{grid-template-columns:repeat(2,1fr)}
+.g3{grid-template-columns:repeat(3,1fr)}
+.v{display:flex;align-items:center;gap:12px;background:var(--card);border:1px solid var(--line);border-radius:10px;padding:12px 14px}
+.v.top{align-items:flex-start}
+.v .face{flex:1;font-size:13px;min-width:0}
+.v .face>span{display:block;font-size:11.5px;color:var(--faint);margin-top:2px;font-family:var(--mono)}
+
+/* ---------- 对照（层 / 开关 / 流程） ---------- */
+.flow{display:flex;flex-direction:column;gap:8px;margin:18px 0}
+.lyr{display:flex;align-items:center;gap:14px;background:var(--card);border:1px solid var(--line);border-radius:10px;padding:13px 16px}
+.lyr .name{flex:none;width:112px;font-size:13px;font-weight:600}
+.lyr .code{flex:1;font-family:var(--mono);font-size:12px;color:var(--mute);min-width:0}
+.lyr .st{flex:none}
+.lyr.off{border-style:dashed}
+.arrowdown{text-align:center;color:var(--faint);font-size:15px;line-height:1;margin:-2px 0}
+
+/* ---------- 条形对比 ---------- */
+.bars{margin:18px 0;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:18px 20px}
+.bar{display:grid;grid-template-columns:150px 1fr 76px;align-items:center;gap:12px;margin-bottom:10px}
+.bar:last-child{margin-bottom:0}
+.bar .bn{font:12px/1.4 var(--mono);color:var(--mute)}
+.bar .track{height:26px;background:var(--soft);border-radius:6px;overflow:hidden}
+.bar .fill{height:100%;border-radius:6px;background:var(--line2);transition:width .6s ease}
+.bar.on .fill{background:var(--okbd);border:1px solid var(--ok)}
+.bar .bv{font:12px/1 var(--mono);color:var(--mute);text-align:right}
+.bar.on .bv{color:var(--ok);font-weight:500}
+.barnote{font-size:12px;color:var(--faint);margin-top:12px;padding-top:12px;border-top:1px solid var(--line)}
+
+/* ---------- 表格 ---------- */
+table{width:100%;border-collapse:collapse;margin:16px 0;font-size:13px}
+th{text-align:left;font-weight:500;color:var(--mute);font-size:11.5px;text-transform:uppercase;letter-spacing:.05em;
+   padding:10px 12px;border-bottom:1px solid var(--line2);white-space:nowrap}
+td{padding:11px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+tr:last-child td{border-bottom:none}
+tbody tr:hover{background:var(--soft)}
+td.mono,th.mono{font-family:var(--mono);font-size:12px}
+td .sub{display:block;color:var(--faint);font-size:12px;margin-top:3px;font-family:var(--mono)}
+.num{text-align:right;font-family:var(--mono);font-size:12px}
+.tbl{border:1px solid var(--line);border-radius:12px;overflow:hidden;background:var(--card)}
+.tbl table{margin:0}
+.tw{overflow-x:auto;border:1px solid var(--line);border-radius:12px;background:var(--card)}
+.tw table{margin:0;min-width:640px}
+/* 定义式表格：首列窄、键名不折行（契约 / 术语 / 字段表） */
+table.def th:first-child{width:150px}
+table.def th{white-space:nowrap}
+
+/* ---------- 待办与跟进 ---------- */
+.todos{margin:18px 0}
+.todo{display:flex;gap:14px;align-items:flex-start;background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px 16px;margin-bottom:8px}
+.todo .tn{flex:none;width:26px;height:22px;border-radius:6px;background:var(--soft);border:1px solid var(--line2);
+  font:500 12px/20px var(--mono);text-align:center;color:var(--mute);margin-top:1px}
+.todo .tbody{flex:1;min-width:0}
+.todo .tt{font-size:13.5px;font-weight:600}
+.todo .td{font-size:12.5px;color:var(--mute);margin-top:4px}
+.todo .td b{color:var(--fg);font-weight:500}
+.todo.blocked{border-color:var(--warnbd);background:var(--warnbg)}
+.todo.done{border-color:var(--okbd);background:var(--okbg)}
+.todo.done .tt{color:var(--ok)}
+
+/* ---------- 折叠 ---------- */
+details.fold{margin:16px 0}
+details.fold>summary{cursor:pointer;list-style:none;display:inline-flex;align-items:center;gap:8px;
+  font:12px/1 var(--mono);color:var(--info);background:var(--infobg);border:1px solid var(--infobd);
+  border-radius:999px;padding:7px 13px;user-select:none}
+details.fold>summary::-webkit-details-marker{display:none}
+details.fold>summary::before{content:"▸";font-size:10px;translate:0 1px}
+details.fold[open]>summary::before{content:"▾"}
+details.fold>summary:hover{border-color:var(--info)}
+details.fold[open]>summary{margin-bottom:4px}
+
+/* ---------- 窄屏 ---------- */
+@media (max-width:760px){
+  .g3,.g2{grid-template-columns:1fr}
+  .bar{grid-template-columns:1fr;gap:4px}
+  .bar .bv{text-align:left}
+  .lyr{flex-wrap:wrap;gap:8px}
+  .lyr .name{width:auto}
+}
+</style>
+<!-- @style:end -->
+</head>
+<body>
+<div class="wrap">
+
+<div class="eyebrow">P13 &nbsp;·&nbsp; 设计阶段，未开工</div>
+<h1>codemode 接入 —— 第四个维度，不是第四个档位
+  <small>三个老档<b>一个字节都不改</b>；codemode 独立成层、用分割线隔开。钉住 <code>codemode.mode=only</code> 之后，模型<b>只拿到 1 个工具</b>——已真进程实测</small>
+</h1>
+<div class="metaline">
+  <span class="tag">前身 <b>P12 §十一</b></span>
+  <span class="tag">单一来源 <b>本文件</b></span>
+  <span class="tag">复现 <b>scripts/diag/tool_surface_probe.py</b></span>
+  <span class="tag">本轮实测 <b>5 组真进程</b></span>
+  <span class="tag">prompt 净增量 <b>+4439 字符</b></span>
+  <span class="tag">2026-10-08</span>
+</div>
+
+
+<h2><span class="n">00</span>结论先行<span class="en">VERDICT</span></h2>
+<div class="call">
+  <div class="lbl">一句话</div>
+  <p>codemode <b>不是第四个档位，是第四个维度</b>：迷你 / 常规 / 全工具回答的是「给模型<b>多少</b>工具」，codemode 回答的是「模型<b>能不能直调</b>工具」。它自带一套内置工具（<code>tools.*</code>），所以不需要跟老档共享工具面、也就<b>不该按"多/少"去插队</b>。<br>
+  代价是实测量出来的：模型声明面从 <b>5 条压到 1 条</b>，但 system prompt <b>净增 4439 字符</b>（工具清单没消失，是<b>搬进了 codemode 的描述里</b>）。这个价要写进 UI 文案，不能只说"更灵活"。</p>
+</div>
+
+<div class="tldr">
+  <div class="tl"><span class="tln">①</span><div><b>布局分两层</b>：三个老档一个字节都不改；codemode 独立成层、用一条分割线隔开（§01）</div></div>
+  <div class="tl"><span class="tln">②</span><div><b><code>mode=only</code> 不必写 <code>settings.json</code></b> —— <code>createCodemodeExtension</code> 从包根导出，且 <code>options.mode</code> <b>优先于</b> settings ⇒ 放一个三行的托管扩展，就把它变成<b>纯 spawn 参数</b>（已实测，§02）</div></div>
+  <div class="tl"><span class="tln">③</span><div><b>「只拿到 1 个工具」已实测</b>，不是源码推论：四组真进程，<code>sections.tools</code> 逐条数出来 5 → 1（§02）</div></div>
+  <div class="tl"><span class="tln">④</span><div><b>连带必修</b>：把 codemode 排到老档<b>上面</b> ⇒ <code>allCases</code> 顺序变 ⇒ 而"显示顺序"现在<b>就是</b>"存储键" ⇒ 老用户档位静默漂移（§02 / §03 / R1）</div></div>
+</div>
+
+<h3>状态矩阵</h3>
+<div class="grid g3">
+  <div class="v"><div class="face">模型只拿到 1 个工具<span>强 · 真进程实测 D 组</span></div><span class="chip c-ok">已实测</span></div>
+  <div class="v"><div class="face">只留 codemode 对老档的影响<span>强 · 五段 sections 逐字符相同</span></div><span class="chip c-ok">零影响</span></div>
+  <div class="v"><div class="face">settings 必须按档位写吗<span>强 · A ≡ B</span></div><span class="chip c-ok">不必，全局一份</span></div>
+  <div class="v"><div class="face"><code>-e</code> 装载但不激活<span>强 · E 组</span></div><span class="chip c-bad">不生效</span></div>
+  <div class="v"><div class="face"><code>--tools +codemode</code> 单独用<span>强 · C 组</span></div><span class="chip c-bad">空操作</span></div>
+  <div class="v"><div class="face">两条 <code>-e</code> 的先后顺序<span>强 · D 组是 llama.cpp 在前</span></div><span class="chip c-ok">无关</span></div>
+  <div class="v"><div class="face">声明面 5 → 1 的价<span>强 · 7436 → 11875</span></div><span class="chip c-info">+4439 字符</span></div>
+  <div class="v"><div class="face">档位存储表示<span>强 · AgentMode + ChatStore</span></div><span class="chip c-bad">必须修</span></div>
+  <div class="v"><div class="face">内层 <code>tools.bash</code> 走审批桥<span>强 · 3 条源码交叉</span></div><span class="chip c-ok">覆盖得到</span></div>
+  <div class="v"><div class="face">内层调用真弹出一张卡<span>— · 需真模型</span></div><span class="chip c-warn">未实测</span></div>
+  <div class="v"><div class="face">脚本能调业务扩展吗<span>强 · 可调面 = 注册面</span></div><span class="chip c-ok">能（条件见 §02）</span></div>
+  <div class="v"><div class="face">settings.json 读不到会怎样<span>中 · 但本版不走它了</span></div><span class="chip c-ok">整条绕开</span></div>
+  <div class="v"><div class="face">三处档位选择器是同一套控件吗<span>强 · 三处源码已读</span></div><span class="chip c-bad">不是</span></div>
+</div>
+
+
+<h2><span class="n">01</span>需求说明<span class="en">REQUIREMENT</span></h2>
+
+<h3>要做什么：四档 <b>两层</b></h3>
+<p>三个老档的能力面<b>完全不动</b>（<code>--tools</code>、<code>-e</code>、业务扩展挂载三项都保持现状）；codemode <b>另起一层</b>，放在老档上方，用一条分割线隔开：</p>
+
+<div class="flow">
+  <div class="lyr"><div class="name">codemode</div><div class="code">模型<b>只能</b>调 <code>codemode</code> 一个工具，其余全部经脚本内层调用 —— <code>mode=only</code></div><div class="st"><span class="chip c-acc">独立维度</span></div></div>
+  <div class="arrowdown">▼ &nbsp;分割线 &nbsp;▼</div>
+  <div class="lyr"><div class="name">迷你</div><div class="code"><code>read / bash / write / edit</code> 四件套，不挂业务扩展</div><div class="st"><span class="chip c-mute">老档·不变</span></div></div>
+  <div class="lyr"><div class="name">常规</div><div class="code">内置工具全量，不挂业务扩展（默认档）</div><div class="st"><span class="chip c-mute">老档·不变</span></div></div>
+  <div class="lyr"><div class="name">全工具</div><div class="code">内置工具全量 + 全部业务扩展</div><div class="st"><span class="chip c-mute">老档·不变</span></div></div>
+</div>
+
+<div class="call ok">
+  <div class="lbl">一句话记住分工</div>
+  <p><b>老档回答「给模型多少工具」，codemode 回答「模型能不能直调工具」。</b>所以 codemode 不参与老档的单调序列 —— 它<b>不是"比全工具更多"</b>，而是"换一种调用范式"。</p>
+</div>
+
+<div class="tw"><table>
+<thead><tr><th>档</th><th>displayName</th><th><code>--tools</code></th><th><code>-e</code></th><th>业务扩展</th><th>模型收到的工具数</th></tr></thead>
+<tbody>
+<tr><td><b>codemode</b></td><td class="mono">Codemode</td><td class="mono">+codemode</td><td class="mono">llama.cpp, codemode</td><td>—</td><td><b>1</b>（只有 codemode）</td></tr>
+<tr><td><b>迷你</b></td><td class="mono">Minimal</td><td class="mono">read,bash,write,edit</td><td class="mono">llama.cpp</td><td>—</td><td>4</td></tr>
+<tr><td><b>常规</b></td><td class="mono">Standard</td><td class="mono">不传</td><td class="mono">llama.cpp</td><td>—</td><td>pi 默认激活集</td></tr>
+<tr><td><b>全工具</b></td><td class="mono">Full</td><td class="mono">不传</td><td class="mono">llama.cpp</td><td>✓</td><td>pi 默认激活集 + 扩展工具</td></tr>
+</tbody>
+</table></div>
+<p class="lead">⚠️ 最后一行是<b>本次修掉的语义漂移</b>：「全工具」此前一度被设计成"内置全量 <b>+ codemode</b> + 业务扩展"，现在回到<b>纯老档</b>（不含 codemode）。<br>
+⚠️ <b>「全工具」不含 codemode</b> —— 这正是"3 个老模式不变"的含义；要 codemode 就选 codemode 那一层。</p>
+
+<h3>现在为什么不行</h3>
+<ul class="tight">
+  <li>三档的能力面是<b>单调嵌套</b>的（四件套 ⊂ 内置全量 ⊂ 内置全量+扩展），而"要 codemode、不要业务扩展"<b>落在这个嵌套之外的第二个轴上</b> ⇒ 三档里根本没有这个位置。</li>
+  <li>把它塞进 full ⇒ full 同时意味着"挂全部业务扩展"和"换一种工具调用范式"，<b>两件事合订</b>；而想要前者的消费者（邮箱哨兵，默认 <code>.full</code>）会被迫接受后者 —— 代价是 <b>+4439 字符</b> 和"模型不能直调工具"这个范式变化。</li>
+  <li>把 codemode 塞进 full 还会让<b>"全工具"这个名字撒谎</b>：它的 <code>subtitle</code> 是写给用户看的<b>能力边界声明</b>，而 codemode 是<b>缩窄</b>直调面的（声明 5 → 1）。"更多"和"更少"不能塞进同一个名字。</li>
+  <li>P12 把引擎升到 1.1.0 后 <code>codemode</code> <b>已经在包里</b>，只是被 MangoX 有意关着；关它的原理由（"它绕过审批桥"）<b>经源码交叉核实是错的</b>（§02）。</li>
+</ul>
+
+<h3>谁受益</h3>
+<ul class="tight">
+  <li><b>要编排但不要扩展的人</b>：少往返、少搬上下文，工具面又保持干净。</li>
+  <li><b>P10 无人值守</b>：大输出可以在沙箱里先筛掉再进模型；多步流程一次跑完。</li>
+  <li><b>档位语义本身</b>：老档的名字不再被借用，"全工具"重新等于"全工具"。</li>
+</ul>
+
+<h3>明确不做什么</h3>
+<div class="grid g2">
+  <div class="v top"><div class="face"><b>不把 codemode 塞进 full / standard</b><span>本版的核心取舍</span>见上面三条；"全工具"必须重新等于"含全部业务扩展且能直调"</div><span class="chip c-bad">不做</span></div>
+  <div class="v top"><div class="face"><b>不接 MCP</b><span>独立立项</span>审批桥是<b>白名单式</b>的 ⇒ <code>mcp__*</code> 命不中策略 ⇒ <b>静默执行</b>。要开必须先做 deny-by-default 的策略重设计</div><span class="chip c-bad">不做</span></div>
+  <div class="v top"><div class="face"><b>不接 tool-search</b><span>声明面 ≠ 能力面</span>MangoX 的工具清单由<b>层级</b>决定；"模型自己搜工具"与"档位即能力边界"直接冲突。<br>⚠️ <code>mode=only</code> 会让 <b>codemode 自己</b>成为搜索入口（描述里带 <code>searchTools</code>），这是<b>接受</b>的：它只是 codemode 维度内部的事</div><span class="chip c-bad">不做</span></div>
+  <div class="v top"><div class="face"><b>不给 codemode 层挂业务扩展</b><span>那就退化成"只换名字"</span>挂上之后它与"全工具 + 只留 codemode"重合，本层就失去独立的理由</div><span class="chip c-bad">不做</span></div>
+  <div class="v top"><div class="face"><b>暂不禁用 <code>models.*</code></b><span>先算账</span>它是 codemode 的一半价值（分类器 / 图像）；按 §04 的 3 号门把账算清再决定</div><span class="chip c-warn">暂缓</span></div>
+  <div class="v top"><div class="face"><b>不改 <code>codemode.inlineBudget</code></b><span>它不是能力开关</span>只管"列不列"，装不下照样可调（§02）。保持上游默认 3000</div><span class="chip c-mute">不动</span></div>
+</div>
+
+
+<h2><span class="n">02</span>需求调研<span class="en">RESEARCH</span></h2>
+
+<h3>上游契约（pi 1.1.0 的 <code>docs/codemode.md</code>）</h3>
+<details class="fold"><summary>展开 · 11 条契约要点 + 2 个设置旋钮</summary>
+<div class="tbl"><table class="def">
+<tbody>
+<tr><th>输入</th><td><b>裸 JavaScript 源码</b> —— 不是 JSON、<b>不要 markdown 围栏</b>。schema = <code>{type:"object", required:["code"], …}</code></td></tr>
+<tr><th>执行</th><td>作为 async 函数体跑在 <b>QuickJS 沙箱</b> ⇒ 顶层 <code>await</code>/<code>return</code> 可用；<b>无 Node API / fs / 网络 / timers</b></td></tr>
+<tr><th>选项行</th><td><code>// @options: {"max_output_tokens":2000,"timeout_ms":60000}</code> · <code>max_output_tokens</code> 默认 <b>10000</b> · <code>timeout_ms</code> <b>默认不设 = 无期限</b></td></tr>
+<tr><th>结果</th><td>以 <code>Script completed</code> / <code>Script failed</code> 开头 + wall time + 输出；失败<b>保留部分输出</b></td></tr>
+<tr><th>失败语义</th><td>被拒 / 被拦 ⇒ <b>reject 一个带工具错误文本的 <code>Error</code></b> ⇒ 脚本可感知，用 <code>Promise.allSettled()</code> 保住其余调用。<b>已发生的调用不回滚</b></td></tr>
+<tr><th>bash 输出上限</th><td><b>1 MiB</b>（模型直调只有 2000 行 / 50KB）⇒ <b>脚本是一条"绕过输出截断"的数据通道</b></td></tr>
+<tr><th>globals</th><td class="mono">tools.&lt;name&gt; · text · image · console.log · return · exit · store/load · ALL_TOOLS · searchTools(q,{limit,namespace}) · describeTool · describeNamespace · models</td></tr>
+<tr><th>工具名映射</th><td>非法标识符字符变 <code>_</code> ⇒ <code>mcp__dev-radius__search</code> 是 <code>tools.mcp__dev_radius__search</code></td></tr>
+<tr><th>models</th><td>分类器与图像用<b>会话凭据</b>跑；chat 模型列出但不可跑；<b>不 throw</b>；每脚本最多 <b>4 并发</b>；<b>用量计入会话成本</b></td></tr>
+<tr><th>store</th><td>成功脚本把值落成 <code>codemode-store</code> custom entry；<b>每分支只见自己路径上的值</b>；单值 ≤262144、总和 ≤1048576</td></tr>
+<tr><th>硬边界</th><td>VM <b>256 MB</b>；输出 >16777216 字符或 text/image/console 调用 >100000 次 ⇒ 失败；等永不 settle 的 promise ⇒ 立即失败；<b>脚本不能启动其它脚本</b></td></tr>
+</tbody>
+</table></div>
+
+<h3>codemode 的两个旋钮（默认从 <code>settings.json</code> 读 —— 本版绕开它）</h3>
+<div class="tw"><table>
+<thead><tr><th>键</th><th>默认</th><th>语义（源码 <code>tool.js:198-208</code>）</th><th>MangoX 的选择</th></tr></thead>
+<tbody>
+<tr><td class="mono">codemode.mode</td><td><b>on</b></td><td><code>on</code> = 直调工具照旧声明，"描述里说明如何从脚本调"；<br><code>only</code> = 直调工具的声明<b>从请求里摘掉</b>，codemode 描述<b>列出全部可调工具</b></td><td><b>钉成 <code>only</code></b>。<br>⚠️ 实现<b>不走这个文件</b> —— 由自建扩展的 <code>options.mode</code> 覆盖（见 §03），所以这里那行的默认值对 MangoX 不生效</td></tr>
+<tr><td class="mono">codemode.inlineBudget</td><td>3000</td><td>codemode 描述里<b>列</b>工具声明的共享预算（估算 tokens = 字符 / 4）。⚠️ <b>只影响"列不列"，不影响"能不能调"</b></td><td>保持默认。装不下的不进描述，但<b>照样可调</b>（靠 <code>searchTools</code> 找）</td></tr>
+</tbody>
+</table></div>
+</details>
+
+<h3>codemode 能调到哪些工具：<b>可调面 = 注册面，不是声明面</b></h3>
+<p class="lead">这条既决定了本层的形态能不能成立，也决定了 §04 门 4 的判据该怎么写。判据是源码，不是文档措辞。</p>
+<pre><span class="c">dist/extensions/codemode/tool.js:88-91 —— 可调用集的全部判据就这一行</span>
+/** Tools a script may call: every given tool except the codemode tool itself. */
+export function getCodemodeCallableTools(tools) {
+    return tools.filter((tool) =&gt; tool.name !== CODEMODE_TOOL_NAME);
+}
+
+<span class="c">core/agent-session.js:1140-1146 —— “可调”的定义</span>
+/** Tools callable through `ctx.executeTool()`: the active `direct` tools and every registered
+ *  `codemode` or `deferred` tool. */
+_getCallableTools(active) {
+    return [...this._toolRegistry.values()].filter((tool) =&gt; {
+        const exposure = this._getToolExposure(tool.name);
+        return exposure === "codemode" || exposure === "deferred"
+            || (exposure === "direct" &amp;&amp; active.has(tool.name));
+    });
+}
+<span class="c">:1136-1138 —— exposure 缺省值</span>
+_getToolExposure(name) { return this._toolDefinitions.get(name)?.definition.exposure ?? "direct"; }</pre>
+
+<div class="grid g2">
+  <div class="v top"><div class="face"><b>模型声明面</b><span>写进 system prompt <code>&lt;tools&gt;</code> 段的那几条</span>只有 <code>direct</code> 且<b>激活</b>的。作用：模型<b>知道能直接调</b>它们</div><span class="chip c-info">知道的</span></div>
+  <div class="v top"><div class="face"><b>脚本可调面</b><span>= <code>ctx.tools</code> 的全部（除 codemode 自己）</span>含 <code>direct</code> / <code>codemode</code> / <code>deferred</code>，<b>只有 <code>hidden</code> 会被移除</b>。作用：脚本<b>调到</b>它们</div><span class="chip c-ok">调得到的</span></div>
+</div>
+
+<div class="call warn">
+  <div class="lbl">三个必须记住的推论</div>
+  <p>① <b>「描述里没列」≠「调不到」</b>。<code>inlineBudget</code> 只管<b>列不列</b>（<code>tool.d.ts</code>：装不下的工具 "left out, like deferred tools"），装不下照样能经 <code>searchTools</code> 找出来调（<code>tool.js:64</code> 的原话就是 "find <b>unlisted</b> tools"）。<br>
+  ② <b><code>mode=only</code> 改的是声明面，不是可调面</b> —— 直调工具的声明被摘掉，但它们在脚本里<b>照旧可调</b>（<code>only</code> 形态下 <code>listed = callable</code>，<b>全部</b>可调工具反而都写进描述里了）。<br>
+  ③ <b>只有 <code>hidden</code> 曝光会被踢出可调面。</b>所以"关不关得掉"取决于<b>注册不注册</b>，不取决于"描述里写没写"。</p>
+</div>
+
+<h3>⇒ 直接回答「codemode 能不能调业务扩展」</h3>
+<div class="call ok">
+  <div class="lbl">能 —— 但条件只有一个："那个层级挂不挂业务扩展"</div>
+  <p>可调面就是 <code>ctx.tools</code>，所以<b>业务扩展的工具一旦挂载（注册进会话），codemode 就能调</b>，不需要额外配置、也不需要额外开关。<br>
+  在我们的四档里：<b>codemode 层不挂业务扩展</b> ⇒ 那些工具<b>根本没注册</b> ⇒ <b>调不到</b>（不是"能调但被禁"，是<b>不存在</b>）；<b>全工具档挂</b> ⇒ <b>调得到</b>。<br>
+  ⇒ 所以「codemode 能不能调业务扩展」这个问题，等价于「那一档挂不挂业务扩展」—— 而这正是两个层级在显式回答的事。</p>
+</div>
+<div class="call bad">
+  <div class="lbl">顺带一个必须承认的既存事实</div>
+  <p>业务扩展的工具名是任意的，而 MangoX 的审批桥是<b>白名单式</b>的（<code>SENSITIVE = Set(["bash","write","edit"])</code>）⇒ 扩展工具名命不中策略 ⇒ <b>本来就不经审批</b>。<br>
+  <b>这不是 codemode 新增的洞</b>（今天它们被直接声明给模型、直接调，也一样不过审批）。codemode 改变的是<b>形态</b>：原本 N 次独立的工具调用，现在包在<b>一次</b> codemode 调用里 ⇒ 用户看到的卡会变少。所以这条要和 <b>门 6（工具卡展示）</b>一起定。</p>
+</div>
+
+<h3>我们的现状：档位是怎么存的（<b>本版的核心发现</b>）</h3>
+<div class="tw"><table>
+<thead><tr><th>位置</th><th>现状</th></tr></thead>
+<tbody>
+<tr><td class="mono">AgentMode.swift:46-51</td><td><code>storageIndex</code> = <b><code>allCases</code> 里的序号</b>；<code>init(storageIndex:)</code> 用它反解</td></tr>
+<tr><td class="mono">ChatStore.swift:784-800</td><td>键 <code>agent_mode.&lt;项目 UUID&gt;</code>，<b>值存的就是那个序号</b>（settings KV 的 TEXT 列）</td></tr>
+<tr><td class="mono">smokeMain.swift:1337-1338</td><td>烟测把 <code>minimal.storageIndex == 0 &amp;&amp; full.storageIndex == 2</code> <b>钉死</b>了</td></tr>
+</tbody>
+</table></div>
+<div class="call bad">
+  <div class="lbl">⇒ 显示顺序与存储键是同一个东西</div>
+  <p>把 <code>codemode</code> 排到三个老档<b>前面</b>（boss 要的布局）⇒ 三个老档的序号整体后移一位，而老库里存的 <code>0 / 1 / 2</code> 会被反解成 <code>codemode / minimal / standard</code> ⇒ <b>所有已选"全工具"的项目静默变成"常规"</b>。<br>
+  <b>危险的地方在于它零红灯</b>：值合法、枚举解得开、界面正常显示 —— 只是档位错了、能力面变了，而且没人会发现。<br>
+  ⚠️ 注意：<b>如果只是把 codemode 加在最后，这条不会发作</b>（老序号含义不变）。是"排到上面"这个<b>布局决策</b>把它从"可绕开"变成"必须修"。<br>
+  ⚠️ 但根因仍在：这个表示法<b>下一次谁再动顺序就再踩一次</b>。所以要修的是"位置即存储键"，不是"这次别排错"。</p>
+</div>
+
+<h3>我们的现状：spawn 参数怎么组装</h3>
+<div class="tw"><table>
+<thead><tr><th>位置</th><th>现状</th></tr></thead>
+<tbody>
+<tr><td class="mono">AgentMode.swift:35-40<span class="sub">toolAllowlist</span></td><td>minimal → <code>["read","bash","write","edit"]</code>；standard / full → <code>nil</code>。<b>名字已经不对了</b>（codemode 要装 <code>+codemode</code> modifier）</td></tr>
+<tr><td class="mono">AgentMode.swift:44<span class="sub">mountsBusinessExtensions</span></td><td><code>self == .full</code>。这条轴本身是对的，本版<b>不动</b></td></tr>
+<tr><td class="mono">AgentMode.swift:55-64<span class="sub">spawnArguments</span></td><td>只按 <code>toolAllowlist</code> 拼 <code>--tools</code>；<code>-e</code> 完全<b>不在这个纯函数里</b></td></tr>
+<tr><td class="mono">PiRpcTransport.swift:193-198<span class="sub">extensionArguments</span></td><td><code>["--no-extensions", "--extension", builtinLlama, "--extension", hosted] + enabled</code> —— <b>"挂哪个内置"是写死的</b>（函数签名里根本没有 mode），所以"挂不挂 codemode"<b>在纯函数里断言不到</b></td></tr>
+<tr><td class="mono">PiRpcTransport.swift:190-191<span class="sub">行内注释</span></td><td>写着"另三个（<code>codemode</code> / <code>tool-search</code> / <code>mcp</code>）<b>有意不开 —— 它们绕过审批桥</b>"</td></tr>
+<tr><td class="mono">PiRpcTransport.swift:567<span class="sub">调用点</span></td><td>恒以 <code>businessExtensions: []</code> 调用 ⇒ <code>spawnArguments</code> 里那个 <code>--extension</code> 分支<b>只被冒烟用到</b></td></tr>
+<tr><td class="mono">ModelMaterializer.swift:109-129<span class="sub">物化壳</span></td><td>只写 <code>models.json</code> / <code>auth.json</code> / <code>.fingerprint</code>；<b>指纹 = sha256(modelsJSON ‖ authJSON)</b>。<b>P13 不碰它</b> —— 它顺带注入的 <code>PI_CODING_AGENT_DIR</code> 有前置条件（<code>modelCount &gt; 0</code>），正是本版绕开那条路的理由之一</td></tr>
+</tbody>
+</table></div>
+<div class="call bad">
+  <div class="lbl">注释已失效</div>
+  <p><code>PiRpcTransport.swift:190-191</code> 那句被下面的源码交叉<b>推翻</b>了 —— codemode <b>不</b>绕过审批桥（内层调用走 <code>ctx.executeTool</code>，hooks 照跑）。<br>
+  以及同段 <code>:187-189</code> 的"<b>唯一</b>主动开的内置扩展"在本版之后也<b>不再成立</b>：会变成两个（<code>llama.cpp</code> + <code>codemode</code>）。</p>
+</div>
+
+<h3>关键实测：模型到底拿到几个工具（四组真进程）</h3>
+<p class="lead">判据落在 <b>system prompt 的 <code>sections.tools</code> 段</b>上。四组都是 <code>--mode rpc --no-session</code> + <code>PI_OFFLINE=1</code>（请求会被组装，模型调用必然失败），读回 session entry 里的 system message。</p>
+
+<div class="tw"><table>
+<thead><tr><th>组</th><th><code>-e</code> 挂 codemode</th><th><code>--tools +codemode</code></th><th>settings <code>mode</code></th><th><code>&lt;tools&gt;</code> 段</th><th>codemode 描述</th><th class="num">&lt;rules&gt;</th><th class="num">transcript</th></tr></thead>
+<tbody>
+<tr><td><b>A</b> 基线</td><td>✗</td><td>✗</td><td>未写</td><td class="mono">read bash edit write &nbsp;<b>(4)</b></td><td>—</td><td class="num">11</td><td class="num">7460</td></tr>
+<tr><td><b>B</b> 基线+only</td><td>✗</td><td>✗</td><td class="mono">only</td><td class="mono">read bash edit write &nbsp;<b>(4)</b></td><td>—</td><td class="num">11</td><td class="num">7436</td></tr>
+<tr><td><b>C</b> 挂载·on</td><td>✓</td><td>✓</td><td>未写（=on）</td><td class="mono">read bash edit write <b>codemode</b> &nbsp;(5)</td><td class="num">1257</td><td class="num">11</td><td class="num">9690</td></tr>
+<tr><td><b>D</b> 挂载·only</td><td>✓</td><td>✓</td><td class="mono">only</td><td class="mono"><b>codemode &nbsp;(1)</b></td><td class="num"><b>4705</b></td><td class="num"><b>3</b></td><td class="num"><b>11875</b></td></tr>
+<tr><td><b>E</b> 只装载不激活</td><td>✓</td><td>✗</td><td class="mono">only</td><td class="mono">read bash edit write &nbsp;<b>(4)</b></td><td>—</td><td class="num">11</td><td class="num">7433</td></tr>
+</tbody>
+</table></div>
+
+<div class="bars">
+  <div class="bar"><div class="bn">A/B 基线（无 codemode）</div><div class="track"><div class="fill" style="width:62.6%"></div></div><div class="bv">7436</div></div>
+  <div class="bar"><div class="bn">C 挂载 · mode=on</div><div class="track"><div class="fill" style="width:81.6%"></div></div><div class="bv">9690</div></div>
+  <div class="bar on"><div class="bn">D 挂载 · mode=only</div><div class="track"><div class="fill" style="width:100%"></div></div><div class="bv">11875</div></div>
+  <div class="barnote">宽度 = transcript 字符数。<b>boss 选的 D 形态比"塞进 full"的 C 形态还贵 2185 字符</b> —— 因为这 4 条直调声明没有消失，而是<b>连描述带参数 schema 一起搬进了 codemode 的描述里</b>（1257 → 4705）。</div>
+</div>
+
+<h4 class="lead">D 组读到的 <code>&lt;tools&gt;</code> 段（原文）</h4>
+<pre><span class="c">D 组 · mode=only —— 全文就这一条</span>
+&lt;tools&gt;
+- <span class="k">codemode</span>: Run JavaScript that calls other tools
+
+In addition to the tools above, you may have access to other custom tools depending on the project.
+&lt;/tools&gt;
+
+<span class="c">C 组 · mode=on —— 对照</span>
+&lt;tools&gt;
+- read: Read file contents
+- bash: Execute bash commands (ls, grep, find, etc.)
+- edit: Make precise file edits with exact text replacement, including multiple disjoint edits in one call
+- write: Create or overwrite files
+- <span class="k">codemode</span>: Run JavaScript that calls other tools
+&lt;/tools&gt;</pre>
+
+<h4 class="lead">D 组 codemode 描述的尾部（工具清单搬家的证据）</h4>
+<pre><span class="c">mode=only 下，描述里带着每个工具的完整声明与 guidelines</span>
+### `write`
+Write content to a file. Creates the file if it doesn't exist, overwrites if it does.
+Automatically creates parent directories.
+
+- Use write only for new files or complete rewrites.   <span class="c">← 这条原本在 &lt;rules&gt; 段</span>
+
+codemode tool declaration:
+```ts
+declare const tools: { write(args: {
+  content: string;   <span class="c">// Content to write to the file</span>
+  path: string;      <span class="c">// Path to the file to write (relative or absolute)</span>
+}): Promise&lt;string&gt;; };
+```</pre>
+
+<div class="call ok">
+  <div class="lbl">三条结论</div>
+  <p>① <b>boss 要的形态成立</b>：D 组的 <code>&lt;tools&gt;</code> 段<b>只剩 codemode 一条</b>（5 → 1）。<br>
+  ② <b>全局写一份 <code>only</code> 是安全的</b>：A vs B 的 <code>preamble / tools / rules / docs / cwd</code> <b>五段逐字符相同</b> ⇒ 对不挂 codemode 的三档<b>零影响</b>。（<code>mode</code> 是"扩展被加载时才生效"的惰性旋钮 —— 那三档不挂扩展，就没人读它。）<br>
+  ③ <b>两层缺一不可</b>：C 组（只有 <code>--tools</code>）与基线逐字节相同；E 组（只有 <code>-e</code>）<b>也</b>退回 4 条 —— 装载 ≠ 激活（<code>index.js:5-7</code>：codemode 注册为 <code>defaultActive: false</code>）。</p>
+</div>
+
+<div class="call warn">
+  <div class="lbl">⚠️ 顺带否掉一个我差点写进方案的假设 + 一条观测面陷阱</div>
+  <p><b>否掉的假设</b>：曾以为"codemode 必须在 <code>-e</code> 里排最前，否则 <code>only</code> 下它自己会被摘掉"。<b>实测为假</b> —— D 组就是 <code>llama.cpp</code> 在前、<code>codemode</code> 在后，照样只剩一条。原因见源码：<code>codemode</code> 的 <code>exposure</code> 是 <code>"model-only"</code>，既不是 <code>direct</code>（进不了 <code>hiddenDeclarations</code>）也不在 <code>callable</code> 里。<b><code>-e</code> 的顺序无关。</b><br>
+  <b>观测面陷阱</b>：transcript 里的 <code>toolsAdded</code> 在 D 组<b>仍然是 5 条</b> —— 摘除发生在<b>请求</b>层（<code>_installHiddenDeclarationsProjection</code>），record 保留原样。⇒ <b>判据必须落在 <code>sections.tools</code> 上；落在 <code>toolsAdded</code> 上会假红</b>（误判成"隐藏没生效"）。</p>
+</div>
+
+<h3>安全核实：codemode 可开，MCP 不行</h3>
+<p class="lead">分水岭不是"有没有触发 hook" —— 两者都触发。MangoX 的审批桥是<b>白名单式</b>的（<code>SENSITIVE = Set(["bash","write","edit"])</code>），<b>名字命不中策略就等于放行</b>。</p>
+<div class="grid g2">
+  <div class="v top"><div class="face"><b>codemode 的内层调用</b><span>hook ✓ · 审批桥 ✓</span>内层落到 <code>bash</code> / <code>write</code> / <code>edit</code>，正是白名单里那三个名字</div><span class="chip c-ok">可开</span></div>
+  <div class="v top"><div class="face"><b>MCP 工具</b><span>hook ✓ · 审批桥 ✗</span>工具名是 <code>mcp__&lt;server&gt;__&lt;tool&gt;</code>，白名单里没有 ⇒ <b>静默执行</b></div><span class="chip c-bad">要先做 deny-by-default</span></div>
+</div>
+<ul class="tight">
+  <li><code>dist/extensions/codemode/tool.js:8-9</code><span class="cite"> —— "Nested calls run through the agent loop's tool pipeline (ctx.executeTool), so validation, <b>tool_call/tool_result hooks</b>, and permission checks apply <b>exactly as for direct</b> calls"</span></li>
+  <li><code>dist/core/agent-session.js:384-386</code> + <code>:401</code><span class="cite"> —— <code>_executeNestedToolCall</code> "goes through the agent's tool pipeline <b>with the session's hooks</b>"</span></li>
+  <li><code>dist/core/nested-tool-calls.js:1-9</code><span class="cite"> —— 每个嵌套调用走 <code>runToolCall</code> "with its own hooks"，<code>tool_execution_*</code> 事件带 <code>parentToolCallId</code></span></li>
+</ul>
+
+<h3>现有集成面</h3>
+<details class="fold"><summary>展开 · 4 个已核 + 4 个待定</summary>
+<div class="tbl"><table>
+<thead><tr><th>面</th><th>结论</th><th>依据</th></tr></thead>
+<tbody>
+<tr><td><code>codemode-store</code> 会话条目</td><td><span class="chip c-ok">兼容</span></td><td><code>ChatStore.snapshotLinePrefix</code> 按 <code>type=="message" &amp;&amp; role=="user"</code> 分类 ⇒ 未知类型不误判不崩；落在切点之后随前缀丢弃，与 pi 的"每分支只见自己路径"语义一致</td></tr>
+<tr><td>fork / 侧问快照</td><td><span class="chip c-ok">自洽</span></td><td>快照是手拼 jsonl 前缀，未知条目随前缀保留 / 丢弃</td></tr>
+<tr><td>系统提示净增量</td><td><span class="chip c-info">+4439</span></td><td>⚠️ 这是 <b>pi 自己的声明面</b>，<b>不计入</b> P11 的注入预算 ⇒ MangoX 的"载荷表"<b>看不到它</b></td></tr>
+<tr><td>会话级配置落库</td><td><span class="chip c-ok">无迁移</span></td><td><code>SessionConfig.agentMode</code> 存的是 <b>rawValue 字符串</b>（<code>PersistenceStore.swift:1022</code> / <code>:1055</code>）⇒ 新增一个枚举值不碰它。<b>只有 ChatStore 那条 KV 是序号</b></td></tr>
+<tr><td>成本显示</td><td><span class="chip c-warn">待实测</span></td><td>官方说 <code>models.*</code> 用量计入会话成本；状态栏从 pi session stats 取 ⇒ 预期能收到 → §04 · 3 号门</td></tr>
+<tr><td>工具卡展示</td><td><span class="chip c-warn">待定</span></td><td>一次 codemode 是一个 <code>tool_execution_start/end</code>，内层调用带 <code>parentToolCallId</code>；现有卡片按扁平事件渲染 ⇒ 要定"接 / 不接 + 理由" → 门 6</td></tr>
+<tr><td>审批卡的归属</td><td><span class="chip c-warn">待定</span></td><td>内层 <code>bash</code> 的卡弹在哪？<code>autoRespondExtensionUI</code> 按 <code>ctx.hasUI</code> 走，事件带 <code>parentToolCallId</code> 但当前实现不看它 → 门 7</td></tr>
+<tr><td><code>settings.json</code> 的读路径</td><td><span class="chip c-ok">已核 · 本版绕开</span></td><td><code>settings-manager.js:131-172</code> 用 <code>proper-lockfile</code>（<code>mkdir &lt;path&gt;.lock</code>）保读；<b>锁失败 ⇒ 整个文件读不到，只降级成一行 startup warning</b>（本机已见该降级路径）⇒ 这条是<b>放弃写 settings 的直接理由</b>，<code>mode</code> 改由自建扩展承担</td></tr>
+</tbody>
+</table></div>
+</details>
+
+<h3>结论可信度分级</h3>
+<div class="tbl"><table>
+<thead><tr><th>档</th><th>含义</th><th>本版的例子</th></tr></thead>
+<tbody>
+<tr><td><span class="chip c-ok">强</span></td><td>真进程实测，或源码交叉（≥2 处互证）</td><td>四组声明面、<code>-e</code> 顺序无关、两层缺一不可、内层走审批桥、档位存储表示、<code>codemode-store</code> 兼容</td></tr>
+<tr><td><span class="chip c-info">中</span></td><td>官方文档明写，但我们这条路没跑过</td><td><code>models.*</code> 计入会话成本、脚本里 <code>bash</code> 的 1 MiB 上限、VM 256 MB</td></tr>
+<tr><td><span class="chip c-warn">弱</span></td><td>推测 —— <b>必须转成 §04 里的门或验收项</b></td><td>"今天 MCP 关着"、内层调用在 MangoX 的 UI 里真弹一张卡</td></tr>
+</tbody>
+</table></div>
+
+
+<h2><span class="n">03</span>路径与方案<span class="en">APPROACH</span></h2>
+
+<h3>形态与派发网格</h3>
+<div class="tw"><table>
+<thead><tr><th>档</th><th><code>--tools</code></th><th><code>-e</code> 内置扩展顺序</th><th>业务扩展</th><th>模型声明面</th><th>脚本可调面</th></tr></thead>
+<tbody>
+<tr><td><b>codemode</b></td><td class="mono">+codemode <span class="chip c-acc">modifier</span></td><td class="mono">llama.cpp, codemode</td><td>—</td><td><b>只有 codemode</b></td><td>已激活的直调工具（read/bash/edit/write…）</td></tr>
+<tr><td><b>迷你</b></td><td class="mono">read,bash,write,edit <span class="chip c-info">allowlist</span></td><td class="mono">llama.cpp</td><td>—</td><td>那四个</td><td><span class="chip c-mute">无 codemode</span></td></tr>
+<tr><td><b>常规</b></td><td class="mono">不传</td><td class="mono">llama.cpp</td><td>—</td><td>内置全量</td><td><span class="chip c-mute">无 codemode</span></td></tr>
+<tr><td><b>全工具</b></td><td class="mono">不传</td><td class="mono">llama.cpp</td><td>✓</td><td>内置全量 + 扩展工具</td><td><span class="chip c-mute">无 codemode</span></td></tr>
+</tbody>
+</table></div>
+<p class="lead">两条轴：<b>老档沿"给多少工具"单调</b>（四件套 ⊂ 内置全量 ⊂ 内置全量+扩展），<b>codemode 在正交的那条轴上</b>（模型能不能直调）。<br>
+⚠️ 最后两列的关系是<b>可调面 ⊇ 声明面</b>：codemode 层里模型只看到 1 条声明，但脚本能调到那 4 条 + <code>searchTools</code> 能搜到的任何已注册工具。</p>
+
+<h3><code>mode</code> 从哪来：一个三行的自建扩展，不写 <code>settings.json</code></h3>
+<p class="lead">本版<b>唯一的实现途径</b>。上一版方案走的是物化 <code>settings.json</code>，实测后<b>整条被换掉</b> —— 因为存在一条短得多的路，而且它让前面那些洞全部变成"不适用"。</p>
+<ul class="tight">
+  <li><b>没有 CLI 开关</b>：<code>pi --help</code> 里与 codemode / tool-search / exposure 相关的项<b>一个都没有</b>（<code>--mode</code> 是输出模式，不是这个）。⇒ <code>mode</code> 不能从参数直传，<b>但能从扩展的 options 传</b>。</li>
+  <li><b>关键发现</b>：<code>createCodemodeExtension</code> 从<b>包根</b>导出（<code>dist/index.js:34</code>），而它内部是 <code>getMode: () =&gt; options.mode ?? readMode(pi)</code> ⇒ <b>传进来的 <code>mode</code> 优先于 <code>settings.json</code></b>。<br>于是只需要在托管扩展目录里放一个三行文件：
+<pre>import { createCodemodeExtension } from "@earendil-works/pi-coding-agent";
+export default createCodemodeExtension({ mode: "only" });</pre></li>
+  <li>⇒ <code>mode</code> 变成<b>纯 spawn 参数</b>（挂哪个扩展由档位决定），与 <code>--tools</code> 在同一次组装里。那三条（<code>PI_CODING_AGENT_DIR</code> 的条件注入 / 目录锁 / 内容指纹）<b>一条都不适用</b>。</li>
+  <li><b>裸模块名为什么能解析</b>（这是这条路唯一的依赖）：pi 用动态 <code>import()</code> 加载扩展，解析基点是 <b>pi 自己的</b> <code>dist/bundle/cli.js</code>（<code>launchSpec()</code> 已把它 realpath 出来用 node 跑）⇒ 向上必然命中 <code>@earendil-works/pi-coding-agent</code> <b>自身</b>所在的那层 node_modules。<b>与扩展文件放在哪无关</b> —— 已实测：同一个扩展放到 5 层深的目录仍可解析。</li>
+</ul>
+<div class="call">
+  <div class="lbl">实测：自建扩展路与 settings 路<b>逐字符等价</b></div>
+  <p>两组的五个段（<code>preamble</code> / <code>tools</code> / <code>rules</code> / <code>docs</code> / <code>cwd</code>）<b>长度与内容全部相同</b>，<code>&lt;tools&gt;</code> 段都只剩 <code>- codemode: Run JavaScript that calls other tools</code>。<br>
+  且这两组的 <code>settings.json</code> 都是 <code>{}</code>（<b>没写</b> <code>codemode.mode</code>）⇒ 生效的确实是 <code>options.mode</code>。</p>
+</div>
+<div class="call warn">
+  <div class="lbl">⚠️ 于是只剩一条依赖（比原来那条窄得多）</div>
+  <p>依赖上游 <code>exports["."]</code> 里<b>继续具名导出 <code>createCodemodeExtension</code></b>（1.1.0 已核）。它将来的风险是"上游删掉这个导出" ⇒ 扩展加载失败 ⇒ <code>mode</code> 回落 <code>on</code>。<br>
+  <b>但它有信号</b>：扩展加载失败会写 stderr，而 P12.1a 的启动归因通道本来就在收 stderr（R4）。</p>
+</div>
+
+<h3>被否掉的做法</h3>
+<div class="tbl"><table>
+<thead><tr><th>做法</th><th>为什么不</th></tr></thead>
+<tbody>
+<tr><td><b>把 codemode 塞进 full</b></td><td>两件事合订（"挂全部扩展" + "换调用范式"）；而且 <code>subtitle</code> 是能力边界声明，codemode 是<b>缩窄</b>直调面的，塞进"全工具"让名字撒谎（§01）。实价 <b>+4439 字符</b></td></tr>
+<tr><td><b>codemode 插在 standard 与 full 之间</b>（上一版方案）</td><td>它把 codemode 表达成"比常规多、比全工具少"，<b>方向就错了</b> —— 它是正交维度，不是单调序列上的一格</td></tr>
+<tr><td>给 standard 也加 codemode</td><td>standard 是默认档 ⇒ 静默改变默认行为，且新层没有存在意义</td></tr>
+<tr><td>只用 <code>--tools +codemode</code>（官方配方）</td><td>在 <code>-ne</code> 前提下是<b>空操作</b>（C 组实测：与基线逐字节相同）</td></tr>
+<tr><td>只加 <code>-e builtin:codemode</code></td><td>装载 ≠ 激活（E 组实测：仍退回 4 条）</td></tr>
+<tr><td>用 <code>--no-tools</code> + <code>--tools +codemode</code> 代替 <code>mode=only</code></td><td><code>-nt</code> 会把直调工具<b>整个停用</b> ⇒ 它们掉出 <code>callable</code> ⇒ 脚本也调不到 ⇒ <b>codemode 变成废的</b>。<b>只有 <code>mode</code> 能"只摘声明、不动可调面"</b></td></tr>
+<tr><td>用 <code>settings.defaultTools</code> 做层级激活</td><td>它是<b>全局</b>设置，与 <code>--tools</code> 的合并语义需要额外核实；且会让"能力边界"藏进一个不在 spawn 参数里的地方。保持 <code>--tools</code>（纯函数里可见可断言）</td></tr>
+<tr><td><code>mode</code> 写进 <code>settings.json</code>（上一版方案的实现途径）</td><td>不是错，而是<b>绕远</b>：要连着处理"注入有前置条件 / 目录锁 / 内容指纹"三件事，而自建扩展一条都不需要。<b>两条路已实测等价</b> ⇒ 选短的那条</td></tr>
+<tr><td>按档位写不同的 <code>PI_CODING_AGENT_DIR</code></td><td>该目录同时承载 <code>models.json</code>/<code>auth.json</code>/指纹缓存；按档位分目录要复刻整个物化链，成本远超收益。<b>实测证明不必</b></td></tr>
+<tr><td>枚举 <code>read,bash,write,edit,codemode</code></td><td>退回 allowlist ⇒ 砸掉业务扩展工具（<code>getToolListError</code> 禁止混用）</td></tr>
+<tr><td>把 codemode 加在 <code>allCases</code> 最后（绕开存储迁移）</td><td>能绕开，但<b>绕的是症状不是根因</b>；boss 要的布局本来就要它排在前面 ⇒ 迁移必须修（R1）</td></tr>
+</tbody>
+</table></div>
+
+<h3>改动面</h3>
+<div class="tw"><table>
+<thead><tr><th>位置</th><th>现状 → 改成</th></tr></thead>
+<tbody>
+<tr><td class="mono">AgentMode.swift:11<span class="sub">枚举</span></td><td><code>case minimal, standard, full</code> → <code>case <b>codemode</b>, minimal, standard, full</code>（<b>声明顺序 = 展示顺序</b>，于是三处 <code>ForEach</code> 自动把 codemode 排在顶部）</td></tr>
+<tr><td class="mono">AgentMode.swift:46-51<span class="sub">存储表示</span></td><td><b>根因修</b>：删掉 <code>storageIndex</code> / <code>init(storageIndex:)</code>，改成按 <code>rawValue</code> 存取的 <code>storageValue</code> / <code>init?(storageValue:)</code>；<b>配一张冻结的旧顺序表</b> <code>["minimal","standard","full"]</code> 用于反解老库</td></tr>
+<tr><td class="mono">AgentMode.swift:14-31<span class="sub">文案</span></td><td>加 <code>Codemode</code> 的 <code>displayName</code> 与 <code>subtitle</code>。⚠️ <code>subtitle</code> 里<b>必须点出代价</b>（"模型只能经脚本调工具；占用更多上下文"）。<code>displayName</code> 保持<b>英文常量、不走 <code>L()</code></b>（与 <code>AgentTransport.swift:124</code> 同款口径）；<code>subtitle</code> 走 <code>L()</code> ⇒ <b>1 处新增 + 2 处语言改动 + 三道本地化门</b></td></tr>
+<tr><td class="mono">AgentMode.swift:35-40<span class="sub">toolAllowlist</span></td><td>改名 <code>toolListArguments</code>（装 modifier 就不再是 allowlist）：codemode → <code>["+codemode"]</code>；迷你 → 四件套；常规 / 全工具 → <code>nil</code></td></tr>
+<tr><td class="mono">AgentMode.swift<span class="sub">新增一条轴</span></td><td>新增 <code>mountsCodemodeExtension: Bool</code>（仅 codemode 档为 true）+ <code>isCodemodeLayer: Bool</code>（选择器画分割线用）。<b>把"挂不挂 codemode"变成纯函数里的可断言项</b> —— 否则它藏在 PiRpcTransport 的组装里，断言不到</td></tr>
+<tr><td class="mono">PiRpcTransport.swift:193-198<span class="sub">extensionArguments</span></td><td>签名加 <code>codemodeExtensionPath: String?</code>：<code>-ne</code> + <code>builtin:llama.cpp</code> + hosted + <b>codemode（可为 nil）</b> + 业务扩展。⚠️ <b>传 nil 时整段与旧形态逐字符相同</b> —— 这是"三老档零影响"的形式化（冒烟直测）</td></tr>
+<tr><td class="mono">PiRpcTransport.swift:185-192<span class="sub">注释</span></td><td>改两处：① "绕过审批桥"的名单去掉 <code>codemode</code>（只留 <code>tool-search</code> / <code>mcp</code>）② 原文"唯一主动开的内置扩展"要改 —— 现在多的是<b>自建</b>扩展（不是内置），且只在这一层挂</td></tr>
+<tr><td class="mono">PiRpcTransport.swift<span class="sub">新增 ensureCodemodeExtensionFile()</span></td><td>与既有的 <code>ensureExtensionFile()</code> 同款（内容不同才写）：把上面那个三行托管扩展落到 <code>~/.mangox/extensions/mangox-codemode.ts</code>。<b>于是本版完全不碰 <code>ModelMaterializer</code></b></td></tr>
+<tr><td class="mono">ChatStore.swift:784-800<span class="sub">读写</span></td><td>改用 <code>saveSettingText</code> / <code>loadSettingText</code> 存 <code>rawValue</code>；读时 <b>① <code>AgentMode(rawValue:)</code> → ② 能解析成 Int 则按冻结旧表反解 → ③ 都不行回落 <code>.standard</code></b></td></tr>
+<tr><td class="mono">三处选择器<b>不是同一套控件</b><span class="sub">ChatComposer.swift:257-268<br>ScheduledView.swift:662-673<br>SparseAgentEditor.swift:300-308</span></td><td>⚠️ <b>只有 composer 是自绘的</b>：<br>① <b>composer</b> = 自绘 <code>popover</code>（宽 320；行 = 标题 + <code>subtitle</code> + 选中勾）⇒ 分割线可控，还能挂一行小注；<br>② <b>另两处</b> = <code>CodexPillMenu</code>，内部是<b>原生 SwiftUI <code>Menu</code></b>（<code>CodexControls.swift:58-82</code>）⇒ 只装得 <code>Button</code>/<code>Divider</code>，<b>富 label 会被剥成纯文本</b>（composer 的注释 <code>:258</code> 已实测过这个机制）⇒ 插 <code>Divider()</code> <b>合法</b>，但样式由 AppKit 定 ⇒ <b>"明显"与否不由我们决定</b>。<br>⇒ <b>已拍板：三处统一</b> —— 菜单内容抽成共用件（<code>AgentModeMenu</code> / <code>AgentModePicker</code>，落在 <code>CodexControls.swift</code>），<b>按钮外观仍由调用方给</b>（三处风格本就不同）。<br>⇒ <b>理由不是"分割线"</b>：codemode 的代价说明只住在 <code>subtitle</code> 里，而原生 Menu 会把它剥成一个英文单词</td></tr>
+<tr><td class="mono">smokeMain.swift:1331-1339<span class="sub">T23</span></td><td>四档参数矩阵各钉一条；<b>换掉</b> <code>full.storageIndex == 2</code> 这条（它是"位置即存储键"的化石）⇒ 换成三条迁移断言（门 8）</td></tr>
+<tr><td class="mono">SessionConfig.swift:14<span class="sub">注释</span></td><td><code>AgentMode.rawValue (minimal / standard / full)</code> → 补上 <code>codemode</code></td></tr>
+</tbody>
+</table></div>
+<div class="call">
+  <div class="lbl">为什么旧顺序表要"冻结"</div>
+  <p><code>["minimal","standard","full"]</code> 是<b>历史编码</b>，不是当前档位表。它一旦跟着 <code>allCases</code> 走，就等于把 bug 原样搬一遍 —— 必须写成一个<b>不再随枚举演进的常量</b>，并加注释说明它为什么不能动。</p>
+</div>
+
+<h3>代价（必须先认下来）</h3>
+<ul class="tight">
+  <li><b>prompt 比"塞进 full"的方案还贵 2185 字符</b>（C 9690 → D 11875），相对基线共 <b>+4439</b>。而且它<b>不进</b> P11 的注入预算 ⇒ MangoX 的载荷表<b>看不到这笔</b>。</li>
+  <li><b>同一特性在两档有两种写法</b>（迷你 allowlist / codemode modifier）⇒ 必须各钉独立断言（<code>getToolListError</code> 不允许混用，这既是保护也是约束）。</li>
+  <li><b>本版是第一个碰"档位存储表示"的版本</b> —— 它顺带把一条潜伏的实现缝（位置即存储键）挖出来了，修它属于本版范围。</li>
+  <li><b>档位选择器从 3 项变 4 项 + 一条分割线</b>，出现在三处；三处都要改 —— 而且<b>三处不是同一套控件</b>（只有 composer 是自绘 popover，另两处是原生 <code>Menu</code>，富版式会被剥掉）⇒ 见 §04 待拍板。</li>
+  <li><b>唯一的实现依赖变成了"上游的包根导出"</b>：<code>createCodemodeExtension</code> 一旦从 <code>exports["."]</code> 消失，扩展加载就失败 ⇒ <code>mode</code> 回落 <code>on</code>。比上一版依赖的"写进 settings 且真被读到"窄得多，但不是零（R4）。</li>
+</ul>
+
+
+<h2><span class="n">04</span>待办与跟进<span class="en">TODO</span></h2>
+<p class="lead">状态只有三种：<span class="chip c-mute">未做</span> <span class="chip c-info">进行中</span> <span class="chip c-ok">已实测</span>。"应该没问题"不算状态。</p>
+
+<h3>前置门（不过就不做）</h3>
+<div class="todos">
+  <div class="todo blocked"><div class="tn">1</div><div class="tbody">
+    <div class="tt">真进程验"内层 <code>tools.bash</code> 真弹出一张卡" <span class="chip c-warn">未做</span></div>
+    <div class="td">现有只有<b>源码</b>证据。判据就是 <b>"真弹出一张卡"，读注释不算</b>。<b>做法</b>：真模型 → 脚本里跑敏感 <code>bash</code> → 看卡是否出现；再选 Deny，看那次调用是否 reject、其余是否照常（<code>Promise.allSettled</code>）。<br>⚠️ <b><code>mode=only</code> 让这条从"要验"升级为"不验就是裸奔"</b>：模型看不见 <code>bash</code> 的声明，用户也就<b>没有别的提示</b>说"这个档会动你的文件"。</div>
+  </div></div>
+  <div class="todo blocked"><div class="tn">2</div><div class="tbody">
+    <div class="tt"><code>timeout_ms</code> 必须给默认值 <span class="chip c-warn">未做</span></div>
+    <div class="td">pi 侧<b>默认不设 = 无期限</b> ⇒ 对 <b>P10 无人值守</b>是真实风险（卡住的脚本占住整个回合）。<b>做法</b>：把默认写进注入给模型的指引文案，或做成"codemode 层的默认选项行"。⚠️ 这是<b>产品决策</b>，不是实现细节。<br>（注：本版 full <b>不含</b> codemode ⇒ 邮箱哨兵不再自动踩这个坑；但显式选了 codemode 层的定时任务仍会。）</div>
+  </div></div>
+  <div class="todo blocked"><div class="tn">3</div><div class="tbody">
+    <div class="tt"><code>models.*</code> 的账要单算 <span class="chip c-warn">未做</span></div>
+    <div class="td">能跑分类器与图像，<b>花外部 API 的钱且不经审批</b>。先确认 <b>MangoX 的成本显示能不能收到这部分</b>；再在"禁用 / UI 明说 / 接受"里选一条。</div>
+  </div></div>
+  <div class="todo blocked"><div class="tn">4</div><div class="tbody">
+    <div class="tt">断言"MCP 真的关着"，且判据要跟着 <code>only</code> 升级 <span class="chip c-warn">未做</span></div>
+    <div class="td"><code>agent-session.js:147-151</code>：allowlist 为空或含 <code>mcp__*</code> 时才过滤 MCP 工具，<b>否则 "keeps MCP tools registered for codemode and tool_search"</b>。本版要用的 modifier 模式恰好让 <code>allowedToolNames = undefined</code> ⇒ <b>MCP 工具会被保留给 codemode</b>。今天无风险只因 <code>-ne</code> 让 mcp 扩展压根不加载 —— <b>那是推论不是断言</b>。<br>⚠️ <b><code>only</code> 把这个风险放大了</b>：<code>on</code> 形态下 MCP 工具只是"可调但没列"；<code>only</code> 形态下 <code>listed = callable</code> ⇒ 它们会<b>直接写进 codemode 的描述</b>，模型<b>看得见</b>。<br><b>判据：codemode 描述里不含 <code>mcp__</code>，且 <code>ALL_TOOLS</code> 里不含 <code>mcp__*</code></b>（不能只断言"模型不能直调"——§02 已确认<b>可调面 = 注册面</b>）。</div>
+  </div></div>
+  <div class="todo blocked"><div class="tn">5</div><div class="tbody">
+    <div class="tt">自建 codemode 扩展落地，并<b>读回验证</b>它真的生效 <span class="chip c-warn">未做</span></div>
+    <div class="td">两件都要做：① 扩展文件由 <code>ensureCodemodeExtensionFile()</code> 落盘（内容不同才写）② <b>验证生效</b>。<br><b>判据（可机检）</b>：codemode 层的 <code>sections.tools</code> <b>只有 1 条</b>（<code>codemode</code>）—— 实测证明这个信号干净可读（A/B/C/D/E 五组 + 自建扩展三组，区分度明确）。<br>⚠️ <b>不要用 <code>toolsAdded</code> 当判据</b>：它在 <code>only</code> 下仍是 5 条（摘除发生在请求层）⇒ 会假红。<br>⚠️ 降级路径：扩展加载失败 ⇒ <code>mode</code> 回落 <code>on</code>。但这次<b>失败会进 stderr</b>（settings 路是无声的），由 P12.1a 的归因通道接住。</div>
+  </div></div>
+  <div class="todo blocked"><div class="tn">6</div><div class="tbody">
+    <div class="tt">内层调用的工具卡展示：定"接 / 不接 + 理由" <span class="chip c-warn">未做</span></div>
+    <div class="td">一次 codemode = 一个 <code>tool_execution_start/end</code>，内层调用带 <code>parentToolCallId</code>，现有卡片按扁平事件渲染。要定清楚"各自冒一张卡 / 全被吞 / 折叠进父卡"，并按 P12 的做法给回归哨。<br>⚠️ <b>形状比上一版更紧</b>：<code>only</code> 下模型只声明 1 个工具，用户看到的卡会<b>明显变少</b> ⇒ 不接的话"这次到底动了什么"完全不可见。</div>
+  </div></div>
+  <div class="todo blocked"><div class="tn">7</div><div class="tbody">
+    <div class="tt">审批卡的归属：内层 <code>bash</code> 的卡弹在哪 <span class="chip c-warn">未做</span></div>
+    <div class="td"><code>autoRespondExtensionUI</code> 按 <code>ctx.hasUI</code> 走，事件带 <code>parentToolCallId</code> 但<b>当前实现不看它</b>。要么让它带上来源标记，要么明确"不区分"。<br>⚠️ 与门 1 是<b>同一条链的两端</b>：门 1 验"会不会弹"，门 7 定"弹出来归属于谁"。</div>
+  </div></div>
+  <div class="todo blocked"><div class="tn">8</div><div class="tbody">
+    <div class="tt">档位存储迁移断言：老值 <code>"2"</code> 必须仍解成 <b>full</b> <span class="chip c-warn">未做</span></div>
+    <div class="td"><b>这是本版唯一碰存储的地方，也是唯一可能静默改变老用户行为的地方。</b>判据（冒烟可机检）：把 <code>agent_mode.&lt;pid&gt;</code> 写成老的序号 <code>"2"</code> ⇒ 读回必须是 <code>.full</code>（<b>不是 <code>.standard</code>、更不是 <code>.codemode</code></b>）；<code>"0"</code> → <code>.minimal</code>；<code>"full"</code> → <code>.full</code>；<code>"zzz"</code> / 越界 → 回落 <code>.standard</code>。<br><b>造反例</b>：把冻结的旧顺序表改成跟着 <code>allCases</code> 走，这条必须变红。</div>
+  </div></div>
+</div>
+
+<h3>待拍板（不是门，但直接决定改动面）</h3>
+<div class="call warn">
+  <div class="lbl">① 三处选择器要不要统一成自绘 popover</div>
+  <p>真身是 composer 那个 <b>自绘 popover</b>（宽 320、行 = 标题 + <code>subtitle</code> + 勾）；另两处走 <code>CodexPillMenu</code> = <b>原生 <code>Menu</code></b>，只能显示一个名字 + 一条样式不由我们定的 <code>Divider()</code>。<br>
+  <b>不统一</b>：成本 0，但<b>在另两处选 codemode 看不到任何代价说明</b>（它是唯一"选了会改变调用范式"的档），而且分割线的"明显"程度由 AppKit 决定。<br>
+  <b>统一</b>：把 <code>modeMenu</code> 那套行版式抽成一个复用件，替换两处 <code>CodexPillMenu</code>。成本 = 一个新 View + 两处替换 + 视图层冒烟编译。<br>
+  ⇒ <b>我的立场：统一。</b>理由：分割线只是这条账的表面 —— 真正的问题是 <b>codemode 的说明只住在 <code>subtitle</code> 里</b>，而另两处把它退化成一个英文单词。</p>
+</div>
+<div class="call warn">
+  <div class="lbl">② 分割线要不要带小注 · codemode 行要不要"新"角标</div>
+  <p><b>小注（如"老档位 · 行为不变"）：要。</b>一条裸线在 4 行里容易被读成"两组的边界"，而不是"两个维度的边界"—— 这句话正是本版要传达的东西。<br>
+  <b>"新"角标：要，但只留一两个版本</b>（它就是一次性的引路牌）。</p>
+</div>
+<div class="call warn">
+  <div class="lbl">③ <code>codemode</code> 的 <code>subtitle</code> 定稿</div>
+  <p>它走 <code>L()</code> ⇒ 进词表、要译文、受本地化三道门管。草案（可改）：<br>
+  <code>模型只保留 codemode 一个工具，其余全部经脚本内层调用 — 换一种调用范式，且会占用更多上下文。</code></p>
+</div>
+
+<h3>验收项</h3>
+<div class="tbl"><table>
+<thead><tr><th>#</th><th>验收项</th><th>怎么做</th><th>期望</th><th>状态</th></tr></thead>
+<tbody>
+<tr><td class="mono">T1</td><td><code>-e builtin:codemode</code> 不可省</td><td class="mono">tool_surface_probe.py</td><td>C 与基线逐字节相同；D 出现声明本体</td><td><span class="chip c-ok">已实测</span></td></tr>
+<tr><td class="mono">T2</td><td><code>--tools</code> 也不可省</td><td>同上（E 组）</td><td>只加 <code>-e</code> 不激活 ⇒ 声明仍 4 条</td><td><span class="chip c-ok">已实测</span></td></tr>
+<tr><td class="mono">T3</td><td><b><code>mode=only</code> 的形态</b></td><td>探针 + 读 <code>sections.tools</code></td><td>codemode 层只有 <b>1 条</b>声明</td><td><span class="chip c-ok">已实测</span></td></tr>
+<tr><td class="mono">T4</td><td><b><code>only</code> 不误伤老档</b></td><td>探针，比对五段 <code>sections</code></td><td>与未写 <code>mode</code> 时<b>逐字符相同</b></td><td><span class="chip c-ok">已实测</span></td></tr>
+<tr><td class="mono">T5</td><td><b>四档</b> <code>--tools</code> / <code>-e</code> 网格</td><td>冒烟断言纯函数输出</td><td>codemode = <code>+codemode</code> + 两个 <code>-e</code>；迷你 = 四件套；常规 / 全工具 = <code>nil</code> + 一个 <code>-e</code></td><td><span class="chip c-mute">未做</span></td></tr>
+<tr><td class="mono">T6</td><td><b>老库读回不漂移</b></td><td>冒烟写老序号再读</td><td><code>"0/1/2"</code> → <code>minimal/standard/full</code>；rawValue 亦可；乱码 → <code>.standard</code></td><td><span class="chip c-warn">= 门 8</span></td></tr>
+<tr><td class="mono">T7</td><td><b>四档显示顺序 + 分割线</b></td><td>断言 <code>allCases</code> + 三处视图编译</td><td><code>[codemode, minimal, standard, full]</code></td><td><span class="chip c-mute">未做</span></td></tr>
+<tr><td class="mono">T8</td><td>内层 <code>tools.bash</code> 真弹审批卡</td><td>真模型 → 脚本内跑敏感 bash</td><td><b>真弹出一张卡</b>；Deny ⇒ 那次 reject、其余照常</td><td><span class="chip c-warn">= 门 1</span></td></tr>
+<tr><td class="mono">T9</td><td>脚本不设 <code>timeout_ms</code> 的后果</td><td>脚本里 <code>await new Promise(()=&gt;{})</code></td><td>先确认行为，再决定默认值</td><td><span class="chip c-warn">= 门 2</span></td></tr>
+<tr><td class="mono">T10</td><td><code>models.*</code> 是否进成本</td><td>真模型 → 一次 <code>classify</code></td><td>用量出现在会话成本里</td><td><span class="chip c-warn">= 门 3</span></td></tr>
+<tr><td class="mono">T11</td><td>MCP 确实关着</td><td>断言 + 若有 <code>mcp.json</code> 则实测</td><td>描述与 <code>ALL_TOOLS</code> 里都不含 <code>mcp__</code></td><td><span class="chip c-warn">= 门 4</span></td></tr>
+<tr><td class="mono">T12</td><td><code>mode</code> 经自建扩展真生效</td><td>读 <code>sections.tools</code></td><td>声明面 = 1 条（<code>codemode</code>）</td><td><span class="chip c-warn">= 门 5</span></td></tr>
+<tr><td class="mono">T13</td><td>门禁</td><td>本批动 spawn 参数 + 落库读写 + 新增 <code>L()</code> 文案 ⇒ 双门禁 <b>+ 本地化三道</b></td><td>smoke ALL PASS / <code>xcodebuild</code> 0 warning / 词表与接线 0 差</td><td><span class="chip c-mute">未做</span></td></tr>
+</tbody>
+</table></div>
+
+<h3>依赖与阻塞</h3>
+<ul class="tight">
+  <li><b>门 1 / 2 / 3 需要一个真模型跑一轮</b> —— 这是本版最大的阻塞点，也是唯一能推翻"安全上可开"结论的东西。</li>
+  <li><b>门 5 是本版新增的硬前置</b>：整个 codemode 层只有一个实现途径，它一旦失效形态就退化 —— 而且<b>"扩展挂了"与"扩展生效了"在 spawn 参数里长得一模一样</b>（差别只在 pi 侧读没读它）⇒ 判据只能落在 pi 的读回面（<code>sections.tools</code>），不能落在我们写出去的东西上。</li>
+  <li><b>无外部依赖</b>：不依赖 MCP、不依赖 tool-search、不依赖新服务。</li>
+</ul>
+
+
+<h2><span class="n">05</span>风险与边界<span class="en">RISK &amp; BOUNDARY</span></h2>
+
+<h3>风险</h3>
+<div class="tbl"><table>
+<thead><tr><th>#</th><th>风险</th><th>现状</th><th>结法</th></tr></thead>
+<tbody>
+<tr><td class="mono">R1</td><td><b>档位静默漂移</b>（老用户 <code>full</code> 变 <code>standard</code>）</td><td><b>只要排到前面就一定会发生</b>，不改存储表示就躲不掉。零红灯</td><td>门 8：存储改 <code>rawValue</code> + 冻结旧顺序表 + 迁移断言（含造反例）</td></tr>
+<tr><td class="mono">R2</td><td><b>"写 <code>settings.json</code>"这条实现途径已整条不采用</b></td><td>它有<b>三个</b>零红灯的静默退化口：<code>PI_CODING_AGENT_DIR</code> 的注入有前置条件（<code>modelCount &gt; 0</code>）+ 目录锁失败即整文件读不到 + 指纹不判存在性</td><td>改走自建扩展 + <code>options.mode</code> ⇒ 三条全部不适用；生效判据仍读 <code>sections.tools</code>（门 5）</td></tr>
+<tr><td class="mono">R3</td><td><b>物化壳的指纹是内容指纹，不是存在性判据</b>（既存缝）</td><td><code>models.json</code> / <code>auth.json</code> 被外部删掉或从旧版升级上来时指纹不变 ⇒ <b>永远不补写</b></td><td><b>本版不动它</b> —— 换路之后 P13 已经不碰这个壳了 ⇒ 单独立账，不夹带</td></tr>
+<tr><td class="mono">R4</td><td>脚本失败<b>不回滚</b></td><td>官方明写 "calls made before a failure are not undone" —— 是<b>特性不是缺陷</b></td><td>在 UI 上说清：工具卡标"来自脚本"，让用户知道这张卡之前可能已经动过别的东西</td></tr>
+<tr><td class="mono">R5</td><td>脚本里 <code>bash</code> 能拿 <b>1 MiB</b> 输出</td><td>绕过模型直调的 2000 行 / 50KB 截断 ⇒ 对 P10 无人值守是<b>新的数据面</b></td><td>在注入的指引里限制"不要把大输出直接 <code>return</code>"，要求先在沙箱里 <code>filter</code>／<code>map</code></td></tr>
+<tr><td class="mono">R6</td><td><code>timeout_ms</code> 无默认</td><td>无期限</td><td>门 2：给默认值（产品决策）</td></tr>
+<tr><td class="mono">R7</td><td><code>models.*</code> 不经审批的花费</td><td>计会话成本但不经审批</td><td>门 3：先把账算清，再选"禁用 / 明说 / 接受"</td></tr>
+<tr><td class="mono">R8</td><td><code>store()</code> 往会话写 custom entry</td><td>已核兼容，但会话文件会变大</td><td>观测即可；单值 ≤262144、总和 ≤1048576 是上游硬上限</td></tr>
+<tr><td class="mono">R9</td><td><b>业务扩展工具本就不经审批</b>，codemode 让它们能被脚本<b>连起来一次调</b></td><td>审批桥是名字白名单（<code>SENSITIVE = bash/write/edit</code>）⇒ 扩展工具名命不中 ⇒ 静默执行。<b>不是 codemode 新增的洞</b>（今天直接调也一样），但形态变了：N 张卡变成 1 张</td><td>与门 6 一起定：至少要能看出"这张 codemode 卡里调过扩展工具"，否则连"发生了"都看不见</td></tr>
+<tr><td class="mono">R10</td><td><b>行为指引"搬家"</b>（新）</td><td><code>only</code> 把 4 条直调工具的 declaration 摘掉 ⇒ 它们的 <b>8 条 guideline 从 <code>&lt;rules&gt;</code> 段（11 → 3 条）搬进 codemode 的描述</b>。实测确认<b>没丢</b>，但位置从"全局规则"变成"单工具描述里的一节"</td><td>门 1 那轮真模型跑一轮，观察模型是否照旧遵守这些规则；若退化，就把关键几条用 <code>--append-system-prompt</code> 补回规则段（<b>不预设，先看</b>）</td></tr>
+<tr><td class="mono">R11</td><td><b>上游改默认值</b></td><td><code>defaultActive: false</code> 与 <code>mode</code> 默认 <code>on</code> 都是上游事实，我们<b>没有写下来</b></td><td>门 5：显式钉住；并沿用 P12 的"引擎升级时复核基线"纪律</td></tr>
+<tr><td class="mono">R12</td><td><b>codemode 的代价说明只在 composer 看得见</b>（新）</td><td>另两处选择器是原生 <code>Menu</code>：<b>只有名字，没有 <code>subtitle</code>、没有勾、没有底色</b> ⇒ 在定时任务 / Sparse 编辑器里选 codemode，用户既看不到"模型只能经脚本调工具"，也看不到"会多占上下文"，<b>切换前零提示</b></td><td>§04 待拍板 ①：<b>建议统一成自绘 popover</b>。若不统一，至少把那两处的 <code>Button</code> 文案从 <code>displayName</code> 换成带上说明的纯文本（能做的上限就在这儿）</td></tr>
+</tbody>
+</table></div>
+
+<h3>四档覆盖不到的缺口（必须承认）</h3>
+<div class="call warn">
+  <div class="lbl">缺口 · 没有"codemode <b>+</b> 业务扩展"这一格</div>
+  <p>两条轴本可以组合出更多种，本方案覆盖的是 <b>{四件套 / 内置全量} × {不挂扩展 / 挂扩展} + codemode层</b>。<br>
+  ⚠️ <b>上一版的缺口（"业务扩展但不要 codemode"）已被本方案修掉</b>：full 回到纯老档 ⇒ <b>邮箱哨兵（默认 <code>.full</code>）要的那一格正好就是 full</b>，它<b>不会</b>再被顺带塞进 codemode。<br>
+  缺口因此<b>翻了面</b>：现在缺的是 <b>"codemode 且挂业务扩展"</b>。今天<b>没有消费者</b>要这一格（哨兵要的是前者）。<br>
+  <b>触发条件</b>：出现<b>第二个</b>需要"脚本编排 + 业务扩展"的消费者时，层级列表就该改成两个正交开关（扩展 × codemode），而不是继续加层。<br>
+  ⚠️ 届时 <code>mode</code> 要能<b>按层取值</b>（今天只有一层挂 codemode，所以写死 <code>only</code> 够用）。自建扩展路已经天然留好了这个口子 —— 换个 <code>options.mode</code> 就是新层，机制不用动。</p>
+</div>
+<div class="call warn">
+  <div class="lbl">缺口 · 层级的"代价"无法在 UI 上表达</div>
+  <p>codemode 层比常规档多花 <b>+4439 字符</b> system prompt（其中 2185 是"只留 codemode"这个形态本身的开销），四档的 <code>subtitle</code> 只是文字说明，用户看不到这条价。<b>本版处置</b>：至少在 <code>subtitle</code> 里点一句"会占用更多上下文"，不做量化 UI。</p>
+</div>
+
+<h3>上游暴露面（我们的能力面依赖了哪些上游行为）</h3>
+<ul class="tight">
+  <li><code>codemode.mode</code> 的默认值 <b>on</b>，与 <code>only</code> 的语义（"<b>只摘声明</b>、不动 <code>callable</code>"）—— 改了它，我们的形态就直接消失。</li>
+  <li><code>codemode</code> 的 <code>exposure: "model-only"</code> —— 它既不在 <code>callable</code>（所以脚本不能套娃），也不受 <code>hiddenDeclarations</code> 影响（所以 <code>only</code> 下它自己还在）。这两个性质<b>同时</b>撑着本层的形态。</li>
+  <li><code>codemode</code> 默认 <code>defaultActive: false</code> —— 改了它，codemode 会变成默认激活，"两层缺一不可"的断言要重判。</li>
+  <li>包根导出 <code>createCodemodeExtension</code> 的<b>存在性</b>，以及 <code>options.mode ?? readMode(pi)</code> 这个<b>优先级顺序</b> —— 本版唯一实现途径整个架在它上面。</li>
+  <li><code>builtin:</code> 前缀与 <code>-ne</code> / <code>--tools</code> 的合并语义 —— <code>--no-mcp</code> 就是靠"merge 之后按 <code>builtin:</code> 过滤"实现的，这套语义一改，我们的 spawn 参数构造规则要重判。</li>
+  <li><code>_allowlistFiltersMcp</code> 的语义（<code>agent-session.js:147-151</code>）—— 它的默认分支是"<b>保留</b> MCP 工具给 codemode"，即"不设防"是上游的缺省。</li>
+  <li>codemode 的描述里带一条<b>指向 pi 安装目录的绝对路径</b>（<code>…/docs/codemode.md</code>）⇒ 模型会被引导去读 pi 自己的文档；该路径随安装位置变化。<b>本版不处理</b>（上游文案，且读文档本身无害）。</li>
+</ul>
+
+<h3>与其它版本的边界</h3>
+<ul class="tight">
+  <li><b>与 P3（引擎对接）</b>：本版改的是 <b>spawn 参数的构造规则</b>（同 P12.1b 的位置）、<b>一处档位存储表示</b>、以及<b>物化产物多一个文件</b>；<b>不动事件投影</b>。</li>
+  <li><b>与 P7（模式档）</b>：这是模式档的<b>第一次"分层"</b> —— 三档之上加一层正交维度，并新增"内置扩展挂载"这条轴。<b>枚举新增 <code>rawValue = "codemode"</code></b>（只新增值，不改变已有值的含义）；⚠️ <b>但存储表示要改</b>（<code>storageIndex</code> → <code>rawValue</code> + 冻结旧表）。</li>
+  <li><b>与 P10（无人值守）</b>：R6 / R7 都落在 P10 场景 ⇒ 门 2、3 本质是 P10 的延伸。<b>好消息</b>：哨兵默认 <code>.full</code> 不再被牵连（不含 codemode）。</li>
+  <li><b>与 P11（注入与记忆）</b>：codemode 的声明<b>不进</b> MangoX 的注入预算 ⇒ 载荷表会低估真实 prompt。要么在载荷表里说明，要么接受这个偏差（<b>本版选说明</b>）。</li>
+  <li><b>与 P12（引擎基线）</b>：P12 §七"不接 codemode"的理由已更正并迁到本文件；<b>P12 不再持有 codemode 的任何结论</b>。</li>
+</ul>
+
+<div class="foot">docs/P13-functional-design.html · 单一来源 · 样式源 docs/assets/design-doc.css · 复现 scripts/diag/tool_surface_probe.py · 写法约定 docs/must_read.txt</div>
+
+</div>
+</body>
+</html>

@@ -7,7 +7,7 @@
    **本文件由 scripts/l10n/gen_strings.py --write 生成, 别手改** ——
    译文改 scripts/l10n/en_values.py 的 VALUES, 再跑 --write。
 
-   条数: 602
+   条数: 614
 */
 
 " [附件: %@]" = " [Attachment: %@]";
@@ -16,6 +16,7 @@
 "%lld 个人格文件 frontmatter 破损, 未注入且已禁止新建 key: %@" = "%lld persona files have broken frontmatter — not injected, and creating keys is blocked: %@";
 "%lld 个人格文件是「按需」的, 模型不知道它们存在: %@" = "%lld persona files are “on demand” — the model does not know they exist: %@";
 "%lld 个人格文件读不出来 (权限或编码), 内容未进 prompt: %@" = "%lld persona files cannot be read (permissions or encoding) — their content is not in the prompt: %@";
+"%lld 个模型因缺元数据未列出: %@" = "%lld models not listed — no metadata available: %@";
 "%lld 字" = "%lld chars";
 "%lld 条与 persona pack 的 key 冲突, 已跳过注入: %@" = "%lld items collide with a persona pack key and were skipped: %@";
 "%lld 条常驻条目被静默丢弃: %@" = "%lld always-on items were silently dropped: %@";
@@ -206,6 +207,7 @@
 "删除项目「%@」？" = "Delete the project “%@”?";
 "到点投递 prompt (cron 驱动)" = "Delivers a prompt when the time comes (cron-driven)";
 "到点投递给 Agent 的 prompt…" = "The prompt delivered to the agent when the time comes…";
+"刷新中…" = "Refreshing…";
 "刷新文件树与 git 状态" = "Refresh the file tree and git status";
 "前往源会话" = "Go to the source session";
 "功能完整的编码 Agent, 内置工具全量 (读/写/Shell/检索), 不挂业务扩展 — 日常默认档。" = "A full-featured coding agent with every built-in tool (read/write/shell/search) and no business extensions — the everyday default.";
@@ -297,6 +299,7 @@
 "已拒绝" = "Denied";
 "已挂载的知识库 %lld 个没进索引: %@" = "%lld mounted knowledge bases did not make it into the index: %@";
 "已暂停" = "Paused";
+"已更新: %lld 家 / %lld 条" = "Updated: %lld providers / %lld models";
 "已绑定" = "Bound";
 "已触发 · %@" = "Triggered · %@";
 "已设置 (留空不修改)" = "Already set (leave blank to keep)";
@@ -381,6 +384,7 @@
 "文件将从托管区移除, 此操作不可撤销。" = "The file will be removed from the managed area; this cannot be undone.";
 "文件类型构成 (共 %lld 个已识别文件)" = "File types (out of %lld recognized files)";
 "文件还在磁盘上 — 用文本编辑器另存为 UTF-8 即可" = "The files are still on disk — re-save them as UTF-8 in a text editor";
+"新" = "New";
 "新会话" = "New session";
 "新会话-%@" = "New session-%@";
 "新建 (Cron 定时 · Watch 条件值守 · Inbox 来信驱动)" = "New (Cron schedule · Watch condition · Inbox mail-driven)";
@@ -415,6 +419,8 @@
 "暂无拒收记录。" = "No rejections recorded.";
 "暂无调用明细" = "No call details yet";
 "更新于 %@" = "Updated %@";
+"更新失败, 保留原目录" = "Update failed; kept the existing catalog";
+"更新模型目录" = "Refresh model catalog";
 "更早" = "Earlier";
 "最多 %lld 张" = "Up to %lld";
 "最多留 200 条" = "Keeps the latest 200";
@@ -438,6 +444,7 @@
 "未验证 — 拉取失败, 使用预设清单兜底" = "Not verified — fetch failed, using the built-in preset list";
 "本会话改动" = "Changes in this session";
 "本周" = "This week";
+"本地" = "Local";
 "本次注入 (只读)" = "This turn's injection (read-only)";
 "条件触发后要执行的动作…" = "The action to run once the condition holds…";
 "来信驱动的无人值守 agent: 按间隔收信, 过鉴权四道闸后起会话执行" = "A mail-driven unattended agent: checks the inbox on an interval and starts a session once the mail passes the four gates";
@@ -447,6 +454,7 @@
 "标题（可留空）" = "Title (optional)";
 "模型" = "Model";
 "模型与思考强度 (选中即期望, 下一回合生效)" = "Model and reasoning effort (a preference; applies to the next turn)";
+"模型只保留 codemode 一个工具，其余全部经脚本内层调用 — 换一种调用范式，且会占用更多上下文。" = "Keeps codemode as the only tool the model sees; everything else is called from inside the script. A different calling paradigm, and it uses more context.";
 "模型由 MangoX 自管, spawn 时物化到 ~/.mangox/pi-config 供 pi 消费 (不碰 ~/.pi/agent)" = "MangoX owns the model list; it is materialized into ~/.mangox/pi-config at spawn time for pi to consume (your ~/.pi/agent is untouched)";
 "模式" = "Mode";
 "模式档位: 决定 agent 可用的工具与扩展 (下回合生效)" = "Mode: decides which tools and extensions the agent gets (applies next turn)";
@@ -487,6 +495,9 @@
 "由此侧问 (含 Turn %lld 及之前)" = "Side chat from here (up to and including turn %lld)";
 "白名单 %lld 条" = "%lld on the allowlist";
 "白名单至少一个发件人地址" = "Add at least one sender address to the allowlist";
+"目录: %lld 家 / %lld 条" = "Catalog: %lld providers / %lld models";
+"目录: %lld 家 / %lld 条, 已过期" = "Catalog: %lld providers / %lld models, stale";
+"目录为空, 点「更新模型目录」拉取" = "Catalog is empty — click Refresh model catalog";
 "目标会话已不存在, 捕获未发送" = "The target session no longer exists; capture not sent";
 "直接提问，模型已了解源会话上下文" = "Ask directly — the model already knows the source session's context";
 "知识" = "Knowledge";
@@ -516,6 +527,7 @@
 "网页版邮箱「设置 → IMAP/SMTP」开启服务, 手机验证后得到授权码 —— 用它当密码, 不是登录密码" = "In the web mailbox, open Settings → IMAP/SMTP, enable the service, verify by phone and copy the app password — use that as the password, not your login password";
 "网页版邮箱「设置 → 客户端设置」开启 IMAP/SMTP, 生成客户端专用密码 —— 用它当密码, 不是登录密码" = "In the web mailbox, open Settings → Client settings, enable IMAP/SMTP and generate a client-specific password — use that as the password, not your login password";
 "网页版邮箱「设置 → 账户」开启 IMAP/SMTP 服务, 短信验证后得到授权码 —— 用它当密码, 不是登录密码" = "In the web mailbox, open Settings → Account, enable IMAP/SMTP and verify by SMS to get the app password — use that as the password, not your login password";
+"老档位 · 行为不变" = "Older modes · unchanged";
 "自定义" = "Custom";
 "自定义 provider: 填 Base URL, 可选测试" = "Custom provider: fill in the base URL, testing is optional";
 "自定义…" = "Custom…";

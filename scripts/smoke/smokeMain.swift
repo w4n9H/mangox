@@ -747,6 +747,25 @@ struct SmokeMain {
             // delegate 按名归位 (pi 0.85.1 无内置生产方, 但扩展可用)
             pi.handleRPCLine(#"{"type":"tool_execution_start","toolCallId":"d1","toolName":"delegate","args":{}}"#)
             check(lastTool(sink).flatMap { $0 }?.kind == .delegate, "T-TOOL delegate 按名归位 (不落 other)")
+            // P13 codemode: 按名归位 + 整段脚本必须占 title。
+            // 落 .other 的症状 = 卡头 `OTHER · codemode · code=…` (boss 实测报「codemode 显示不对」);
+            // 而就算 kind 对了, 走通用式 (`title = path ?? cmd ?? name`) 也会退成 name ⇒ 脚本消失。
+            pi.handleRPCLine(#"{"type":"tool_execution_start","toolCallId":"cm1","toolName":"codemode","args":{"code":"const r = await tools.bash({ command: 'ls -la' })"}}"#)
+            let cm = lastTool(sink).flatMap { $0 }
+            check(cm?.kind == .codemode, "T-TOOL codemode 按名归位 (不落 other ⇒ 徽章不再显示 OTHER)")
+            check(cm?.kind.label == "codemode", "T-TOOL codemode 徽章 = codemode (原样工具名)")
+            // 2026-10-09 翻案: 标签从 `rawValue.uppercased()` 改成 `rawValue` (逐字对齐 pi 上报的工具名,
+            // 可照着 grep 日志)。⚠️ 这里用**全量**不变式而不是逐个列举 —— 新加的 case 自动被覆盖,
+            // 谁把 uppercased() 加回来这条就红。
+            check(ToolKind.allCases.allSatisfy { $0.label == $0.rawValue },
+                  "T-TOOL 标签恒等于原样 toolName (全部 \(ToolKind.allCases.count) 个 kind, 无一被 upper 化)")
+            check(ToolKind.allCases.allSatisfy { !$0.label.isEmpty },
+                  "T-TOOL 标签非空 (kindChip 不画空 chip)")
+            check(cm?.title == "const r = await tools.bash({ command: 'ls -la' })",
+                  "T-TOOL codemode 脚本占 title (走通用式会退成 name ⇒ 脚本凭空消失)")
+            check(cm?.command == nil, "T-TOOL codemode 不降级到 command 副列")
+            check(cm?.kind.defaultColor == ToolKind.bash.defaultColor,
+                  "T-TOOL codemode 与 bash 同族色 (都是「把活干出去」)")
             // 内置 8 个仍全部正确 (回归)
             for (name, kind) in [("read", ToolKind.read), ("bash", .bash), ("edit", .edit),
                                  ("write", .write), ("find", .find), ("grep", .grep), ("ls", .ls)] {
@@ -1278,12 +1297,68 @@ struct SmokeMain {
             let openaiJSON = Data("{\"data\":[{\"id\":\"a\"},{\"id\":\"b\"}]}".utf8)
             check(ModelCatalogFetcher.parseModelIds(openaiJSON) == ["a", "b"], "T22 OpenAI /models 解析")
             let ollamaJSON = Data("{\"models\":[{\"name\":\"l1\"},{\"id\":\"x\"}]}".utf8)
-            check(ModelCatalogFetcher.parseModelIds(ollamaJSON) == ["l1", "x"], "T22 Ollama tags 解析 (name 优先, id 兜底)")
+            check(ModelCatalogFetcher.parseModelIds(ollamaJSON) == ["l1", "x"],
+                  "T22 Ollama tags 解析 (name 优先, id 兜底; 预设已移除, 解析分支留给自定义端点)")
             check(ModelCatalogFetcher.parseModelIds(Data("not json".utf8)) == nil, "T22 垃圾输入返回 nil")
-            check(ProviderPresets.all.count == 8 && Set(ProviderPresets.all.map(\.id)).count == 8,
-                  "T22 预设库 8 家且 id 唯一")
-            check(ProviderPresets.preset(id: "deepseek")?.seedModels.isEmpty == false
-                  && ProviderPresets.preset(id: "ollama")?.needsKey == false, "T22 预设种子/Ollama 无 key")
+            check(ProviderPresets.all.count == 4 && Set(ProviderPresets.all.map(\.id)).count == 4,
+                  "T22 预设库 4 家且 id 唯一")
+            check(Set(ProviderPresets.all.map(\.id)) == ["deepseek", "kimi", "minimax", "zhipu"],
+                  "T22 预设库只剩 deepseek/kimi/minimax/GLM (P14 砍库)")
+            check(ProviderPresets.all.allSatisfy { !$0.seedModels.isEmpty },
+                  "T22 每家预设都有种子 (拉取失败兜底)")
+            check(ProviderPresets.preset(id: "openai") == nil
+                  && ProviderPresets.preset(id: "ollama") == nil
+                  && ProviderPresets.preset(id: "qwen") == nil
+                  && ProviderPresets.preset(id: "anthropic") == nil,
+                  "T22 已移除的 4 家预设确实查不到")
+
+            // P14: MiniMax-M3.1-Flash-Preview —— 把三条接线实测结论钉成断言
+            //   (① 窗口取官方文档真值 ② input 不含 video: pi schema 只认 text|image, 写了整条会被丢弃
+            //    ③ thinkingLevelMap 必须显式给: 缺 map 时 off 静默变服务端默认 max, xhigh/max 被夹成 high)
+            if let m31 = ProviderPresets.preset(id: "minimax")?.seedModels
+                .first(where: { $0.id == "MiniMax-M3.1-Flash-Preview" }) {
+                check(m31.reasoning && m31.contextWindow == 1_000_000 && m31.maxTokens == 512_000,
+                      "T22 M3.1 种子: reasoning + 官方 1M 窗口 + M3 家族 maxTokens")
+                check(m31.input == ["text", "image"],
+                      "T22 M3.1 input 不含 video (pi schema 只认 text|image)")
+                let mapObj = (try? JSONSerialization.jsonObject(
+                    with: Data((m31.thinkingLevelMap ?? "").utf8))) as? [String: Any]
+                check(mapObj != nil && mapObj?["off"] is NSNull && mapObj?["minimal"] is NSNull
+                      && mapObj?["low"] as? String == "low" && mapObj?["max"] as? String == "max"
+                      && mapObj?["xhigh"] as? String == "xhigh",
+                      "T22 M3.1 显式 thinkingLevelMap (off/minimal=null, xhigh/max 可透传)")
+            } else {
+                check(false, "T22 MiniMax-M3.1-Flash-Preview 种子缺失")
+            }
+
+            // P14(二): GLM / Kimi 种子换代 —— 旧种子 glm-4.6 (2025-09-30) / glm-4.5-air (2025-07-28)
+            // 已过时一年; kimi 的 kimi-k2-0905-preview / kimi-latest 在 models.dev 里**查无此模型**。
+            // 元数据一律取自 models.dev (2026-10-09 校对)。
+            if let glm = ProviderPresets.preset(id: "zhipu")?.seedModels,
+               let kimi = ProviderPresets.preset(id: "kimi")?.seedModels {
+                check(glm.map(\.id) == ["glm-5.3-flashx", "glm-5.3-flash"],
+                      "T22 GLM 种子已换代 (glm-5.3 系, 不再是 glm-4.6/4.5-air)")
+                check(kimi.map(\.id) == ["kimi-k3"], "T22 Kimi 种子已换代 (kimi-k3)")
+                check(glm.allSatisfy { $0.contextWindow == 1_000_000 && $0.maxTokens == 131_072 }
+                      && kimi.allSatisfy { $0.contextWindow == 1_048_576 && $0.maxTokens == 1_048_576 },
+                      "T22 新种子窗口/输出取 models.dev 真值")
+                check((glm + kimi).allSatisfy { $0.input == ["text", "image"] },
+                      "T22 新种子 input 不含 video/pdf (目录里有这俩, pi schema 只认 text|image)")
+                // 两家 reasoning_options 都是 effort [low,high,max] 且不可关 ⇒ off 必须显式剔除,
+                // 否则「缺键 = 默认支持」会把 off 放上滑轨, 而它发不出合法值。
+                for s in glm + kimi {
+                    let mapObj = (try? JSONSerialization.jsonObject(
+                        with: Data((s.thinkingLevelMap ?? "").utf8))) as? [String: Any]
+                    check(mapObj?["off"] is NSNull && mapObj?["minimal"] is NSNull
+                          && mapObj?["medium"] is NSNull && mapObj?["xhigh"] is NSNull
+                          && mapObj?["low"] as? String == "low"
+                          && mapObj?["high"] as? String == "high"
+                          && mapObj?["max"] as? String == "max",
+                          "T22 \(s.id) 显式 map: off/minimal/medium/xhigh 剔除, low/high/max 透传")
+                }
+            } else {
+                check(false, "T22 GLM/Kimi 预设缺失")
+            }
 
             // ---- T22b P7-M3.5: models.dev 元数据目录 (三层自有化, 零依赖 ~/.pi/agent) ----
             print("== T22b P7-M3.5: 模型元数据目录 ==")
@@ -1308,10 +1383,10 @@ struct SmokeMain {
                       "T22b 模糊扫全目录唯一命中")
                 check(store22c.entry(provider: "unknown-x", modelId: "glm") == nil,
                       "T22b 模糊多义/未命中返回 nil")
-                check(store22c.entries(provider: "kimi").count == idx["moonshotai"]?.count,
-                      "T22b entries(provider:) 走别名")
-                // encode→parse roundtrip 保元数据
-                if let round = ModelCatalogStore.parse(ModelCatalogStore.encode(idx)) {
+                check(store22c.entriesNewestFirst(provider: "kimi").count == idx["moonshotai"]?.count,
+                      "T22b entriesNewestFirst(provider:) 走别名")
+                // encode→decode roundtrip 保元数据 (本地缓存带 schema 版本戳)
+                if let round = ModelCatalogStore.decode(ModelCatalogStore.encode(idx)) {
                     check(round["deepseek"]?["deepseek-flash"]?.contextWindow == flash?.contextWindow
                           && round["deepseek"]?["deepseek-flash"]?.cost == flash?.cost,
                           "T22b encode/parse roundtrip 保真")
@@ -1326,6 +1401,122 @@ struct SmokeMain {
             check(catM1?.input == ["text", "image"] && catM1?.contextWindow == 200_000
                   && catM1?.cost?.output == 3.0, "T22b 合成 JSON 解析字段映射")
 
+            // ---- T22c P14: models.dev 线上形制 ≠ MangoX 扁平形制 (键名不同, 曾按扁平名读线上) ----
+            // 线上: limit.context / limit.output / modalities.input / cost.cache_read / cost.cache_write
+            // 曾全按扁平名读 ⇒ 全表 8462 条窗口/输出/模态/缓存价静默丢失, 唯一可见症状是
+            // 候选列表 image 徽章对目录来的模型从不点亮。
+            let live = ModelCatalogStore.parse(Data(#"""
+{"minimax":{"models":{"MiniMax-M3":{"name":"MiniMax-M3","reasoning":true,"modalities":{"input":["text","image","video"],"output":["text"]},"limit":{"context":1000000,"output":512000},"cost":{"input":0.3,"output":1.2,"cache_read":0.06,"cache_write":0.07}}}}}
+"""#.utf8))
+            let m3 = live?["minimax"]?["MiniMax-M3"]
+            check(m3?.contextWindow == 1_000_000 && m3?.maxTokens == 512_000,
+                  "T22c 线上形制: limit.context/output → contextWindow/maxTokens")
+            check(m3?.input == ["text", "image"],
+                  "T22c 线上形制: modalities.input 取用且滤掉 video (pi schema 只认 text|image)")
+            check(m3?.cost?.cacheRead == 0.06 && m3?.cost?.cacheWrite == 0.07,
+                  "T22c 线上形制: cost.cache_read/cache_write → cacheRead/cacheWrite")
+            check(ModelCatalogStore.parseEntry(["modalities": ["input": ["video"]]]).input == ["text"],
+                  "T22c 模态过滤后为空回落 [\"text\"]")
+            let flatInt = ModelCatalogStore.parseEntry(
+                ["contextWindow": 262144, "maxTokens": 65536, "cost": ["input": 1, "output": 2]])
+            check(flatInt.contextWindow == 262_144 && flatInt.maxTokens == 65_536
+                  && flatInt.cost?.output == 2, "T22c 扁平形制 + 整型数值仍可解析 (bundle 快照/旧缓存)")
+            // 缓存版本戳: 坏解析器写的 (无版本 / 旧版本) 缓存必须被拒 ⇒ isStale 判死 ⇒ 不等 TTL 重拉
+            check(ModelCatalogStore.decode(Data("{\"prov\":{\"models\":{}}}".utf8)) == nil,
+                  "T22c 无版本戳的旧缓存被拒")
+            check(ModelCatalogStore.decode(Data("{\"schemaVersion\":1,\"catalog\":{}}".utf8)) == nil,
+                  "T22c 版本不符的缓存被拒")
+            let goodCache = ModelCatalogStore.decode(Data(
+                "{\"schemaVersion\":3,\"catalog\":{\"p\":{\"models\":{\"m\":{\"name\":\"M\"}}}}}".utf8))
+            check(goodCache?["p"]?["m"]?.name == "M", "T22c 当前版本戳缓存可解")
+
+            // ---- T22d P14: 发布日期 —— 「新版在前」排序的数据面 ----
+            // 线上 `release_date` 是 ISO `yyyy-MM-dd`; 存字符串 (字典序即时间序) 直接用于排序。
+            // 动机: GLM 组 18 条按 id 字母序排时最新的 glm-5.3-flashx 被压到最底, 看着像「目录全是老模型」。
+            let dated = ModelCatalogStore.parse(Data(#"""
+{"zai":{"models":{
+  "glm-5.3-flashx":{"name":"GLM-5.3-FlashX","release_date":"2026-09-18"},
+  "glm-4.6":{"name":"GLM-4.6","release_date":"2025-09-30"},
+  "glm-5.3":{"name":"GLM-5.3","release_date":"2026-08-14"},
+  "no-date":{"name":"No Date"}}}}
+"""#.utf8))
+            check(dated?["zai"]?["glm-5.3-flashx"]?.releaseDate == "2026-09-18",
+                  "T22d 线上 release_date → releaseDate")
+            if let dated {
+                let ordered = ModelCatalogStore(providers: dated)
+                    .entriesNewestFirst(provider: "zai").map(\.id)
+                check(ordered == ["glm-5.3-flashx", "glm-5.3", "glm-4.6", "no-date"],
+                      "T22d 新版在前 (缺发布日期的排最后)")
+                check(dated["zai"]!.keys.sorted() != ordered,
+                      "T22d 判据不自证 (退化成字母序会给出相反答案)")
+            }
+            if let dated, let rt = ModelCatalogStore.decode(ModelCatalogStore.encode(dated)) {
+                check(rt["zai"]?["glm-5.3-flashx"]?.releaseDate == "2026-09-18",
+                      "T22d 缓存 roundtrip 保发布日期")
+            } else {
+                check(false, "T22d 缓存 roundtrip 保发布日期")
+            }
+
+            // ---- T22e P14-d: 候选 = /models ∪ 未列出的种子 (洞 A) ----
+            // 动机: MiniMax-M3.1-Flash-Preview 是在售的, 但 vendor 的 /models 结构性列不出它
+            // (订阅制 / 隐藏模型) ⇒ 点「测试连接」时若整体替换, 唯一为它维护的种子补丁就被删掉
+            // (boss 实测: 点测试连接后 M3.1 从候选里消失)。式子是**并集**, 不是纯 /models。
+            let mmReturned = ["MiniMax-M3", "MiniMax-M2.7", "MiniMax-M2.7-highspeed"]
+            let mmSeeds = ["MiniMax-M2.7", "MiniMax-M3.1-Flash-Preview"]
+            let unlisted = ProviderPresets.vendorUnlisted(returned: mmReturned, seedIds: mmSeeds)
+            check(unlisted == ["MiniMax-M3.1-Flash-Preview"],
+                  "T22e 在售但 /models 列不出的种子仍留在候选里")
+            check(!mmReturned.contains("MiniMax-M3.1-Flash-Preview") && unlisted.contains(unlisted.first ?? ""),
+                  "T22e 判据不自证 (退化成纯 /models 替换就会把它丢掉)")
+            check(ProviderPresets.vendorUnlisted(returned: mmReturned, seedIds: mmReturned) == [],
+                  "T22e 全被列出时不虚报「本地」标记")
+
+            // ---- T22f P14-e: provider 级固有采样参数 (MiniMax `reasoning_split`) ----
+            // 动机: MiniMax 不传 `reasoning_split` 时思考混进 `content` (实测 M3 208 字 / M2.7 706 字),
+            // 被 pi 当正文推给 UI。它是**厂商固有契约**(与具体模型无关) ⇒ 声明在 ProviderPreset,
+            // 物化时展开到每个 model 条目 (pi schema 只认 model 级 samplingParams)。
+            check(ProviderPresets.preset(id: "minimax")?.samplingParams?.contains("reasoning_split") == true,
+                  "T22f MiniMax 预置声明了 reasoning_split")
+            check(ProviderPresets.preset(id: "deepseek")?.samplingParams == nil,
+                  "T22f 其他预置不带采样参数 (人人都有就不对了)")
+            do {
+                let mmModels = [
+                    ManagedModel(provider: "minimax", modelId: "MiniMax-M3", displayName: "MiniMax-M3",
+                                 apiType: "openai-completions", baseURL: "https://api.minimaxi.com/v1",
+                                 source: .preset),
+                    ManagedModel(provider: "minimax", modelId: "MiniMax-M2.7", displayName: "MiniMax-M2.7",
+                                 apiType: "openai-completions", baseURL: "https://api.minimaxi.com/v1",
+                                 samplingParamsJSON: "{\"reasoning_split\":false,\"top_k\":40}",
+                                 source: .preset),
+                    ManagedModel(provider: "deepseek", modelId: "deepseek-flash", displayName: "DeepSeek",
+                                 apiType: "openai-completions", baseURL: "https://api.deepseek.com",
+                                 source: .preset),
+                ]
+                func entries(_ data: Data, _ provider: String) -> [[String: Any]] {
+                    let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+                    let provs = (obj?["providers"] as? [String: Any]) ?? [:]
+                    return ((provs[provider] as? [String: Any])?["models"] as? [[String: Any]]) ?? []
+                }
+                let outMM = ModelMaterializer.materialize(mmModels, keyProvider: { _ in nil })
+                let mmList = entries(outMM.modelsJSON, "minimax")
+                let m3 = mmList.first { ($0["id"] as? String) == "MiniMax-M3" }
+                let m27 = mmList.first { ($0["id"] as? String) == "MiniMax-M2.7" }
+                check((m3?["samplingParams"] as? [String: Any])?["reasoning_split"] as? Bool == true,
+                      "T22f provider 默认展开到模型条目 (M3 拿到 reasoning_split=true)")
+                check((m27?["samplingParams"] as? [String: Any])?["reasoning_split"] as? Bool == false,
+                      "T22f 模型自带覆盖 provider 默认 (显式 false 不被顶掉)")
+                check((m27?["samplingParams"] as? [String: Any])?["top_k"] as? Int == 40,
+                      "T22f 模型自带参数原样保留")
+                check(entries(outMM.modelsJSON, "deepseek").first?["samplingParams"] == nil,
+                      "T22f 无默认的 provider 不凭空长参数")
+                // 判据不自证: 注入空默认 ⇒ 同一条目必须拿不到参数 (证明它来自预置, 不是硬编码)。
+                let outEmpty = ModelMaterializer.materialize(mmModels, providerSamplingParams: { _ in nil },
+                                                             keyProvider: { _ in nil })
+                check(entries(outEmpty.modelsJSON, "minimax")
+                        .first { ($0["id"] as? String) == "MiniMax-M3" }?["samplingParams"] == nil,
+                      "T22f 判据不自证 (注入空默认 ⇒ provider 默认确实来自预置)")
+            }
+
             // ---- T23 P7-M4: 模式选择器 (三档矩阵 + 池下发 + 按项目记忆) ----
             print("== T23 P7-M4: 模式选择器 ==")
             check(AgentMode.spawnArguments(for: .minimal, businessExtensions: ["/x/e.ts"])
@@ -1334,9 +1525,26 @@ struct SmokeMain {
                   "T23 常规档零参数 (pi 默认全量内置)")
             check(AgentMode.spawnArguments(for: .full, businessExtensions: ["/x/e.ts"])
                   == ["--extension", "/x/e.ts"], "T23 完整档挂业务扩展, 不带 --tools")
-            check(AgentMode.minimal.storageIndex == 0 && AgentMode.full.storageIndex == 2
-                  && AgentMode(storageIndex: 2) == .full && AgentMode(storageIndex: 99) == .standard,
-                  "T23 存储序号 roundtrip + 越界回落 standard")
+            // P13: codemode 层 —— ⚠️ 两条轴("挂上扩展" + "--tools 激活")**必须同进同退**,
+            // 分开断言抓不到这条耦合 (少一条就是"挂了却没生效", 且没有红灯)。
+            check(AgentMode.spawnArguments(for: .codemode, businessExtensions: ["/x/e.ts"])
+                  == ["--tools", "+codemode"], "T23 codemode 层用 modifier 写法, 且不挂业务扩展")
+            check(AgentMode.codemode.toolListArguments == ["+codemode"]
+                  && AgentMode.codemode.mountsCodemodeExtension
+                  && !AgentMode.codemode.mountsBusinessExtensions,
+                  "T23 codemode 层三件事同时成立: 挂扩展 + --tools modifier + 不挂业务扩展")
+            check(AgentMode.allCases.filter { $0.mountsCodemodeExtension } == [.codemode]
+                  && AgentMode.allCases.filter { $0.isCodemodeLayer } == [.codemode],
+                  "T23 codemode 扩展与分层判据都只认这一档")
+            check(AgentMode.allCases.map(\.rawValue) == ["codemode", "minimal", "standard", "full"],
+                  "T23 声明顺序 = 展示顺序 (codemode 独占顶部那层)")
+            // P13 门 8 (纯函数半边): 老库存的是序号, 新库存 rawValue。
+            check(AgentMode(storageValue: "2") == .full && AgentMode(storageValue: "0") == .minimal
+                  && AgentMode(storageValue: "full") == .full && AgentMode(storageValue: "codemode") == .codemode
+                  && AgentMode(storageValue: "zzz") == .standard && AgentMode(storageValue: "99") == .standard,
+                  "T23 ⚠️ 老序号按冻结旧表反解 (2→full, 不是 standard/codemode) + 新值直解 + 越界回落")
+            check(AgentMode.legacyOrder == ["minimal", "standard", "full"],
+                  "T23 ⚠️ 冻结的旧顺序表不得随 allCases 演进 (改回它就等于把位置即键的 bug 搬一遍)")
 
             let store23 = ChatStore(transport: mock, dbPath: dir + "/t23mode.db", modelKeyStore: keys22)
             store23.addProject(title: "P7M4", path: dir + "/t23proj")
@@ -1355,6 +1563,24 @@ struct SmokeMain {
             store23b.selectedProjectId = proj23
             check(store23b.agentMode == .full && mock.lastMode == .full,
                   "T23 选项目恢复该项目档位 (按项目记忆)")
+
+            // P13 门 8 (接线半边): 往**真实 key** 里种老形态的序号, 走 ChatStore 自己的读写路径。
+            // ⚠️ 放在 store23b 之后是为了不干扰上面那条"继承上次会话配置"的断言 ——
+            //    agentMode 的 didSet 会写穿会话快照, 在这儿改它已经伤不到谁了。
+            if let p23 = store23.persistence {
+                for (legacy, expect) in [("0", AgentMode.minimal), ("1", AgentMode.standard), ("2", AgentMode.full)] {
+                    p23.saveSettingText(key: store23.agentModeKey, value: legacy)
+                    store23.restoreAgentMode()
+                    check(store23.agentMode == expect,
+                          "T23 ⚠️ 老库序号 \"\(legacy)\" 经真实 KV 读回 = \(expect.rawValue)")
+                }
+                p23.saveSettingText(key: store23.agentModeKey, value: "zzz")
+                store23.restoreAgentMode()
+                check(store23.agentMode == .standard, "T23 乱值经真实 KV 读回回落 standard")
+                store23.agentMode = .codemode
+                check(p23.loadSettingText(key: store23.agentModeKey) == "codemode",
+                      "T23 ⚠️ ChatStore 存进 KV 的是 rawValue 字符串 (不是序号)")
+            }
 
             // ---- T24 P7-M6a: 图片附件管线 (压缩/落盘/兼容/删会话先读后删) ----
             print("== T24 P7-M6a: 图片附件管线 ==")
@@ -4270,6 +4496,7 @@ struct SmokeMain {
             // 不用管兼容问题」) ⇒ 内置 provider 的补回是**无条件**的。删门控的同时必须
             // 把这条钉住: 它从"版本判断的结果"变成"恒定契约", 更需要断言守着。
             let ext = PiRpcTransport.extensionArguments(hostedExtensionPath: "/tmp/mangox-approval.js",
+                                                        codemodeExtensionPath: nil,
                                                         enabled: [])
             check(ext == ["--no-extensions",
                           "--extension", "builtin:llama.cpp",
@@ -4277,7 +4504,19 @@ struct SmokeMain {
                   "P12 扩展参数: 关自动发现 → 补内置 provider → 挂托管扩展 (顺序即语义)")
             check(PiRpcTransport.builtinLlamaExtension == "builtin:llama.cpp",
                   "P12 扩展参数: llama.cpp 是契约 token (逐字进 spawn, 不得本地化/改写)")
+            // P13: codemode 层插在**托管扩展之后、业务扩展之前** (它也是 MangoX 自管的),
+            // 且传 nil 时上面那条 `ext` 的整段逐字符不变 —— 这就是三老档"零影响"的形式化。
+            let extCM = PiRpcTransport.extensionArguments(hostedExtensionPath: "/tmp/mangox-approval.js",
+                                                          codemodeExtensionPath: "/x/mangox-codemode.ts",
+                                                          enabled: ["/x/biz.js"])
+            check(extCM == ["--no-extensions",
+                            "--extension", "builtin:llama.cpp",
+                            "--extension", "/tmp/mangox-approval.js",
+                            "--extension", "/x/mangox-codemode.ts",
+                            "--extension", "/x/biz.js"],
+                  "P13 扩展参数: 托管 → codemode → 业务 (codemode 段可缺席)")
             let ext2 = PiRpcTransport.extensionArguments(hostedExtensionPath: "/tmp/a.js",
+                                                         codemodeExtensionPath: nil,
                                                          enabled: ["/x/b.js", "/x/c.js"])
             check(ext2.suffix(4) == ["--extension", "/x/b.js", "--extension", "/x/c.js"],
                   "P12 扩展参数: 业务扩展按序追加在最后")

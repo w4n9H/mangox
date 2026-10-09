@@ -11,7 +11,8 @@ struct SessionConfig: Codable, Equatable {
     var modelId: String
     /// nil = 用户未手动选过级别 (恢复时不钉死, 保持探测上报行为)。
     var thinkingLevel: String?
-    /// AgentMode.rawValue (minimal / standard / full)。
+    /// AgentMode.rawValue (codemode / minimal / standard / full)。
+    /// ⚠️ 这里落的是 **rawValue 字符串**, 不是档位序号 —— 所以新增档位不碰老快照 (P13)。
     var agentMode: String
     var askApproval: Bool
 }

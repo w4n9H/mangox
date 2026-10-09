@@ -81,6 +81,120 @@ struct CodexPillMenu<Content: View, Label: View>: View {
     }
 }
 
+// MARK: - P13 档位选择器 (四档两层; 三处入口共用同一个实现)
+
+/// 档位菜单的**内容**: codemode 独占上层, 一条**带小注**的分割线声明"下面是老档、行为不变"。
+///
+/// ⚠️ 为什么不用原生 `Menu` (即上面的 `CodexPillMenu`): NSMenu 的 title 机制会把富 label
+///    **剥成纯文本**, 而 codemode 的代价说明**只住在 `subtitle` 里** —— 被剥掉就等于
+///    用户在另两处选它时看不到"这一档会换掉工具调用范式"。故三处统一走自绘 popover。
+struct AgentModeMenu: View {
+    @Binding var mode: AgentMode
+    @Binding var isPresented: Bool
+
+    /// 上层 = allCases 里属于 codemode 层的那些; 老档层 = 其余。
+    /// ⚠️ 两侧都**现算**, 不写死名单 —— 否则将来加层时这里与 `isCodemodeLayer` 会不一致。
+    private var layerModes: [AgentMode] { AgentMode.allCases.filter { $0.isCodemodeLayer } }
+    private var legacyModes: [AgentMode] { AgentMode.allCases.filter { !$0.isCodemodeLayer } }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            ForEach(layerModes) { row($0) }
+            dividerNote
+            ForEach(legacyModes) { row($0) }
+        }
+        .padding(.vertical, 5)
+        .frame(width: 320)
+    }
+
+    /// 中层: 把"两个**维度**的边界"写出来。
+    /// 一条裸线在 4 行里很容易被读成"两**组**的边界" —— 而这句话正是本版要传达的东西。
+    private var dividerNote: some View {
+        HStack(spacing: 8) {
+            dividerLine
+            Text(L("老档位 · 行为不变"))
+                .font(.system(size: 10))
+                .foregroundStyle(CodexTheme.textMuted)
+                .fixedSize()
+            dividerLine
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 6)
+    }
+
+    private var dividerLine: some View {
+        Rectangle().fill(CodexTheme.border.opacity(0.5)).frame(height: 1)
+    }
+
+    /// 参考版式菜单行: 标题 + 多行描述 + 选中勾 (与 composer 原 `modeRow` 一致)。
+    private func row(_ m: AgentMode) -> some View {
+        let selected = m == mode
+        return Button {
+            mode = m
+            isPresented = false
+        } label: {
+            HStack(alignment: .top, spacing: 10) {
+                VStack(alignment: .leading, spacing: 3) {
+                    HStack(spacing: 6) {
+                        Text(m.displayName)
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(CodexTheme.textPrimary)
+                        if m.isCodemodeLayer { newBadge }
+                    }
+                    Text(m.subtitle)
+                        .font(.system(size: 11))
+                        .foregroundStyle(CodexTheme.textMuted)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer(minLength: 12)
+                if selected {
+                    Image(systemName: "checkmark")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(CodexTheme.textPrimary)
+                }
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 9)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
+            .background(selected ? CodexTheme.bgSidebar : Color.clear)
+        }
+        .buttonStyle(.plain)
+    }
+
+    /// 引路牌 (**一次性**): 让"多了一层"这件事一眼可见, 免得被读成"多了一档"。
+    /// 只留一两个版本就删 —— 删的时候这里与词表里的那条一起走。
+    private var newBadge: some View {
+        Text(L("新"))
+            .font(.system(size: 9, weight: .semibold))
+            .foregroundStyle(CodexTheme.accent)
+            .padding(.horizontal, 5)
+            .padding(.vertical, 1)
+            .background(CodexTheme.accentSoft)
+            .clipShape(Capsule())
+    }
+}
+
+/// 档位 pill + 自绘 popover (**三处入口共用**)。
+/// **按钮外观由调用方给** —— 三处风格本就不同 (composer 带条件着色, 另两处是 bgPill 胶囊);
+/// 这里只管"点下去弹什么", 于是三处的**菜单内容**才是同一份。
+struct AgentModePicker<Label: View>: View {
+    @Binding var mode: AgentMode
+    var help: String = ""
+    @ViewBuilder var label: () -> Label
+    @State private var showMenu = false
+
+    var body: some View {
+        Button { showMenu.toggle() } label: { label() }
+            .buttonStyle(.plain)
+            .contentShape(Rectangle())
+            .popover(isPresented: $showMenu, arrowEdge: .bottom) {
+                AgentModeMenu(mode: $mode, isPresented: $showMenu)
+            }
+            .help(help)
+    }
+}
+
 // MARK: - 自绘 mini 开关 (替换 .toggleStyle(.switch))
 
 struct CodexMiniToggle: View {

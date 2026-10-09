@@ -132,9 +132,11 @@ struct ChatView: View {
             // 流式 chunk 高频到达, 同帧多次触发会报 "update multiple times per frame";
             // scrollScheduled 同帧合并为一次滚动调度, 双跳异步复位 (滚动执行完的下一拍才放行)。
             // P9-#9: 用户上滑阅读历史时不再强制拽回 (距视口底 <140pt 才跟随)
-            guard nearBottom, !scrollScheduled else { return }
-            scrollScheduled = true
+            // ⚠️ 2026-10-09: 守卫与置位**必须都在 async 块里** —— 在 onChange 的 action 里同步写
+            //    @State 本身就会让 SwiftUI 判成"同帧多次更新", 光靠守卫挡不住警告刷屏 (见 :64 同款教训)。
             DispatchQueue.main.async {
+                guard nearBottom, !scrollScheduled else { return }
+                scrollScheduled = true
                 let anchor: AnyHashable = store.isStreaming ? "streaming-tail" : (store.messages.last?.id ?? UUID())
                 withAnimation(CodexTheme.animMed) {
                     proxy.scrollTo(anchor, anchor: .bottom)

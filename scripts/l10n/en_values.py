@@ -669,4 +669,21 @@ VALUES = {
     # P12.2: 第三方扩展请求了 MangoX 不处理的界面方法 —— 回的是"取消"而不是瞎答。
     # 必须点名方法, 否则用户不知道是哪个提问被吞了。
     '扩展请求了 MangoX 不处理的「%@」界面, 已按「取消」应答。': 'Extension requested a "%@" prompt the app does not handle; answered "Cancel".',
+    '新': 'New',
+    '模型只保留 codemode 一个工具，其余全部经脚本内层调用 — 换一种调用范式，且会占用更多上下文。': 'Keeps codemode as the only tool the model sees; everything else is called from inside the script. A different calling paradigm, and it uses more context.',
+    '老档位 · 行为不变': 'Older modes · unchanged',
+    # P14 硬准入: 官方 /models 报了 id 但既无种子也无目录元数据 ⇒ 挡在候选之外。
+    # 必须**点名**(%@): 只报个数字用户不知道是哪个, 分不清是拉取失败还是被拦。
+    '%lld 个模型因缺元数据未列出: %@': '%lld models not listed — no metadata available: %@',
+    # P14 手动更新 models.dev 目录 (设置 → 模型)。目录 7 天自动刷一次, 这是强制刷新的那条路。
+    '更新模型目录': 'Refresh model catalog',
+    '刷新中…': 'Refreshing…',
+    '更新失败, 保留原目录': 'Update failed; kept the existing catalog',
+    '目录为空, 点「更新模型目录」拉取': 'Catalog is empty — click Refresh model catalog',
+    '目录: %lld 家 / %lld 条': 'Catalog: %lld providers / %lld models',
+    '目录: %lld 家 / %lld 条, 已过期': 'Catalog: %lld providers / %lld models, stale',
+    '已更新: %lld 家 / %lld 条': 'Updated: %lld providers / %lld models',
+    # P14-d: 候选 = /models ∪ 未列出的种子。补丁行的行上标记(与 image/think 并列), 让来源不模糊。
+    # ⚠️ 纯字符串 key —— 别加 title:/非字符串参数, 本地化不透明。
+    '本地': 'Local',
 }

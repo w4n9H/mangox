@@ -5,6 +5,37 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [0.1.15] - 2026-10-09
+
+本版主线 = **codemode 接入（P13）+ 模型目录与预设重整（P14）**。前者给 Agent 加第四档 —— 模型只留一个工具，其余全部经脚本内层调用；后者把模型目录的刷新链路、预设 provider 库与候选生成规则一起收口。全量冒烟 **909 项 ALL PASS** + `xcodebuild` BUILD SUCCEEDED 零 warning。
+
+### Added
+
+- **codemode 档（P13）**：模型只保留 `codemode` 一个工具，其余工具（`read` / `bash` / `write` / `edit` 与业务扩展）全部经脚本**内层调用**。它换的是「模型怎么调工具」这个维度，**不是"更强的老档"** ⇒ 选择器画成两层：codemode 独占上层，三个老档在下层，中间一条带小注的分割线。工具卡上**整段脚本原样可见**（不是只显示一个名字）。⚠️ 会占用更多上下文，菜单里有代价说明。安全前置已核：内层调用走完整工具管线 + 会话 hook ⇒ 内层 `bash` / `write` / `edit` 照常弹审批卡
+- **模型列表按发布日期倒序**：目录条目新增发布日期（`models.dev` 的 `release_date`）⇒ 选模型时**新版在前**，不再字母序。缺发布日期的条目排最后（不假装最新）
+- **候选模型里本地维护的项会标「本地」**：预设为「厂商 `/models` 不返回、但确实可用」的模型（如订阅制 preview 型号）保留种子；候选列表 = 线上目录 **∪** 本地种子，后者带「本地」标记与线上返回的区分开
+
+### Changed
+
+- **预设 provider 从 8 家砍到 4 家**：只留 `deepseek` / `kimi` / `minimax` / `zhipu`(GLM)，种子表整体换代；`ollamaStyle` 端点能力保留给自定义 provider
+- **工具卡标签改为原样小写**：`READ` / `BASH` / `OTHER` → `read` / `bash` / `other`（2026-09-21「一律全大写英文」那条决定**已废**）。轨迹页的 `USER` / `ASSISTANT` / `LLM` 不在此列，仍是大写
+- **档位菜单收成一处**：对话输入框、定时任务、稀疏 Agent 编辑器三处共用同一个档位选择器 —— codemode 的代价说明在三处都看得见
+
+### Fixed
+
+- **MiniMax 思考与正文混排**：MiniMax 需显式传 `reasoning_split` 才把思考放进独立字段；不传就直接写在正文里（`<think>…</think>` 开头），阅读体验很差。现在按 **provider 级固有契约**声明、**物化期展开** ⇒ 已保存的模型**零迁移**被修好
+- **流式输出时日志刷「同一帧多次更新」**：滚动跟随的守卫与置位原先在回调里同步写 `@State`，挡住的是重复滚动、挡不住警告 —— 两件事一起挪进异步块
+
+### 工程
+
+- **档位持久化改存 `rawValue`**（原为 `allCases` 序号）：代号入列会整体位移，老库里存的序号由一张**冻结的旧顺序表**反解，无需数据迁移；代价是**降级回旧版本时该列读不出**（回落默认档），这是有意的取舍
+- **codemode 的 `--tools` 语法与白名单不同源**：白名单是 `a,b,c`（**只留**），codemode 是 `+codemode`（在全量基础上**增补**）⇒ 枚举里那个名字从 `toolAllowlist` 改成 `toolListArguments`，免得被读反
+- **codemode 用的是自建扩展**（不是 `builtin:codemode`）：只有自建版能传 `options.mode = "only"`。三个老档**连扩展都不挂** ⇒ 它们的扩展段逐字节不变（这是「零影响」最强的证明形式）
+- **`reasoning_split` 声明在预设层、物化期降维展开**：pi 的 `samplingParams` 逃生舱只有 model 级、没有 provider 级 ⇒ 厂商固有契约由适配层在每次 spawn 重算时展开，**不入库**（存量模型因此零迁移）
+- **一处口径翻转要记住**：`ToolKind.label` 从 `rawValue.uppercased()` 改成 `rawValue` ⇒ 现在 **`label == rawValue`**，展示与存储键变成同一个东西（而 `rawValue` 同时是 `Codable` 键与 pi 工具名比对依据）
+- **对齐文档载体换代**：P13 起对齐文档由 `.md` 改成 `.html`（六块固定骨架 + 颜色承载状态 + 样式单一来源 `docs/assets/design-doc.css`，由脚本同步），约定写在 `docs/must_read.txt`。P3~P12 的 `.md` 保留原样；`P13-functional-design.md` 已删（结论全部并入 html）
+- **MCP 仍不接**：审批桥是白名单式（只拦 `bash` / `write` / `edit`），而 `mcp__*` 命中 hook 却命中不了策略 ⇒ 会静默执行
+
 ## [0.1.14] - 2026-10-08
 
 本版主线 = **pi 引擎大版本升级适配（0.85.1 → 1.1.0）**：上游跨了 16 个版本，下游只动了**参数构造规则**与**失败可见性**两处，**架构一处未动**（per-turn 进程模型、审批桥、注入链路全部保留）。全量冒烟 **857 项 ALL PASS** + `xcodebuild` BUILD SUCCEEDED 零 warning。

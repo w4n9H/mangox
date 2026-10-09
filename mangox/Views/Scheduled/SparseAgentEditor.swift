@@ -297,14 +297,21 @@ struct SparseAgentEditor: View {
 
     /// 工具面 (`AgentMode`)。首版是系统 `.menu` `Picker`, 渲染成 AppKit 默认的**蓝色双箭头弹窗** ——
     /// 在这套全自绘胶囊的界面里最扎眼的一处 (boss 截图: "太丑了这个样式")。
+    /// P13: 同 `ScheduledView.configModePicker` —— 改用共用自绘菜单, 让 codemode 的
+    /// 代价说明 (`subtitle`) 在这里也看得见。按钮外观 (bgPill 胶囊) 保持原样。
     private var agentModePill: some View {
-        CodexPillMenu {
-            ForEach(AgentMode.allCases) { mode in
-                Button(mode.displayName) { draft.agentMode = mode }
+        AgentModePicker(mode: $draft.agentMode) {
+            HStack(spacing: 4) {
+                Image(systemName: "switch.2")
+                Text(draft.agentMode.displayName)
             }
-        } label: {
-            Image(systemName: "switch.2")
-            Text(draft.agentMode.displayName)
+            .font(CodexTheme.fontSmall)
+            .foregroundStyle(CodexTheme.textSecondary)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 3)
+            .background(CodexTheme.bgPill)
+            .clipShape(Capsule())
+            .overlay(Capsule().stroke(CodexTheme.border.opacity(0.4), lineWidth: 1))
         }
     }
 

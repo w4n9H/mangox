@@ -781,23 +781,29 @@ final class ChatStore: ObservableObject {
         restoreAgentMode()
     }
 
-    // MARK: - P7-M4 模式档位持久化 (settings KV, Int = allCases 序号)
+    // MARK: - P7-M4 模式档位持久化 (settings KV, 存 AgentMode.rawValue)
+    // ⚠️ P13 之前这里存的是 `allCases` **序号** —— "位置即存储键"。加 codemode 时若沿用,
+    //    老库里的 0/1/2 会整体改义 (老用户的 full 静默变 standard, 零红灯)。
+    //    现改存 rawValue; 老库的序号值由 `AgentMode.init(storageValue:)` 按**冻结的旧顺序表**反解,
+    //    所以不需要一次性数据迁移 (读时反解, 写回时自动变成新形态)。
 
-    private var agentModeKey: String {
+    /// ⚠️ internal (不是 private): 冒烟要按**真实 key** 往 KV 里种老形态的序号值来验迁移 ——
+    ///    在判据里手拼一遍 `"agent_mode.\(pid.uuidString)"` 会让判据**自证** (拼错照样绿)。
+    var agentModeKey: String {
         if let pid = selectedProjectId { return "agent_mode.\(pid.uuidString)" }
         return "agent_mode"
     }
 
     private func saveAgentMode() {
-        persistence?.saveSetting(key: agentModeKey, value: agentMode.storageIndex)
+        persistence?.saveSettingText(key: agentModeKey, value: agentMode.storageValue)
     }
 
     func restoreAgentMode() {
         suppressConfigStamp = true   // P10.3: 项目级档位恢复是程序性写值, 不写穿会话快照
         defer { suppressConfigStamp = false }
-        let idx = persistence?.loadSetting(key: agentModeKey, defaultValue: AgentMode.standard.storageIndex)
-            ?? AgentMode.standard.storageIndex
-        agentMode = AgentMode(storageIndex: idx)
+        let raw = persistence?.loadSettingText(key: agentModeKey)
+            ?? AgentMode.standard.storageValue
+        agentMode = AgentMode(storageValue: raw)
     }
 
     // MARK: - P10.3 会话级配置 (sessions.config 快照 + 跟随选中恢复)

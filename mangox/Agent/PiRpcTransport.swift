@@ -182,17 +182,23 @@ final class PiRpcTransport: AgentTransport {
     /// ⚠️ **契约 token** —— 逐字进 spawn 参数, 名字由 pi 定, 不得本地化 / 改写 / 拆分。
     static let builtinLlamaExtension = "builtin:llama.cpp"
 
-    /// P3.11 + P12.1b: spawn 期的扩展参数 (纯函数, 冒烟直测)。三段顺序即理由:
+    /// P3.11 + P12.1b + P13: spawn 期的扩展参数 (纯函数, 冒烟直测)。四段顺序即理由:
     ///   ① `--no-extensions` 关掉**自动发现** (只加载 MangoX 认可的扩展);
     ///   ② `--extension builtin:llama.cpp` —— ⚠️ **不可省**: pi **0.99.0** 起
     ///      `--no-extensions` 连**内置扩展**一起关, 而 llama.cpp 是 provider ⇒ 不补回来,
-    ///      `get_available_models` 里整族本地模型直接消失。
-    ///      这是 MangoX 唯一主动开的内置扩展; 另三个 (`codemode` / `tool-search` / `mcp`)
-    ///      **有意不开** —— 它们绕过审批桥 (理由见 docs/P12 §七)。
-    ///   ③ MangoX 托管扩展 (审批桥恒挂; 业务扩展按模式档位, 由调用方过滤后传进来)。
-    static func extensionArguments(hostedExtensionPath: String, enabled: [String]) -> [String] {
+    ///      `get_available_models` 里整族本地模型直接消失。**四档恒挂**。
+    ///      另两个内置 (`tool-search` / `mcp`) **有意不开** —— 它们绕过审批桥 (理由见 docs/P12 §七)。
+    ///   ③ MangoX 托管扩展 (审批桥, **四档恒挂**)。
+    ///   ④ P13: **自建** codemode 扩展 —— **仅 codemode 档**(`codemodeExtensionPath` 为 nil 就不加)。
+    ///      ⚠️ 它**不是** `builtin:codemode`: 内置版没有传 options 的口子, 而 "only" 这个模式
+    ///      只有自建版能给 (见 ensureCodemodeExtensionFile 的注释)。
+    ///   ⑤ 业务扩展 (仅完整档, 由调用方过滤后传进来)。
+    static func extensionArguments(hostedExtensionPath: String,
+                                   codemodeExtensionPath: String?,
+                                   enabled: [String]) -> [String] {
         var args = ["--no-extensions", "--extension", builtinLlamaExtension,
                     "--extension", hostedExtensionPath]
+        if let codemode = codemodeExtensionPath { args += ["--extension", codemode] }
         for path in enabled { args += ["--extension", path] }
         return args
     }
@@ -299,6 +305,42 @@ final class PiRpcTransport: AgentTransport {
         return path
     }
 
+    /// P13: 自建 codemode 扩展 —— **唯一能钉住 `mode: "only"` 的载体**。
+    ///
+    /// ⚠️ 为什么不用 `builtin:codemode`: 内置版没有传 options 的口子, 而 `readMode(pi)` 只认
+    /// `<agentDir>/settings.json` 里的 `codemode.mode` ⇒ 那条路要连着踩三个洞 (见 docs/P13 §03):
+    ///   ① `PI_CODING_AGENT_DIR` 的注入**有前置条件** (`modelCount > 0`) ⇒ 无自管模型时静默失效;
+    ///   ② 读 settings 走 `proper-lockfile` 的**目录锁**, 拿不到锁就**整个文件读不到**
+    ///      (只吐一行 warning, `mode` 静默回落 `on`);
+    ///   ③ `settings.json` 是**跨会话持久契约**, 写进去的 `only` 会在任何挂了 codemode 的
+    ///      spawn 上生效 —— 想让别的层挂 codemode 又要 `on` 就没有表达力了。
+    ///
+    /// ✅ 自建版走 `createCodemodeExtension({ mode: "only" })`: 该函数从包根导出, 且
+    ///    `options.mode ?? readMode(pi)` ⇒ **传进来的 mode 优先于 settings** ⇒ 变成纯 spawn 参数,
+    ///    上面三条全部不适用 (已用真进程实测: 扩展 + `--tools +codemode` ⇒ 模型只声明 codemode 一条)。
+    ///
+    /// ⚠️ 裸模块名能解析的**机理**: pi 用动态 `import()` 加载扩展, 解析基点是 **pi 自己的**
+    ///    `dist/bundle/cli.js` (launchSpec 已把它 realpath 出来) ⇒ 向上必然命中
+    ///    `@earendil-works/pi-coding-agent` **自身**所在的那层 node_modules。
+    ///    ⇒ **与扩展文件放在哪无关** (实测把扩展挪到 5 层深的目录仍可解析)。
+    static func ensureCodemodeExtensionFile() -> String {
+        let dir = NSHomeDirectory() + "/.mangox/extensions"
+        let path = dir + "/mangox-codemode.ts"
+        let source = """
+        // Auto-deployed by MangoX. Pin codemode's exposure to "only" for the codemode mode.
+        // P13: options.mode 优先于 <agentDir>/settings.json 的 codemode.mode ⇒
+        // 档位由 spawn 参数决定, 不写 settings.json (也就没有锁/指纹/注入条件那三个洞)。
+        import { createCodemodeExtension } from "@earendil-works/pi-coding-agent";
+        export default createCodemodeExtension({ mode: "only" });
+        """
+        try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+        let existing = try? String(contentsOfFile: path, encoding: .utf8)
+        if existing != source {
+            try? source.write(toFile: path, atomically: true, encoding: .utf8)
+        }
+        return path
+    }
+
     // MARK: - AgentTransport
 
     func send(prompt: String, images: [OutgoingImage]) {
@@ -374,7 +416,11 @@ final class PiRpcTransport: AgentTransport {
     }
 
     func updateExtensions(_ paths: [String]) {
-        desiredExtensions = paths.filter { !$0.hasSuffix("mangox-approval.ts") }
+        // P13: 两个 MangoX 自管扩展都要滤掉 —— 它们由档位轴决定挂不挂,
+        // 不能被业务扩展扫掠重复挂一遍 (approval 一直如此; codemode 同理)。
+        desiredExtensions = paths.filter {
+            !$0.hasSuffix("mangox-approval.ts") && !$0.hasSuffix("mangox-codemode.ts")
+        }
     }
 
     /// 重启 pi 使最新注入块/cwd 生效 (丢进程内对话记忆, 由 UI 显式触发)。
@@ -527,11 +573,15 @@ final class PiRpcTransport: AgentTransport {
     private func spawnProcess(cwd: String) {
         guard let spec = Self.launchSpec() else { return }
         let extPath = Self.ensureExtensionFile()
+        // P13: 自建 codemode 扩展**只在这一档落地** —— 三老档连"挂载"这一步都没有,
+        // 所以它们的扩展段逐字节不变 (是"不存在", 不是"挂了但没生效")。
+        let codemodeExtPath = desiredMode.mountsCodemodeExtension ? Self.ensureCodemodeExtensionFile() : nil
         var args = spec.scriptArgs + ["--mode", "rpc"]
-        // P12.1b: 扩展参数 (关自动发现 + 补回内置 provider + 挂托管扩展)。
-        // 业务扩展仅完整档挂载 (P7-M4); 系统扩展 (审批桥) 三档恒挂。
+        // P12.1b + P13: 扩展参数 (关自动发现 + 补回内置 provider + 挂托管扩展 + codemode 层)。
+        // 业务扩展仅完整档挂载 (P7-M4); 系统扩展 (审批桥) 四档恒挂。
         args += Self.extensionArguments(
             hostedExtensionPath: extPath,
+            codemodeExtensionPath: codemodeExtPath,
             enabled: desiredMode.mountsBusinessExtensions ? desiredExtensions : [])
         if let fork = desiredForkSource {
             // P6.3.1: 侧问首回合 — fork 源快照 (互斥分支: 不带 --session/--no-session)。
@@ -563,7 +613,9 @@ final class PiRpcTransport: AgentTransport {
             // ephemeral: 任务 fire 轮次等, transcript 仅存进程内存
             args += ["--no-session"]
         }
-        // P7-M4: 极简档 --tools 白名单裁内置工具 (常规/完整不传, pi 默认即全量)
+        // P7-M4 + P13: 档位对 --tools 的取值 (极简裁内置 / codemode 加 modifier / 另两档不传 = pi 默认全量)。
+        // ⚠️ 与上面那段 extensionArguments **必须同进同退**: codemode 档要"挂上"与"激活"两件事都做
+        //    (扩展是 defaultActive: false —— 只 `--extension` 挂载不会生效, 已实测)。
         args += AgentMode.spawnArguments(for: desiredMode, businessExtensions: [])
         // P3.7: 知识注入块挂在 spawn 参数上 (--append-system-prompt 可重复传; 会话内不可改)
         if let knowledge = desiredKnowledge, !knowledge.isEmpty {
@@ -1351,6 +1403,12 @@ final class PiRpcTransport: AgentTransport {
         // 未知工具 (kind == .other) 的卡头标签恒为 "OTHER", 标签本身不携带真名 ⇒ 真名必须
         // 占 title, 否则用户看不出跑的是哪个扩展工具 (args 退到 command 列)。
         if kind == .other { return (name, cmd ?? path ?? firstScalarArg(args)) }
+        // P13 codemode: 唯一参数是 `code` (**整段脚本**), 没有 path/command ⇒ 若走下面的通用式,
+        // `title` 会退成 name(`codemode`)、`command` 恒 nil ⇒ **整段脚本从卡上消失**。
+        // 让它占 title, 与 bash 的 `title = cmd` 同一道理; 审批时"要批的脚本"也才看得见。
+        // ⚠️ 脚本可能以 `// @options:` 开头 —— 那就显示那一行 (pi 自己的 renderer 也是把该行
+        //    当脚本一部分渲染的), 不特判、不猜"哪行才算正文"。
+        if kind == .codemode { return (args["code"] as? String ?? name, nil) }
         let title = path ?? cmd ?? name
         return (title, (cmd != nil && title == cmd) ? nil : cmd)
     }
@@ -1381,6 +1439,9 @@ final class PiRpcTransport: AgentTransport {
         case "search": return .search
         case "image": return .image
         case "delegate": return .delegate         // pi 0.85.1 无内置生产方, 留位给扩展
+        // P13: codemode 由**自建扩展**注册 (pi 的 `builtin:codemode` 没有传 options 的口子),
+        // 但上报的工具名恒为 `codemode` ⇒ 按名归位, 不落 other。
+        case "codemode": return .codemode
         // ⚠️ **不许再 return .read** —— 那是谎报: 装了 web-search / subagents 这类扩展后,
         // 卡片标签会**读作 READ**, 轨迹页 chip 更连**颜色一起错** (`defaultColor` 只在轨迹页用;
         // 卡片标签色走 `railColor`, 由相态决定 ⇒ 那里错的是文字不是颜色)。

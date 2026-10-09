@@ -6,7 +6,7 @@
 
 import Foundation
 
-/// 目录条目 (models.dev 6 字段剪裁)。
+/// 目录条目 (models.dev 6 字段剪裁 + 发布日期)。
 struct CatalogModelEntry: Hashable {
     var name: String
     var reasoning: Bool
@@ -14,6 +14,9 @@ struct CatalogModelEntry: Hashable {
     var contextWindow: Int?
     var maxTokens: Int?
     var cost: ModelCost?
+    /// 发布日期 (ISO `yyyy-MM-dd`)。⚠️ 存字符串不存 Date —— 字典序即时间序, 直接拿来排序,
+    /// 且不受时区/locale 影响。缺省 nil (bundled 快照没这个字段) ⇒ 排到最后, 不假装最新。
+    var releaseDate: String? = nil
 }
 
 /// 进程内单例; loadCached 即时, refreshIfStale 异步静默。
@@ -29,7 +32,16 @@ final class ModelCatalogStore {
     static let remoteURL = URL(string: "https://models.dev/api.json")!
     static let ttl: TimeInterval = 7 * 24 * 3600
 
+    /// 本地缓存 schema 版本。解析键名 / 条目字段一旦变化就必须递增 —— 旧解析器已把窗口/输出/模态/缓存价
+    /// 压成 nil 或默认值, 而 mtime 还新鲜 (TTL 7 天) 不会重拉, 只能靠版本戳把这份缓存判死。
+    /// v2 = 修正线上键名; v3 = 条目加 releaseDate (缺了它就排不出「新版在前」)。
+    static let cacheSchemaVersion = 3
+
     private(set) var providers: [String: [String: CatalogModelEntry]] = [:]
+
+    /// loadCached 置位: 盘上缓存是否按当前 schema 版本成功解码。
+    /// false ⇒ isStale 恒 true ⇒ 下次巡检 (点预设芯片) 必然重拉, 不等 TTL。
+    private var cacheValid = false
 
     private static var cacheURL: URL {
         FileManager.default.homeDirectoryForCurrentUser
@@ -47,9 +59,13 @@ final class ModelCatalogStore {
     // MARK: - 加载 (远端缓存 > bundled 快照 > 空)
 
     func loadCached() {
-        providers = Self.parse(Self.data(at: Self.cacheURL))
-            ?? Self.parse(Self.bundledData())
-            ?? [:]
+        if let idx = Self.decode(Self.data(at: Self.cacheURL)) {
+            providers = idx
+            cacheValid = true
+        } else {
+            providers = Self.parse(Self.bundledData()) ?? [:]
+            cacheValid = false
+        }
     }
 
     static func bundledData() -> Data? {
@@ -70,15 +86,23 @@ final class ModelCatalogStore {
         return hits.count == 1 ? hits[0] : nil
     }
 
-    /// 指定 provider 的全部条目 (仅精确 + 别名, 不模糊) — loadPreset 展开用。
-    func entries(provider: String) -> [String: CatalogModelEntry] {
-        providers[provider] ?? providers[Self.providerAliases[provider] ?? ""] ?? [:]
+    /// 指定 provider 的全部条目 (仅精确 + 别名, 不模糊), **新版在前** — loadPreset 展开用。
+    /// ⚠️ 排序是「一眼看到的是不是最新模型」的判据本身, 所以住在 model 层 (可被冒烟断言),
+    ///    不写在视图里。日期相同或缺失时按 id 升序, 保证顺序稳定可复现。
+    func entriesNewestFirst(provider: String) -> [(id: String, entry: CatalogModelEntry)] {
+        let bucket = providers[provider] ?? providers[Self.providerAliases[provider] ?? ""] ?? [:]
+        return bucket.map { (id: $0.key, entry: $0.value) }
+            .sorted {
+                let a = $0.entry.releaseDate ?? "", b = $1.entry.releaseDate ?? ""
+                return a == b ? $0.id < $1.id : a > b
+            }
     }
 
     // MARK: - 远端刷新 (静默失败, 7 天 TTL)
 
     var isStale: Bool {
-        guard let attr = try? FileManager.default.attributesOfItem(atPath: Self.cacheURL.path),
+        guard cacheValid,
+              let attr = try? FileManager.default.attributesOfItem(atPath: Self.cacheURL.path),
               let mtime = attr[.modificationDate] as? Date else { return true }
         return Date().timeIntervalSince(mtime) > Self.ttl
     }
@@ -97,6 +121,7 @@ final class ModelCatalogStore {
               (resp as? HTTPURLResponse)?.statusCode == 200,
               let index = Self.parse(data), !index.isEmpty else { return false }
         providers = index
+        cacheValid = true   // 盘上已是当前 schema 版本的有效缓存 ⇒ isStale 交回 TTL 判, 否则每次点芯片都重拉
         let url = Self.cacheURL
         try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(),
                                                  withIntermediateDirectories: true)
@@ -124,22 +149,49 @@ final class ModelCatalogStore {
         return index.isEmpty ? nil : index
     }
 
+    /// 条目解析 — 同时兼容 models.dev 线上形制与 MangoX 自有扁平形制。
+    ///
+    /// ⚠️ 两套形制的键名不同, 曾按扁平名去读线上数据 ⇒ 全表 8462 条的窗口/输出/模态/缓存价
+    ///    静默丢失 (唯一可见症状: 候选列表的 `image` 徽章对目录来的模型从不点亮)。
+    ///    线上: limit.context / limit.output / modalities.input / cost.cache_read / cost.cache_write
+    ///    扁平: contextWindow / maxTokens / input / cost.cacheRead / cost.cacheWrite (bundled 快照与本地缓存)
     static func parseEntry(_ mv: [String: Any]) -> CatalogModelEntry {
         var cost: ModelCost?
         if let c = mv["cost"] as? [String: Any] {
-            func d(_ k: String) -> Double { c[k] as? Double ?? 0 }
+            func d(_ keys: String...) -> Double {
+                for k in keys { if let v = num(c[k]) { return v } }
+                return 0
+            }
             cost = ModelCost(input: d("input"), output: d("output"),
-                             cacheRead: d("cacheRead"), cacheWrite: d("cacheWrite"))
+                             cacheRead: d("cache_read", "cacheRead"),
+                             cacheWrite: d("cache_write", "cacheWrite"))
         }
+        let limit = mv["limit"] as? [String: Any] ?? [:]
+        let modalities = mv["modalities"] as? [String: Any] ?? [:]
+        let rawInput = (modalities["input"] as? [String]) ?? (mv["input"] as? [String]) ?? ["text"]
+        // pi 的 input schema 只认 text|image; 混进 "video" 会让整条 models.json 被引擎丢弃
+        // (回落内置 provider 打真 API ⇒ 表现为莫名的 401)。这里先过滤, 过滤空了退回 ["text"]。
+        let input = rawInput.filter { $0 == "text" || $0 == "image" }
         return CatalogModelEntry(
             name: mv["name"] as? String ?? "",
             reasoning: mv["reasoning"] as? Bool ?? false,
-            input: mv["input"] as? [String] ?? ["text"],
-            contextWindow: mv["contextWindow"] as? Int,
-            maxTokens: mv["maxTokens"] as? Int,
-            cost: cost)
+            input: input.isEmpty ? ["text"] : input,
+            contextWindow: int(limit["context"]) ?? int(mv["contextWindow"]),
+            maxTokens: int(limit["output"]) ?? int(mv["maxTokens"]),
+            cost: cost,
+            releaseDate: (mv["release_date"] as? String) ?? (mv["releaseDate"] as? String))
     }
 
+    /// JSONSerialization 的数值一律是 NSNumber (整数也可能落成 Int), 统一走这里取值。
+    private static func num(_ v: Any?) -> Double? {
+        guard let v else { return nil }
+        if let n = v as? NSNumber { return n.doubleValue }
+        return nil
+    }
+
+    private static func int(_ v: Any?) -> Int? { num(v).map { Int($0) } }
+
+    /// 写带版本戳的本地缓存形制 {schemaVersion, catalog}。
     static func encode(_ index: [String: [String: CatalogModelEntry]]) -> Data? {
         var root: [String: Any] = [:]
         for (pid, models) in index {
@@ -148,6 +200,7 @@ final class ModelCatalogStore {
                 var m: [String: Any] = ["name": e.name, "reasoning": e.reasoning, "input": e.input]
                 if let w = e.contextWindow { m["contextWindow"] = w }
                 if let t = e.maxTokens { m["maxTokens"] = t }
+                if let d = e.releaseDate { m["releaseDate"] = d }
                 if let c = e.cost {
                     m["cost"] = ["input": c.input, "output": c.output,
                                  "cacheRead": c.cacheRead, "cacheWrite": c.cacheWrite]
@@ -156,6 +209,17 @@ final class ModelCatalogStore {
             }
             root[pid] = ["models": mb]
         }
-        return try? JSONSerialization.data(withJSONObject: root, options: [.sortedKeys])
+        return try? JSONSerialization.data(
+            withJSONObject: ["schemaVersion": cacheSchemaVersion, "catalog": root],
+            options: [.sortedKeys])
+    }
+
+    /// 读本地缓存; 版本戳缺失或不符 (旧解析器写的坏缓存) 一律返回 nil, 当作没有缓存。
+    static func decode(_ data: Data?) -> [String: [String: CatalogModelEntry]]? {
+        guard let data,
+              let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              root["schemaVersion"] as? Int == cacheSchemaVersion,
+              let catalog = root["catalog"] else { return nil }
+        return parse(try? JSONSerialization.data(withJSONObject: catalog))
     }
 }

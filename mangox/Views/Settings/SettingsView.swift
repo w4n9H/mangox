@@ -25,12 +25,16 @@ struct SettingsView: View {
     @State private var testState: TestState = .idle
     @State private var formError: String?
     @State private var showMorePresets = false
+    @State private var missingMetaNote: String?    // P14: 硬准入挡掉的模型 (点名提示)
+    @State private var catalogBusy = false         // P14: 手动更新 models.dev 目录中
+    @State private var catalogNote: String?        // P14: 目录更新结果 (一行)
+    @State private var lastFetchedIds: [String] = []  // P14: /models 最后拉回的 id 全集
     @State private var recording = false          // P8-T27: 热键录制中
     @State private var keyMonitor: Any?           // P8-T27: 录制用 keyDown 监听
 
     enum TestState: Equatable { case idle, testing, done }
 
-    /// 勾选行条目 (seed 元数据 或 /models 拉回的 id + 保守默认)。
+    /// 勾选行条目 (seed 元数据 或 /models 拉回的 id + 保守默认 / 目录元数据)。
     struct CandidateModel: Identifiable, Hashable {
         let id: String
         var name: String
@@ -40,6 +44,9 @@ struct SettingsView: View {
         var maxTokens: Int
         var cost: ModelCost?
         var thinkingLevelMap: String?
+        /// true = 不在 vendor 的 `/models` 清单里 (订阅制 / 隐藏模型, 只靠种子存在)。
+        /// ⚠️ 只有在点过「测试连接」之后才判定得出来 ⇒ 未拉取时恒 false (不猜)。
+        var vendorUnlisted: Bool = false
     }
 
     var body: some View {
@@ -181,9 +188,11 @@ struct SettingsView: View {
         .settingsCard()
     }
 
-    /// 预设芯片行: 主推 4 家 + "其他"展开余下 + 自定义 (预设数据仍是全量 8 家)。
+    /// 预设芯片行: 主推列表平铺 + "其他"展开余下 + 自定义。
+    /// P14 起预设库只有 4 家且全部在主推里 ⇒ 「其他…」不再出现在界面上, 但**机制保留**:
+    /// 以后往 ProviderPresets.all 加一条, 它会自动落到「其他…」, 不挤占主推位置。
     private var presetChips: some View {
-        let primary = ["deepseek", "minimax", "zhipu", "kimi"]
+        let primary = ["deepseek", "kimi", "minimax", "zhipu"]
         let others = ProviderPresets.all.filter { !primary.contains($0.id) }
         return ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 6) {
@@ -192,13 +201,15 @@ struct SettingsView: View {
                         loadPreset(p)
                     }
                 }
-                chip("其他…", selected: showMorePresets || others.contains { $0.id == selectedPresetId }) {
-                    showMorePresets.toggle()
-                }
-                if showMorePresets {
-                    ForEach(others) { p in
-                        chip(LK(p.displayName), selected: selectedPresetId == p.id) {
-                            loadPreset(p)
+                if !others.isEmpty {
+                    chip("其他…", selected: showMorePresets || others.contains { $0.id == selectedPresetId }) {
+                        showMorePresets.toggle()
+                    }
+                    if showMorePresets {
+                        ForEach(others) { p in
+                            chip(LK(p.displayName), selected: selectedPresetId == p.id) {
+                                loadPreset(p)
+                            }
                         }
                     }
                 }
@@ -207,6 +218,7 @@ struct SettingsView: View {
                     baseURL = ""; apiType = "openai-completions"
                     candidates = []; checked = []; verified = false
                     testState = .idle; formError = nil
+                    lastFetchedIds = []
                 }
             }
         }
@@ -233,6 +245,19 @@ struct SettingsView: View {
     private var addModelForm: some View {
         VStack(alignment: .leading, spacing: 10) {
             presetChips
+
+            // 模型目录 (models.dev) 与 /models 各管一半: 前者管「这个模型是什么」(窗口/价格/模态),
+            // 后者管「现在有哪些模型」。目录 7 天自动刷新一次, 这里给一条手动强制刷新的路。
+            HStack(spacing: 8) {
+                Button(LK(catalogBusy ? "刷新中…" : "更新模型目录")) { refreshCatalog() }
+                    .fixedSize()
+                    .disabled(catalogBusy)
+                Text(catalogStatusText)
+                    .font(.system(size: 11))
+                    .foregroundStyle(catalogNote != nil ? CodexTheme.toolDone : CodexTheme.textMuted)
+                    .fixedSize(horizontal: false, vertical: true)
+                Spacer()
+            }
 
             if selectedPresetId == nil {
                 TextField("provider (自定义)", text: $customProvider)
@@ -280,39 +305,58 @@ struct SettingsView: View {
             if !candidates.isEmpty {
                 candidateList
             }
+
+            // P14 硬准入: 官方 /models 报了 id 但既无种子也无目录元数据的, 不进候选 —— 这里如实报数,
+            // 否则用户只看到"少了几个模型", 无从判断是拉取失败还是被挡。
+            if let missingMetaNote {
+                Text(missingMetaNote)
+                    .font(.system(size: 11))
+                    .foregroundStyle(CodexTheme.textMuted)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
     }
 
+    /// 候选清单。
+    /// ⚠️ 外层 ScrollView 不只是为了能滚 —— `frame(maxHeight:)` **不裁剪**, 少了它, 超出 180pt 的行
+    /// 会直接画到框外、压住下面的提示 (GLM 组 18 条必然触发; 只有框下有元素时才看得见)。
     private var candidateList: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            ForEach(candidates) { c in
-                HStack(spacing: 8) {
-                    Toggle(isOn: Binding(
-                        get: { checked.contains(c.id) },
-                        set: { on in
-                            if on { checked.insert(c.id) } else { checked.remove(c.id) }
+        ScrollView {
+            VStack(alignment: .leading, spacing: 0) {
+                ForEach(candidates) { c in
+                    HStack(spacing: 8) {
+                        Toggle(isOn: Binding(
+                            get: { checked.contains(c.id) },
+                            set: { on in
+                                if on { checked.insert(c.id) } else { checked.remove(c.id) }
+                            }
+                        )) { Text("") }
+                        .toggleStyle(.checkbox)
+                        .labelsHidden()
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(c.name).font(.system(size: 12)).foregroundStyle(CodexTheme.textPrimary)
+                            Text(c.id).font(CodexTheme.fontMonoXs).foregroundStyle(CodexTheme.textMuted)
                         }
-                    )) { Text("") }
-                    .toggleStyle(.checkbox)
-                    .labelsHidden()
-                    VStack(alignment: .leading, spacing: 1) {
-                        Text(c.name).font(.system(size: 12)).foregroundStyle(CodexTheme.textPrimary)
-                        Text(c.id).font(CodexTheme.fontMonoXs).foregroundStyle(CodexTheme.textMuted)
+                        Spacer()
+                        // ⚠️ 纯字符串 key, 别加 title:/非字符串参数 —— 本地化不透明 (深坑)。
+                        if c.vendorUnlisted {
+                            Text("本地").font(.system(size: 9, weight: .semibold))
+                                .foregroundStyle(CodexTheme.textSecondary)
+                        }
+                        if c.input.contains("image") {
+                            Text("image").font(.system(size: 9, weight: .semibold))
+                                .foregroundStyle(CodexTheme.toolRunning)
+                        }
+                        if c.reasoning {
+                            Text("think").font(.system(size: 9, weight: .semibold))
+                                .foregroundStyle(CodexTheme.toolDone)
+                        }
                     }
-                    Spacer()
-                    if c.input.contains("image") {
-                        Text("image").font(.system(size: 9, weight: .semibold))
-                            .foregroundStyle(CodexTheme.toolRunning)
-                    }
-                    if c.reasoning {
-                        Text("think").font(.system(size: 9, weight: .semibold))
-                            .foregroundStyle(CodexTheme.toolDone)
-                    }
+                    .padding(.vertical, 4)
                 }
-                .padding(.vertical, 4)
             }
         }
-        .frame(maxHeight: 180, alignment: .top)
+        .frame(maxHeight: 180)
     }
 
     /// 自管条目行: 名称 + 来源徽章 + provider/id + key 点 + 启停/选中/删除。
@@ -422,6 +466,8 @@ struct SettingsView: View {
         verified = false
         testState = .idle
         formError = nil
+        missingMetaNote = nil
+        lastFetchedIds = []
         Task { @MainActor in
             // 目录新鲜度后台巡检 (静默); 完成后如果还在当前预设, 重新展开补全
             if await ModelCatalogStore.shared.refreshIfStale(), selectedPresetId == p.id {
@@ -440,7 +486,9 @@ struct SettingsView: View {
                            thinkingLevelMap: s.thinkingLevelMap)
         }
         let seedIds = Set(seeds.map(\.id))
-        for (id, e) in ModelCatalogStore.shared.entries(provider: provider).sorted(by: { $0.key < $1.key })
+        // ⚠️ 按发布日期倒序 (不是 id 字母序) —— 18 条的 GLM 组里最新那条曾被字母序压到最底,
+        //    看起来就像「目录全是老模型」。
+        for (id, e) in ModelCatalogStore.shared.entriesNewestFirst(provider: provider)
         where !seedIds.contains(id) {
             list.append(CandidateModel(id: id, name: e.name.isEmpty ? id : e.name,
                                        reasoning: e.reasoning, input: e.input,
@@ -451,40 +499,138 @@ struct SettingsView: View {
         return list
     }
 
+    /// 当前预设的种子表 (硬准入的第一优先级)。刻意不从 candidates 取 —— 那里混着目录条目,
+    /// 目录刷新后需要能按新元数据重算。
+    private var seedMap: [String: ProviderPreset.SeedModel] {
+        Dictionary(uniqueKeysWithValues: (selectedPreset?.seedModels ?? []).map { ($0.id, $0) })
+    }
+
+    /// 候选 id = **vendor `/models` 返回集 ∪ 未被列出的种子**（不是纯 `/models`）。
+    ///
+    /// ⚠️ 纯替换会删掉唯一的补丁：订阅制 / 隐藏模型（`MiniMax-M3.1-Flash-Preview`）**永远不会**出现在
+    /// 官方清单里，而种子正是为它们维护的 ⇒ 实测「点测试连接后 M3.1 消失」就是这么来的。
+    /// 返回 (候选 id 序列, 「本地补充」的 id 集合 —— 给行上打标用)。
+    /// 顺序 = 官方原序在前、本地补充在后（保留 vendor 的排序语义, 补丁不插队）。
+    private func unionWithUnlistedSeeds(fetched: [String]) -> ([String], Set<String>) {
+        let extra = ProviderPresets.vendorUnlisted(returned: fetched, seedIds: seedMap.keys.sorted())
+        return (fetched + extra, Set(extra))
+    }
+
+    /// 硬准入: 候选 id 逐个定元数据 —— 种子 (不漂移) > models.dev 目录 > 挡掉。
+    /// 返回 (候选, 被挡掉的 id)。挡掉的理由: 裸默认 (128k/16k) 会一路物化进 pi, 让引擎按错的窗口
+    /// 提前压缩, 而 UI 上完全看不出来 —— 宁可少列, 不可错列。
+    /// `vendorUnlisted` = 属于「本地补充」的 id (不在 vendor `/models` 清单里), 打标用。
+    private func admit(ids: [String], provider: String,
+                       seeds: [String: ProviderPreset.SeedModel],
+                       vendorUnlisted: Set<String> = []) -> ([CandidateModel], [String]) {
+        var admitted: [CandidateModel] = []
+        var missing: [String] = []
+        for id in ids {
+            if let s = seeds[id] {
+                admitted.append(CandidateModel(id: s.id, name: s.name, reasoning: s.reasoning,
+                                               input: s.input, contextWindow: s.contextWindow,
+                                               maxTokens: s.maxTokens, cost: s.cost,
+                                               thinkingLevelMap: s.thinkingLevelMap,
+                                               vendorUnlisted: vendorUnlisted.contains(id)))
+                continue
+            }
+            if let e = ModelCatalogStore.shared.entry(provider: provider, modelId: id) {
+                admitted.append(CandidateModel(id: id, name: e.name.isEmpty ? id : e.name,
+                                               reasoning: e.reasoning, input: e.input,
+                                               contextWindow: e.contextWindow ?? 128_000,
+                                               maxTokens: e.maxTokens ?? 16_384,
+                                               cost: e.cost, thinkingLevelMap: nil,
+                                               vendorUnlisted: vendorUnlisted.contains(id)))
+                continue
+            }
+            missing.append(id)
+        }
+        return (admitted, missing)
+    }
+
+    /// 「被挡掉」的提示文案。**必须点名** —— 只报个数字的话用户不知道是哪个, 会当 bug 追
+    /// (实测: 挡掉的往往是「官方有、目录没有」的那一两个, 说出来才能判断该不该补种子)。
+    private func missingNote(_ missing: [String]) -> String? {
+        guard !missing.isEmpty else { return nil }
+        let head = missing.prefix(3).joined(separator: ", ") + (missing.count > 3 ? "…" : "")
+        return String(format: L("%lld 个模型因缺元数据未列出: %@"), missing.count, head)
+    }
+
     private func testConnection() {
         testState = .testing
         formError = nil
+        missingMetaNote = nil
         Task { @MainActor in
+            // 表单 key 为空时回落 Keychain 已存 key —— 与 saveModels 对称。
+            // ⚠️ 缺此回落 ⇒ 点预设芯片会清空表单 (:419), 紧接着点测试连接就必不带 Authorization
+            //    ⇒ 强制鉴权的 provider (MiniMax / DeepSeek / ...) 一律 401 "login fail"。
+            let provider = selectedPresetId ?? customProvider.trimmingCharacters(in: .whitespaces)
+            let effectiveKey = apiKey.isEmpty ? store.providerKey(provider: provider) : apiKey
             let result = await ModelCatalogFetcher.fetch(
                 baseURL: baseURL.trimmingCharacters(in: .whitespaces),
-                apiKey: apiKey.isEmpty ? nil : apiKey,
+                apiKey: effectiveKey,
                 apiType: apiType,
                 ollamaStyle: selectedPreset?.ollamaStyle ?? false)
             testState = .done
             if result.verified {
                 verified = true
-                let provider = selectedPresetId ?? customProvider.trimmingCharacters(in: .whitespaces)
-                let seeds = Dictionary(uniqueKeysWithValues: candidates.map { ($0.id, $0) })
-                candidates = result.modelIds.map { id in
-                    // 元数据优先级: seed (不漂移) > models.dev 目录 > 裸默认
-                    if let seed = seeds[id] { return seed }
-                    if let e = ModelCatalogStore.shared.entry(provider: provider, modelId: id) {
-                        return CandidateModel(id: id, name: e.name.isEmpty ? id : e.name,
-                                              reasoning: e.reasoning, input: e.input,
-                                              contextWindow: e.contextWindow ?? 128_000,
-                                              maxTokens: e.maxTokens ?? 16_384,
-                                              cost: e.cost, thinkingLevelMap: nil)
-                    }
-                    return CandidateModel(id: id, name: id, reasoning: false,
-                                          input: ["text"], contextWindow: 128_000,
-                                          maxTokens: 16_384, cost: nil, thinkingLevelMap: nil)
-                }
-                checked = Set(result.modelIds.filter { seeds[$0] != nil })   // 种子预勾, 其余不勾
+                let seeds = seedMap
+                // 候选 = /models ∪ 未列出的种子 (vendor 清单结构性列不出订阅制模型, 见 unionWithUnlistedSeeds)。
+                let (ids, unlisted) = unionWithUnlistedSeeds(fetched: result.modelIds)
+                let (admitted, missing) = admit(ids: ids, provider: provider,
+                                                seeds: seeds, vendorUnlisted: unlisted)
+                lastFetchedIds = result.modelIds
+                candidates = admitted
+                missingMetaNote = missingNote(missing)
+                checked = Set(ids.filter { seeds[$0] != nil })   // 种子预勾, 其余不勾
             } else {
                 verified = false
+                lastFetchedIds = []
+                missingMetaNote = nil
                 formError = String(format: L("拉取失败 (%@), 已回落预设清单"), result.error ?? L("未知"))
             }
         }
+    }
+
+    /// 手动强制刷新 models.dev 目录 (跳过 7 天 TTL); 成功后按新元数据重算候选。
+    private func refreshCatalog() {
+        catalogBusy = true
+        catalogNote = nil
+        Task { @MainActor in
+            let ok = await ModelCatalogStore.shared.refreshRemote()
+            catalogBusy = false
+            guard ok else {
+                catalogNote = L("更新失败, 保留原目录")
+                return
+            }
+            let catalog = ModelCatalogStore.shared
+            let models = catalog.providers.values.reduce(0) { $0 + $1.count }
+            catalogNote = String(format: L("已更新: %lld 家 / %lld 条"), catalog.providers.count, models)
+            // 元数据就是候选的输入 ⇒ 目录变了要把候选重算一遍 (不重拉 /models)
+            let provider = selectedPresetId ?? customProvider.trimmingCharacters(in: .whitespaces)
+            if !lastFetchedIds.isEmpty {
+                // 重算走与 testConnection 同一条式子 (并集 + 标记), 否则标记会与候选来源不一致。
+                let (ids, unlisted) = unionWithUnlistedSeeds(fetched: lastFetchedIds)
+                let (admitted, missing) = admit(ids: ids, provider: provider,
+                                                seeds: seedMap, vendorUnlisted: unlisted)
+                candidates = admitted
+                checked = checked.intersection(Set(admitted.map(\.id)))
+                missingMetaNote = missingNote(missing)
+            } else if let p = selectedPreset {
+                candidates = mergeCatalog(provider: p.id, seeds: p.seedModels)
+                checked.formUnion(p.seedModels.map(\.id))
+            }
+        }
+    }
+
+    private var catalogStatusText: String {
+        if let catalogNote { return catalogNote }
+        let catalog = ModelCatalogStore.shared
+        guard !catalog.isEmpty else { return L("目录为空, 点「更新模型目录」拉取") }
+        let models = catalog.providers.values.reduce(0) { $0 + $1.count }
+        return catalog.isStale
+            ? String(format: L("目录: %lld 家 / %lld 条, 已过期"), catalog.providers.count, models)
+            : String(format: L("目录: %lld 家 / %lld 条"), catalog.providers.count, models)
     }
 
     private func saveModels() {
@@ -518,6 +664,8 @@ struct SettingsView: View {
         verified = false
         testState = .idle
         formError = nil
+        missingMetaNote = nil
+        lastFetchedIds = []
     }
 
     // MARK: - 并发上限

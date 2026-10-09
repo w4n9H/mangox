@@ -13,7 +13,7 @@ struct ChatComposer: View {
     @ObservedObject var store: ChatStore
     /// CompactTextEditor 实测内容高度回调 (SwiftUI 外部 frame 才是权威布局)。
     @State private var editorHeight: CGFloat = Tune.editorMinHeight
-    @State private var showModeMenu = false   // P7-M4: 档位 popover (原生 Menu 剥富 label)
+    // P13: 档位 popover 的展开态移进共用件 AgentModePicker, 这里不再需要它
 
     var body: some View {
         VStack(spacing: Tune.composerStackSpacing) {
@@ -235,12 +235,16 @@ struct ChatComposer: View {
         .help(LK(store.askApproval ? "审批流开启, 点击关闭" : "审批流关闭, 点击开启"))
     }
 
-    // MARK: - 模式档位 pill (P7-M4: 极简/常规/完整, per-turn spawn 生效)
+    // MARK: - 模式档位 pill (P7-M4 三档; P13 加 codemode 层, per-turn spawn 生效)
 
+    /// 菜单内容抽到共用件 `AgentModeMenu` —— 三处入口从此**同一份** (原来只有这里是自绘
+    /// popover, 另两处在原生 Menu 里退化成一个名字, 看不到 codemode 的代价说明)。
     private var modeMenu: some View {
-        Button {
-            showModeMenu.toggle()
-        } label: {
+        // ⚠️ help 文本原先写作 `.help("…")` —— 那是**硬编码中文**: `.help(` 恰好在接线扫描的
+        //    豁免名单里, 所以它一直"绿"着却有译文没人用 (隐形漏译)。现在它成了普通实参,
+        //    扫描器看得见了 ⇒ 必须真接 `L()`。
+        AgentModePicker(mode: $store.agentMode,
+                        help: L("模式档位: 决定 agent 可用的工具与扩展 (下回合生效)")) {
             (Text(Image(systemName: "slider.horizontal.3"))
                 .font(.system(size: 10)).foregroundColor(store.agentMode == .standard ? CodexTheme.textTertiary : CodexTheme.accent)
              + Text(" \(store.agentMode.displayName)")
@@ -253,51 +257,6 @@ struct ChatComposer: View {
                 .frame(height: Tune.pillHeight)
                 .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
-        .popover(isPresented: $showModeMenu, arrowEdge: .bottom) {
-            // 原生 Menu 会把富 label 剥成纯文本 (NSMenu title 机制), 富版式必须 popover 自绘
-            VStack(alignment: .leading, spacing: 0) {
-                ForEach(AgentMode.allCases) { m in
-                    modeRow(m)
-                }
-            }
-            .padding(.vertical, 5)
-            .frame(width: 320)
-        }
-        .help("模式档位: 决定 agent 可用的工具与扩展 (下回合生效)")
-    }
-
-    /// 参考版式菜单行: 标题 + 多行描述 + 选中勾。
-    private func modeRow(_ m: AgentMode) -> some View {
-        let selected = m == store.agentMode
-        return Button {
-            store.agentMode = m
-            showModeMenu = false
-        } label: {
-            HStack(alignment: .top, spacing: 10) {
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(m.displayName)
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(CodexTheme.textPrimary)
-                    Text(m.subtitle)
-                        .font(.system(size: 11))
-                        .foregroundStyle(CodexTheme.textMuted)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                Spacer(minLength: 12)
-                if selected {
-                    Image(systemName: "checkmark")
-                        .font(.system(size: 11, weight: .semibold))
-                        .foregroundStyle(CodexTheme.textPrimary)
-                }
-            }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 9)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .contentShape(Rectangle())
-            .background(selected ? CodexTheme.bgSidebar : Color.clear)
-        }
-        .buttonStyle(.plain)
     }
 
     // MARK: - 知识注入 pill (P3.7: 生效条数 + 重启引擎入口)

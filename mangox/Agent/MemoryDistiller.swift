@@ -47,7 +47,11 @@ final class MemoryDistiller {
         var args = spec.scriptArgs + ["--mode", "rpc"]
         // P12.1b: 与 PiRpcTransport **同一份**扩展参数 (含补回内置 llama.cpp provider)。
         // 走同一个纯函数而不是各写一份 —— 两条引擎路径的扩展集不许悄悄分叉。
-        args += PiRpcTransport.extensionArguments(hostedExtensionPath: extPath, enabled: [])
+        // ⚠️ P13: codemode 段传 nil —— 提炼轮是**无人值守**的固定流程, 不该换成 codemode 的
+        //    调用范式 (那还会顺带引入"脚本 timeout 无默认值"这个对无人值守最要命的风险)。
+        args += PiRpcTransport.extensionArguments(hostedExtensionPath: extPath,
+                                                  codemodeExtensionPath: nil,
+                                                  enabled: [])
         args += ["--no-session"]
         if let model { args += ["--model", model] }
         if let thinking { args += ["--thinking", thinking] }

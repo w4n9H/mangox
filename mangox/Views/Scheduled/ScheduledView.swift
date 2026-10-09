@@ -658,16 +658,24 @@ struct ScheduledView: View {
             ?? (draftModelId.isEmpty ? L("选择模型") : draftModelId)
     }
 
+    /// P13: 从原生 `Menu`(只显示一个名字) 换成共用自绘菜单 —— 才能在选择 codemode 时
+    /// 看到"这一档会换掉工具调用范式"的代价说明 (`subtitle` 在原生 Menu 里会被剥掉)。
+    /// ⚠️ 草稿仍按 `String`(rawValue) 存, 所以这里做一层双向转换 (改了草稿类型会牵动别处)。
     private var configModePicker: some View {
-        CodexPillMenu {
-            ForEach(AgentMode.allCases) { mode in
-                Button(mode.displayName) {
-                    draftMode = mode.rawValue
-                }
+        AgentModePicker(mode: Binding(
+            get: { AgentMode(rawValue: draftMode) ?? .standard },
+            set: { draftMode = $0.rawValue })) {
+            HStack(spacing: 4) {
+                Image(systemName: "switch.2")
+                Text(LK(AgentMode(rawValue: draftMode)?.displayName ?? "模式"))
             }
-        } label: {
-            Image(systemName: "switch.2")
-            Text(LK(AgentMode(rawValue: draftMode)?.displayName ?? "模式"))
+            .font(CodexTheme.fontSmall)
+            .foregroundStyle(CodexTheme.textSecondary)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 3)
+            .background(CodexTheme.bgPill)
+            .clipShape(Capsule())
+            .overlay(Capsule().stroke(CodexTheme.border.opacity(0.4), lineWidth: 1))
         }
     }
 

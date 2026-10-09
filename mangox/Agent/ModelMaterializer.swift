@@ -27,7 +27,10 @@ enum ModelMaterializer {
     // MARK: - 纯函数核心
 
     /// keyProvider: account (keyRef) → key 明文 (来自 Keychain)。返回 nil/空 = 该 provider 不进 auth.json。
+    /// providerSamplingParams: provider → 该厂商固有的请求体参数 (JSON 文本), 作为模型缺省值。
+    ///   注入式而非直接读 ProviderPresets —— 与 keyProvider 同形, 且冒烟可喂假值验优先级。
     static func materialize(_ models: [ManagedModel],
+                            providerSamplingParams: (String) -> String? = { ProviderPresets.preset(id: $0)?.samplingParams },
                             keyProvider: (String) -> String?) -> Output {
         let enabled = models.filter { $0.enabled }
         // 排序保证 .sortedKeys 之外的结构也确定 (数组顺序影响指纹)
@@ -58,7 +61,10 @@ enum ModelMaterializer {
                 if let cost = m.cost { entry["cost"] = costDict(cost) }
                 if let raw = m.thinkingLevelMapJSON, let obj = parseFragment(raw) { entry["thinkingLevelMap"] = obj }
                 if let raw = m.compatJSON, let obj = parseFragment(raw) { entry["compat"] = obj }
-                if let raw = m.samplingParamsJSON, let obj = parseFragment(raw) { entry["samplingParams"] = obj }
+                // 模型自带 > provider 固有默认 (MiniMax `reasoning_split` 这类是 provider 级契约)。
+                // ⚠️ 在**物化期**展开而非入库 ⇒ 存量已保存的模型无需数据迁移就被修好 (DB 一个字节不动)。
+                if let raw = m.samplingParamsJSON ?? providerSamplingParams(provider),
+                   let obj = parseFragment(raw) { entry["samplingParams"] = obj }
                 modelEntries.append(entry)
             }
 

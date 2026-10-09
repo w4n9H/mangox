@@ -5,6 +5,7 @@
 > **基线**：本机实装 `pi 0.85.1`（`/opt/homebrew/bin/pi`，npm 全局装）。⚠️ boss 记忆中的「0.83」与之同属 0.8x；**0.83.0 的 RPC 契约与 0.85.1 逐字相同**（已下载 0.83.0 核对 `--thinking` 档位行与 RPC 命令集）⇒ **下面所有判定对 0.83 与 0.85.1 同时成立**，基线取哪个都不影响结论。
 > **目标版本**：**`1.1.0`**（npm `latest`，2026-10-07；本机实装已同步升级）。初次调研的基线是 `1.0.2`；**P12.2 收口时按 boss「只兼容最新版 pi」的前置重核到 1.0.4** —— 1.0.3 / 1.0.4 的增量已逐条核过（§1.3），**对 MangoX 零影响**；**1.1.0 的增量已核过（§1.4），同样零影响**。中间跨过 0.86/0.87/0.99.0~0.99.2/1.0.0~1.1.0 共 16 个版本。
 > **状态**：**P12.1 ✅ · P12.2 ✅ —— 均已落地并过门禁**（§五、§六 都是已实现记录）。
+> **P13（codemode 接入）已于 2026-10-08 单独立项** —— 判定、契约、前置门与验收方式全在 **`docs/P13-functional-design.html`**；**本文不再持有 codemode 的任何结论**（保持单一来源）。
 
 ---
 
@@ -142,7 +143,7 @@
 | 15 | 蒸馏进程 | `MemoryDistiller.swift:47-53` | 同 #3 的扩展段（**调用同一个** `extensionArguments`）+ `--no-session` + `--model` `--thinking` |
 | 16 | 档位语义 | `AgentTransport.swift:115-150` | `ThinkingLevel` 枚举 + `supported(reasoning:map:)`（自称复刻 pi `getSupportedThinkingLevels`） |
 | 17 | 模式 → `--tools` | `AgentMode.swift:35-64` | 极简档 `--tools read,bash,write,edit` |
-| 18 | 预设 provider | `ProviderPresets.swift:44-121` | 自建 `deepseek/kimi/zhipu/qwen/minimax/openai/anthropic/ollama` + `api` 适配器名 |
+| 18 | 预设 provider | `ProviderPresets.swift` | 自建 4 家 `deepseek/kimi/minimax/zhipu(GLM)` + `api` 适配器名（P14 砍库，原 8 家；`ollamaStyle` 能力保留给自定义端点） |
 
 ---
 
@@ -484,8 +485,8 @@
 
 | 不做什么 | 为什么 |
 |---|---|
-| **不接 MCP**（`builtin:mcp`） | ① **安全**：MangoX 的审批桥只拦 `bash`/`write`/`edit`（`SENSITIVE`），而 MCP 工具名是 `mcp__<server>__<tool>` ⇒ **hook 虽触发、但策略不覆盖** ⇒ **静默执行** ⇒ 开 MCP 等于给引擎一个不经用户同意的外部执行面（**要开必须先做 deny-by-default 的审批策略**，见 §十一）。② 成本：MCP 会往系统提示里插 `mcp_servers` 段、改工具清单、加连接生命周期 ⇒ 与 MangoX 的"注入块由 App 全权决定"以及 per-turn 拆进程**直接冲突**（每个回合都要重连一次服务器）。要做必须单独立项 |
-| **不接 codemode**（⚠️ **理由已于 2026-10-08 更正**，见 §十一） | 原写「codemode 让模型跑 JS 调工具，**审批桥同样覆盖不到**」—— **这条是错的**：codemode 的嵌套调用走 `ctx.executeTool` ⇒ **完整 tool pipeline + session hooks**（`agent-session.js:384-386`；`codemode/tool.js:8-9` 明写 "`tool_call`/`tool_result` hooks … apply exactly as for direct calls"）⇒ **内层 `tools.bash`/`write`/`edit` 照常弹审批卡**；且 sandbox 禁 fs / 网络 / Node API ⇒ 影响面**只能经 tools**。⇒ **安全上可开**。它仍是**能力面扩张**（非升级适配）⇒ 立为 **P13**（§十一） |
+| **不接 MCP**（`builtin:mcp`） | ① **安全**：MangoX 的审批桥只拦 `bash`/`write`/`edit`（`SENSITIVE`），而 MCP 工具名是 `mcp__<server>__<tool>` ⇒ **hook 虽触发、但策略不覆盖** ⇒ **静默执行** ⇒ 开 MCP 等于给引擎一个不经用户同意的外部执行面（**要开必须先做 deny-by-default 的审批策略**，见 `docs/P13-functional-design.html`）。② 成本：MCP 会往系统提示里插 `mcp_servers` 段、改工具清单、加连接生命周期 ⇒ 与 MangoX 的"注入块由 App 全权决定"以及 per-turn 拆进程**直接冲突**（每个回合都要重连一次服务器）。要做必须单独立项 |
+| **不接 codemode**（⚠️ **理由已于 2026-10-08 更正**；**本节起 codemode 的结论全在 `docs/P13-functional-design.html`**） | 原写「codemode 让模型跑 JS 调工具，**审批桥同样覆盖不到**」—— **这条是错的**：codemode 的嵌套调用走 `ctx.executeTool` ⇒ **完整 tool pipeline + session hooks**（`agent-session.js:384-386`；`codemode/tool.js:8-9` 明写 "`tool_call`/`tool_result` hooks … apply exactly as for direct calls"）⇒ **内层 `tools.bash`/`write`/`edit` 照常弹审批卡**；且 sandbox 禁 fs / 网络 / Node API ⇒ 影响面**只能经 tools**。⇒ **安全上可开**。它仍是**能力面扩张**（非升级适配）⇒ 立为 **P13**（`docs/P13-functional-design.html`） |
 | **不接 tool-search** | 改的是**工具声明方式**（声明面，不是能力面）；MangoX 的工具清单由**档位白名单**决定，tool-search 的"模型自己搜工具"与"档位即能力边界"直接冲突 |
 | **不改 per-turn 进程架构** | 1.0 没有任何东西要求它变；0.86.0/0.87.0 反而把启动改快了。热进程会引入状态串味与常驻内存 —— 现架构的代价（每回合重启）在变小，收益（隔离）在变大 |
 | **不换成 SDK（`@earendil-works/pi-coding-agent` 的 in-process 用法）** | 那会把 Node 运行时塞进 MangoX 进程，逆转 `P3.0` 的"UI 与引擎边界"设计；且 0.87.0 的破坏性变更（`SessionManager` 权威化、`TranscriptContext`）**全部落在 SDK 面** ⇒ 换过去等于主动去踩本次唯一的一堆坑 |
@@ -540,60 +541,3 @@
 - **与 P7（模型自管/模式档）**：`models.json` schema 纯增量 ⇒ P7 的物化层**零改动**；P7-M4 的 `--tools` 语义未变 ⇒ 模式档零改动。
 - **与 P10（无人值守）**：`autoJudge` 的分级只覆盖 `bash`（`P10.2` 决定 8 B 案）⇒ 这**正是 §七 拒绝 MCP 的核心论据**：审批覆盖度决定了"能接什么能力"。P12 不扩张能力面，因此不动 P10。
 - **与 P11（注入与记忆）**：`--append-system-prompt` 仍存在、注入仍是 spawn 期定格；1.0 让系统提示进 transcript（§4.2）⇒ **注入块现在会被写进会话文件**。P11 的"三载体"模型不变，但**备份/删除会话会连带记忆**这一点要在 P11 的文档里补一句。
-
----
-
-## 十一、P13 立项建议：codemode 接入（2026-10-08 核实）
-
-> 缘起：boss 提出「MCP 与 codemode 都感兴趣，**特别是 codemode**，可以增强我的 3 模式」，并让决定"本期加还是开新版本"。
-> **决定：开新版本（P13）。** 本节记录已核实的可行性（省得重查）与建议方案。P13 正式立项时把这节移过去。
-
-### 11.1 安全性核实（结论：codemode 可开；MCP 要先改审批策略）
-
-| | `tool_call` hook 触发？ | 审批桥覆盖？ | 判定 |
-|---|---|---|---|
-| **codemode** 的嵌套调用 | ✅ 触发（`ctx.executeTool` ⇒ 完整 tool pipeline + session hooks） | ✅ **覆盖** —— 内层落到 `bash`/`write`/`edit`，正是 `SENSITIVE` 那三个名字 | **安全上可开** |
-| **MCP** 工具 | ✅ 触发 | ❌ **不覆盖** —— 工具名 `mcp__<server>__<tool>` 不在 `SENSITIVE` 里 ⇒ **静默执行** | **要先做 deny-by-default** |
-
-**证据（可复查）**：
-- `dist/extensions/codemode/tool.js:8-9`："Nested calls run through the agent loop's tool pipeline (`ctx.executeTool`), so validation, **`tool_call`/`tool_result` hooks**, and permission checks apply **exactly as for direct** calls"
-- `dist/core/agent-session.js:384-386`：`_executeNestedToolCall` —— "It goes through the agent's tool pipeline **with the session's hooks**"；`:401` 传 `beforeToolCall: (context) => this._beforeToolCall(context, parentId)`
-- `dist/core/nested-tool-calls.js:1-9`：嵌套调用"runs each one through the agent's tool pipeline (`runToolCall`) **with its own hooks**"
-- 反面对照（MCP 为什么不行）：审批桥的策略是**白名单式**（`SENSITIVE` 三个名字）⇒ 名字不认识就放行；**hook 触发 ≠ 策略覆盖**，这是两条不同的判据
-
-### 11.2 建议方案：只给 full 档加，用 `--tools +codemode`
-
-| 档 | `--tools` | 内置扩展 | 业务扩展 |
-|---|---|---|---|
-| minimal | `read,bash,write,edit`（**allowlist 模式**） | 只有 `llama.cpp` | — |
-| standard | 不传（pi 默认全量） | 只有 `llama.cpp` | — |
-| **full** | **`+codemode`**（**modifier 模式**） | `llama.cpp` + **`codemode`** | ✅ |
-
-**为什么用 `+codemode` 而不是 `read,bash,write,edit,codemode`**（1.1.0 新语法的真正用处，判据在 `sdk.js:151-157`）：
-- **modifier 模式**下 `allowedToolNames = undefined` ⇒ **不构成白名单** ⇒ **业务扩展注册的工具照旧全部可用** —— 这正是 full 档的核心语义（"扩展注册的工具一并进入工具池"）。
-- **allowlist 模式**（minimal）**只保留列出的名字** ⇒ 扩展工具被排除 ⇒ 符合 minimal 的"轻装"。
-- ⇒ **两种 `--tools` 模式恰好对应两种档位语义**，不是拼凑；代价是同一特性在两档有**两种写法**，必须各钉独立断言（且 `getToolListError` **禁止混用**，写错会直接报错而不是静默误解）。
-
-**为什么只给 full**：standard 是**默认档**，静默加 codemode 会让"模型会不会改用脚本调工具"变成用户**没预期**的行为；full 是用户**显式选择的"全能力"档**，预期明确。
-
-### 11.3 工作量（三块）与前置门（都是"钱花在验证上"）
-
-1. **档位矩阵**：新增「**内置扩展挂载**」轴（现在 `extensionArguments` 写死只挂 `builtin:llama.cpp`）+ `--tools` 双模式 ⇒ 改 `AgentMode.spawnArguments` / `PiRpcTransport.extensionArguments` + 冒烟断言（两档两种写法各一条）。
-2. **审批策略复核（前置门 —— 不过就不做）**：
-   - **必须真进程实测**"codemode 内层 `tools.bash` 真的弹审批卡"。现有只有**源码**证据；判据是"**真弹出一张卡**"，读注释不算。
-   - **`timeout_ms` 必须给默认值**：`docs/codemode.md` 写明**默认不设 = 无期限** ⇒ 对 P10 无人值守是真实风险。
-   - `models.*` 能调分类器 / 图像模型（**花外部 API 的钱，且不经审批**）⇒ 要不要限制需单独定。
-3. **端到端**：真模型写脚本 → 审批卡弹出 → 选 Deny ⇒ 脚本里那次调用被正确阻断（且剩余脚本行为可预期）。
-4. **必须断言「MCP 真的关着」，不能只靠推论**：codemode 默认把 MCP 工具**藏在脚本侧**（`extensions/mcp/index.js` 头注释：默认 `"exposure": "codemode"` ⇒ 工具不进模型的工具声明，只能从脚本经 `searchTools()` 找到），而 `core/agent-session.js:147-151` 写明：
-   > Whether the allowlist filters MCP tools: it is empty (`--no-tools`) or names an MCP tool (`mcp__*`). **Otherwise it keeps MCP tools registered for codemode and tool_search.**
-   而 full 档要用的 **modifier 模式**（`+codemode`）恰好让 `allowedToolNames = undefined`（§11.2）⇒ 不构成白名单 ⇒ **MCP 工具会被保留给 codemode**。
-   ⇒ 今天之所以无风险，是因为 `-ne` 让 `mcp` 扩展**压根不加载**（零服务器 ⇒ 零连接 ⇒ 零工具；本机实测 `~/.pi/agent/mcp.json` 与项目 `.pi/mcp.json` 都不存在）；但这是**推论，不是断言**。**P13 落地时必须加一条断言钉住「MCP 关着」** —— 否则 codemode 就是通往 MCP 的**第二条路**，且这条路**不经过模型的工具声明**，MangoX 的审批桥连工具名都看不到。
-
-### 11.4 MCP 的立场（结论不变，理由写准）
-
-**继续不做**，一条安全前提 + 两条成本：
-- **安全前提**：审批桥是**白名单式**的 ⇒ 要让 MCP 可开，必须先把策略升级为 **deny-by-default**（未知工具名默认弹卡）—— 那是一次**独立的策略重设计**，不是加开关。
-- **成本①**：MCP 往系统提示插 `mcp_servers` 段、改工具清单 ⇒ 与「注入块由 App 全权决定」冲突。
-- **成本②**：连接生命周期 ⇒ 与 **per-turn 拆进程**架构冲突（每回合重连服务器）。
-- **⚠️ 与 codemode 的耦合（P13 必须处理）**：见 11.3 第 4 条 —— codemode 是通往 MCP 的**第二条路**，且**不经过模型的工具声明**。所以「P13 开 codemode」与「永不连 MCP」两条立场必须**同时成立**才算安全，不能靠「反正没配服务器」蒙混过去。
-
