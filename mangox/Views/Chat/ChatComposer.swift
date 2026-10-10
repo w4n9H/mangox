@@ -128,10 +128,12 @@ struct ChatComposer: View {
         .padding(.horizontal, Tune.cardHPadding)
         .padding(.vertical, Tune.cardVPadding)
         .background(CodexTheme.bgComposer)
-        .clipShape(RoundedRectangle(cornerRadius: CodexTheme.radiusLg))
+        .clipShape(RoundedRectangle(cornerRadius: CodexTheme.radiusComposer))
         .overlay(
-            RoundedRectangle(cornerRadius: CodexTheme.radiusLg)
-                .stroke(CodexTheme.border.opacity(0.45), lineWidth: 1)
+            // P14 第四批: 45% 透明 → 实色 (对齐参考图实测 #E2E2E2; token 本身即 #E3E3E7)。
+            // ⚠️ 圆角与这条描边必须用**同一个 token** —— 分开写会让圆角与描边错开。
+            RoundedRectangle(cornerRadius: CodexTheme.radiusComposer)
+                .stroke(CodexTheme.border, lineWidth: 1)
         )
         .shadow(color: .black.opacity(0.05), radius: 5, x: 0, y: 2)  // Codex 式柔和投影, 卡片在白底上不再隐形
         .onDrop(of: [UTType.image], isTargeted: nil) { providers in
@@ -221,13 +223,13 @@ struct ChatComposer: View {
                 Text("Ask for approval")
                     .font(CodexTheme.fontSmall)
             }
-            // 开关视觉: on = accent 胶囊高亮, off = 素色描边 (无状态区分是 A4"点了没反应"的根因)
-            .foregroundStyle(store.askApproval ? CodexTheme.accent : CodexTheme.textTertiary)
+            // 开关视觉: on = textPrimary (近黑), off = textTertiary (无状态区分是 A4"点了没反应"的根因)
+            .foregroundStyle(store.askApproval ? CodexTheme.textPrimary : CodexTheme.textTertiary)
             .padding(.horizontal, 8)
             .padding(.vertical, 3)
-            .background(store.askApproval ? CodexTheme.accentSoft : Color.clear)
-            .clipShape(Capsule())
-            .overlay(Capsule().stroke(CodexTheme.border.opacity(0.4), lineWidth: 1))
+            // P14 第四批: 控件退成"裸"的图标 + 文字 —— 无描边、无底色 (对齐参考图)。
+            // 状态全靠上方 foregroundStyle 的**文字色**表达 (off = textTertiary / on = textPrimary)。
+            // 判据边界: P10.8c「面必须自带边界元素」管的是"面"; 控件不在这个范畴。
             .frame(height: Tune.pillHeight)
             .contentShape(Rectangle())
         }
@@ -246,14 +248,14 @@ struct ChatComposer: View {
         AgentModePicker(mode: $store.agentMode,
                         help: L("模式档位: 决定 agent 可用的工具与扩展 (下回合生效)")) {
             (Text(Image(systemName: "slider.horizontal.3"))
-                .font(.system(size: 10)).foregroundColor(store.agentMode == .standard ? CodexTheme.textTertiary : CodexTheme.accent)
+                .font(.system(size: 10)).foregroundColor(store.agentMode == .standard ? CodexTheme.textTertiary : CodexTheme.textPrimary)
              + Text(" \(store.agentMode.displayName)")
-                .font(CodexTheme.fontSmall).foregroundColor(store.agentMode == .standard ? CodexTheme.textTertiary : CodexTheme.accent))
+                .font(CodexTheme.fontSmall).foregroundColor(store.agentMode == .standard ? CodexTheme.textTertiary : CodexTheme.textPrimary))
                 .padding(.horizontal, 8)
                 .padding(.vertical, 3)
-                .background(store.agentMode == .standard ? Color.clear : CodexTheme.accentSoft)
-                .clipShape(Capsule())
-                .overlay(Capsule().stroke(CodexTheme.border.opacity(0.4), lineWidth: 1))
+                // P14 第四批: 同 approvalToggle —— 无描边、无底色; 状态靠文字色表达。
+                // ⚠️ 曾用 `accent` (品牌红) —— 实测参考图的控件行是**纯灰阶**(#181818/#E0E0E0, R=G=B),
+                //    零彩色 ⇒ 换中性色 (standard = textTertiary / 非 standard = textPrimary)。
                 .frame(height: Tune.pillHeight)
                 .contentShape(Rectangle())
         }

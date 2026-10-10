@@ -1303,7 +1303,7 @@ struct SmokeMain {
             check(ProviderPresets.all.count == 4 && Set(ProviderPresets.all.map(\.id)).count == 4,
                   "T22 预设库 4 家且 id 唯一")
             check(Set(ProviderPresets.all.map(\.id)) == ["deepseek", "kimi", "minimax", "zhipu"],
-                  "T22 预设库只剩 deepseek/kimi/minimax/GLM (P14 砍库)")
+                  "T22 预设库只剩 deepseek/kimi/minimax/GLM (P13 砍库)")
             check(ProviderPresets.all.allSatisfy { !$0.seedModels.isEmpty },
                   "T22 每家预设都有种子 (拉取失败兜底)")
             check(ProviderPresets.preset(id: "openai") == nil
@@ -1312,7 +1312,7 @@ struct SmokeMain {
                   && ProviderPresets.preset(id: "anthropic") == nil,
                   "T22 已移除的 4 家预设确实查不到")
 
-            // P14: MiniMax-M3.1-Flash-Preview —— 把三条接线实测结论钉成断言
+            // P13: MiniMax-M3.1-Flash-Preview —— 把三条接线实测结论钉成断言
             //   (① 窗口取官方文档真值 ② input 不含 video: pi schema 只认 text|image, 写了整条会被丢弃
             //    ③ thinkingLevelMap 必须显式给: 缺 map 时 off 静默变服务端默认 max, xhigh/max 被夹成 high)
             if let m31 = ProviderPresets.preset(id: "minimax")?.seedModels
@@ -1331,7 +1331,7 @@ struct SmokeMain {
                 check(false, "T22 MiniMax-M3.1-Flash-Preview 种子缺失")
             }
 
-            // P14(二): GLM / Kimi 种子换代 —— 旧种子 glm-4.6 (2025-09-30) / glm-4.5-air (2025-07-28)
+            // P13(二): GLM / Kimi 种子换代 —— 旧种子 glm-4.6 (2025-09-30) / glm-4.5-air (2025-07-28)
             // 已过时一年; kimi 的 kimi-k2-0905-preview / kimi-latest 在 models.dev 里**查无此模型**。
             // 元数据一律取自 models.dev (2026-10-09 校对)。
             if let glm = ProviderPresets.preset(id: "zhipu")?.seedModels,
@@ -1401,7 +1401,7 @@ struct SmokeMain {
             check(catM1?.input == ["text", "image"] && catM1?.contextWindow == 200_000
                   && catM1?.cost?.output == 3.0, "T22b 合成 JSON 解析字段映射")
 
-            // ---- T22c P14: models.dev 线上形制 ≠ MangoX 扁平形制 (键名不同, 曾按扁平名读线上) ----
+            // ---- T22c P13: models.dev 线上形制 ≠ MangoX 扁平形制 (键名不同, 曾按扁平名读线上) ----
             // 线上: limit.context / limit.output / modalities.input / cost.cache_read / cost.cache_write
             // 曾全按扁平名读 ⇒ 全表 8462 条窗口/输出/模态/缓存价静默丢失, 唯一可见症状是
             // 候选列表 image 徽章对目录来的模型从不点亮。
@@ -1430,7 +1430,7 @@ struct SmokeMain {
                 "{\"schemaVersion\":3,\"catalog\":{\"p\":{\"models\":{\"m\":{\"name\":\"M\"}}}}}".utf8))
             check(goodCache?["p"]?["m"]?.name == "M", "T22c 当前版本戳缓存可解")
 
-            // ---- T22d P14: 发布日期 —— 「新版在前」排序的数据面 ----
+            // ---- T22d P13: 发布日期 —— 「新版在前」排序的数据面 ----
             // 线上 `release_date` 是 ISO `yyyy-MM-dd`; 存字符串 (字典序即时间序) 直接用于排序。
             // 动机: GLM 组 18 条按 id 字母序排时最新的 glm-5.3-flashx 被压到最底, 看着像「目录全是老模型」。
             let dated = ModelCatalogStore.parse(Data(#"""
@@ -1457,7 +1457,7 @@ struct SmokeMain {
                 check(false, "T22d 缓存 roundtrip 保发布日期")
             }
 
-            // ---- T22e P14-d: 候选 = /models ∪ 未列出的种子 (洞 A) ----
+            // ---- T22e P13-d: 候选 = /models ∪ 未列出的种子 (洞 A) ----
             // 动机: MiniMax-M3.1-Flash-Preview 是在售的, 但 vendor 的 /models 结构性列不出它
             // (订阅制 / 隐藏模型) ⇒ 点「测试连接」时若整体替换, 唯一为它维护的种子补丁就被删掉
             // (boss 实测: 点测试连接后 M3.1 从候选里消失)。式子是**并集**, 不是纯 /models。
@@ -1471,7 +1471,7 @@ struct SmokeMain {
             check(ProviderPresets.vendorUnlisted(returned: mmReturned, seedIds: mmReturned) == [],
                   "T22e 全被列出时不虚报「本地」标记")
 
-            // ---- T22f P14-e: provider 级固有采样参数 (MiniMax `reasoning_split`) ----
+            // ---- T22f P13-e: provider 级固有采样参数 (MiniMax `reasoning_split`) ----
             // 动机: MiniMax 不传 `reasoning_split` 时思考混进 `content` (实测 M3 208 字 / M2.7 706 字),
             // 被 pi 当正文推给 UI。它是**厂商固有契约**(与具体模型无关) ⇒ 声明在 ProviderPreset,
             // 物化时展开到每个 model 条目 (pi schema 只认 model 级 samplingParams)。
@@ -4755,6 +4755,236 @@ struct SmokeMain {
             p4.handleRPCLine(#"{"type":"agent_start"}"#)
             p4.handleRPCLine(#"{"type":"response","command":"prompt","success":false,"error":"boom"}"#)
             check(ended(s4) == 0, "P12.2 disposition: 失败响应不消费 (仍走既有静默语义)")
+        }
+
+        // ===============================================================
+        // P14: 工作区自动刷新 —— 合并式重扫 (ChatStore.mergeRescan) 的身份契约
+        // ===============================================================
+        // 为什么值得断言: `FileNode.id` 是**每次现生成的 UUID** (WorkspaceModels.swift:12),
+        // 所以"重扫"天然产出一棵全新身份的树。若照旧整体替换 `fileTree`, 视图就会重建节点 ⇒
+        // **用户展开的目录被收起来、选中态复位**。合并的作用只是把旧身份搬过来 ——
+        // 逻辑很薄但很容易写松 (匹配键放宽一格就张冠李戴), 所以这里钉住它。
+        do {
+            let ws15Root = fixtureDir("p15ws")
+            let fm15 = FileManager.default
+            try? fm15.createDirectory(atPath: ws15Root + "/A", withIntermediateDirectories: true)
+            try? fm15.createDirectory(atPath: ws15Root + "/B", withIntermediateDirectories: true)
+            try? fm15.createDirectory(atPath: ws15Root + "/C", withIntermediateDirectories: true)
+            try? "a".write(toFile: ws15Root + "/A/shared.txt", atomically: true, encoding: .utf8)
+            try? "b".write(toFile: ws15Root + "/B/shared.txt", atomically: true, encoding: .utf8)
+            try? "c".write(toFile: ws15Root + "/C/only.txt", atomically: true, encoding: .utf8)
+            try? "t".write(toFile: ws15Root + "/top.txt", atomically: true, encoding: .utf8)
+
+            // 首扫 (旧树为空, 等价于"刚打开项目"): 无旧树可借, 全用新身份
+            let first15 = ChatStore.mergeRescan(root: ws15Root, old: [])
+            check(Set(first15.map(\.name)) == ["A", "B", "C", "top.txt"],
+                  "P14 合并: 首扫按磁盘产出 A/B/C/top.txt")
+
+            // 模拟用户: 展开了 A / B 并把子级加载出来; C 从没展开过 (childrenLoaded=false)
+            let loaded15: [FileNode] = first15.map { node in
+                guard node.isFolder, node.name != "C" else { return node }
+                let kids = WorkspaceScanner.scanDirectory(ws15Root + "/" + node.name, depth: node.depth + 1)
+                return FileNode(id: node.id, name: node.name, isFolder: true, depth: node.depth,
+                                isExpanded: true, childrenLoaded: true, children: kids)
+            }
+            let oldA15 = loaded15.first { $0.name == "A" }
+            let oldB15 = loaded15.first { $0.name == "B" }
+            let oldSharedA15 = oldA15?.children.first { $0.name == "shared.txt" }?.id
+            let oldSharedB15 = oldB15?.children.first { $0.name == "shared.txt" }?.id
+            check(oldSharedA15 != nil && oldSharedB15 != nil && oldSharedA15 != oldSharedB15,
+                  "P14 合并 前置: A/B 各有一份同名 shared.txt 且身份本就不同")
+
+            // 磁盘变动: A 里新增一个文件 / 删掉 top.txt
+            try? "n".write(toFile: ws15Root + "/A/added.txt", atomically: true, encoding: .utf8)
+            try? fm15.removeItem(atPath: ws15Root + "/top.txt")
+
+            let second15 = ChatStore.mergeRescan(root: ws15Root, old: loaded15)
+            let newA15 = second15.first { $0.name == "A" }
+            let newB15 = second15.first { $0.name == "B" }
+            let newC15 = second15.first { $0.name == "C" }
+
+            check(newA15?.id == oldA15?.id && newB15?.id == oldB15?.id,
+                  "P14 合并: 目录身份跨重扫保持 (id 复用 ⇒ 展开态不跳)")
+            check(newA15?.isExpanded == true && newB15?.isExpanded == true,
+                  "P14 合并: 展开态被搬过来 (这条才是「不收起用户目录」的判据)")
+            check(newC15?.isExpanded == false,
+                  "P14 合并: 原本没展开的 C 不会被顺手展开")
+            check(newA15?.children.contains { $0.name == "added.txt" } == true,
+                  "P14 合并: A (旧树已加载) 里的新增文件出现 —— 重扫真的递归进了已加载目录")
+            check(newC15?.childrenLoaded == false && newC15?.children.isEmpty == true,
+                  "P14 合并: 未加载过的目录保持未加载 (否则每次重扫退化成全量递归)")
+            check(second15.contains { $0.name == "top.txt" } == false,
+                  "P14 合并: 磁盘上已删的 top.txt 从树里消失")
+            check(newA15?.children.first { $0.name == "shared.txt" }?.id == oldSharedA15
+                  && newB15?.children.first { $0.name == "shared.txt" }?.id == oldSharedB15,
+                  "P14 合并: 同名文件各归各的父目录, 身份不串 (判据含父路径)")
+
+            // 反例: 同级「同名的文件」与「同名的目录」不许互借身份。
+            // 磁盘上造不出这种局面 (同名只能存在一个), 所以直接喂一棵手搓的旧树:
+            // 那个同名"文件"是**展开着的**, 于是匹配键一旦漏掉 `isFolder`,
+            // 目录 A 会连它的展开态一起继承 —— 两条断言同时红 (真实症状: 张冠李戴)。
+            let decoyID15 = UUID()
+            let decoy15 = [FileNode(id: decoyID15, name: "A", isFolder: false, depth: 0,
+                                    isExpanded: true)]
+            let typeKeyed15 = ChatStore.mergeRescan(root: ws15Root, old: decoy15)
+            check(typeKeyed15.first { $0.name == "A" }?.id != decoyID15,
+                  "P14 合并 反例: 旧树里的同名**文件**不被同名**目录**借身份 (匹配键含 isFolder)")
+            check(typeKeyed15.first { $0.name == "A" }?.isExpanded == false,
+                  "P14 合并 反例: 借错身份会连带借走展开态 —— 来自文件节点的 true 不许落到目录上")
+
+            // ---- P14: 命令 → 视图的一次性信号 (序号自增; 视图只观察, 不回写清零) ----
+            let ws15Dir = fixtureDir("p15cmd")
+            let ws15Store = ChatStore(transport: MockTransport(), dbPath: ws15Dir + "/p15.db",
+                                      managedExtensionsDir: ws15Dir + "/ext")
+            check(!ws15Store.canUseWorkspace, "P14 信号 前置: 无项目会话时工作区不可用")
+
+            let focusTick0 = ws15Store.workspaceFilterFocusTick
+            ws15Store.focusWorkspaceFilter()
+            check(ws15Store.workspaceFilterFocusTick == focusTick0 && !ws15Store.workspaceVisible,
+                  "P14 信号 反例: 没有工作目录时 ⌘F 不发聚焦信号 (否则焦点被送进不存在的视图)")
+
+            let refreshTick0 = ws15Store.workspaceRefreshTick
+            ws15Store.refreshWorkspace()
+            check(ws15Store.workspaceRefreshTick == refreshTick0 + 1,
+                  "P14 信号: ⌘R 每次自增 (不是置真 —— 否则连按两次只生效一次)")
+            check(ws15Store.fileTree.isEmpty,
+                  "P14 信号: 无项目时 ⌘R 不动文件树 (guard 住, 不为空说明在扫空路径)")
+
+            // 挂上一个带 path 的项目 ⇒ 工作区可用
+            let ws15ProjectID = UUID()
+            ws15Store.projects = [ProjectGroup(id: ws15ProjectID, title: "T15", path: ws15Root,
+                                               items: [ConversationItem(title: "c15")])]
+            ws15Store.selectedProjectId = ws15ProjectID
+            check(ws15Store.canUseWorkspace && !ws15Store.fileTree.isEmpty,
+                  "P14 信号: 挂上带 path 的项目后工作区可用且文件树已扫出")
+
+            ws15Store.workspaceVisible = false
+            let focusTick1 = ws15Store.workspaceFilterFocusTick
+            ws15Store.focusWorkspaceFilter()
+            check(ws15Store.workspaceVisible && ws15Store.workspaceFilterFocusTick == focusTick1 + 1,
+                  "P14 信号: 有工作目录时 ⌘F 既打开工作区、又发一次聚焦信号")
+
+            // 最后这条是"合并 vs 整体替换"的喉咙: 重扫后顶层身份必须一模一样。
+            let idsBefore15 = ws15Store.fileTree.map(\.id)
+            check(!idsBefore15.isEmpty, "P14 信号 前置: 顶层身份快照非空")
+            ws15Store.refreshWorkspace()
+            check(ws15Store.fileTree.map(\.id) == idsBefore15,
+                  "P14 信号: ⌘R 重扫后顶层节点身份不变 (走合并; 回退成整体替换 ⇒ 这里立刻红)")
+        }
+
+        // ===============================================================
+        // P14: 侧栏搜索的过滤语义 (SidebarFilter)
+        // ===============================================================
+        // 为什么值得断言: 过滤写松之后**不会报任何错** —— 表现只是"少了几行", 而肉眼无法
+        // 分辨"确实没匹配"和"匹配了但被规则吃掉"。三个函数都很薄, 但三条规则互相独立:
+        //   ① 空查询 = 恒等 (不是"匹配空串" —— 那会让侧栏一打开就全空)
+        //   ② 项目名命中 → 保留**整个**项目 (命中容器时该看到容器全貌)
+        //   ③ 仅会话名命中 → 保留项目但**只留命中的会话** (不该顺带展开无关会话)
+        do {
+            // ① 恒等 / 过滤态判定
+            let p16Chats = [
+                ConversationItem(title: "hi"),
+                ConversationItem(title: "DeepSeek 接入"),
+                ConversationItem(title: "mangox"),
+            ]
+            let p16Groups = [
+                ProjectGroup(title: "mangox", items: [
+                    ConversationItem(title: "alpha"),
+                    ConversationItem(title: "beta"),
+                ]),
+                ProjectGroup(title: "mangopi-cli", items: [
+                    ConversationItem(title: "重构计划"),
+                ]),
+            ]
+
+            check(!SidebarFilter.isFiltering("") && !SidebarFilter.isFiltering("   \n\t"),
+                  "P14 过滤: 空/纯空白查询不算过滤态 (否则侧栏一打开就是空的)")
+            check(SidebarFilter.isFiltering("hi"), "P14 过滤: 有内容才算过滤态")
+
+            check(SidebarFilter.chats(p16Chats, query: "").map(\.title) == p16Chats.map(\.title),
+                  "P14 过滤: 空查询会话**原样返回** (含顺序 —— 调用方还要按 updatedAt 排)")
+            check(SidebarFilter.projects(p16Groups, query: "   ").map(\.title) == p16Groups.map(\.title),
+                  "P14 过滤: 纯空白查询项目原样返回")
+
+            // ② 大小写 / 变音不敏感
+            check(SidebarFilter.matches("DeepSeek", query: "deep"),
+                  "P14 过滤: 大小写不敏感")
+            check(SidebarFilter.matches("Café", query: "cafe"),
+                  "P14 过滤: 变音符号不敏感 (café 能被 cafe 搜到)")
+
+            // ③ 会话过滤
+            check(SidebarFilter.chats(p16Chats, query: "de").map(\.title) == ["DeepSeek 接入"],
+                  "P14 过滤: 会话按标题子串命中")
+            check(SidebarFilter.chats(p16Chats, query: "zzz").isEmpty,
+                  "P14 过滤: 无命中返回空数组 (调用方据此落提示)")
+
+            // ④ 项目名命中 → 整组保留 (这条是反例的靶子, 见下)
+            let byGroupName = SidebarFilter.projects(p16Groups, query: "mangox")
+            check(byGroupName.map(\.title) == ["mangox"],
+                  "P14 过滤: 只有项目名命中的那个组留下")
+            check(byGroupName.first?.items.map(\.title) == ["alpha", "beta"],
+                  "P14 过滤 反例: 项目名命中 ⇒ **整组会话都在** (改成只留标题命中的会话 ⇒ 这里立刻红)")
+
+            // ⑤ 仅会话名命中 → 保留项目, 但只留命中的会话
+            let byItemName = SidebarFilter.projects(p16Groups, query: "重构")
+            check(byItemName.map(\.title) == ["mangopi-cli"],
+                  "P14 过滤: 会话名命中的项目被保留 (项目名本身没中)")
+            check(byItemName.first?.items.map(\.title) == ["重构计划"],
+                  "P14 过滤: 只留命中的会话, 不把同项目下无关会话一起拖出来")
+
+            // ⑥ 谁都没中 → 整组消失
+            check(SidebarFilter.projects(p16Groups, query: "zzz").isEmpty,
+                  "P14 过滤: 项目名与会话名都没中 ⇒ 整组不出现 (空区块头由视图侧一起收走)")
+
+            // ⑦ 组的身份不被过滤改掉 —— 视图靠它查 expandedProjects, 换 id 会让展开态失联
+            check(byItemName.first?.id == p16Groups[1].id,
+                  "P14 过滤: 过滤后组 id 不变 (否则展开态查不到, 搜索期强制展开也会错位)")
+        }
+
+        // ===============================================================
+        // P14: 侧栏面板互斥不变量 (ChatStore.panelsExclusive)
+        // ===============================================================
+        // 为什么补这条: 2026-10-10 从 boss 的真机截图里读出来的 —— 侧栏 **Knowledge 与 Plugins
+        // 两行的图标同时是 accent 色**, 而主区只显示一个面板。根因是两个 toggle 分工不对称:
+        // `toggleKnowledgePanel` 只清 Scheduled、`toggleScheduledPanel` 只清 Knowledge ——
+        // **谁都没清 Extensions**。当时只表现为"多一个图标染色"(没人看得出);
+        // P14 给导航行加选中胶囊后, 同一个残留会表现成**两颗胶囊同时亮**。
+        // 判据: 每次 toggle 之后 `panelsExclusive` 都必须成立; 且设置窗**不参与**互斥。
+        do {
+            let p16Dir = fixtureDir("p16panels")
+            let p16Store = ChatStore(transport: MockTransport(), dbPath: p16Dir + "/p16.db",
+                                     managedExtensionsDir: p16Dir + "/ext")
+            check(p16Store.panelsExclusive,
+                  "P14 互斥 前置: 初始态三块主区面板全关")
+
+            // 顺序刻意"开过 Plugins 再点 Knowledge" —— 这正是实测踩到的路径
+            p16Store.toggleExtensionsPanel()
+            check(p16Store.showExtensionsPanel && p16Store.panelsExclusive,
+                  "P14 互斥: 开 Plugins 后成立")
+            p16Store.toggleKnowledgePanel()
+            check(p16Store.showKnowledgePanel && !p16Store.showExtensionsPanel,
+                  "P14 互斥 反例: 开 Knowledge 必须**关掉 Plugins** (只清 Scheduled ⇒ 这里立刻红)")
+            check(p16Store.panelsExclusive, "P14 互斥: Knowledge 覆盖后仍成立")
+
+            p16Store.toggleScheduledPanel()
+            check(p16Store.showScheduledPanel && !p16Store.showKnowledgePanel,
+                  "P14 互斥 反例: 开 Scheduled 必须**关掉 Knowledge**")
+            p16Store.toggleExtensionsPanel()
+            check(p16Store.showExtensionsPanel && !p16Store.showScheduledPanel,
+                  "P14 互斥 反例: 开 Plugins 必须**关掉 Scheduled**")
+            check(p16Store.panelsExclusive, "P14 互斥: 三轮互相覆盖后仍成立")
+
+            // 同一条再点一次 = 收起, 不能把别的面板顺手打开
+            p16Store.toggleExtensionsPanel()
+            check(!p16Store.showExtensionsPanel && p16Store.panelsExclusive,
+                  "P14 互斥: 再点一次只是收起自己, 不牵连别人")
+
+            // P14 的分界: 设置是**独立窗口**, 允许与任一主区面板并存 —— 别把它拉进互斥
+            p16Store.toggleKnowledgePanel()
+            p16Store.showSettingsPanel = true
+            check(p16Store.showKnowledgePanel && p16Store.showSettingsPanel && p16Store.panelsExclusive,
+                  "P14 互斥: 设置窗与主区面板**可以并存** (它不参与互斥, 见 ChatStore:1709)")
+            p16Store.showSettingsPanel = false
         }
 
         report()    }

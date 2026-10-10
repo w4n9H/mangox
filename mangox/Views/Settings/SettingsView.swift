@@ -25,10 +25,10 @@ struct SettingsView: View {
     @State private var testState: TestState = .idle
     @State private var formError: String?
     @State private var showMorePresets = false
-    @State private var missingMetaNote: String?    // P14: 硬准入挡掉的模型 (点名提示)
-    @State private var catalogBusy = false         // P14: 手动更新 models.dev 目录中
-    @State private var catalogNote: String?        // P14: 目录更新结果 (一行)
-    @State private var lastFetchedIds: [String] = []  // P14: /models 最后拉回的 id 全集
+    @State private var missingMetaNote: String?    // P13: 硬准入挡掉的模型 (点名提示)
+    @State private var catalogBusy = false         // P13: 手动更新 models.dev 目录中
+    @State private var catalogNote: String?        // P13: 目录更新结果 (一行)
+    @State private var lastFetchedIds: [String] = []  // P13: /models 最后拉回的 id 全集
     @State private var recording = false          // P8-T27: 热键录制中
     @State private var keyMonitor: Any?           // P8-T27: 录制用 keyDown 监听
 
@@ -189,7 +189,7 @@ struct SettingsView: View {
     }
 
     /// 预设芯片行: 主推列表平铺 + "其他"展开余下 + 自定义。
-    /// P14 起预设库只有 4 家且全部在主推里 ⇒ 「其他…」不再出现在界面上, 但**机制保留**:
+    /// P13 起预设库只有 4 家且全部在主推里 ⇒ 「其他…」不再出现在界面上, 但**机制保留**:
     /// 以后往 ProviderPresets.all 加一条, 它会自动落到「其他…」, 不挤占主推位置。
     private var presetChips: some View {
         let primary = ["deepseek", "kimi", "minimax", "zhipu"]
@@ -306,7 +306,7 @@ struct SettingsView: View {
                 candidateList
             }
 
-            // P14 硬准入: 官方 /models 报了 id 但既无种子也无目录元数据的, 不进候选 —— 这里如实报数,
+            // P13 硬准入: 官方 /models 报了 id 但既无种子也无目录元数据的, 不进候选 —— 这里如实报数,
             // 否则用户只看到"少了几个模型", 无从判断是拉取失败还是被挡。
             if let missingMetaNote {
                 Text(missingMetaNote)

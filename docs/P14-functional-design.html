@@ -1,0 +1,596 @@
+<!DOCTYPE html>
+<html lang="zh-Hans">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>P14 — 应用外壳与工作区收口</title>
+<!-- @style:begin · generated from docs/assets/design-doc.css — 请勿手改 -->
+<style>
+/* ============================================================================
+   design-doc.css —— MangoX 对齐文档统一样式
+   ----------------------------------------------------------------------------
+   ⚠️ 这是**唯一手改的样式源**。任何 docs/*.html 都不得自己写样式。
+      各文档里的 style 块由 scripts/docs/design_doc_css.py 从本文件生成：
+          python3 scripts/docs/design_doc_css.py --apply    # 同步
+          python3 scripts/docs/design_doc_css.py --check    # 不同步就退码 1
+      改完样式必须重跑 --apply，否则文档里的副本是旧的。
+
+   为什么不用外链：预览面板只服务单个文件（同级路径返回 403），
+   外链样式在面板里会静默失效 ⇒ 必须内联。单一来源靠脚本保证，不靠链接。
+
+   主题：跟随系统（prefers-color-scheme），两套色板都在 :root 里。
+   字号：正文 14px；标题 30 / 19 / 14；说明 12~13px。**不要小于 11px。**
+
+   —— 类名清单（骨架 = .wrap + 章节 h2，其余按需） ——
+   骨架   .wrap .eyebrow h1(.small) .metaline .tag h2(.n .en) h3
+   文本   .lead p code pre(.c .k) .foot ul.tight .kv .cite
+   强调块 .call(.lbl)  变体：.call.ok / .call.warn / .call.bad
+          .tldr > .tl(> .tln)
+   状态   .chip  变体：.c-ok .c-bad .c-warn .c-info .c-acc .c-mute
+   卡片   .grid(.g2 .g3) > .v(> .face > span)
+   对照   .flow > .lyr(.name .code .st)  + .arrowdown
+   条形   .bars > .bar(.on) > .track > .fill / .bv   + .barnote
+   表格   .tbl / .tw  > table > th/td(.num .sub)
+   待办   .todos > .todo(.blocked) > .tn / .tbody > .tt .td   + .cite
+   折叠   details.fold > summary
+   ============================================================================ */
+
+:root{
+  --bg:#fbfbf9; --card:#ffffff; --soft:#f4f4f0;
+  --fg:#1b1b19; --mute:#6a6a64; --faint:#9c9c95;
+  --line:#e5e4df; --line2:#d2d1cb;
+  --ok:#0f6e56; --okbg:#e3f5ee; --okbd:#9fe1cb;
+  --bad:#a32d2d; --badbg:#fcebeb; --badbd:#f7c1c1;
+  --warn:#82500b; --warnbg:#faeeda; --warnbd:#fac775;
+  --info:#185fa5; --infobg:#e8f1fb; --infobd:#b5d4f4;
+  --acc:#4a41b0; --accbg:#eeedfe; --accbd:#cecbf6;
+  --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
+}
+@media (prefers-color-scheme:dark){
+  :root{
+    --bg:#141417; --card:#1d1d21; --soft:#232328;
+    --fg:#ececea; --mute:#a2a29b; --faint:#74746e;
+    --line:#2e2e33; --line2:#414148;
+    --ok:#8adcbc; --okbg:#0e2f27; --okbd:#1d6e57;
+    --bad:#f4a4a4; --badbg:#361818; --badbd:#8f3b3b;
+    --warn:#f2c47f; --warnbg:#332610; --warnbd:#8a5f19;
+    --info:#9bc9f2; --infobg:#132539; --infobd:#255f94;
+    --acc:#b6b1f4; --accbg:#231f3e; --accbd:#4a41b0;
+  }
+}
+
+*{box-sizing:border-box}
+html{-webkit-text-size-adjust:100%}
+body{
+  margin:0;background:var(--bg);color:var(--fg);
+  font:14px/1.65 -apple-system,BlinkMacSystemFont,"PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;
+}
+.wrap{max-width:1060px;margin:0 auto;padding:44px 28px 72px}
+
+/* ---------- 页头 ---------- */
+.eyebrow{font:500 12px/1 var(--mono);letter-spacing:.08em;text-transform:uppercase;color:var(--faint)}
+h1{font-size:30px;line-height:1.25;font-weight:600;margin:12px 0 10px;letter-spacing:-.01em}
+h1 small{display:block;font-size:15px;font-weight:400;color:var(--mute);margin-top:8px;letter-spacing:0}
+.metaline{display:flex;flex-wrap:wrap;gap:8px;margin-top:18px}
+.tag{font:12px/1 var(--mono);padding:6px 10px;border:1px solid var(--line2);border-radius:999px;color:var(--mute);background:var(--card)}
+.tag b{color:var(--fg);font-weight:500}
+
+/* ---------- 章节 ---------- */
+h2{font-size:19px;font-weight:600;margin:52px 0 4px;padding-bottom:10px;border-bottom:1px solid var(--line);letter-spacing:-.01em}
+h2 .n{font:500 12px/1 var(--mono);color:var(--faint);margin-right:10px;vertical-align:2px}
+h2 .en{font:400 11px/1 var(--mono);color:var(--faint);letter-spacing:.06em;margin-left:10px;vertical-align:2px}
+h3{font-size:14px;font-weight:600;margin:28px 0 10px;color:var(--fg)}
+
+/* ---------- 文本 ---------- */
+p{margin:12px 0}
+.lead{color:var(--mute);font-size:13px;margin:8px 0 0}
+code{font:12.5px/1.5 var(--mono);background:var(--soft);padding:2px 5px;border-radius:5px;color:var(--fg)}
+pre{font:12.5px/1.7 var(--mono);background:var(--soft);border:1px solid var(--line);border-left:3px solid var(--accbd);
+    padding:14px 16px;border-radius:10px;overflow-x:auto;margin:12px 0;color:var(--fg)}
+pre .c{color:var(--faint)}
+pre .k{color:var(--acc)}
+.foot{color:var(--faint);font-size:12px;margin-top:44px;padding-top:18px;border-top:1px solid var(--line);font-family:var(--mono)}
+ul.tight{margin:12px 0;padding-left:20px}
+ul.tight li{margin:7px 0;font-size:13.5px}
+ul.tight li b{font-weight:600}
+.kv{display:grid;grid-template-columns:96px 1fr;gap:6px 14px;font-size:13px;margin:14px 0}
+.kv dt{color:var(--faint);font-family:var(--mono);font-size:11.5px;padding-top:2px}
+.kv dd{margin:0}
+.cite{font:11.5px/1.5 var(--mono);color:var(--faint);white-space:nowrap}
+hr{border:none;border-top:1px solid var(--line);margin:40px 0}
+
+/* ---------- 强调块 ---------- */
+.call{border:1px solid var(--accbd);background:var(--accbg);border-radius:12px;padding:16px 18px;margin:20px 0}
+.call .lbl{font:500 11px/1 var(--mono);letter-spacing:.08em;text-transform:uppercase;color:var(--acc);margin-bottom:8px}
+.call p{margin:0;font-size:14px}
+.call+.call{margin-top:10px}
+.call.ok{border-color:var(--okbd);background:var(--okbg)}   .call.ok .lbl{color:var(--ok)}
+.call.warn{border-color:var(--warnbd);background:var(--warnbg)} .call.warn .lbl{color:var(--warn)}
+.call.bad{border-color:var(--badbd);background:var(--badbg)}   .call.bad .lbl{color:var(--bad)}
+
+.tldr{display:flex;flex-direction:column;gap:1px;background:var(--line);border:1px solid var(--line);border-radius:12px;overflow:hidden;margin:10px 0 0}
+.tldr .tl{display:flex;gap:12px;align-items:flex-start;background:var(--card);padding:12px 16px;font-size:13.5px}
+.tldr .tl .tln{flex:none;color:var(--acc);font:500 13px/1.6 var(--mono)}
+.tldr .tl b{font-weight:600}
+
+/* ---------- 状态 chip ---------- */
+.chip{display:inline-block;font-size:11.5px;font-weight:500;padding:4px 9px;border-radius:999px;border:1px solid;white-space:nowrap}
+.c-ok{color:var(--ok);background:var(--okbg);border-color:var(--okbd)}
+.c-bad{color:var(--bad);background:var(--badbg);border-color:var(--badbd)}
+.c-warn{color:var(--warn);background:var(--warnbg);border-color:var(--warnbd)}
+.c-info{color:var(--info);background:var(--infobg);border-color:var(--infobd)}
+.c-acc{color:var(--acc);background:var(--accbg);border-color:var(--accbd)}
+.c-mute{color:var(--mute);background:var(--soft);border-color:var(--line2)}
+
+/* ---------- 卡片 ---------- */
+.grid{display:grid;gap:10px;margin:18px 0}
+.g2{grid-template-columns:repeat(2,1fr)}
+.g3{grid-template-columns:repeat(3,1fr)}
+.v{display:flex;align-items:center;gap:12px;background:var(--card);border:1px solid var(--line);border-radius:10px;padding:12px 14px}
+.v.top{align-items:flex-start}
+.v .face{flex:1;font-size:13px;min-width:0}
+.v .face>span{display:block;font-size:11.5px;color:var(--faint);margin-top:2px;font-family:var(--mono)}
+
+/* ---------- 对照（层 / 开关 / 流程） ---------- */
+.flow{display:flex;flex-direction:column;gap:8px;margin:18px 0}
+.lyr{display:flex;align-items:center;gap:14px;background:var(--card);border:1px solid var(--line);border-radius:10px;padding:13px 16px}
+.lyr .name{flex:none;width:112px;font-size:13px;font-weight:600}
+.lyr .code{flex:1;font-family:var(--mono);font-size:12px;color:var(--mute);min-width:0}
+.lyr .st{flex:none}
+.lyr.off{border-style:dashed}
+.arrowdown{text-align:center;color:var(--faint);font-size:15px;line-height:1;margin:-2px 0}
+
+/* ---------- 条形对比 ---------- */
+.bars{margin:18px 0;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:18px 20px}
+.bar{display:grid;grid-template-columns:150px 1fr 76px;align-items:center;gap:12px;margin-bottom:10px}
+.bar:last-child{margin-bottom:0}
+.bar .bn{font:12px/1.4 var(--mono);color:var(--mute)}
+.bar .track{height:26px;background:var(--soft);border-radius:6px;overflow:hidden}
+.bar .fill{height:100%;border-radius:6px;background:var(--line2);transition:width .6s ease}
+.bar.on .fill{background:var(--okbd);border:1px solid var(--ok)}
+.bar .bv{font:12px/1 var(--mono);color:var(--mute);text-align:right}
+.bar.on .bv{color:var(--ok);font-weight:500}
+.barnote{font-size:12px;color:var(--faint);margin-top:12px;padding-top:12px;border-top:1px solid var(--line)}
+
+/* ---------- 表格 ---------- */
+table{width:100%;border-collapse:collapse;margin:16px 0;font-size:13px}
+th{text-align:left;font-weight:500;color:var(--mute);font-size:11.5px;text-transform:uppercase;letter-spacing:.05em;
+   padding:10px 12px;border-bottom:1px solid var(--line2);white-space:nowrap}
+td{padding:11px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+tr:last-child td{border-bottom:none}
+tbody tr:hover{background:var(--soft)}
+td.mono,th.mono{font-family:var(--mono);font-size:12px}
+td .sub{display:block;color:var(--faint);font-size:12px;margin-top:3px;font-family:var(--mono)}
+.num{text-align:right;font-family:var(--mono);font-size:12px}
+.tbl{border:1px solid var(--line);border-radius:12px;overflow:hidden;background:var(--card)}
+.tbl table{margin:0}
+.tw{overflow-x:auto;border:1px solid var(--line);border-radius:12px;background:var(--card)}
+.tw table{margin:0;min-width:640px}
+/* 定义式表格：首列窄、键名不折行（契约 / 术语 / 字段表） */
+table.def th:first-child{width:150px}
+table.def th{white-space:nowrap}
+
+/* ---------- 待办与跟进 ---------- */
+.todos{margin:18px 0}
+.todo{display:flex;gap:14px;align-items:flex-start;background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px 16px;margin-bottom:8px}
+.todo .tn{flex:none;width:26px;height:22px;border-radius:6px;background:var(--soft);border:1px solid var(--line2);
+  font:500 12px/20px var(--mono);text-align:center;color:var(--mute);margin-top:1px}
+.todo .tbody{flex:1;min-width:0}
+.todo .tt{font-size:13.5px;font-weight:600}
+.todo .td{font-size:12.5px;color:var(--mute);margin-top:4px}
+.todo .td b{color:var(--fg);font-weight:500}
+.todo.blocked{border-color:var(--warnbd);background:var(--warnbg)}
+.todo.done{border-color:var(--okbd);background:var(--okbg)}
+.todo.done .tt{color:var(--ok)}
+
+/* ---------- 折叠 ---------- */
+details.fold{margin:16px 0}
+details.fold>summary{cursor:pointer;list-style:none;display:inline-flex;align-items:center;gap:8px;
+  font:12px/1 var(--mono);color:var(--info);background:var(--infobg);border:1px solid var(--infobd);
+  border-radius:999px;padding:7px 13px;user-select:none}
+details.fold>summary::-webkit-details-marker{display:none}
+details.fold>summary::before{content:"▸";font-size:10px;translate:0 1px}
+details.fold[open]>summary::before{content:"▾"}
+details.fold>summary:hover{border-color:var(--info)}
+details.fold[open]>summary{margin-bottom:4px}
+
+/* ---------- UI 原型 (mock) ----------
+   给「新页面长什么样」用的积木。**只在设计文档里用**, 不是产品样式。
+   为什么必须放这儿: lint ① 要求所有 class 都能在共享 CSS 里找到定义。 */
+.mocks{display:flex;flex-direction:column;gap:20px;margin:18px 0}
+.mock{background:var(--card);border:1px solid var(--line2);border-radius:12px;overflow:hidden}
+.mock .cap{font:500 11px/1 var(--mono);letter-spacing:.07em;text-transform:uppercase;color:var(--faint);
+  padding:9px 14px;border-bottom:1px solid var(--line);background:var(--soft)}
+.mock .win{display:flex;min-height:112px}
+.mock .pane{flex:1;padding:12px 14px;min-width:0}
+.mock .pane.side{flex:none;width:154px;border-right:1px solid var(--line);background:var(--soft)}
+.mock .tbar{display:flex;align-items:center;gap:6px;padding:9px 12px;border-bottom:1px solid var(--line)}
+.mock .dot{width:9px;height:9px;border-radius:50%;background:var(--line2);flex:none}
+.mock .ttl{font-size:12px;font-weight:500;color:var(--mute);margin-left:6px}
+.mock .row{display:flex;align-items:center;gap:8px;padding:6px 9px;border-radius:7px;font-size:12.5px}
+.mock .row.on{background:var(--accbg);color:var(--acc)}
+.mock .row .lab{flex:1;min-width:0}
+.mock .row .k{flex:none;color:var(--faint);font:11.5px/1.5 var(--mono)}
+.mock .row.on .k{color:var(--acc)}
+.mock .sep{height:1px;background:var(--line);margin:6px 0}
+.mock .mi{display:flex;gap:28px;justify-content:space-between;padding:5px 10px;border-radius:5px;font-size:12.5px}
+.mock .mi.hl{background:var(--accbg);color:var(--acc)}
+.mock .mi .k{color:var(--faint);font:11.5px/1.5 var(--mono)}
+.mock .mi.hl .k{color:var(--acc)}
+.mock .pill{display:inline-block;font:11px/1 var(--mono);padding:4px 8px;border-radius:999px;
+  border:1px solid var(--line2);background:var(--soft);color:var(--mute)}
+.mock .thumb{display:block;width:100%;height:74px;border:1px solid var(--line);border-radius:8px;
+  background:repeating-linear-gradient(45deg,var(--soft),var(--soft) 7px,transparent 7px,transparent 14px)}
+.mock .note{font-size:12px;color:var(--faint);padding:9px 14px;border-top:1px solid var(--line);background:var(--soft)}
+.mock .note b{color:var(--fg);font-weight:500}
+
+/* ---------- 窄屏 ---------- */
+@media (max-width:760px){
+  .g3,.g2{grid-template-columns:1fr}
+  .bar{grid-template-columns:1fr;gap:4px}
+  .bar .bv{text-align:left}
+  .lyr{flex-wrap:wrap;gap:8px}
+  .lyr .name{width:auto}
+}
+</style>
+<!-- @style:end -->
+</head>
+<body>
+<div class="wrap">
+
+<div class="eyebrow">P14 &nbsp;·&nbsp; 已实施 &nbsp;·&nbsp; 双门禁绿（2026-10-10）&nbsp;·&nbsp; 本版两批：应用外壳收口 + 侧栏对齐 Music 式</div>
+<h1>应用外壳与工作区收口 —— 把已有的东西接到 macOS 的惯例位上
+  <small>外壳三条（独立设置窗 · <code>⌘,</code> · 菜单栏）成本低且干净；工作区那条有个真障碍：<b>重扫会折叠用户展开的树</b>，得先补一层合并</small>
+</h1>
+<div class="metaline">
+  <span class="tag">派生自 <b>2026-10-10 成熟度盘点</b></span>
+  <span class="tag">单一来源 <b>本文件</b></span>
+  <span class="tag">现状证据 <b>6 处源码定位</b></span>
+  <span class="tag">本版<b>设计 + 实现</b></span>
+  <span class="tag">2026-10-10</span>
+</div>
+
+
+<h2><span class="n">00</span>结论先行<span class="en">VERDICT</span></h2>
+
+<div class="call">
+  <div class="lbl">一句话</div>
+  <p>这四条<b>都做得成</b>，但其中三条的价值不在「加功能」，而在<b>把已有的东西接到 macOS 的惯例位上</b> —— 设置窗改独立、<code>⌘,</code> 绑上、菜单栏补齐。第四条（工作区自动刷新）<b>不能照抄现有刷新路径</b>：<code>FileNode.id</code> 是随机 UUID，重扫必然折叠用户展开的树，那是在身上添疤，不是收口。</p>
+</div>
+
+<div class="tldr">
+  <div class="tl"><span class="tln">①</span><div><b>外壳三条干净得出乎预料</b>：<code>showSettingsPanel</code> 的 9 处引用里，<b>7 处是「切会话时关掉主区面板」的机械删除</b>；删完设置窗就能和主区任意面板<b>并存</b>（§03）</div></div>
+  <div class="tl"><span class="tln">②</span><div><b>我上一轮把 <code>⌘F</code> 说错了</b>：MangoX <b>没有搜索功能</b>（全仓 0 命中）⇒ <code>⌘F</code> 只能接「聚焦工作区文件过滤框」，不是「全局搜索」。<b>已按此口径实现</b>（你回「开干」即等于选了这一支）</div></div>
+  <div class="tl"><span class="tln">③</span><div><b>工作区那条有真障碍</b>：<code>FileNode.id</code> 是<b>随机 UUID</b>（<code>WorkspaceModels.swift:12</code>）⇒ 自动刷新必须先写「按<b>同级 + 同名 + 同类型</b>匹配、保留 id 与展开态」的合并，否则<b>每次 agent 改文件都把用户的树收起来</b>。<b>合并已写，且有一条会变红的反例</b>（§04 T3）</div></div>
+  <div class="tl"><span class="tln">④</span><div><b>第二批（同日并入）：侧栏对齐 Music 式</b> —— 搜索框 · 分组标题降级 · 导航行选中胶囊。它带出两条判据：<b>过滤语义必须放模型层</b>（<code>SidebarFilter</code> —— 「哪些行该留」是可断言的语义，写进 <code>body</code> 就只能靠肉眼）；以及一个<b>真 bug</b>：两条 <code>toggle*Panel</code> 都漏清 <code>showExtensionsPanel</code>，面板互斥原本有残留（§03 第三批）</div></div>
+</div>
+
+<h3>状态矩阵</h3>
+<div class="grid g3">
+  <div class="v"><div class="face">独立设置窗可行性<span>强 · 同款先例 MiniWindowController:25</span></div><span class="chip c-ok">可做</span></div>
+  <div class="v"><div class="face"><code>⌘,</code> 当前是否绑定<span>强 · 全仓快捷键仅 3 处</span></div><span class="chip c-bad">未绑定</span></div>
+  <div class="v"><div class="face">菜单栏现状<span>强 · mangoxApp.swift 全文 34 行</span></div><span class="chip c-bad">无 .commands</span></div>
+  <div class="v"><div class="face">独立窗口的取词<span>强 · L10nRoot 四处独立根</span></div><span class="chip c-ok">有先例</span></div>
+  <div class="v"><div class="face">工作区刷新 API<span>强 · ChatStore.swift:887</span></div><span class="chip c-ok">已存在</span></div>
+  <div class="v"><div class="face">自动刷新会折叠树吗<span>强 · WorkspaceModels.swift:12</span></div><span class="chip c-bad">会</span></div>
+  <div class="v"><div class="face"><code>⌘F</code> 有没有宿主<span>强 · 全仓 0 命中</span></div><span class="chip c-bad">不存在</span></div>
+  <div class="v"><div class="face">图片预览的渲染缝<span>强 · WorkspaceView.swift:685</span></div><span class="chip c-ok">已留</span></div>
+  <div class="v"><div class="face">⚠️ 视觉是否真机核对过<span>弱 · 本机起不来无头浏览器</span></div><span class="chip c-warn">未核对</span></div>
+  <div class="v"><div class="face">侧栏过滤语义写在哪<span>强 · 原落在 view body</span></div><span class="chip c-ok">已挪到模型层</span></div>
+  <div class="v"><div class="face">面板互斥有不变量吗<span>强 · ChatStore:1703 注释要求互斥</span></div><span class="chip c-bad">原本没有</span></div>
+  <div class="v"><div class="face">参考图的缩放比<span>强 · 用设置窗 760pt 反推</span></div><span class="chip c-warn">曾按 2× 误读</span></div>
+  <div class="v"><div class="face">composer 圆角能否共用 radiusLg<span>强 · 全局值, 聊天卡 / 面板共用</span></div><span class="chip c-bad">不能</span></div>
+</div>
+
+
+<h2><span class="n">01</span>需求说明<span class="en">REQUIREMENT</span></h2>
+
+<p><b>要做什么</b> —— 把「一个 macOS 用户会下意识去碰的外壳」补齐，并让工作区在 agent 改完文件后自己跟上。</p>
+
+<p><b>现在为什么不行</b> —— 三条现状，都是「用户按肌肉记忆去够，够空」：</p>
+<ul class="tight">
+  <li><b>设置按 <code>⌘,</code> 没反应</b> —— 它不是 macOS 的 Settings 场景，而是画在 <code>ContentView</code> 里的<b>整页覆盖</b>（<code>ContentView.swift:144</code>），只能从侧栏按钮点进去。</li>
+  <li><b>菜单栏只有系统默认项</b> —— <code>mangoxApp.swift</code> 全文没有 <code>.commands</code>（全文 34 行，实测），所以「关于 / 帮助 / 检查更新」这类位置是空的。</li>
+  <li><b>工作区要手点刷新、图片看不了</b> —— agent 改完文件，文件树停在上一次扫描的结果上（<code>WorkspaceView.swift:80</code> 那颗刷新按钮是唯一入口）；点开一张 png 得到的是一句占位文案（<code>WorkspaceView.swift:685</code>）。</li>
+</ul>
+
+<p><b>谁受益、在哪个场景受益</b> —— 就是本人和任何 macOS 用户，受益点是「不用学它」：窗口能开两个、<code>⌘,</code> 打得开设置、菜单里找得到帮助。工作区那条受益在「agent 干完活不用我再去点一下」。</p>
+
+<p><b>明确不做什么</b>（放末尾，各带理由）：</p>
+<ul class="tight">
+  <li><b>不做全局搜索</b> —— 这是<b>加一个功能</b>，不是收口；且要新起一个搜索面（会话标题 / 知识条目 / 文件内容三种目标还没定）。<code>⌘F</code> 先接工作区过滤框（见 §03 口径）。</li>
+  <li><b>不接自动更新</b> —— 它硬依赖签名与托管 appcast，属交付面（另一条主线），本版不持有它的结论。</li>
+  <li><b>不动 README「已知限制」里标了「有意」的那批</b> —— 「命中」列恒 <code>—</code>、工具标签小写、Codemode 不挂业务扩展、宽表表头跟滚、换行开关不落库、空态不画光标 —— 它们是设计决定，改掉才是退步。</li>
+</ul>
+
+
+<h2><span class="n">02</span>需求调研<span class="en">RESEARCH</span></h2>
+
+<h3>现状（全部为源码定位，可复查）</h3>
+<div class="tw">
+<table>
+<tr><th>要面</th><th>现状</th><th>出处</th></tr>
+<tr><td class="mono">快捷键</td><td>全仓 <code>.keyboardShortcut(</code> <b>只有 3 处</b>：<code>Esc</code>（<code>ChatView.swift:395</code>）、<code>⌘.</code>（<code>ChatComposer.swift:324</code>）、<code>Esc</code>（<code>ImagePresentation.swift:81</code>）。<code>⌘,</code> 不在其中。</td><td class="cite">grep -rn '\.keyboardShortcut(' mangox/ · wc -l</td></tr>
+<tr><td class="mono">菜单栏</td><td><code>mangoxApp.swift</code> 只有 <code>WindowGroup</code> + <code>AppDelegate</code>，全文 <b>无</b> <code>.commands</code> / <code>CommandGroup</code> / <code>CommandMenu</code>。</td><td class="cite">mangoxApp.swift:18-34</td></tr>
+<tr><td class="mono">设置的位置</td><td>设置是主区的一支：<code>else if store.showSettingsPanel { SettingsView(store:) }</code>，与知识 / 定时 / 插件四个面板互斥。</td><td class="cite">ContentView.swift:144-147</td></tr>
+<tr><td class="mono">设置的开关</td><td><code>showSettingsPanel</code> 共 <b>9 处</b>引用：1 处定义 + 1 处 toggle + <b>7 处「切会话 / 开别的面板时把它置 false」</b>。</td><td class="cite">ChatStore.swift:437, 633, 956, 1069, 1646, 1660, 1678</td></tr>
+<tr><td class="mono">独立窗口先例</td><td>mini 台已经是「singleton NSWindow + <code>NSHostingView</code> + <code>L10nRoot</code>」，且注释明确写了「四处独立 SwiftUI 根」含「任意新独立窗口」。</td><td class="cite">MiniWindowController.swift:25 · AppLanguage.swift:85</td></tr>
+<tr><td class="mono">工作区刷新</td><td><code>refreshFileTree()</code> = <code>fileTree = WorkspaceScanner.scanShallow(root:)</code>，<b>整体替换</b>。git / 统计是视图侧 <code>@State</code>，由 <code>reloadGit()</code> / <code>reloadStats()</code> 各自拉。</td><td class="cite">ChatStore.swift:887 · WorkspaceView.swift:80-83, 424, 441</td></tr>
+<tr><td class="mono">文件节点标识</td><td><code>struct FileNode</code> 的 <code>let id: UUID</code> <b>由 <code>UUID()</code> 现生成</b>（不是路径派生）⇒ 一次重扫 = 一棵全新的树。</td><td class="cite">WorkspaceModels.swift:12, 21</td></tr>
+<tr><td class="mono">图片预览</td><td>命中图片扩展名时<b>直接返回一句占位文案</b>（<code>// 二进制文件 (%@), 图片预览将在后续版本提供</code>），正文区只渲染文本。</td><td class="cite">WorkspaceView.swift:683-685</td></tr>
+</table>
+</div>
+
+<p><b>上表全部是「动手前」的实测值</b>（2026-10-10 开工前采集）—— 保留它，是因为它是判据的基线：没有基线就看不出改了什么。同一批判据的<b>改后值</b>见 §04 T2 与本节末的「改后回填」。</p>
+
+<h3>能变红的判据（三条，改前改后各跑一次）</h3>
+<pre><span class="c"># ① 快捷键条数 —— 改前 3；改后 7（新增 ⌘, / ⌘N / ⌘R / ⌘F）</span>
+grep -rno '\.keyboardShortcut(' mangox/ | wc -l
+
+<span class="c"># ② 菜单栏是否接上 —— 改前 0；改后 1</span>
+grep -c '\.commands' mangox/mangoxApp.swift
+
+<span class="c"># ③ 文件节点标识是不是随机 —— 命中（这条不改，它决定"必须写合并"）</span>
+grep -n 'let id: UUID' mangox/Models/WorkspaceModels.swift</pre>
+
+<div class="call warn">
+  <div class="lbl">上一轮我说错的地方</div>
+  <p>我把 <code>⌘F</code> 写成「搜索」。全仓 <code>func search</code> / <code>searchText</code> / <code>searchQuery</code> <b>0 命中</b> —— MangoX 里根本没有搜索功能，<code>⌘F</code> 没有宿主。这不是「补个快捷键」，是「要么加一个功能、要么改口径」。本版按 macOS「在当前视图里查找」的惯例，把它接到工作区已有的<b>文件过滤框</b>（<code>WorkspaceView.swift:13</code> 的 <code>filterText</code>）。</p>
+</div>
+
+<div class="call">
+  <div class="lbl">改后回填（2026-10-10 实测）</div>
+  <p>① <b>3 → 7</b>：<code>⌘,</code>（<code>AppCommands.swift:40</code>）· <code>⌘N</code>（:47）· <code>⌘R</code>（:54）· <code>⌘F</code>（:62），另 3 处是原有的 <code>Esc ×2</code> 与 <code>⌘.</code>。② <b>0 → 1</b>（<code>mangoxApp.swift</code>）。③ 仍命中 —— 合并逻辑因此存在（<code>ChatStore.swift:922</code>）。</p>
+</div>
+
+
+<h2><span class="n">03</span>路径与方案<span class="en">APPROACH</span></h2>
+
+<h3>目标形态（UI 原型）</h3>
+<div class="mocks">
+
+  <div class="mock">
+    <div class="cap">① 菜单栏 —— 新增项落在 macOS 惯例位</div>
+    <div class="pane">
+      <div class="pill">MangoX 菜单（应用菜单）</div>
+      <div class="sep"></div>
+      <div class="mi"><span>关于 MangoX</span><span class="k">系统自带</span></div>
+      <div class="mi hl"><span>设置…</span><span class="k">⌘,</span></div>
+      <div class="sep"></div>
+      <div class="mi"><span>隐藏 MangoX</span><span class="k">⌘H</span></div>
+      <div class="mi"><span>退出 MangoX</span><span class="k">⌘Q</span></div>
+    </div>
+    <div class="note">另两处：<b>文件</b>菜单新增「新会话 <b>⌘N</b>」；<b>帮助</b>菜单换成「MangoX 使用手册」（打开仓库 README —— 这是目前唯一存在的文档）。没有聚焦窗口时这三项<b>置灰</b>，不留「点了没反应」的死项。</div>
+  </div>
+
+  <div class="mock">
+    <div class="cap">② 独立设置窗 —— 从「主区整页覆盖」变成「能与主窗口并存」</div>
+    <div class="tbar"><span class="dot"></span><span class="dot"></span><span class="dot"></span><span class="ttl">设置</span></div>
+    <div class="win">
+      <div class="pane side">
+        <div class="row on"><span class="lab">外观</span></div>
+        <div class="row"><span class="lab">语言 (Language)</span></div>
+        <div class="row"><span class="lab">模型</span></div>
+        <div class="row"><span class="lab">并发回合上限</span></div>
+        <div class="row"><span class="lab">回合完成通知</span></div>
+        <div class="row"><span class="lab">快速捕获热键</span></div>
+        <div class="row"><span class="lab">邮箱账号</span></div>
+        <div class="row"><span class="lab">手动备份</span></div>
+      </div>
+      <div class="pane">
+        <div class="row"><span class="lab">8 个 section 原样搬进来</span></div>
+        <div class="sep"></div>
+        <p class="lead">窗口标题跟着语言走（<code>L()</code> 取词，订阅 <code>LanguageModel</code>，否则切语言后会冻在旧值）。红灯关窗后，侧栏「Settings」的<b>高亮跟着灭</b> —— 不留「面板开着」的假状态。</p>
+      </div>
+    </div>
+    <div class="note">内容<b>一行不改</b>，改的只是承载它的窗口。开窗期间切会话，窗口<b>不关</b>（这正是它与「主区面板」的分界）。<b>窗口可拖大</b>（<code>contentMinSize</code> = 首版 760×640，再小只会更难读）。</div>
+  </div>
+
+  <div class="mock">
+    <div class="cap">③ 工作区 —— 自动刷新（展开态不丢）+ 图片预览</div>
+    <div class="win">
+      <div class="pane side">
+        <div class="row"><span class="lab">mangox/</span></div>
+        <div class="row on"><span class="lab">Views/</span><span class="k">展开</span></div>
+        <div class="row"><span class="lab">Chat/</span></div>
+        <div class="row"><span class="lab">Settings/</span><span class="k">+2</span></div>
+      </div>
+      <div class="pane">
+        <div class="row"><span class="lab">AppIcon.png</span><span class="pill">图片预览</span></div>
+        <div class="thumb"></div>
+      </div>
+    </div>
+    <div class="note">agent 一写文件就重扫 —— 但<b>展开的目录保持展开</b>：靠「按<b>父路径 + 名字</b>复用旧节点 id」，不是无脑替换整棵树。</div>
+  </div>
+
+</div>
+
+<h3>改动面（第一批 · 外壳）</h3>
+<div class="tw">
+<table>
+<tr><th>文件:行号</th><th>现状 → 改成</th></tr>
+<tr><td class="mono">mangox/Commands/AppCommands.swift</td><td><b>新文件</b>。命令集 + <code>FocusedValues.chatStore</code> 通道。<b>放在独立文件</b>是因为 <code>mangoxApp.swift</code>（<code>@main</code>）不参与冒烟编译，命令体写在那儿就断言不到。</td></tr>
+<tr><td class="mono">mangox/Views/Settings/SettingsWindowController.swift</td><td><b>新文件</b>。singleton + 弱引用 store + <code>isReleasedWhenClosed = false</code>，形态照抄 <code>MiniWindowController</code>；内容包一层 <code>L10nRoot</code>。</td></tr>
+<tr><td class="mono">mangox/mangoxApp.swift:32</td><td>无 <code>.commands</code> → 加一行 <code>.commands { AppCommands() }</code>。</td></tr>
+<tr><td class="mono">mangox/Views/ContentView.swift:144-147</td><td>设置的主区分支 → <b>删除</b>（连同上面那行注释里的「设置」）。</td></tr>
+<tr><td class="mono">mangox/Views/ContentView.swift:118</td><td>— → 加 <code>.focusedSceneValue(\.chatStore, store)</code>，把当前窗口的 store 交给菜单命令。</td></tr>
+<tr><td class="mono">mangox/Views/Sidebar/SidebarView.swift:93-96</td><td><code>store.toggleSettingsPanel()</code> → <code>SettingsWindowController.shared.toggle(store: store)</code>；<code>active:</code> 仍读 <code>model.showSettingsPanel</code>。</td></tr>
+<tr><td class="mono">mangox/State/ChatStore.swift:437,633,956,1069,1646,1660,1678</td><td><b>7 处</b> <code>showSettingsPanel = false</code> → 全删（设置不再参与主区互斥）。</td></tr>
+<tr><td class="mono">mangox/State/ChatStore.swift:1665-1672</td><td><code>toggleSettingsPanel()</code> → 换成注释：<code>showSettingsPanel</code> 降级为<b>独立窗口的可见性镜像</b>，唯一写入方是控制器。</td></tr>
+<tr><td class="mono">mangox/Theme/CodexTheme.swift:247</td><td>— → 加 <code>Tune.settingsWindowSize</code>（首版 760×640 真机实测偏挤 ⇒ <b>920×780</b>）与 <code>Tune.settingsWindowMinSize</code>（= 首版 760×640，收缩下限）。</td></tr>
+<tr><td class="mono">mangox.xcodeproj/project.pbxproj:398,423</td><td><code>NSHumanReadableCopyright = ""</code> → 填 <code>© 2026 w4n9H</code>；并补 <code>LSApplicationCategoryType = public.app-category.developer-tools</code>（现在 Finder 简介里分类是空的）。</td></tr>
+<tr><td class="mono">scripts/l10n/en_values.py</td><td>新增 7 条译文、删 1 条废弃（词表 614 → <b>620</b>）。</td></tr>
+</table>
+</div>
+
+<h3>工作区那一批的改动面</h3>
+<div class="tw">
+<table>
+<tr><th>文件:行号</th><th>现状 → 改成</th></tr>
+<tr><td class="mono">mangox/State/ChatStore.swift:887</td><td><code>refreshFileTree()</code> 整体替换 → 走 <code>mergeRescan</code>；新增 <code>refreshWorkspace()</code> / <code>focusWorkspaceFilter()</code> / <code>mergeRescan(root:old:)</code> / <code>mergeLevel(fresh:old:relPath:root:)</code>；新增 <code>@Published workspaceRefreshTick</code> / <code>workspaceFilterFocusTick</code>（序号自增，视图不回写清零 —— 清零会让连按两次 ⌘R 退化成一次）。</td></tr>
+<tr><td class="mono">mangox/Views/Workspace/WorkspaceView.swift</td><td>加三个 <code>.onChange</code>（触达文件 → 合并重扫；⌘R 信号 → 重载 git/统计；⌘F 信号 → 聚焦过滤框）+ <code>@FocusState filterFocused</code>；<code>FilePreviewView</code> 加 <code>previewImage</code>（≤40 MB 才渲染，走 <code>Image(nsImage:)</code>），占位分支改成两句可读文案。</td></tr>
+<tr><td class="mono">scripts/smoke/smokeMain.swift</td><td><b>+19 条断言</b>（909 → 928）：11 条钉合并语义（含 1 个手搓反例）、8 条钉命令信号链。</td></tr>
+</table>
+</div>
+
+<h3>改动面（第三批 · 侧栏对齐 Music 式，2026-10-10 同日并入）</h3>
+<div class="tw">
+<table>
+<tr><th>文件</th><th>改动（现状 → 改成什么）</th></tr>
+<tr><td class="mono">Models/SidebarModels.swift</td><td><b>新增 <code>SidebarFilter</code></b>（纯静态函数，放模型层）：空 / 纯空白查询<b>不算过滤态</b>；命中 = 标题子串、<code>caseInsensitive + diacriticInsensitive</code>。⚠️ 两种命中<b>语义不同</b> —— <b>项目名命中 ⇒ 整组会话都留</b>；只有会话名命中 ⇒ 保留该项目但<b>只留命中的会话</b>。这条由反例钉住。</td></tr>
+<tr><td class="mono">Theme/CodexTheme.swift</td><td>选中态叠加透明度 <b>0.08 → 0.10</b>（⚠️ 这是<b>全局语义</b>：侧栏 / 分段控件 / 卡面选中一起走，不是侧栏专用值）；新增三个侧栏 token：<code>sidebarContentInset 13</code> · <code>sidebarSearchHeight 28</code> · <code>sidebarSearchRadius 7</code>。</td></tr>
+<tr><td class="mono">Views/Sidebar/SidebarView.swift</td><td>brand 头之后插<b>搜索框</b>与无命中提示；整块滚动内容右移到 <b>13pt</b>；分组标题 <b>11pt semibold → 12pt regular</b>（tracking 0.5 → 0.3）；导航行加<b>选中胶囊</b>、未选中行提到 <code>textSecondary</code>。⚠️ <b><code>ConversationRow</code> / <code>projectRow</code> 一行未动</b> —— <code>...</code> 行内菜单（重命名 / 由此侧问 / 删除会话）照旧。</td></tr>
+<tr><td class="mono">State/ChatStore.swift</td><td>三条 <code>toggle*Panel</code> 改<b>对称形态</b>（各自清掉另两个）+ 新增 <code>panelsExclusive</code> 不变量。⚠️ <b>不含 <code>showSettingsPanel</code></b> —— 设置是独立窗口，本来就能与任一主区面板并存。</td></tr>
+<tr><td class="mono">scripts/smoke/smokeMain.swift</td><td><b>+23 条断言</b>：14 条钉过滤语义（含 1 个反例）、9 条钉面板互斥（含 3 个反例）。</td></tr>
+</table>
+</div>
+
+<div class="call bad">
+  <div class="lbl">这一批牵出一个真 bug（不是顺手优化）</div>
+  <p><b><code>toggleKnowledgePanel</code> 只清 Scheduled、<code>toggleScheduledPanel</code> 只清 Knowledge —— 两个都没清 <code>showExtensionsPanel</code></b>（<code>openKnowledgePanel()</code> 反而清全了 ⇒ 只有 toggle 路径留残留）。<code>ChatStore:1703</code> 的注释明写这几块面板应当互斥。此前只表现为「多一个图标染色」，无人注意；<b>侧栏给导航行加了选中胶囊之后，同一个残留会表现成「两颗胶囊同时亮」</b> ⇒ 才暴露出来。造反例（退回线上那版）<b>精准红 2 条</b>、其余 7 条照绿 —— 同时证明该 bug 在线上真实存在。</p>
+</div>
+
+<div class="call">
+  <div class="lbl">定标：那张参考图不是 2×</div>
+  <p>对齐之前先量。参考图 <code>438×1302</code> 我一开始按 <b>2×</b> 读成 <code>219×651pt</code>，算出侧栏宽 <b>313px → 156.5pt</b>，与代码里的 <code>Tune.sidebarWidth = 256</code> <b>对不上</b>。改用截图里<b>尺寸已知的窗口</b>反推：设置窗内容卡白区 <code>858px ÷ (760 − 2×24)pt = 1.2051</code> ⇒ 按 1.205 重算侧栏右沿 <b>313px → 259.8pt</b>，与 256 吻合。<b>不校准的后果：整张差异表偏 1.66 倍，而且不会有一个红灯。</b></p>
+</div>
+
+<h3>改动面（第四批 · 输入框风格对齐）</h3>
+<p class="lead">只做<b>风格</b>，不碰能力 —— 参考图里的<b>麦克风 / 文件附件 / git 分支</b>三项全部不在本批（用户明示：「我发图是给你看风格的，你不需要动能力侧的东西」）。</p>
+
+<div class="tw">
+<table>
+<tr><th>维度</th><th>现在</th><th>参考图</th><th>量测依据</th></tr>
+<tr><td class="mono">卡片圆角</td><td><b>12pt</b>（<code>radiusLg</code>）</td><td><b>约 22pt</b></td><td class="cite">轮廓拟合 22px ÷ 1.889（与代码 12pt 吻合）／参考 39~45px</td></tr>
+<tr><td class="mono">卡片边框</td><td><code>border</code> 45% 透明 ⇒ 实测 <code>#EDEDEF</code></td><td><b><code>#E2E2E2</code></b> 实色、更深</td><td class="cite">边框中点取样</td></tr>
+<tr><td class="mono">控件边界</td><td><b>1px 描边胶囊</b>（囊内透明）</td><td><b>完全无边界</b></td><td class="cite">竖直剖面 x=250：囊内 <code>#FFFFFF</code>（是描边不是填充）／参考 x=300 整段纯白</td></tr>
+<tr><td class="mono">控件底色</td><td>选中时 <code>accentSoft</code> <b>浅粉底</b>（未选时透明）</td><td><b>无底色</b></td><td class="cite">真机截图：选中档位成了控件行里<b>唯一残留的色块</b> ⇒ 底色也去（见本节末「真机验收后追改」）</td></tr>
+<tr><td class="mono">控件文字色</td><td>激活时 <code>accent</code> <b>品牌红</b> <code>#DD5742</code>（实测截图 <code>#D04840</code>）</td><td><b>中性近黑 <code>#181818</code></b></td><td class="cite">控件行颜色直方图：参考图全部 R=G=B（<code>#181818</code> / <code>#E0E0E0</code> / <code>#000000</code>）—— <b>零彩色</b>；现状图里唯一的彩色就是这条红</td></tr>
+<tr><td class="mono">发送按钮</td><td><b>26pt</b></td><td><b>约 33pt</b></td><td class="cite">字符图量得直径 63px ÷ 1.889</td></tr>
+</table>
+</div>
+
+<div class="tw">
+<table>
+<tr><th>文件:行号</th><th>现状 → 改成什么</th></tr>
+<tr><td class="mono">Theme/CodexTheme.swift:291</td><td><code>sendButtonSize = 26</code> → <b>33</b>。</td></tr>
+<tr><td class="mono">Theme/CodexTheme.swift:127</td><td>⚠️ <b><code>radiusLg = 12</code> 不动</b> —— 它是<b>全局</b>值（聊天卡 / 面板 / 分段控件共用），直接改会连带改别的面 ⇒ <b>另开一个 composer 专用圆角（22）</b>。</td></tr>
+<tr><td class="mono">Views/Chat/ChatComposer.swift:131,133</td><td>输入卡的 <code>cornerRadius: radiusLg</code> 与它上方那条 <code>stroke</code> 用的同一个值 → 换成 composer 专用值。<b>两处必须同源</b>，否则圆角与描边会错开。</td></tr>
+<tr><td class="mono">Views/Chat/ChatComposer.swift:134</td><td><code>border.opacity(0.45)</code> → 提高不透明度 / 换实色，对齐参考图的 <code>#E2E2E2</code>。</td></tr>
+<tr><td class="mono">Views/Chat/ChatComposer.swift:230</td><td><code>overlay(Capsule().stroke(...))</code> —— 「Ask for approval」的描边胶囊<b>去掉</b>；<code>background(accentSoft)</code> 高亮底、以及随之成为 no-op 的 <code>clipShape(Capsule())</code> <b>一并去掉</b>（真机验收后追改）。</td></tr>
+<tr><td class="mono">Views/Chat/ChatComposer.swift:256</td><td>同上（模式档 pill 的描边胶囊 + 高亮底<b>都去掉</b>）。⚠️ 这一格<b>我改过一次判断</b> —— 原先写的是「高亮底（非 standard 时的 <code>accentSoft</code>）<b>保留</b>，那是状态表达」，真机截图否掉了它。</td></tr>
+<tr><td class="mono">Views/Chat/ChatComposer.swift:227</td><td><code>accent</code> → <code>textPrimary</code>（「Ask for approval」开启态的文字与手形图标）。</td></tr>
+<tr><td class="mono">Views/Chat/ChatComposer.swift:251,253</td><td><code>accent</code> → <code>textPrimary</code>（模式档的图标 + 文字，非 standard 时）。<b>两处同源</b> —— 图标与文字必须同色，否则一颗 pill 里出现两种色。</td></tr>
+</table>
+</div>
+
+<div class="call warn">
+  <div class="lbl">一条要论证的地方（不是「顺手改」）</div>
+  <p>去掉胶囊描边后，控件<b>不再是「一个面」</b>，而是卡面上的图标 + 文字。P10.8c 那条判据（<b>「面必须自带边界元素」</b>）管的是「面」；裸文字不在这个范畴内 —— <b>但这是判据的适用边界，不等于「本版不需要边界」</b>。写在这里，免得下一个人把它当成「违反 P10.8c」的反例。</p>
+</div>
+
+<div class="call">
+  <div class="lbl">真机验收后追改的两条（2026-10-10）</div>
+  <p>控件去掉描边之后，我原先把 <code>accentSoft</code> 高亮底<b>留着</b>当状态表达 —— 真机上看到「选中档位」是一块<b>粉底</b>，成了这一行里<b>唯一残留的色块</b>，与参考图的「裸图标 + 文字」直接冲突。⇒ <b>底色也去掉</b>，选中态只剩<b>文字色</b>（<code>textTertiary</code> → <code>accent</code>）；无底之后 <code>clipShape(Capsule())</code> 成了 no-op，一并删掉（不留空壳）。</p>
+  <p>⚠️ <b>我错在哪</b>：我把「状态要不要表达」当成了<b>我该推理的事</b>（结论：要 ⇒ 保留底色），可参考图里<b>根本没有底色</b> —— 那是<b>事实</b>，不是待推理的题。像素量测能定「有没有边界、边界多深」，定不了「该不该有底色」，后者是风格判断，只能靠真机看。<b>下次遇到「参考图已经给出答案」的项，照抄事实，不要拿推理去覆盖它。</b></p>
+  <p><b>第二次（同一天）</b>：底色去掉之后文字仍是 <code>accent</code> 品牌红 —— 我又把「状态要靠颜色强调」当成了<b>需要我在红与黑之间权衡</b>的事，于是留了红。实测参考图控件行的颜色直方图：主色 <code>#181818</code> / <code>#E0E0E0</code> / <code>#000000</code>，<b>R=G=B，零彩色</b>。⇒ 换 <code>textPrimary</code>（近黑），深浅仍承载状态（默认 <code>textTertiary</code> / 激活 <code>textPrimary</code>）。</p>
+  <p>⚠️ <b>同一个坑，一天踩两次</b>：两次都是「参考图已经给了答案，我却拿推理去覆盖」。⇒ <b>本批立一条判据：控件行的所有元素必须落在灰阶上（R=G=B）—— 出现彩色就是没对齐。</b>参考图是这个风格，不是「我判断该不该用强调色」的问题。</p>
+</div>
+
+<div class="call">
+  <div class="lbl">定标与量测的两脚坑（都记在这儿）</div>
+  <p>图1 输入卡 x <code>21..1622</code> = 1602px，代码 <code>Tune.composerMaxWidth = 848pt</code> ⇒ 缩放比 <b>1.889</b>（不是 2）。<b>自证</b>：按此比例把图1 的卡片圆角量成 22px ⇒ <code>22 ÷ 1.889 = 11.6pt</code>，与代码 <code>radiusLg = 12</code> 吻合。<br>
+  ⚠️ ① 图1 里 <code>y=79</code> 那条线是<b>上方 projectPill 的底边</b>，不是输入卡顶边 —— 拿它拟合圆角会得出 38pt 的假值。<br>
+  ⚠️ ② <b>水平剖面会把上/下描边误读成填充</b>：「控件有浅灰 pill 底」这个结论就是这么错的；竖直剖面才看清囊内是纯白。<b>判一个区域有没有底色，必须看穿过它的竖直剖面。</b></p>
+</div>
+
+<h3>为什么这么做，为什么不是别的做法</h3>
+<ul class="tight">
+  <li><b>设置窗为什么不用 <code>Settings</code> 场景</b> —— SwiftUI 的 <code>Settings</code> 场景要求 store 提升到 App 层，而 <code>ChatStore</code> 现在是 <code>ContentView</code> 的 <code>@StateObject</code>；提升会动窗口模型，且 <code>mangoxApp.swift</code> 不进冒烟 ⇒ 那部分逻辑<b>断言不到</b>。走独立控制器则形态与 mini 台同款、可测。</li>
+  <li><b>菜单命令怎么够到 store</b> —— 用 <code>focusedSceneValue</code> / <code>@FocusedValue</code> 通道，而不是全局单例或通知。<b>被否的那个</b>：把 <code>ChatStore</code> 改成单例 —— 会改掉「每窗口一份 store」的现状，且 <code>ContentView</code> 的 <code>@StateObject</code> 语义跟着变，收益不抵风险。</li>
+  <li><b>自动刷新为什么不用 FSEvents</b> —— MangoX <b>自己就知道 agent 何时写文件</b>（<code>WorkspaceView.swift:338</code> 已经在按 <code>edit</code> / <code>write</code> 工具算触达路径）。为「agent 改文件」这个已知事件去监听整个仓库，是多余能力，还要管递归监听与生命周期。</li>
+</ul>
+
+<div class="call bad">
+  <div class="lbl">代价与临时妥协</div>
+  <p>① ⚠️ 设置窗用 <code>@FocusedValue</code> 拿 store ⇒ 多窗口（<code>⌘N</code> 开新窗）时，设置窗<b>只跟随最近聚焦的那个窗口</b>。消掉条件：哪天把 store 提升到 App 层。<br>
+  ② ⚠️ <b>视觉没有在真机上核对过</b> —— 本机无头浏览器起不来（GPU 进程崩溃），上面三张原型是<b>排版草案</b>：类名由 lint 守住、配色跟主题变量走，但间距与换行没被眼睛看过。<br>
+  ③ 三张原型的样式积木（<code>.mocks / .mock / .win …</code>）加在 <code>docs/assets/design-doc.css</code>。若本版被否，这批类名要跟文档一起撤掉 —— 否则就是留在样式源里的死代码。</p>
+</div>
+
+
+<h2><span class="n">04</span>待办与跟进<span class="en">TODO</span></h2>
+
+<h3>前置门（不过就不动手）</h3>
+<div class="todos">
+  <div class="todo"><div class="tn">门1</div><div class="tbody"><div class="tt">拍板：<code>⌘F</code> 接工作区过滤框，还是先不做</div><div class="td">判据：你回一句话。<span class="chip c-ok">已定 —— 接过滤框</span>（2026-10-10「那就开干吧」即等于选了这一支；按 macOS「在当前视图里查找」的惯例）。</div></div></div>
+  <div class="todo"><div class="tn">门2</div><div class="tbody"><div class="tt">拍板：设置窗的形态（独立窗 vs 沿用整页覆盖）</div><div class="td">判据：你回一句话。<span class="chip c-ok">已定 —— 独立窗</span>（2026-10-10 你选 A）。</div></div></div>
+  <div class="todo"><div class="tn">门3</div><div class="tbody"><div class="tt">工作区合并语义定稿</div><div class="td">判据：能说清「重扫时哪些节点复用、哪些新增、展开态怎么算」。<span class="chip c-ok">已定稿</span> —— <b>同级 + 同名 + 同类型</b>复用（外层新增节点用新身份）· 递归只进<b>旧树里已加载过</b>的目录 · 展开态取自旧节点。见 <code>ChatStore.swift:922</code> 与 T3。</div></div></div>
+</div>
+
+<h3>验收项</h3>
+<div class="todos">
+  <div class="todo"><div class="tn">T1</div><div class="tbody"><div class="tt">独立设置窗 + <code>⌘,</code></div><div class="td">验收：<code>⌘,</code> 能开窗；红灯关窗后侧栏 <code>Settings</code> 高亮灭；开窗时切会话，窗口<b>不关</b>；切语言后窗口标题跟随。<span class="chip c-warn">已见真机 · 两条待验</span> —— 2026-10-10 你贴的截图已证明<b>窗口开得起来、与主窗口并存、8 个 section 渲染正常、标题为本地化后的 <code>Settings</code></b>；未验的是「红灯关窗后侧栏高亮灭」与「切语言后标题跟随」。<b>该截图还暴露了一个真缺陷：760×640 偏挤</b> ⇒ 已改为 920×780 并放开可拖大（见 §03 修改面表）。</div></div></div>
+  <div class="todo"><div class="tn">T2</div><div class="tbody"><div class="tt">菜单栏 + 快捷键</div><div class="td">验收：<code>grep -c '\.commands' mangox/mangoxApp.swift</code> = 1；<code>grep -rno '\.keyboardShortcut(' mangox/ | wc -l</code> ≥ 6。<span class="chip c-ok">已验 · 1 / 7</span> —— 两条静态判据都达标（实测 <code>1</code> 与 <code>7</code>）。⚠️ 但<b>「菜单项真的出现在菜单栏里」仍是未验的</b>：那要开 App（见 §05 上游暴露面）。</div></div></div>
+  <div class="todo"><div class="tn">T3</div><div class="tbody"><div class="tt">工作区自动刷新（带合并）</div><div class="td">验收：展开一个子目录 → 让 agent 写一个文件 → 树刷新且<b>那个子目录仍是展开的</b>。<span class="chip c-warn">机制已验 · 端到端未验</span> —— 合并语义已由冒烟 <b>11 条</b>断言钉住（<b>9 条正向</b> + <b>1 个手搓反例带出 2 条</b>：把匹配键放宽成「只看名字」⇒ 那 2 条精准变红，其余 17 条照绿）；<b>但「agent 真写文件触发 <code>onChange</code>」这一段要真跑 App</b>。</div></div></div>
+  <div class="todo"><div class="tn">T4</div><div class="tbody"><div class="tt">工作区图片预览</div><div class="td">验收：点开一个 <code>.png</code> 出图（不是占位文案）；超大图与损坏图各给一句可读的失败说明。<span class="chip c-warn">代码已落 · 运行时未验</span> —— 渲染缝是 <code>Image(nsImage:)</code>（<code>WorkspaceView.swift</code>，≤40 MB 才渲染），失败回落两句可读文案（读不出 / 超限 · PDF 不支持）。<b>出图与否要开 App 点一下。</b></div></div></div>
+  <div class="todo"><div class="tn">T5</div><div class="tbody"><div class="tt"><code>⌘F</code> 聚焦工作区过滤框</div><div class="td">验收：工作区可见时 <code>⌘F</code> 把光标送进过滤框。<span class="chip c-warn">信号链已验 · 焦点未验</span> —— 冒烟钉住「无工作目录 ⇒ 不发信号」「有工作目录 ⇒ 既开工作区又发一次信号」；<b>「光标真的落在框里」要开 App。</b></div></div></div>
+  <div class="todo"><div class="tn">T6</div><div class="tbody"><div class="tt">门禁</div><div class="td">验收：<code>bash scripts/smoke/run.sh</code> <b>ALL PASS</b>（须前台 + 免沙箱）+ <code>xcodebuild … build</code> 出 <b>BUILD SUCCEEDED</b> 零 warning + 本地化三道门绿。<span class="chip c-ok">已验 · 全绿</span> —— 逐条数字见下。</div></div></div>
+  <div class="todo"><div class="tn">T7</div><div class="tbody"><div class="tt">侧栏对齐 Music 式</div><div class="td">验收：搜索框敲字后 Projects / Chats 两区按命中收展、无命中出一句提示；导航行的选中态是一整颗胶囊。<span class="chip c-warn">语义已验 · 视觉未验</span> —— 过滤语义冒烟 <b>14 条</b>（含 1 个反例）、面板互斥 <b>9 条</b>（含 3 个反例）；<b>「看着像不像参考图」要真机看</b>。</div></div></div>
+  <div class="todo"><div class="tn">T8</div><div class="tbody"><div class="tt">输入框风格对齐（第四批）</div><div class="td">验收：输入卡圆角 <code>22pt</code> · 边框为实色 · 控件行<b>无描边、无底色、无彩色</b>（全部落在灰阶）· 发送按钮 <code>33pt</code>；且<b>聊天卡 / 面板的圆角完全不受影响</b>（另开值）。<span class="chip c-warn">代码已落 · 真机未验</span> —— 五处常量与视图修饰符，冒烟 <b>951 / 0</b> 已过；<b>「像不像参考图」要真机看</b>（已看过一张，见 §03 的追改条）。</div></div></div>
+</div>
+
+<h3>门禁实测（2026-10-10）</h3>
+<div class="tw">
+<table>
+<tr><th>门</th><th>结果</th><th>判据原文</th></tr>
+<tr><td class="mono">语义冒烟</td><td><b>ALL PASS · 951 / 0</b>（改前 928，本次 +23）</td><td class="cite">bash scripts/smoke/run.sh</td></tr>
+<tr><td class="mono">xcodebuild</td><td><b>BUILD SUCCEEDED · 0 warning · 0 error</b></td><td class="cite">grep -c 'warning:' 构建日志</td></tr>
+<tr><td class="mono">本地化 ①</td><td><b>623 / 623</b>，未翻译 0 · 已废弃 0</td><td class="cite">gen_strings.py --check</td></tr>
+<tr><td class="mono">本地化 ②</td><td><b>可疑未接线 0 · 冻结取词 0</b></td><td class="cite">scan_wiring.py --check</td></tr>
+<tr><td class="mono">本地化 ③</td><td><b>644 PASS / 0 FAIL</b>（含 1 条反例）</td><td class="cite">e2e_probe.py</td></tr>
+<tr><td class="mono">新文件入 target</td><td>两个新文件都在编译日志里 —— 同步组<b>无需改 <code>project.pbxproj</code></b> 已实证</td><td class="cite">grep AppCommands.swift / SettingsWindowController.swift 构建日志</td></tr>
+</table>
+</div>
+
+<div class="call warn">
+  <div class="lbl">这一版没验到的，别当成验过了</div>
+  <p><b>还有几条「运行时」验收没做：T1 的两条细节（红灯关窗后侧栏高亮灭 · 切语言后标题跟随）· T2 的菜单是否真出现 · T3 的 <code>onChange</code> 触发 · T4 的出图 · T5 的焦点落位 · <b>T7 的侧栏视觉</b> · <b>T8 的输入框风格</b>。</b>门禁能证明的是<b>编译产物与语义正确</b>，证明不了「点下去有反应」。之所以列在这儿，是因为「门禁跑绿」很容易被误读成「功能验过了」；反过来，<b>T1 的「窗口开得起来」已由 2026-10-10 的真机截图实证</b>——真机截图与门禁是两类证据，缺哪类都得标出来。</p>
+</div>
+
+
+<h2><span class="n">05</span>风险与边界<span class="en">RISK &amp; BOUNDARY</span></h2>
+
+<div class="tw">
+<table>
+<tr><th>风险</th><th>现象</th><th>结法</th></tr>
+<tr><td>命令够不到 store</td><td>无聚焦窗口（或窗口全关）时 <code>@FocusedValue</code> 为 nil ⇒ 命令点了没反应</td><td>三个菜单项统一 <code>.disabled(store == nil)</code> —— 宁可置灰，不要留死项</td></tr>
+<tr><td>设置窗持有旧 store</td><td><code>ContentView</code> 重建后，窗口仍挂上一份已失效的 store</td><td>控制器记 <code>hostingStore</code>，<code>show</code> 时比对引用，换代就重挂 <code>contentView</code></td></tr>
+<tr><td>合并写错张冠李戴</td><td>同名节点复用了错的 id ⇒ 展开态错位。<b>实测下来真正的缺口不是「不同目录」</b>（<code>mergeLevel</code> 每层只拿本层旧数组比，天然按目录分隔），而是<b>同级同名但类型不同</b>：旧的<code>文件 A</code> 可能把身份借给新的<code>目录 A</code></td><td>匹配键 = <b>同级 + 同名 + 同类型（<code>isFolder</code> 进判据）</b>；冒烟加一条<b>手搓旧树</b>的反例（磁盘上造不出同名文件与同名目录并存）—— 把 <code>isFolder</code> 从判据里删掉，该条<b>精准变红 2 例</b>（已实测）</td></tr>
+<tr><td>关窗后 flag 不同步</td><td>红灯关窗但 <code>showSettingsPanel</code> 仍为 true ⇒ 侧栏高亮不灭</td><td>订阅该窗口的 <code>willCloseNotification</code> 置 false（<code>MiniWindowController:41</code> 同款）</td></tr>
+<tr><td>菜单项本地化冻结</td><td>窗口标题走 <code>L()</code>，若不订阅 <code>LanguageModel</code> 会冻在首次取值</td><td>控制器订阅 <code>LanguageModel.shared.$current</code> 重设标题（这正是「冻结取词」那条坑）</td></tr>
+</table>
+</div>
+
+<h3>边界</h3>
+<ul class="tight">
+  <li><b>本版改什么</b>：应用外壳（设置窗形态 / 菜单 / 快捷键）与工作区（刷新时机 / 图片预览）。</li>
+  <li><b>本版不改什么</b>：pi 协议与 spawn 参数<b>一个字节不动</b>；注入链路、审批桥、数据库 schema 不碰；README 标「有意」的那批不动。</li>
+  <li><b>本版不往 README / CHANGELOG 写本版内容</b> —— 它们是<b>发版面</b>：README 的版本徽章、词表条数（614 → 623）、冒烟条数（909 → 951）与那两条已过时的「已知限制」（文件树不自动刷新 / 图片预览）都得<b>跟着版本号一起改</b>，不宜提前把未发布的行为写进 README。留给下一次走发版链路时一次改完。</li>
+  <li><b>不持有谁的结论</b>：交付面（签名 / 公证 / 自动更新）是另一条主线，本版只用到「<code>LSApplicationCategoryType</code> 与版权串」两个与它无关的 plist 字段。</li>
+</ul>
+
+<h3>上游暴露面</h3>
+<ul class="tight">
+  <li>本版依赖 SwiftUI 的两个行为：<code>focusedSceneValue</code> 在 <code>WindowGroup</code> 单窗口下的取值时机；<code>CommandGroup(replacing: .appSettings)</code> 在没有 <code>Settings</code> 场景时仍能落位。<b>这两条仍是文档级认知，未实测</b> —— T2 的静态判据（<code>.commands</code> = 1）只能证明「代码写在那儿」，<b>「菜单项真出现在菜单栏」要开 App 才算（见 §04 的告警框）</b>。</li>
+  <li>不依赖 pi 的任何未文档化行为。</li>
+</ul>
+
+<div class="foot">
+  P14 · 2026-10-10 · <b>设计 + 实现均已落地</b>；双门禁绿（冒烟 951 项 ALL PASS · xcodebuild BUILD SUCCEEDED 零 warning）+ 本地化三道门绿。真机截图已确认设置窗可开、可与主窗口并存（并据此修掉「偏挤」）。<b>仍未验的是运行时四条</b>（T2 的菜单落位 / T3 的 onChange 触发 / T4 的出图 / T5 的焦点）—— 见 §04。<br>
+  样式单一来源 docs/assets/design-doc.css（由 scripts/docs/design_doc_css.py 同步）。
+</div>
+
+</div>
+</body>
+</html>

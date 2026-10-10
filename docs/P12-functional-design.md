@@ -143,7 +143,7 @@
 | 15 | 蒸馏进程 | `MemoryDistiller.swift:47-53` | 同 #3 的扩展段（**调用同一个** `extensionArguments`）+ `--no-session` + `--model` `--thinking` |
 | 16 | 档位语义 | `AgentTransport.swift:115-150` | `ThinkingLevel` 枚举 + `supported(reasoning:map:)`（自称复刻 pi `getSupportedThinkingLevels`） |
 | 17 | 模式 → `--tools` | `AgentMode.swift:35-64` | 极简档 `--tools read,bash,write,edit` |
-| 18 | 预设 provider | `ProviderPresets.swift` | 自建 4 家 `deepseek/kimi/minimax/zhipu(GLM)` + `api` 适配器名（P14 砍库，原 8 家；`ollamaStyle` 能力保留给自定义端点） |
+| 18 | 预设 provider | `ProviderPresets.swift` | 自建 4 家 `deepseek/kimi/minimax/zhipu(GLM)` + `api` 适配器名（P13 砍库，原 8 家；`ollamaStyle` 能力保留给自定义端点） |
 
 ---
 

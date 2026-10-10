@@ -30,6 +30,8 @@ struct mangoxApp: App {
         .windowStyle(.hiddenTitleBar)
         .windowToolbarStyle(.unified)
         .windowResizability(.contentMinSize)
+        // P14: 菜单命令集在 Commands/AppCommands.swift (该文件参与冒烟编译; @main 不参与)
+        .commands { AppCommands() }
     }
 }
 

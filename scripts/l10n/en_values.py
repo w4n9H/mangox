@@ -20,6 +20,8 @@ VALUES = {
     '%lld 项': '%lld items',
     '(无输入)': '(no input)',
     '+%lld / -%lld 行': '+%lld / -%lld lines',
+    '// PDF 暂不支持预览': '// PDF preview is not supported yet',
+    '// 图片 (%@) 读取失败或超过 40 MB': '// Image (%@) could not be read, or exceeds 40 MB',
     '= 检查频率 (条件可能成立后按此间隔值守)': ' = check interval (poll at this rate once the condition may hold)',
     'AI 回复生成中…': 'Generating reply…',
     'AI 记忆文件 = 该会话的对话上下文 (<uuid>.jsonl); 误删不可恢复。': "The AI memory file is this session's conversation context (<uuid>.jsonl); deleting it cannot be undone.",
@@ -42,6 +44,7 @@ VALUES = {
     'Inbox「%@」: 项目目录不存在, 任务未执行': 'Inbox “%@”: the project directory does not exist, task not run',
     'Key 已存': 'Key stored',
     'Key 缺失 (物化后不可用)': 'Key missing (unusable after materialization)',
+    'MangoX 使用手册': 'MangoX User Guide',
     'MangoX 自动裁决拦下: %@': 'Blocked by MangoX auto-judge: %@',
     'QQ 邮箱': 'QQ Mail',
     'SMTP 主机': 'SMTP host',
@@ -100,6 +103,7 @@ VALUES = {
     '五': 'Fri',
     '仅 read / bash / write / edit 四个内置工具, 不挂业务扩展 — 轻装跑定时任务与快速问答。': 'Only the four built-in tools (read / bash / write / edit) and no business extensions — a lean setup for scheduled tasks and quick questions.',
     '仅作用于本任务运行 (日志会话), 不改变你当前会话的模型与档位。': "Applies only to this task's run (its log session); your current session's model and mode are untouched.",
+    '刷新工作区': 'Refresh workspace',
     '只作用于这个 Inbox 起的会话, 不改变你当前会话的模型与档位': "Applies only to sessions started by this Inbox; your current session's model and mode are untouched.",
     '仅显示前 80 条, 继续输入缩小范围': 'Showing the first 80 — keep typing to narrow it down',
     '仅项目会话可用 (在输入框上方选择项目)': 'Available in project sessions only (pick a project above the composer)',
@@ -235,6 +239,7 @@ VALUES = {
     '尚未配置邮箱。点下方「添加邮箱」开始 —— 建议用一个专用个人邮箱, 不要用企业邮箱。': 'No mailbox configured yet. Start with “Add mailbox” below — a dedicated personal mailbox is recommended, not a work one.',
     '展开侧栏': 'Expand sidebar',
     '展开全部': 'Expand all',
+    '工作区中查找': 'Find in workspace',
     '工作日志': 'Work log',
     '工具执行失败': 'Tool execution failed',
     '工具相位落库': 'Persist tool phases',
@@ -291,8 +296,11 @@ VALUES = {
     '提炼中…': 'Distilling…',
     '提炼依据: %@': 'Distilled from: %@',
     '提炼本会话 → 待审核记忆': 'Distill this session → memory to review',
+    '搜索会话、项目': 'Search chats and projects',
     '摘要重试中…': 'Retrying summary…',
     '收件实现未接入 (P10.2c)': 'Receiving is not wired up yet (P10.2c)',
+    '没有匹配的会话或项目': 'No matching chats or projects',
+    '清除': 'Clear',
     '收信中 · 每 %llds': 'Receiving · every %llds',
     '收起': 'Collapse',
     '收起侧栏': 'Collapse sidebar',
@@ -427,6 +435,8 @@ VALUES = {
     '触发条件与动作为必填': 'Trigger condition and action are required',
     '认证失败, 检查授权码%@': 'Authentication failed — check the app password%@',
     '记忆': 'Memory',
+    '设置': 'Settings',
+    '设置…': 'Settings…',
     '该会话回合在途, 捕获未发送': 'A turn is in flight in this session; capture not sent',
     '该账号登录的邮箱本人: MangoX 从它收信, 也以它的名义发回执。它不是收件人过滤 —— 「谁能驱动 agent」在 Inbox 的「发件人白名单」里配。': "This is the mailbox itself: MangoX receives here and sends receipts under its name. It is not a recipient filter — who may drive the agent is configured in the Inbox's sender allowlist.",
     '该邮件缺 IMAP UID': 'This message has no IMAP UID',
@@ -577,7 +587,6 @@ VALUES = {
     'Inbox「%@」: %@': 'Inbox “%@”: %@',
     '// 无法读取源码': '// Cannot read the source',
     '// 文件过大 (>1 MB), 暂不支持预览': '// File too large (>1 MB) — preview not supported yet',
-    '// 二进制文件 (%@), 图片预览将在后续版本提供': '// Binary file (%@); image preview is coming in a later version',
     '// 二进制文件或暂不支持的编码': '// Binary file, or an encoding not supported yet',
     '// 空文件': '// Empty file',
 
@@ -672,10 +681,10 @@ VALUES = {
     '新': 'New',
     '模型只保留 codemode 一个工具，其余全部经脚本内层调用 — 换一种调用范式，且会占用更多上下文。': 'Keeps codemode as the only tool the model sees; everything else is called from inside the script. A different calling paradigm, and it uses more context.',
     '老档位 · 行为不变': 'Older modes · unchanged',
-    # P14 硬准入: 官方 /models 报了 id 但既无种子也无目录元数据 ⇒ 挡在候选之外。
+    # P13 硬准入: 官方 /models 报了 id 但既无种子也无目录元数据 ⇒ 挡在候选之外。
     # 必须**点名**(%@): 只报个数字用户不知道是哪个, 分不清是拉取失败还是被拦。
     '%lld 个模型因缺元数据未列出: %@': '%lld models not listed — no metadata available: %@',
-    # P14 手动更新 models.dev 目录 (设置 → 模型)。目录 7 天自动刷一次, 这是强制刷新的那条路。
+    # P13 手动更新 models.dev 目录 (设置 → 模型)。目录 7 天自动刷一次, 这是强制刷新的那条路。
     '更新模型目录': 'Refresh model catalog',
     '刷新中…': 'Refreshing…',
     '更新失败, 保留原目录': 'Update failed; kept the existing catalog',
@@ -683,7 +692,7 @@ VALUES = {
     '目录: %lld 家 / %lld 条': 'Catalog: %lld providers / %lld models',
     '目录: %lld 家 / %lld 条, 已过期': 'Catalog: %lld providers / %lld models, stale',
     '已更新: %lld 家 / %lld 条': 'Updated: %lld providers / %lld models',
-    # P14-d: 候选 = /models ∪ 未列出的种子。补丁行的行上标记(与 image/think 并列), 让来源不模糊。
+    # P13-d: 候选 = /models ∪ 未列出的种子。补丁行的行上标记(与 image/think 并列), 让来源不模糊。
     # ⚠️ 纯字符串 key —— 别加 title:/非字符串参数, 本地化不透明。
     '本地': 'Local',
 }

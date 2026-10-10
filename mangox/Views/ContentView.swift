@@ -115,6 +115,8 @@ struct ContentView: View {
                 }
             }
         }
+        // P14: 把当前窗口的 store 递给菜单命令 —— AppCommands 用 @FocusedValue(\.chatStore) 取它
+        .focusedSceneValue(\.chatStore, store)
     }
 
     // MARK: - 主布局 (normal 形态)
@@ -128,7 +130,8 @@ struct ContentView: View {
                     .transition(.move(edge: .leading).combined(with: .opacity))
             }
             Divider().overlay(CodexTheme.divider)
-            // P3.7/P3.6/P3.11/P4.0.4: 主区切换——知识 / 定时任务 / 插件 / 设置 / 会话视图
+            // P3.7/P3.6/P3.11: 主区切换——知识 / 定时任务 / 插件 / 会话视图
+            // (P14: 设置已移出主区, 成为独立窗口 ⇒ 不再参与这里的互斥)
             if store.showKnowledgePanel {
                 KnowledgeView(store: store)
                     .frame(maxWidth: .infinity)
@@ -139,10 +142,6 @@ struct ContentView: View {
                     .background(CodexTheme.bgChat)
             } else if store.showExtensionsPanel {
                 ExtensionsView(store: store)
-                    .frame(maxWidth: .infinity)
-                    .background(CodexTheme.bgChat)
-            } else if store.showSettingsPanel {
-                SettingsView(store: store)
                     .frame(maxWidth: .infinity)
                     .background(CodexTheme.bgChat)
             } else {

@@ -193,6 +193,12 @@ final class ChatStore: ObservableObject {
         }
     }
 
+    /// P14: 菜单命令 → 工作区视图的一次性信号。**序号自增 = 新的一次请求**;
+    /// 视图只观察变化、不回写清零 (清零会让「连按两次 ⌘R」退化成一 次)。
+    /// 存在的理由: git 状态 / 语言构成是视图侧 `@State`, 命令层够不到 ⇒ 把命令转成视图能观察的事件。
+    @Published var workspaceRefreshTick = 0
+    @Published var workspaceFilterFocusTick = 0
+
     /// 全部会话（跨 projects + chats）。
     var allConversations: [ConversationItem] {
         projects.flatMap(\.items) + chats
@@ -432,10 +438,20 @@ final class ChatStore: ObservableObject {
 
     func toggleExtensionsPanel() {
         showExtensionsPanel.toggle()
-        showKnowledgePanel = false
-        showScheduledPanel = false
-        showSettingsPanel = false
-        if showExtensionsPanel { scanExtensions() }
+        // 与另外两个 toggle 同一形态 (先 toggle 再在"打开"分支清场) —— 三条对称,
+        // 后来者照抄任一条都不会漏掉第三个 flag。
+        if showExtensionsPanel {
+            showKnowledgePanel = false
+            showScheduledPanel = false
+            scanExtensions()
+        }
+    }
+
+    /// 侧栏面板互斥不变量: 主区三块面板 (知识 / 定时 / 插件) **至多一个**为真。
+    /// ⚠️ **不含 `showSettingsPanel`** —— P14 起设置是独立窗口, 本来就能与任一主区面板并存。
+    /// 由冒烟守卫 (P14): 任何 toggle 之后都必须成立。
+    var panelsExclusive: Bool {
+        [showKnowledgePanel, showScheduledPanel, showExtensionsPanel].filter { $0 }.count <= 1
     }
 
     // Layout
@@ -630,7 +646,6 @@ final class ChatStore: ObservableObject {
         showKnowledgePanel = false   // 从面板发起新会话 → 回会话视图
         showScheduledPanel = false
         showExtensionsPanel = false
-        showSettingsPanel = false
         try? persistence?.insertChatSession(item)
         markLastSession()
         stampSessionConfig()   // P10.3: 新会话落生即快照当前配置 (重启恢复有据)
@@ -883,10 +898,55 @@ final class ChatStore: ObservableObject {
         }
     }
 
-    /// 工作区列手动刷新入口: 只重扫文件树 (不动 cwd 绑定与扩展)。
+    /// 工作区列刷新入口 (手动刷新按钮与菜单 ⌘R 共用): 重扫顶层 + **每个已加载过的目录**,
+    /// 再与旧树按「同级 + 同名 + 同类型」合并 (不动 cwd 绑定与扩展)。
+    ///
+    /// ⚠️ **不许整体替换**: `FileNode.id` 是现生成的 `UUID()` (WorkspaceModels.swift:12),
+    /// 一棵新树 = 一组新视图身份 ⇒ 用户展开的目录会被收起来。合并把旧节点的 id 与展开态搬过来。
     func refreshFileTree() {
         guard let root = activeProjectPath else { return }
-        fileTree = WorkspaceScanner.scanShallow(root: root)
+        fileTree = Self.mergeRescan(root: root, old: fileTree)
+    }
+
+    /// 菜单 ⌘R: 重扫文件树 + 给工作区视图发一次「重载 git / 语言统计」的信号。
+    func refreshWorkspace() {
+        refreshFileTree()
+        workspaceRefreshTick &+= 1
+    }
+
+    /// 菜单 ⌘F: 把焦点送进工作区的文件过滤框。
+    /// 口径: MangoX **没有全局搜索** (全仓无 search 实现) ⇒ 对齐 macOS「在当前视图里查找」的惯例,
+    /// 不假装是"搜索整个 App"。
+    func focusWorkspaceFilter() {
+        guard canUseWorkspace else { return }
+        workspaceVisible = true
+        workspaceFilterFocusTick &+= 1
+    }
+
+    /// 重扫并与旧树合并 (递归到所有已加载过的目录)。
+    static func mergeRescan(root: String, old: [FileNode]) -> [FileNode] {
+        mergeLevel(fresh: WorkspaceScanner.scanShallow(root: root), old: old, relPath: "", root: root)
+    }
+
+    /// 逐层合并。匹配键 = **同级 + 同名 + 同类型** —— `isFolder` 也进判据,
+    /// 否则同名的目录与文件会互相顶替 (拿到错的身份 = 展开态张冠李戴)。
+    private static func mergeLevel(fresh: [FileNode], old: [FileNode],
+                                   relPath: String, root: String) -> [FileNode] {
+        fresh.map { node in
+            guard let match = old.first(where: { $0.name == node.name && $0.isFolder == node.isFolder })
+            else { return node }   // 新增节点: 用新身份, 与谁都不冲突
+            let childRel = relPath.isEmpty ? node.name : "\(relPath)/\(node.name)"
+            var children = node.children
+            var loaded = node.childrenLoaded
+            if node.isFolder, match.childrenLoaded {
+                let dir = URL(fileURLWithPath: root).appendingPathComponent(childRel).path
+                children = mergeLevel(fresh: WorkspaceScanner.scanDirectory(dir, depth: node.depth + 1),
+                                      old: match.children, relPath: childRel, root: root)
+                loaded = true
+            }
+            return FileNode(id: match.id, name: node.name, isFolder: node.isFolder, depth: node.depth,
+                            isExpanded: match.isExpanded, childrenLoaded: loaded, children: children)
+        }
     }
 
     /// lazy 展开: 后台扫描目标目录一层, 回主线程原位插入树 (保留节点 id, 展开态不跳)。
@@ -953,7 +1013,6 @@ final class ChatStore: ObservableObject {
         showKnowledgePanel = false
         showExtensionsPanel = false
         showScheduledPanel = false
-        showSettingsPanel = false
         markLastSession()
         syncWorkspaceContext()
     }
@@ -1066,7 +1125,6 @@ final class ChatStore: ObservableObject {
         showKnowledgePanel = false   // 点选会话 → 回会话视图
         showScheduledPanel = false
         showExtensionsPanel = false
-        showSettingsPanel = false
         // P4.0.2: 切走在途回合会话 → 未落库的流式块/非终态工具卡搬进镜像, 后续事件续投镜像
         if let previous, runningTurns.contains(previous) {
             let inflight = messages.filter { msg in
@@ -1643,7 +1701,6 @@ final class ChatStore: ObservableObject {
         showKnowledgePanel = true
         showScheduledPanel = false
         showExtensionsPanel = false
-        showSettingsPanel = false
     }
 
     /// Composer pill "重启引擎生效": 重启池内全部实例使最新注入块生效 (丢进程内对话记忆, 用户显式触发)。
@@ -1654,28 +1711,36 @@ final class ChatStore: ObservableObject {
         extensionsDirty = false
     }
 
-    /// 面板互斥: 打开一个关另一个 (主区同一时刻只显示一个面板)。
+    /// 面板互斥: 打开一个关另外两个 (主区同一时刻只显示一个面板)。
+    ///
+    /// ⚠️ **2026-10-10 修**: 原先这里只清 `showScheduledPanel` (下面那条只清 `showKnowledgePanel`)
+    /// —— **两个 toggle 谁都没清 `showExtensionsPanel`**。于是"开过 Plugins 再点 Knowledge"
+    /// 会留下两个 true, 而主区只显示一个: 侧栏的 Plugins 行一直亮着, 却点不出已开的面板。
+    /// 当时看不出来 (高亮只是把图标染个色); P14 给导航行加了选中胶囊后, 同一个状态错
+    /// 直接表现成**两颗胶囊同时亮** —— 状态错被 UI 放大成"有两个当前项"。
+    /// 不变量由 `panelsExclusive` + 冒烟守住 (别再往这里加"只清一个"的分支)。
     func toggleKnowledgePanel() {
         showKnowledgePanel.toggle()
-        if showKnowledgePanel { showScheduledPanel = false; showSettingsPanel = false }
-    }
-
-    // MARK: - Settings (P4.0.4 最小设置页: 并发上限; 通知开关随 P4.1 加)
-
-    func toggleSettingsPanel() {
-        showSettingsPanel.toggle()
-        if showSettingsPanel {
-            showKnowledgePanel = false
+        if showKnowledgePanel {
             showScheduledPanel = false
             showExtensionsPanel = false
         }
     }
 
+    // MARK: - Settings (P14: 设置已是**独立窗口**, 开关归 SettingsWindowController)
+
+    /// `showSettingsPanel` 现在只是**独立设置窗的可见性镜像** —— 唯一的写入方是
+    /// SettingsWindowController(开窗置 true / 关窗置 false)。它**不再参与主区面板互斥**:
+    /// 窗口可以和主窗口里任何一个面板并存。侧栏高亮与其它消费点读的就是这个 flag。
+
     // MARK: - Scheduled (P3.6 本地定时任务)
 
     func toggleScheduledPanel() {
         showScheduledPanel.toggle()
-        if showScheduledPanel { showKnowledgePanel = false; showSettingsPanel = false }
+        if showScheduledPanel {
+            showKnowledgePanel = false
+            showExtensionsPanel = false
+        }
     }
 
     // MARK: - Scheduled (P3.6 本地定时任务; P9.1b 起由 SchedulerService 承载, 此处仅转发)

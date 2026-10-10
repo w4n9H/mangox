@@ -49,7 +49,7 @@ struct ProviderPreset: Identifiable, Hashable {
 }
 
 enum ProviderPresets {
-    /// 内置预设。P14 起重整为 4 家 (deepseek / kimi / minimax / zhipu-GLM) ——
+    /// 内置预设。P13 起重整为 4 家 (deepseek / kimi / minimax / zhipu-GLM) ——
     /// 其余 (qwen / openai / anthropic / ollama) 已从库里移除; 加回 = 在此加一条数据。
     /// ⚠️ 移除 preset **不影响**已保存的自管模型 (它们存的是自己的元数据快照, 不是引用 preset);
     ///    只是这两家以后不能再从芯片一键载入。

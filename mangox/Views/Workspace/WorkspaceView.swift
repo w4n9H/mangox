@@ -4,6 +4,7 @@
 //  files + language bar + filter + file preview.
 //
 
+import AppKit
 import SwiftUI
 
 struct WorkspaceView: View {
@@ -16,6 +17,8 @@ struct WorkspaceView: View {
     @State private var totalFiles: Int? = nil
     @State private var recentCommits: [WorkspaceGit.Commit] = []
     @State private var showCommits: Bool = true
+    /// P14 ⌘F: 文件过滤框的焦点。菜单命令够不到视图 @State ⇒ 由 store 的 tick 转成事件驱动它。
+    @FocusState private var filterFocused: Bool
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -43,6 +46,27 @@ struct WorkspaceView: View {
             reloadGit()
             reloadStats()
         }
+        // P14 自动刷新: agent 每新触达一个文件就重扫一次 ——
+        // 走合并式刷新, 所以展开的目录**保持展开** (整体替换会把用户的树收起来)。
+        .onChange(of: touchedPaths) { _, _ in
+            store.refreshFileTree()
+            reloadGit()
+        }
+        // P14 ⌘R: git 与统计是视图 @State, 命令层够不到 ⇒ 由 store 的序号转成这里能观察的事件。
+        .onChange(of: store.workspaceRefreshTick) { _, _ in
+            reloadGit()
+            reloadStats()
+        }
+        // P14 ⌘F: 把焦点送进过滤框。
+        .onChange(of: store.workspaceFilterFocusTick) { _, _ in
+            filterFocused = true
+        }
+    }
+
+    /// agent 触达文件集 (与 `agentTouchedPaths` 同源; 供 `onChange` 观察变化)。
+    private var touchedPaths: [String] {
+        guard let root = store.activeProjectPath else { return [] }
+        return agentTouchedPaths(root: root)
     }
     // P3.4: 无目录 (Work 理论上进不来, 兜底)
     private var emptyState: some View {
@@ -172,6 +196,7 @@ struct WorkspaceView: View {
                 .foregroundStyle(CodexTheme.textMuted)
             TextField("过滤文件…", text: $filterText)
                 .textFieldStyle(.plain)
+                .focused($filterFocused)
                 .font(CodexTheme.fontSmall)
                 .foregroundStyle(CodexTheme.textPrimary)
             if !filterText.isEmpty {
@@ -674,15 +699,31 @@ struct FilePreviewView: View {
         return parts.isEmpty ? nil : parts.joined(separator: " · ")
     }
 
-    /// 真实文件内容; 二进制/超大文件给占位文案。
+    /// 能直接按图片渲染的扩展名 (与 `fileContent` 的回落判据同源, 免得两处清单漂移)。
+    private static let imageExts: Set<String> = [
+        "png", "jpg", "jpeg", "gif", "webp", "bmp", "tiff", "tif", "heic", "icns",
+    ]
+
+    private var fileExt: String { (fileName as NSString).pathExtension.lowercased() }
+
+    /// P14: 能按图片渲染时给出 `NSImage`; 非图片 / 超过 40 MB / 读不出来 → nil, 回落文本占位。
+    private var previewImage: NSImage? {
+        guard Self.imageExts.contains(fileExt) else { return nil }
+        guard let attr = try? FileManager.default.attributesOfItem(atPath: absolutePath),
+              let size = attr[.size] as? Int, size <= 40_000_000 else { return nil }
+        return NSImage(contentsOfFile: absolutePath)
+    }
+
+    /// 真实文件内容; 二进制/超大文件给占位文案 (图片正常时走 `previewImage`, 这里只兜失败)。
     private var fileContent: String {
         let fm = FileManager.default
         guard let attr = try? fm.attributesOfItem(atPath: absolutePath),
               let size = attr[.size] as? Int, size <= 1_000_000
         else { return L("// 文件过大 (>1 MB), 暂不支持预览") }
-        let imageExts: Set<String> = ["png", "jpg", "jpeg", "gif", "webp", "icns", "pdf"]
-        let ext = (fileName as NSString).pathExtension.lowercased()
-        if imageExts.contains(ext) { return String(format: L("// 二进制文件 (%@), 图片预览将在后续版本提供"), ext) }
+        if Self.imageExts.contains(fileExt) {
+            return String(format: L("// 图片 (%@) 读取失败或超过 40 MB"), fileExt)
+        }
+        if fileExt == "pdf" { return L("// PDF 暂不支持预览") }
         guard let s = try? String(contentsOfFile: absolutePath, encoding: .utf8) else {
             return L("// 二进制文件或暂不支持的编码")
         }
@@ -715,7 +756,7 @@ struct FilePreviewView: View {
                 }
                 Spacer()
                 VStack(alignment: .trailing, spacing: 1) {
-                    Text(language ?? "text")
+                    Text(Self.imageExts.contains(fileExt) ? fileExt : (language ?? "text"))
                         .font(CodexTheme.fontMonoXs)
                         .foregroundStyle(CodexTheme.textTertiary)
                     if let meta = fileMeta {
@@ -732,15 +773,28 @@ struct FilePreviewView: View {
                 alignment: .bottom
             )
 
-            ScrollView([.horizontal, .vertical], showsIndicators: true) {
-                Text(CodeHighlighter.highlight(fileContent, language: language))
-                    .font(CodexTheme.fontMonoXs)
-                    .foregroundStyle(CodexTheme.textPrimary)
-                    .textSelection(.enabled)
-                    .fixedSize(horizontal: true, vertical: true)
-                    .padding(12)
+            if let image = previewImage {
+                // P14: 图片直接渲染 (原先是「图片预览将在后续版本提供」的占位文案)
+                ScrollView([.horizontal, .vertical], showsIndicators: true) {
+                    Image(nsImage: image)
+                        .resizable()
+                        .scaledToFit()
+                        .frame(maxWidth: Tune.workspacePreviewImageMaxSide,
+                               maxHeight: Tune.workspacePreviewImageMaxSide)
+                        .padding(12)
+                }
+                .frame(maxHeight: .infinity)
+            } else {
+                ScrollView([.horizontal, .vertical], showsIndicators: true) {
+                    Text(CodeHighlighter.highlight(fileContent, language: language))
+                        .font(CodexTheme.fontMonoXs)
+                        .foregroundStyle(CodexTheme.textPrimary)
+                        .textSelection(.enabled)
+                        .fixedSize(horizontal: true, vertical: true)
+                        .padding(12)
+                }
+                .frame(maxHeight: .infinity)
             }
-            .frame(maxHeight: .infinity)
         }
     }
 }

@@ -11,6 +11,9 @@ struct SidebarView: View {
     /// 数据源 = chats/projects 投影 (订阅域状态, 不含流式热路径)。
     @StateObject private var model: SidebarModel
     @State private var expandedProjects: Set<UUID> = []
+    /// P14 (2026-10-10): 侧栏搜索串 —— 只过滤 Projects / Chats 两区,
+    /// 导航 5 项是**固定的应用入口**, 不是可搜索内容。
+    @State private var query: String = ""
     // 删除会话二次确认 (两种粒度: 仅 db / db+pi 记忆文件)
     @State private var confirmDeleteTarget: ConversationItem?
 
@@ -23,11 +26,13 @@ struct SidebarView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 2) {
                 brandHeader
+                searchField
                 navSection
+                if noMatches { noMatchNote }
                 projectsSection
                 chatsSection
             }
-            .padding(.horizontal, 8)
+            .padding(.horizontal, Tune.sidebarContentInset)
             .padding(.top, 10)
             .padding(.bottom, 16)
         }
@@ -67,6 +72,59 @@ struct SidebarView: View {
         .padding(.vertical, 6)
     }
 
+    // MARK: - 搜索 (P14, 2026-10-10: 对齐 Music 式侧栏)
+
+    private var filtering: Bool { SidebarFilter.isFiltering(query) }
+    private var filteredProjects: [ProjectGroup] { SidebarFilter.projects(model.projects, query: query) }
+    private var filteredChats: [ConversationItem] { SidebarFilter.chats(model.chats, query: query) }
+
+    /// 过滤态下 Projects + Chats **同时**为空 —— 用来决定要不要落那句"没匹配"的提示。
+    /// 没有它, 侧栏会静默变空 (用户分不清"没搜到"和"数据没了")。
+    private var noMatches: Bool {
+        filtering && filteredProjects.isEmpty && filteredChats.isEmpty
+    }
+
+    /// 形态取自参考图量测值: 高 28 · 圆角 7 · 填充 = 黑 6% 叠加 (复用 `bgPill`)。
+    /// 行为 = **真过滤** (纯函数在 `SidebarFilter`), 空查询不改变任何数据 ——
+    /// 一个只会显示、不动的搜索框比没有更糟。
+    private var searchField: some View {
+        HStack(spacing: 7) {
+            Image(systemName: "magnifyingglass")
+                .font(.system(size: 12))
+                .foregroundStyle(CodexTheme.textMuted)
+            TextField("搜索会话、项目", text: $query)
+                .textFieldStyle(.plain)
+                .font(.system(size: 13))
+                .foregroundStyle(CodexTheme.textPrimary)
+            if !query.isEmpty {
+                Button {
+                    query = ""
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 11))
+                        .foregroundStyle(CodexTheme.textMuted)
+                }
+                .buttonStyle(.plain)
+                .help("清除")
+            }
+        }
+        .padding(.horizontal, 8)
+        .frame(height: Tune.sidebarSearchHeight)
+        .background(CodexTheme.bgPill)
+        .clipShape(RoundedRectangle(cornerRadius: Tune.sidebarSearchRadius))
+        .padding(.top, 2)
+        .padding(.bottom, 4)
+    }
+
+    private var noMatchNote: some View {
+        Text("没有匹配的会话或项目")
+            .font(.system(size: 12))
+            .foregroundStyle(CodexTheme.textMuted)
+            .padding(.horizontal, 10)
+            .padding(.top, 14)
+            .padding(.bottom, 4)
+    }
+
     // MARK: - 全局导航 (Codex: New chat / Plugins / Scheduled)
 
     private var navSection: some View {
@@ -89,10 +147,11 @@ struct SidebarView: View {
                    active: model.showExtensionsPanel) {
                 store.toggleExtensionsPanel()
             }
-            // P4.0.4: 最小设置页 (并发上限; 通知开关随 P4.1)
+            // P14: 设置改成**独立窗口** —— 这里只是入口, 开关由 SettingsWindowController 持有
+            // (active 读 store.showSettingsPanel: 它是窗口可见性的镜像, 由控制器写入)
             navRow(icon: "gearshape", title: "Settings",
                    active: model.showSettingsPanel) {
-                store.toggleSettingsPanel()
+                SettingsWindowController.shared.toggle(store: store)
             }
         }
         .padding(.bottom, 6)
@@ -111,7 +170,9 @@ struct SidebarView: View {
                 Text(title)
                     .font(.system(size: 13,
                                   weight: title == "New chat" || active ? .medium : .regular))
-                    .foregroundStyle(active ? CodexTheme.textPrimary : CodexTheme.textPrimary)
+                    // P14: 未选中行提亮到 textSecondary (参考图行文字 #494949 ≈ 8.3:1,
+                    // textPrimary 的 13.6:1 偏重一档); 选中行保持 textPrimary。
+                    .foregroundStyle(active ? CodexTheme.textPrimary : CodexTheme.textSecondary)
                 Spacer()
                 if let badge, badge > 0 {
                     Text("\(badge)")
@@ -125,6 +186,10 @@ struct SidebarView: View {
             }
             .padding(.horizontal, 8)
             .padding(.vertical, 6)
+            // P14: 导航行也吃选中胶囊 —— 参考图里"当前项"是一整颗底, 而原先只有图标换色
+            // (读取时"当前在哪"只能靠颜色猜)。形态与会话行**同一个** token/圆角。
+            .background(active ? CodexTheme.selected : Color.clear)
+            .clipShape(RoundedRectangle(cornerRadius: CodexTheme.radiusSm))
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -133,11 +198,16 @@ struct SidebarView: View {
     // MARK: - Projects (嵌套会话, 行内同带活动徽章)
 
     private var projectsSection: some View {
-        VStack(alignment: .leading, spacing: 1) {
-            sectionHeader("Projects")
-            ForEach(model.projects) { group in
+        let groups = filteredProjects
+        return VStack(alignment: .leading, spacing: 1) {
+            // P14: 过滤态下**不画空区块头** —— 只有标题没有内容的组会读成"坏了"。
+            // (不过滤时保持原行为: 没项目也留着头, 那是"这里本该有项目"的提示。)
+            if !filtering || !groups.isEmpty { sectionHeader("Projects") }
+            ForEach(groups) { group in
                 projectRow(group)
-                if expandedProjects.contains(group.id) {
+                // P14: 搜索时**强制展开命中的项目** —— 命中藏在折叠的项目里等于没搜到。
+                // 只影响绘制, 不动 `expandedProjects`, 所以清空查询后用户的展开态原样回来。
+                if filtering || expandedProjects.contains(group.id) {
                     nestedSessions(group)
                 }
             }
@@ -228,10 +298,10 @@ struct SidebarView: View {
     // MARK: - Chats (P8.0: 非项目会话按 今天/昨天/本周/更早 分桶)
 
     private var chatsSection: some View {
-        let sessions = model.chats.sorted { $0.updatedAt > $1.updatedAt }
+        let sessions = filteredChats.sorted { $0.updatedAt > $1.updatedAt }
         let grouped = Dictionary(grouping: sessions) { DayBucket.bucket(for: $0.updatedAt, now: .now) }
         return VStack(alignment: .leading, spacing: 1) {
-            sectionHeader("Chats")
+            if !filtering || !sessions.isEmpty { sectionHeader("Chats") }
             ForEach(DayBucket.allCases, id: \.rawValue) { bucket in
                 if let items = grouped[bucket], !items.isEmpty {
                     dayHeader(bucket, count: items.count)
@@ -259,9 +329,11 @@ struct SidebarView: View {
     }
 
     private func sectionHeader(_ title: String) -> some View {
+        // P14: 11pt semibold → 12pt regular —— 参考图的组标题是"大而轻"的货架标签
+        // (实测 #ADADAD ≈ 2.1:1), semibold 让它读成了次级按钮。
         Text(title)
-            .font(.system(size: 11, weight: .semibold))
-            .tracking(0.5)
+            .font(.system(size: 12))
+            .tracking(0.3)
             .foregroundStyle(CodexTheme.textMuted)
             .padding(.horizontal, 10)
             .padding(.top, 14)

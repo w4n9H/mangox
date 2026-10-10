@@ -71,7 +71,12 @@ enum CodexTheme {
     // 卡内悬停按钮 (底=卡面)、分段控件 hover (底=容器面) —— 三者底色差了三档, 同一个实色不可能都对。
     // 两个 token 而不是一个: **选中必须比悬停更实**, 否则"当前项在哪"读不出来。
     static let hover    = overlay(dark: Dark.hoverAlpha, light: 0.05)
-    static let selected = overlay(dark: Dark.selectedAlpha, light: 0.08)
+    /// ⚠️ 亮色档 2026-10-10 由 **0.08 → 0.10**。
+    /// 判据 (从参考图量的, 不是凭感觉): Music 式侧栏的选中胶囊实测 `#DCDCDC` 落在 `#F5F5F5` 底上
+    /// ⇒ 等价于**黑 10.2% 叠加**; 0.08 合成出来是 `#E2E2E4`, 选中"看得见但不跳出来"。
+    /// 这是**全局语义的加强** (分段控件 / 卡面选中一起跟着走), **不是侧栏专用值** ——
+    /// 同一个"选中"不该有两套强度, 否则以后必然漂移。
+    static let selected = overlay(dark: Dark.selectedAlpha, light: 0.10)
 
     // MARK: - Borders
     static let border     = adaptive(light: 0xE3E3E7, dark: Dark.border)
@@ -121,6 +126,10 @@ enum CodexTheme {
     static let radius: CGFloat         = 8
     static let radiusLg: CGFloat       = 12
     static let radiusSm: CGFloat       = 6
+    /// P14 第四批: composer 输入卡专用圆角 (对齐参考图的"大而软"卡形)。
+    /// ⚠️ 不并进 `radiusLg` —— 后者是**全局**值 (聊天卡 / 面板 / 分段控件共用),
+    ///    改它等于连带改一批与本批无关的面。
+    static let radiusComposer: CGFloat = 22
 
     // MARK: - Typography
     // 用语义化系统字体, 不走 Font.custom(私有字体名)——私有名 (.AppleSystemUIFont/.SF Mono)
@@ -245,6 +254,13 @@ enum Tune {
     // 窗口
     static let windowMinSize     = CGSize(width: 1280, height: 820)
     static let windowDefaultSize = CGSize(width: 1440, height: 900)
+    /// 设置窗 (P14: 设置从主区整页覆盖升为**独立窗口**, 由 SettingsWindowController 承载)。
+    /// 尺寸按 "8 个 section 里一眼能看见 3~4 段、其余滚动" 定; 2026-10-10 首版 760×640 实测偏挤 ⇒ 放大。
+    static let settingsWindowSize    = CGSize(width: 920, height: 780)
+    /// 设置窗的收缩下限 = 首版尺寸 (窗口可拖大; 再小就回到"挤"的状态, 没有意义)。
+    static let settingsWindowMinSize = CGSize(width: 760, height: 640)
+    /// 工作区图片预览的渲染上界 (超过就靠 ScrollView 滚; 不放大到糊)
+    static let workspacePreviewImageMaxSide: CGFloat = 1600
 
     // 迷你条 (P4.2, 主窗口变形为任务台)
     static let miniBarWidth: CGFloat      = 300   // mini 台窗口宽
@@ -276,7 +292,8 @@ enum Tune {
     static let pillHeight: CGFloat              = 24   // 胶囊控件高 (审批/模型 pill)
     static let projectPillHPadding: CGFloat     = 10
     static let projectPillVPadding: CGFloat     = 6
-    static let sendButtonSize: CGFloat          = 26
+    // P14 第四批: 26 → 33。占卡高比 17.4% → 23.6% (对齐参考图实测值 63px ÷ 1.889)。
+    static let sendButtonSize: CGFloat          = 33
     static let boltIconSize: CGFloat            = 10   // 模型 pill 闪电图标
     static let chevronIconSize: CGFloat         = 9    // 模型 pill 下箭头
     static let levelFontSize: CGFloat           = 12   // 模型 pill 思考级别字号
@@ -296,6 +313,16 @@ enum Tune {
 
     // 侧栏
     static let sidebarWidth: CGFloat          = 256
+    /// 侧栏滚动内容的左右内缩 (原为硬编码的 8)。
+    /// 2026-10-10 对齐 Music 式侧栏: 图标列 17.4 → 22.4pt (参考图 icon 左沿 26/219pt ≈ 11.9%,
+    /// 按同比例落到 256pt 宽还要更靠右, 这里只取**半步** 8+5)。
+    /// ⚠️ 它作用于**整块滚动内容** —— 一起走的还有项目行 / 层级引导线 / 会话胶囊 / 搜索框。
+    ///    别只改某一行, 否则侧栏左沿会参差不齐。
+    static let sidebarContentInset: CGFloat   = 13
+    /// 侧栏搜索框 (P14)。高度对齐 macOS 标准 sidebar 搜索框; 填充复用 `bgPill`
+    /// (`#E7E7EA` 正好等于参考图实测的"黑 6% 叠加", 无需新 token)。
+    static let sidebarSearchHeight: CGFloat   = 28
+    static let sidebarSearchRadius: CGFloat   = 7
     /// 项目下会话行缩进 (顶层会话行恒为 8, 见 ConversationRow 的 leading)。
     /// P10.7 修正: 该参数此前是死代码 —— 调用点硬编码 `indent: false`, 层级从未表达。
     static let sidebarRowIndent: CGFloat      = 34
