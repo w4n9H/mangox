@@ -17,7 +17,9 @@ struct KnowledgeView: View {
         case none
         case item(UUID)      // DB 条目 (可编辑)
         case pack(String)    // persona pack 文件 (只读, 双击去 Finder)
-        case base(String)    // 挂载的知识库 (P11.4b: 只读信息面 + 改描述 / 摘库)
+        case base(String)    // 一个根 (只读信息面 + 改描述 / 摘库)
+        case note(String, String)   // 一篇笔记 (根 id, 根内相对路径) —— P15.1 只读信息面, P15.2 起可写
+        case proposal(UUID)  // 一条 dream 提案 —— **P15.3 只读**: 能看、能点开, 不能拍板
     }
 
     @State private var selection: Selection = .none
@@ -43,22 +45,88 @@ struct KnowledgeView: View {
     /// 摘库确认 (内置库不可摘 ⇒ 这个对话框只会由用户库触发)。
     @State private var showDeleteBaseConfirm: Bool = false
 
-    // —— 挂载流程 (P11.4b) ——
-    // 走**两步**而不是"选完目录就挂上": 描述必填 (索引里只有文件名时, agent 拿到的是一串没有语义的
-    // 字符串)。所以先选目录 → 再在弹窗里填描述。描述**不进 draft 复用** —— 它与条目草稿是两套东西。
-    @State private var showMountSheet: Bool = false
-    @State private var mountPath: String = ""
-    @State private var mountDesc: String = ""
-    @State private var mountReject: KnowledgeBaseRejection?
-    /// 选中库的扫描结果 (文档数在右侧信息面里给)。**不在 body 里现扫** —— 面板每次重绘都走一遍
+    /// 选中根的扫描结果 (文档数在右侧信息面里给)。**不在 body 里现扫** —— 面板每次重绘都走一遍
     /// 目录树是那种"看起来没 bug、只是越来越卡"的开销。`.task(id:)` 只在换选中目标时扫一次。
     @State private var baseDocs: [KnowledgeBaseDoc] = []
+    /// 左列的**根 × 笔记**快照 (P15.1)。与 `baseDocs` **分开**: 那个只服务"当前选中", 这个服务整个
+    /// 列表, 两者要扫的目录不是同一个集合。同样**不在 body 里现扫**。
+    @State private var rootScan: [RootScan] = []
+
+    /// 一个根 + 它扫到的笔记。
+    private struct RootScan: Identifiable {
+        let base: KnowledgeBase
+        let docs: [KnowledgeBaseDoc]
+        var id: String { base.id }     // 路径唯一 ⇒ 根名唯一, 够当 ForEach 的身份
+    }
+
+    /// 用户**手动缩回**的根 id（`base.id` 是稳定的: 全局根是常量, 项目根是项目 UUID ⇒ 重扫不丢态）。
+    ///
+    /// ⚠️ 记的是「**缩回的**」而不是「展开的」（侧栏 `expandedProjects` 是对偶写法）—— 根是**扫盘现算**的,
+    /// 会随项目增减出现; 记「展开的」⇒ 新根不在集合里 ⇒ **默认折叠 = 一出现就是隐形的**。
+    /// 缺省必须可见（同"藏起来的入口 = 没有入口"）。侧栏靠 `onAppear` 一次性全展开拿到同一个缺省,
+    /// 这里没有那个稳定时机（根每次重扫重算）, 所以换个**不依赖时机**的表达。
+    @State private var collapsedRoots: Set<String> = []
     /// 用户库描述编辑草稿 (内置库描述不归用户配置, 只读展示)。
     @State private var draftBaseDesc: String = ""
 
+    // MARK: P15.2 笔记编辑草稿
+
+    /// 打开一篇笔记时那一版的**指纹** —— 保存时带回去比对。乐观并发的全部状态就只有这一个字符串
+    /// （没有"锁定"、没有"正在编辑"标记: 磁盘才是真源, 我们只是记住"我读到的是哪一版"）。
+    @State private var noteDraftHash: String = ""
+    @State private var noteDraftTitle: String = ""
+    @State private var noteDraftBody: String = ""
+    /// 打开（或上次保存）时磁盘上的**整篇原文** —— 编辑面拿它算"改过没有", 也拿它当
+    /// frontmatter 的真源（用户手写的注释 / 键顺序**逐字保留**, 我们只换 `title:` 那一行）。
+    @State private var noteBaseline: String = ""
+    /// 这篇支不支持改标题（非 `.md` 不支持: frontmatter 是 markdown 的东西）。
+    @State private var noteTitleEditable: Bool = false
+    @State private var noteReject: NoteWriteRejection?
+    @State private var showNoteDeleteConfirm: Bool = false
+
+    /// 选中那篇的**版本史**（新 → 旧）。与 `noteDraft*` **同一批读**（`.task(id: noteDraftTrigger)`）——
+    /// 来源标记与变更史用的是同一份数据, 分开读就成了两个真源、两次 IO。
+    ///
+    /// ⚠️ **不做缓存**（同 `rootScan` 那条判据）: 它是低频写的（人点保存 / 采纳提案才变）,
+    /// 而"在 `body` 里现读"会让每次重绘都打一次库。
+    @State private var noteRevisions: [NoteRevision] = []
+    /// 采纳 / 丢弃被拒的原因。文案在 View 侧拼 —— 与 `noteRejectText` 同一个理由:
+    /// `NoteWriteRejection` 住在 `Models/KnowledgeBase.swift`, 而那个文件在
+    /// `gen_strings.py` 的 `EXCLUDE_FILES` 里 ⇒ 在那边写 `L()` 的 key 永远进不了词表。
+    @State private var proposalReject: NoteWriteRejection?
+    /// 提案的"现在"（磁盘上目标那一篇的原文）。`nil` = 还没读到; insight 恒 `""`（目标还不存在）。
+    /// **随选中项缓存**, 不在 `body` 里现读文件（同 `noteDraftTrigger` 那条判据）。
+    @State private var proposalBase: String?
+
+    /// 新建笔记的表单。
+    @State private var showNewNoteSheet: Bool = false
+    @State private var newNoteTitle: String = ""
+    @State private var newNoteReject: NoteWriteRejection?
+
     private var editingId: UUID? { if case .item(let id) = selection { return id }; return nil }
     private var editingPackFile: String? { if case .pack(let f) = selection { return f }; return nil }
-    private var editingBaseId: String? { if case .base(let id) = selection { return id }; return nil }
+    private var editingBaseId: String? {
+        switch selection {
+        case .base(let id): return id
+        // P15.1: 选中一篇笔记时, 右侧要**它的根**的信息 + 扫描结果 (`baseDocs` 靠它驱动)。
+        case .note(let id, _): return id
+        default: return nil
+        }
+    }
+
+    /// 选中的那一篇笔记（根 + 文档）。找不到 = 文件在 App 外被删了 ⇒ 回落显示根的信息面。
+    private var editingNote: (base: KnowledgeBase, doc: KnowledgeBaseDoc)? {
+        guard case .note(let bid, let rel) = selection,
+              let base = store.knowledgeBase(id: bid),
+              let doc = baseDocs.first(where: { $0.relativePath == rel }) else { return nil }
+        return (base, doc)
+    }
+
+    /// 选中的那条提案（P15.3）。找不到 = 这一批被重读了 ⇒ 回落显示条目编辑面（同 `editingNote` 的处置）。
+    private var editingProposal: NoteProposal? {
+        guard case .proposal(let id) = selection else { return nil }
+        return store.noteProposals.first { $0.id == id }
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -75,7 +143,7 @@ struct KnowledgeView: View {
             }
         }
         .sheet(isPresented: $showInjection) { injectionSheet }
-        .sheet(isPresented: $showMountSheet) { mountSheet }
+        .sheet(isPresented: $showNewNoteSheet) { newNoteSheet }
         .confirmationDialog("删除条目「\(draftTitle)」？",
                             isPresented: $showDeleteConfirm,
                             titleVisibility: .visible) {
@@ -93,7 +161,23 @@ struct KnowledgeView: View {
             // 说清"摘掉 ≠ 删目录" —— 这是用户点下去前最需要知道的一件事。
             Text("只是不再挂载, 目录与里面的文件一个都不动。")
         }
+        .confirmationDialog("删除笔记「\(noteDraftTitle)」？",
+                            isPresented: $showNoteDeleteConfirm,
+                            titleVisibility: .visible) {
+            Button("删除", role: .destructive) { deleteEditingNote() }
+            Button("取消", role: .cancel) {}
+        } message: {
+            // ⚠️ 两条退路都要写出来: 删除是本功能里唯一不可逆的动作, 而它其实**有**退路 ——
+            //    不说, 用户就会按"删了就没了"来做决定, 于是要么不敢删、要么删错了才发现能捞。
+            Text("当前内容会记进变更史; 文件移到「废纸篓」, 还能捞回来。")
+        }
         .task(id: baseScanTrigger) { await reloadBaseDocs() }
+        .task(id: rootScanTrigger) { await reloadRootScan() }
+        // P15.2: 换选中那篇笔记时读一次磁盘（正文 / 标题 / 指纹）。**不在 `body` 里读** ——
+        // 同一份文件每帧读一遍，是那种"看起来没 bug、只是越来越卡"的开销（同 `rootScan` 那条）。
+        .task(id: noteDraftTrigger) { loadNoteDraft() }
+        // P15.4: 换选中那条提案时读一次它的"现在"（并排 diff 的左半边）。
+        .task(id: proposalBaseTrigger) { loadProposalBase() }
     }
 
     // MARK: - A 块: 顶部载荷条 (回答"这一轮我带什么上飞机")
@@ -228,7 +312,7 @@ struct KnowledgeView: View {
                     id: "ondemandPack",
                     text: String(format: L("%lld 个人格文件是「按需」的, 模型不知道它们存在: %@"),
                                  files.count, namesBrief(files)),
-                    help: L("它们不进 prompt, 也进不了知识库索引 (pack 目录不在任何库的扫描路径下)。挂成知识库即可, 做法同 PROJECTS.md"))
+                    help: L("它们不进 prompt, 也进不了笔记索引 (pack 目录不在任何根的扫描路径下)。把内容写成一篇笔记即可"))
             case .indexSkipped(let bases):
                 // 索引段整段缺席 (Q11 方案 A)。点名每库占多少字 —— 用户才知道该摘哪个库。
                 let detail = bases.map { "\($0.name) \($0.chars)" }.joined(separator: " · ")
@@ -340,26 +424,22 @@ struct KnowledgeView: View {
 
     private var listPane: some View {
         VStack(alignment: .leading, spacing: 0) {
-            // 区头: 与侧栏 "Projects/Chats" 同款 + 右侧新建
-            HStack {
-                Text("KNOWLEDGE")
-                    .font(.system(size: 11, weight: .semibold))
-                    .tracking(0.5)
-                    .foregroundStyle(CodexTheme.textMuted)
-                Spacer()
-                Button(action: startNew) {
-                    Image(systemName: "plus")
-                        .font(.system(size: 11))
-                        .foregroundStyle(CodexTheme.textSecondary)
-                        .frame(width: 18, height: 18)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .help("新建条目")
-            }
-            .padding(.horizontal, 10)
-            .padding(.top, 14)
-            .padding(.bottom, 4)
+            // 面板标题。**右侧那个 `+` 已移除**（2026-10-13, boss: 「那最上面那个小 + 可以移除了」）——
+            // 新建条目的入口**只剩下一个**, 住在自定义区段内的 `newItemRow`。
+            // 为什么移掉是对的:
+            // ① 那个 `+` 挂在**面板标题**上, 它只能回答"这整块面板能新建", 回答不了"**哪一段**能新建"
+            //    —— 而这正是当天踩坑的形状（删空自定义段 ⇒ 找不到落点）;
+            // ② 同一个动作有两个入口、且分别落在两个层级 ⇒ 用户得先判断"这俩是不是一回事";
+            // ③ **就近 > 全局**: 段的入口就在段末, 视线不必离开列表（常驻段最多 3~4 行, 自定义段
+            //    永远在首屏内 —— 所以"长列表要滚回来点"这个保留理由不成立, 我自己否掉）。
+            // 判据: **一个动作一个入口, 且入口住在这个动作所属的那一段里**。
+            Text("KNOWLEDGE")
+                .font(.system(size: 11, weight: .semibold))
+                .tracking(0.5)
+                .foregroundStyle(CodexTheme.textMuted)
+                .padding(.horizontal, 10)
+                .padding(.top, 14)
+                .padding(.bottom, 4)
 
             ScrollView {
                 VStack(spacing: 1) {
@@ -373,7 +453,6 @@ struct KnowledgeView: View {
                     let pack = store.knowledge.personaPack
                     let custom = store.customKnowledge
                     let pending = store.pendingKnowledge
-                    let bases = store.effectiveKnowledgeBases
 
                     // ① 常驻 = persona pack (固定档, 只读)。soul/user/rules 三份恒常驻; pack 里若还有人
                     //    写 `layer: ondemand`, 那一行也留在这里 (它同样是固定真源, 只是不进 prompt)。
@@ -424,23 +503,48 @@ struct KnowledgeView: View {
                     ForEach(pack.entries.filter { !$0.isResident }) { e in packRow(e) }
                     // ② 自定义 = 你手动加的 + 从会话沉淀的。**待审核候选排最前** —— 它们需要动作,
                     //    而"需要动作的东西埋在列表中间"是那种用户永远发现不了的 bug。
-                    if !pending.isEmpty || !custom.isEmpty {
-                        sectionHeader(L("自定义"), count: pending.count + custom.count,
-                                      tint: CodexTheme.textMuted)
-                        ForEach(pending) { item in row(item) }
-                        ForEach(custom) { item in row(item) }
+                    //
+                    // ⚠️ 这一段**不判空**（2026-10-13 改口径 —— **同一根火柴第三次**）。
+                    //    判据 = **这一段里有没有"用户在这个界面里能发起的动作"**（下面 ④ 反过来用它）:
+                    //    提案只有**产出** ⇒ 判空（空段只是噪音）; 条目**永远可以再建一条** ⇒ 恒显示。
+                    //    旧版判空踩的坑: 删掉唯一一条 ⇒ **整段（含区头）一起消失** ⇒ 段里那个入口
+                    //    「像从未存在过一样」。boss 原话: 「我删除唯一一条自定义后, 发现没地方新建了」。
+                    //    ⇒ **入口住的那一段不许判空**（笔记区 2026-09-23 已因同一条判据修过一次）。
+                    //    修法不是补一个更聪明的 `if`, 而是**把 `if` 整个删掉**: 区头 + 条目行 + 新建行
+                    //    恒渲染 —— 于是**不存在**"下次又忘了把入口带上"的位置。判据能修根因, 就不贴补丁。
+                    sectionHeader(L("自定义"), count: pending.count + custom.count,
+                                  tint: CodexTheme.textMuted)
+                    ForEach(pending) { item in row(item) }
+                    ForEach(custom) { item in row(item) }
+                    newItemRow
+                    // ③ 笔记 = **根分组 + 组内笔记行** (P15.1)。**不判空**: 固定根恒存在 (目录可能
+                    //    还没建, 但"根"是本版主战场, 而入口住在这一段里 —— 藏起来的入口等于没有入口)。
+                    //    ⚠️ 区头计数 = **笔记篇数**, 不是根数: 区头标题是一个断言 ("这些是笔记"),
+                    //    数字就必须是**该断言的成员数** (同常驻区 2026-09-22 那条修正)。
+                    //    分组维度也只有一个 = 根; "全局 / 项目"由**住在哪个根**表达, 不再做行内标记 ——
+                    //    这正是门 1「位置即归属」在界面上的形状。
+                    sectionHeader(L("笔记"), count: rootScan.reduce(0) { $0 + $1.docs.count },
+                                  tint: CodexTheme.textMuted)
+                    ForEach(rootScan) { group in rootGroup(group) }
+                    newNoteRow
+
+                    // ④ 提案 = dream 攒出来、**等你拍**的那批（P15.3, 只读）。
+                    //
+                    // ⚠️ 这一段**判空**（与上面的笔记区刻意相反）: 笔记区不判空是因为**入口住在
+                    //    那一段里**（藏起来的入口 = 没有入口）; 而提案是**产出**, 没有产出就没有
+                    //    任何可做的事 —— 空段只会让左列多一块"提案 · 0"的固定噪音。
+                    //    判据 = 这一段里有没有"用户在这个界面里能发起的动作"。
+                    if !store.noteProposals.isEmpty {
+                        sectionHeader(L("提案"), count: store.noteProposals.count,
+                                      tint: CodexTheme.accent)
+                        ForEach(store.noteProposals) { p in proposalRow(p) }
                     }
-                    // ③ 知识库 = 挂载的目录。**不判空**: 内置库恒有一个 (L1 落盘目录), 所以这段永远在,
-                    //    而它正是挂载入口的所在地 —— 藏起来的入口等于没有入口。
-                    sectionHeader(L("知识库"), count: bases.count, tint: CodexTheme.textMuted)
-                    ForEach(bases) { base in baseRow(base) }
-                    mountRow
 
                     if store.knowledgeItems.isEmpty && pack.isEmpty {
                         // 旧文案是「暂无条目 / 点右上角 + 新建」—— 只说了三条路里的一条, 而 user
                         // 真正想找的往往是**另外两条** (人格文件放哪 / 目录挂哪)。清单页在"什么都没有"
                         // 时是**唯一**能指路的地方, 指错路就等于没指 (2026-09-23 改口径)。
-                        Text(L("还没有常驻内容\n点右上角 + 新建条目, 或用上面两段的入口放入文件"))
+                        Text(L("还没有常驻内容\n点右上角 + 新建条目, 或用常驻区与笔记区的入口放入文件"))
                             .font(CodexTheme.fontTiny)
                             .foregroundStyle(CodexTheme.textMuted)
                             .multilineTextAlignment(.center)
@@ -448,7 +552,9 @@ struct KnowledgeView: View {
                             .padding(.top, 24)
                     }
                 }
-                .padding(.horizontal, 8)
+                // 容器内缩**共用侧栏那个常量** (P16, 2026-10-12) —— 两块面板常常同屏并排,
+                // 表格线就是眼睛的锚点; 各写一个数字迟早会漂。这一层管的是"整块离窗口边多远"。
+                .padding(.horizontal, Tune.sidebarContentInset)
                 .padding(.bottom, 12)
             }
         }
@@ -461,12 +567,12 @@ struct KnowledgeView: View {
         let hovered = hoveringId == entry.fileName
         return HStack(spacing: 7) {
             Image(systemName: entry.isBroken ? "exclamationmark.triangle" : "text.book.closed")
-                .font(.system(size: 10))
-                .foregroundStyle(entry.isBroken ? CodexTheme.toolError : CodexTheme.thinking)
-                .frame(width: 14)
+                .font(.system(size: 12))
+                .foregroundStyle(entry.isBroken ? CodexTheme.toolError : CodexTheme.textSecondary)
+                .frame(width: 16)
             VStack(alignment: .leading, spacing: 1) {
                 Text(PersonaRowText.title(for: entry.fileName))
-                    .font(.system(size: 12))
+                    .font(.system(size: 13))
                     .lineLimit(1)
                     .foregroundStyle(selected ? CodexTheme.textPrimary : CodexTheme.textSecondary)
                 Text(PersonaRowText.subtitle(for: entry))
@@ -482,7 +588,7 @@ struct KnowledgeView: View {
                 .help(L("人格文件是只读真源, 去 Finder 打开编辑"))
         }
         .padding(.leading, 8)
-        .padding(.trailing, 6)
+        .padding(.trailing, 8)
         .padding(.vertical, 5)
         .background(selected ? CodexTheme.selected : (hovered ? CodexTheme.hover : Color.clear))
         .clipShape(RoundedRectangle(cornerRadius: CodexTheme.radiusSm))
@@ -502,35 +608,72 @@ struct KnowledgeView: View {
 
     // MARK: - 知识库区行 (P11.4b)
 
-    /// 一条挂载记录。行内开关 = **是否进索引**(与条目那个开关同形: 关掉 ≠ 摘掉)。
-    /// 「内置」标记一次说清两件事: 不可删 (删了下次现算又回来, 那种"删了又出现"的按钮比没有更坏)、
-    /// 描述由 App 写死 (它的存在由 L1 落盘目录决定, 不归用户配置)。
-    private func baseRow(_ base: KnowledgeBase) -> some View {
-        let selected = selection == .base(base.id)
-        let hovered = hoveringId == "base:" + base.id
+    // MARK: - 笔记区的根分组与笔记行 (P15.1)
+
+    /// 一个根：小标题（小三角 · 根名 · 篇数 · 启用开关）+ 组内的笔记行。
+    private func rootGroup(_ group: RootScan) -> some View {
+        VStack(alignment: .leading, spacing: 1) {
+            rootHeaderRow(group)
+            // 缩回 ⇒ **连引导线一起收走** —— 线是为"这些行属于上面那个根"画的, 没有行就没有归属要表达,
+            // 留一根孤线只会让人以为下面还有东西。
+            if !collapsedRoots.contains(group.base.id) {
+                // 层级引导线：形态与侧栏 `nestedSessions` **逐项同一套常量**（同一个 `guide` token、
+                // 同一个 `sidebarGuideInset`）。只跨子行区（不含根标题本身），上下各留 4pt 让线不贴相邻行。
+                VStack(alignment: .leading, spacing: 1) {
+                    ForEach(group.docs, id: \.relativePath) { doc in
+                        noteRow(doc, in: group.base)
+                    }
+                }
+                .overlay(alignment: .topLeading) {
+                    Rectangle()
+                        .fill(CodexTheme.guide)
+                        .frame(width: 1)
+                        .padding(.leading, Tune.sidebarGuideInset)
+                        .padding(.vertical, 4)
+                }
+            }
+        }
+    }
+
+    /// 根的小标题。行内开关 = **这个根进不进索引**（与条目那个开关同形: 关掉 ≠ 删掉）。
+    /// 描述不在这里铺开（它常常是两行）—— 挂到 tooltip 上, 点一下在右侧看全。
+    ///
+    /// 字号 11 semibold → **13 medium**（2026-10-12, 与侧栏 P16 对齐的连带面）: 组标题与它的子行
+    /// 是**同字号、不同字重**（侧栏 Project / session 就是这条），否则子行 13 会**比组标题还响**。
+    /// 颜色仍走 textSecondary（停用降 textMuted）—— 那一档是"这个根进不进索引"的语义, 别顺手统一。
+    ///
+    /// **行首小三角 = 展开/缩回**（2026-10-13 加）。三件事按判据定的, 不是随手:
+    /// - **空根不画三角**（`docs.isEmpty`）—— 画了就是"点了没反应", 那是我们反复判过的形状;
+    ///   但**占位保留 16**（与行图标列同宽）⇒ 有内容/没内容的根, 名字仍在同一条竖线上。
+    /// - **三角自己吃掉点击**, 不并进整行的 `loadBase` —— 整行点击是"选中这个根、右侧看详情"（P11.4b
+    ///   既有行为）, 不能被折叠顶掉。⚠️ 与侧栏 `projectRow` 有意不同: 那座项目行整行 = 折叠, 因为它
+    ///   没有"选中后看详情"这个面。同形不同义的两个东西, 值 7 个字换清楚。
+    /// - **命中区 16×16** —— 8pt 的 chevron 自身只有几个点宽, 不给 `contentShape` 就是"看得到点不到"。
+    private func rootHeaderRow(_ group: RootScan) -> some View {
+        let base = group.base
+        let collapsible = !group.docs.isEmpty
+        let collapsed = collapsedRoots.contains(base.id)
         return HStack(spacing: 7) {
-            Image(systemName: base.isBuiltin ? "internaldrive" : "folder")
+            if collapsible {
+                Button { toggleRoot(base.id) } label: {
+                    Image(systemName: collapsed ? "chevron.right" : "chevron.down")
+                        .font(.system(size: 8, weight: .semibold))
+                        .foregroundStyle(CodexTheme.textMuted)
+                        .frame(width: 16, height: 16)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+            } else {
+                Color.clear.frame(width: 16, height: 1)
+            }
+            Text(base.displayName)
+                .font(.system(size: 13, weight: .medium))
+                .lineLimit(1)
+                .foregroundStyle(base.enabled ? CodexTheme.textSecondary : CodexTheme.textMuted)
+            Text("\(group.docs.count)")
                 .font(.system(size: 10))
-                .foregroundStyle(base.enabled ? CodexTheme.thinking : CodexTheme.textMuted)
-                .frame(width: 14)
-            VStack(alignment: .leading, spacing: 1) {
-                Text(base.displayName)
-                    .font(.system(size: 12))
-                    .lineLimit(1)
-                    .foregroundStyle(!base.enabled ? CodexTheme.textMuted
-                                     : (selected ? CodexTheme.textPrimary : CodexTheme.textSecondary))
-                Text(base.description)
-                    .font(.system(size: 10))
-                    .foregroundStyle(CodexTheme.textMuted)
-                    .lineLimit(1)
-            }
+                .foregroundStyle(CodexTheme.textTertiary)
             Spacer(minLength: 2)
-            if base.isBuiltin {
-                Text(L("内置"))
-                    .font(.system(size: 10))
-                    .foregroundStyle(CodexTheme.textTertiary)
-                    .help(L("L1 落盘目录, 自动挂载: 不可删, 描述由 App 写死"))
-            }
             CodexMiniToggle(isOn: Binding(
                 get: { base.enabled },
                 set: { _ in store.toggleKnowledgeBase(id: base.id) }
@@ -538,37 +681,415 @@ struct KnowledgeView: View {
         }
         .padding(.leading, 8)
         .padding(.trailing, 6)
-        .padding(.vertical, 5)
+        .padding(.top, 8)
+        .padding(.bottom, 2)
+        .contentShape(Rectangle())
+        .onTapGesture { loadBase(base) }
+        .help(base.description)
+    }
+
+    /// 展开/缩回一个根。**动画与侧栏同一档**（`animFast`）—— 一处折叠快、一处折叠慢会像两个 App。
+    private func toggleRoot(_ id: String) {
+        withAnimation(CodexTheme.animFast) {
+            if collapsedRoots.contains(id) { collapsedRoots.remove(id) }
+            else { collapsedRoots.insert(id) }
+        }
+    }
+
+    /// 一篇笔记。行内三样: **标题**（给人的显示名）· **陈旧度**（只在超阈值时出现）· 根归属（分组）。
+    ///
+    /// - Note: 标题取 `doc.title`（frontmatter `title:` 回落文件名去扩展名）——
+    ///   而**索引行给的是相对路径**: 模型需要一个能直接 `read` 的定位符, 人需要的是一个读得懂的名字。
+    ///   两个消费者要的不是同一样东西, 所以这里刻意不共用同一个字段。
+    private func noteRow(_ doc: KnowledgeBaseDoc, in base: KnowledgeBase) -> some View {
+        let selected = selection == .note(base.id, doc.relativePath)
+        let hovered = hoveringId == "note:" + base.id + ":" + doc.relativePath
+        let days = KnowledgeBaseScan.staleDays(doc.modifiedAt)
+        return HStack(spacing: 7) {
+            Image(systemName: "doc.text")
+                .font(.system(size: 12))
+                // 默认色用中性灰（跟侧栏会话行同档）；**陈旧才换 `toolError`** —— 陈旧 ≠ 错误，
+                // 但这里是"该回头看它了"的提醒色，保留原语义。
+                .foregroundStyle(days == nil ? CodexTheme.textSecondary : CodexTheme.toolError)
+                .frame(width: 16)
+            Text(doc.title)
+                .font(.system(size: 13))
+                .lineLimit(1)
+                .foregroundStyle(!base.enabled ? CodexTheme.textMuted
+                                 : (selected ? CodexTheme.textPrimary : CodexTheme.textSecondary))
+            Spacer(minLength: 2)
+            if let days {
+                // 只在超阈值时出现 —— "天天显示 1 天"是噪音, 标记要有信息量。
+                Text(String(format: L("%lld 天未更新"), days))
+                    .font(.system(size: 10))
+                    .foregroundStyle(CodexTheme.textTertiary)
+            }
+        }
+        .padding(.leading, Tune.sidebarRowIndent)
+        .padding(.trailing, 8)
+        .padding(.vertical, 4)
         .background(selected ? CodexTheme.selected : (hovered ? CodexTheme.hover : Color.clear))
         .clipShape(RoundedRectangle(cornerRadius: CodexTheme.radiusSm))
         .contentShape(Rectangle())
-        .onHover { hoveringId = $0 ? "base:" + base.id : nil }
-        .onTapGesture { loadBase(base) }
+        .onHover { hoveringId = $0 ? "note:" + base.id + ":" + doc.relativePath : nil }
+        .onTapGesture { selection = .note(base.id, doc.relativePath) }
     }
 
-    /// 挂载入口 —— 做成**区里的一行**, 而不是区头再加一个「+」: 两个加号会让人分不清
-    /// "新建条目"和"挂目录"(它们做的事完全不同, 而"都是加号"会让点错变成常态)。
-    private var mountRow: some View {
-        let hovered = hoveringId == "mount"
+    /// 新建笔记入口 —— P15.1 只到"把目录准备好"为止; **P15.2 起真的建一篇**。
+    ///
+    /// 只留**一个**入口、且固定落全局根: 门 1 的两个根都归用户, 但入口多一个就多一次
+    /// "这条属于谁"的判断, 而那个判断用户往往还没做。放全局根最坏只是"先记下来, 回头再分";
+    /// 落到项目根错了才麻烦（项目没了它就没了）。参数化"建到哪个根"等真有这个需求时再说。
+    ///
+    /// 「打开笔记目录」那个动作没消失, 挪去了编辑面底部 —— 它现在不是主路径了。
+    private var newNoteRow: some View {
+        let hovered = hoveringId == "new-note"
         return HStack(spacing: 7) {
             Image(systemName: "plus")
-                .font(.system(size: 10))
-                .foregroundStyle(CodexTheme.textTertiary)
-                .frame(width: 14)
-            Text(L("挂载目录…"))
                 .font(.system(size: 12))
+                .foregroundStyle(CodexTheme.textTertiary)
+                .frame(width: 16)
+            Text(L("新建笔记"))
+                .font(.system(size: 13))
                 .foregroundStyle(CodexTheme.textMuted)
             Spacer(minLength: 2)
         }
         .padding(.leading, 8)
-        .padding(.trailing, 6)
+        .padding(.trailing, 8)
         .padding(.vertical, 5)
         .background(hovered ? CodexTheme.hover : Color.clear)
         .clipShape(RoundedRectangle(cornerRadius: CodexTheme.radiusSm))
         .contentShape(Rectangle())
-        .onHover { hoveringId = $0 ? "mount" : nil }
-        .onTapGesture { pickDirectory() }
-        .help(L("挂一个目录当资料库: App 只读, 只把描述与文件清单给 agent"))
+        .onHover { hoveringId = $0 ? "new-note" : nil }
+        .onTapGesture {
+            newNoteTitle = ""
+            newNoteReject = nil
+            showNewNoteSheet = true
+        }
+        .help(L("写一篇新笔记 (存到全局笔记目录, 下一轮组装就会带上它)"))
+    }
+
+    /// 新建条目入口 —— **住在自定义区段内**（2026-10-13 加）。
+    ///
+    /// 为什么必须住在段内: 面板标题行那个 `+` 是**整块面板的工具栏**, 它回答的是"这个面板能新建",
+    /// 不是"**这一段**能新建"。而这一段此前是判空的 ⇒ 删掉唯一一条, 整段连区头一起消失,
+    /// 用户视线落在这一段的位置上就**什么都看不见了**（boss 实测: 删完就找不到入口）。
+    /// 这是「藏起来的入口 = 没有入口」又一次实证 —— 两次都发生在**同一个位置类型**上。
+    ///
+    /// 形态与「+ 新建笔记」**逐项同款**（图标字号 / 占位 / 行高 / 悬停底 / 内缩）—— 两段都
+    /// 必须能就地新建, 而"一段有、一段没有"正是这次踩坑的形状本身。
+    ///
+    /// 给的是**零新增文案**：行文字「新建条目」已经自明（面板 `+` 的 tooltip 也是这三个字,
+    /// 再挂一遍是同义反复); 而目的地在点开后的右栏**可见**（scope 控件在那儿）⇒ 这里不像
+    /// `newNoteRow` 那样有个"目的地是隐藏约定"要解释。不新增词条 ⇒ 本轮 l10n 三道读数
+    /// **应当逐字不变**（这本身就是可核对的一条）。
+    private var newItemRow: some View {
+        let hovered = hoveringId == "new-item"
+        return HStack(spacing: 7) {
+            Image(systemName: "plus")
+                .font(.system(size: 12))
+                .foregroundStyle(CodexTheme.textTertiary)
+                .frame(width: 16)
+            Text(L("新建条目"))
+                .font(.system(size: 13))
+                .foregroundStyle(CodexTheme.textMuted)
+            Spacer(minLength: 2)
+        }
+        .padding(.leading, 8)
+        .padding(.trailing, 8)
+        .padding(.vertical, 5)
+        .background(hovered ? CodexTheme.hover : Color.clear)
+        .clipShape(RoundedRectangle(cornerRadius: CodexTheme.radiusSm))
+        .contentShape(Rectangle())
+        .onHover { hoveringId = $0 ? "new-item" : nil }
+        .onTapGesture { startNew() }
+    }
+
+    // MARK: - dream 提案（P15.3 只读面 · P15.4 起可拍板）
+
+    /// 三类动作的行内标记。**文案在这里拼** —— `NoteProposalKind` 是模型层的数据,
+    /// 而 `Models/NoteProposal.swift` 不在 `gen_strings.py` 的 `EXCLUDE_FILES` 里:
+    /// 在那边拼中文要么漏掉 `L()`、要么把 key 写进一个语义不对的地方（域层只出数据）。
+    private func proposalKindLabel(_ kind: NoteProposalKind) -> String {
+        switch kind {
+        case .insight: L("增")
+        case .merge: L("并")
+        case .replace: L("换")
+        }
+    }
+
+    /// 三种动作的配色——同时充当"这个标记到底在说什么"的唯一图例:
+    /// 增 = 长出新东西(green) · 并 = 把两样合成一样(blue) · 换 = 旧值过期, 提醒你看一眼(amber)。
+    private func proposalKindColor(_ kind: NoteProposalKind) -> Color {
+        switch kind {
+        case .insight: CodexTheme.toolDone
+        case .merge: CodexTheme.info
+        case .replace: CodexTheme.thinking
+        }
+    }
+
+    /// 提案行的一句话: 有 `title` 就用它, 否则拿正文第一行(去掉 markdown 的 `#` 与缩进)。
+    /// **不发明占位** —— 内容为空、没有来源的提案在解析阶段就被拒了, 走不到这里。
+    private func proposalHeadline(_ p: NoteProposal) -> String {
+        if !p.title.isEmpty { return p.title }
+        var line = p.content.split(separator: "\n", omittingEmptySubsequences: true)
+            .first.map(String.init) ?? ""
+        while line.hasPrefix("#") || line.hasPrefix(" ") { line.removeFirst() }
+        return line.count > 60 ? String(line.prefix(60)) + "…" : line
+    }
+
+    /// `全局笔记 / shell-quirks.md` —— 归属由**根的显示名**表达（门 1: 位置即归属）。
+    private func proposalTargetLabel(_ p: NoteProposal) -> String {
+        let root = store.knowledgeBase(id: p.rootId)?.displayName ?? p.rootId
+        return root + " / " + p.targetPath
+    }
+
+    /// 一条提案行: 两行 —— 动作 + 一句话 / 目标 + 来源条数。
+    ///
+    /// ⚠️ **P15.8/5f**: 不再有"已拍板"的行（采纳 / 丢弃都**直接删行**）⇒ 这里没有降档分支,
+    /// 表里出现的每一条都**在等你拍**。旧版那套「终态整行降档」随终态概念一起去掉了。
+    private func proposalRow(_ p: NoteProposal) -> some View {
+        let selected = selection == .proposal(p.id)
+        let hovered = hoveringId == "proposal:" + p.id.uuidString
+        return HStack(spacing: 7) {
+            // 窄列标记: 中文是单字(10pt 宽 ≈10), 英文是 New / Merge / Swap 这类词 —— 用 `minWidth`
+            // 让框跟着内容走: 中文居中落在 16pt 框里, 英文加宽而不溢出压住标题。
+            // 16 与其余行的图标占位**同宽** —— 否则各段的标题起跑线不在一条竖线上 (P16 对齐)。
+            Text(proposalKindLabel(p.kind))
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(proposalKindColor(p.kind))
+                .frame(minWidth: 16)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(proposalHeadline(p))
+                    .font(.system(size: 13))
+                    .lineLimit(1)
+                    .foregroundStyle(selected ? CodexTheme.textPrimary : CodexTheme.textSecondary)
+                Text(proposalTargetLabel(p) + " · "
+                     + String(format: L("%lld 个来源"), p.sources.count))
+                    .font(CodexFonts.monoFont(9))
+                    .lineLimit(1)
+                    .foregroundStyle(CodexTheme.textMuted)
+            }
+            Spacer(minLength: 2)
+        }
+        .padding(.leading, 8)
+        .padding(.trailing, 8)
+        .padding(.vertical, 5)
+        .background(selected ? CodexTheme.selected : (hovered ? CodexTheme.hover : Color.clear))
+        .clipShape(RoundedRectangle(cornerRadius: CodexTheme.radiusSm))
+        .contentShape(Rectangle())
+        .onHover { hoveringId = $0 ? "proposal:" + p.id.uuidString : nil }
+        .onTapGesture { selection = .proposal(p.id) }
+    }
+
+    private static let proposalStamp: DateFormatter = {
+        let f = DateFormatter()
+        f.dateStyle = .short
+        f.timeStyle = .short
+        return f
+    }()
+
+    /// 提案的审阅面（P15.3 起只读；**P15.4 起可拍板**；P15.8/5f 起只剩待审这一种形态）。
+    ///
+    /// ⚠️ P15.3 那句"这里没有采纳 / 丢弃按钮, 不是没做完, 是做完了"现在**过期了** ——
+    /// 那两个动作正是本批的正面。变的不是纪律而是位置: 从提案到磁盘的路径**现在存在**,
+    /// 但它只有一个入口（下面那两个按钮）, 且必须由人按下。
+    ///
+    /// 也不再需要"已拍板就不用画 diff"那个分支: 拍完板的行已经被删掉了, **能走到这里的
+    /// 恒是待审** ⇒ diff 与两个按钮恒画。
+    private func proposalEditor(_ p: NoteProposal) -> some View {
+        return VStack(alignment: .leading, spacing: 14) {
+            HStack(spacing: 8) {
+                Text(L("提案"))
+                    .font(CodexTheme.fontTitle)
+                    .foregroundStyle(CodexTheme.textPrimary)
+                Text(proposalKindLabel(p.kind))
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(proposalKindColor(p.kind))
+                Spacer()
+                Text(proposalStampLine(p))
+                    .font(.system(size: 10))
+                    .foregroundStyle(CodexTheme.textTertiary)
+            }
+            VStack(alignment: .leading, spacing: 6) {
+                factRow(L("目标"), value: proposalTargetLabel(p), mono: true)
+                factRow(L("为什么提"), value: p.reason.isEmpty ? "—" : p.reason, mono: false)
+                // 指纹只在 merge / replace 上有 —— 它是"提出时那一版长什么样"的凭据,
+                // insight 的目标还不存在, 所以留空而不是补个假的。
+                if !p.baseHash.isEmpty {
+                    factRow(L("提出时的指纹"), value: String(p.baseHash.prefix(16)), mono: true)
+                }
+            }
+            proposalSources(p)
+
+            // 并排 diff **恒画**（P15.8/5f: 能走到这里的都是待审 —— 拍过板的行已经删了,
+            // 不存在"两栏已经相等"那种情况了）。
+            proposalDiffBlock(p)
+            if let reject = proposalReject { noteRejectBanner(reject) }
+            HStack(spacing: 8) {
+                // ⚠️ **不弹二次确认**（与删除相反）: 采纳是**可逆**的 —— 被顶掉的那一版
+                //    进了版本史, 写下去的也能再改回来。为可逆动作加一道确认, 只会训练用户
+                //    闭眼点"确定"（而删除那道确认的份量正是靠"它不可逆"撑起来的）。
+                Button(L("采纳")) { adoptProposal(p) }
+                    .buttonStyle(CodexActionButtonStyle(kind: .primary))
+                    .help(L("把这一份整篇写进上面那条目标; 被顶掉的那一版会进变更史"))
+                // P15.8/5f: 丢弃 = **把这条提案删掉**（不再落终态留在列表里）。
+                Button(L("丢弃")) { discardProposal(p) }
+                    .buttonStyle(CodexActionButtonStyle(kind: .danger))
+                    .help(L("删掉这条提案; 磁盘上的笔记一个字节都不会动"))
+                Spacer()
+            }
+            Text(L("采纳前, 磁盘上的笔记一个字节都不会变 —— 上面那份 diff 只是「如果」。"))
+                .font(CodexTheme.fontTiny)
+                .foregroundStyle(CodexTheme.textMuted)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    // MARK: - 提案的并排 diff（P15.4）
+
+    /// 并排 diff: 左 = **现在**（磁盘上的那一版）, 右 = **采纳后**（提案的 `content`）。
+    ///
+    /// 为什么必须是并排、且必须是**整份**: dream 的产出粒度是"整篇重写或新增一篇"
+    /// （它做不了逐行手术, 见 P15 §03 提炼 ⑤）⇒ 人拍板时要判断的是"这一整篇换上去行不行",
+    /// 而不是"这一行改得对不对"。P15.3 那个只看新版的预览正是**没有对照**才必须截断行数。
+    ///
+    /// ⚠️ 仍然按行渲染（一个 `Text` 装整块是平方级开销）。这里不再设行数上限 ——
+    /// `NoteDiff` 自带规模护栏（超 `maxCells` 退化成整体替换, 语义依然诚实）。
+    private func proposalDiffBlock(_ p: NoteProposal) -> some View {
+        let rows = NoteDiff.lines(old: proposalBase ?? "", new: p.content)
+        return VStack(alignment: .leading, spacing: 5) {
+            HStack(spacing: 0) {
+                Text(L("现在"))
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                Text(L("采纳后"))
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .font(CodexTheme.fontTiny)
+            .foregroundStyle(CodexTheme.textMuted)
+            VStack(alignment: .leading, spacing: 1) {
+                ForEach(rows) { row in
+                    HStack(alignment: .top, spacing: 0) {
+                        diffCell(row.left, kind: row.kind)
+                        diffCell(row.right, kind: row.kind)
+                    }
+                }
+            }
+            .padding(.vertical, 8)
+            .padding(.horizontal, 4)
+            .background(CodexTheme.bgCard)
+            .clipShape(RoundedRectangle(cornerRadius: CodexTheme.radiusSm))
+            if p.kind == .insight {
+                Text(L("左边是空的 —— 这是一篇**还不存在**的笔记(增)。"))
+                    .font(CodexTheme.fontTiny)
+                    .foregroundStyle(CodexTheme.textMuted)
+            }
+        }
+    }
+
+    /// 并排 diff 的一格。`nil` = 这一格空着（对面那一侧有内容）。
+    ///
+    /// 着色只落在**有内容的那一格**上 —— 空的那一格涂色会把"这里什么都没有"
+    /// 也画成一次改动, 于是"删了一行"看起来像"删一行 + 凭空多一行"。
+    private func diffCell(_ text: String?, kind: NoteDiffLine.Kind) -> some View {
+        let tint: Color? = {
+            guard text != nil else { return nil }
+            switch kind {
+            case .same: return nil
+            case .added: return CodexTheme.toolDone.opacity(0.16)
+            case .removed: return CodexTheme.toolError.opacity(0.16)
+            }
+        }()
+        return Text(text ?? " ")
+            .font(CodexTheme.fontMonoSm)
+            .foregroundStyle(text == nil ? Color.clear
+                                         : (kind == .same ? CodexTheme.textMono
+                                                          : CodexTheme.textPrimary))
+            .lineLimit(1)
+            .truncationMode(.tail)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 4)
+            .background(tint ?? Color.clear)
+    }
+
+    /// 时间戳那一行: 提出于 X。
+    ///
+    /// ⚠️ P15.8/5f: 原来还有一段"拍板于 Y"（P15.4）—— 随终态一起去掉了:
+    /// 拍过板的行**已经不在表里**, 没有哪一行还能有"拍板时刻"。「待审了多久」这个问题
+    /// 现在由"提于 X"单独回答（收件箱里唯一存在的那段时间）。
+    private func proposalStampLine(_ p: NoteProposal) -> String {
+        String(format: L("提于 %@"), Self.proposalStamp.string(from: p.createdAt))
+    }
+
+    /// `.task(id:)` 的重扫键 —— 换选中那条提案时重读它的"现在"。
+    private var proposalBaseTrigger: String {
+        guard case .proposal(let id) = selection else { return "" }
+        return id.uuidString
+    }
+
+    /// 读提案的"现在"（= 磁盘上目标那一篇的原文）。insight 的目标还不存在 ⇒ 空串。
+    ///
+    /// **不在 `body` 里读** —— 那是每帧一次文件 IO（同 `noteDraftTrigger` / `rootScan` 那条）。
+    private func loadProposalBase() {
+        proposalReject = nil
+        guard let p = editingProposal else { proposalBase = nil; return }
+        if p.kind == .insight { proposalBase = ""; return }
+        proposalBase = store.knowledge.readNote(rootId: p.rootId, relativePath: p.targetPath) ?? ""
+    }
+
+    private func adoptProposal(_ p: NoteProposal) {
+        proposalReject = store.knowledge.adoptProposal(p)
+        guard proposalReject == nil else { return }
+        // 磁盘变了 ⇒ 左列的"陈旧度/摘要"与这篇的版本史都得重读（提案本身也会刷新成终态）。
+        Task { await reloadRootScan() }
+    }
+
+    private func discardProposal(_ p: NoteProposal) {
+        proposalReject = store.knowledge.discardProposal(p)
+    }
+
+    private func factRow(_ label: String, value: String, mono: Bool) -> some View {
+        HStack(alignment: .top, spacing: 8) {
+            Text(label)
+                .font(CodexTheme.fontTiny)
+                .foregroundStyle(CodexTheme.textMuted)
+                .frame(width: 76, alignment: .leading)
+            Text(value)
+                .font(mono ? CodexTheme.fontMonoXs : CodexTheme.fontSmall)
+                .foregroundStyle(mono ? CodexTheme.textMono : CodexTheme.textSecondary)
+                .textSelection(.enabled)
+            Spacer(minLength: 0)
+        }
+    }
+
+    /// 来源指针 —— **它们是"这条提案凭什么可信"的全部依据**（§05: 拿不出指针的不入表）。
+    /// `quote` 为空就不画那一行: 强制模型编一句"原话"比让它留空更糟。
+    private func proposalSources(_ p: NoteProposal) -> some View {
+        VStack(alignment: .leading, spacing: 5) {
+            Text(String(format: L("来源 · %lld 条"), p.sources.count))
+                .font(CodexTheme.fontTiny)
+                .foregroundStyle(CodexTheme.textMuted)
+            ForEach(Array(p.sources.enumerated()), id: \.offset) { _, s in
+                HStack(alignment: .top, spacing: 8) {
+                    Text(s.kind == .session ? L("会话") : L("笔记"))
+                        .font(.system(size: 10))
+                        .foregroundStyle(CodexTheme.textTertiary)
+                        .frame(width: 76, alignment: .leading)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(s.ref)
+                            .font(CodexTheme.fontMonoXs)
+                            .foregroundStyle(CodexTheme.textMono)
+                            .textSelection(.enabled)
+                        if !s.quote.isEmpty {
+                            Text(s.quote)
+                                .font(CodexTheme.fontSmall)
+                                .foregroundStyle(CodexTheme.textSecondary)
+                        }
+                    }
+                    Spacer(minLength: 0)
+                }
+            }
+        }
     }
 
     private func row(_ item: KnowledgeItem) -> some View {
@@ -578,13 +1099,15 @@ struct KnowledgeView: View {
         return HStack(spacing: 7) {
             Image(systemName: isPending ? "wand.and.stars"
                             : (item.source == .session ? "bookmark.fill" : "doc.text"))
-                .font(.system(size: 10))
+                .font(.system(size: 12))
+                // 三档都是**语义**（待审 accent / 会话沉淀 thinking / 其余中性），不是缺省色，
+                // 所以这行只跟字号与占位宽度（P16 对齐），颜色一个不动。
                 .foregroundStyle(isPending ? CodexTheme.accent
                                  : (item.source == .session ? CodexTheme.thinking : CodexTheme.textMuted))
-                .frame(width: 14)
+                .frame(width: 16)
             VStack(alignment: .leading, spacing: 1) {
                 Text(item.title)
-                    .font(.system(size: 12))
+                    .font(.system(size: 13))
                     .lineLimit(1)
                     .foregroundStyle(!item.enabled || isPending
                                      ? CodexTheme.textMuted
@@ -610,7 +1133,7 @@ struct KnowledgeView: View {
             }
         }
         .padding(.leading, 8)
-        .padding(.trailing, 6)
+        .padding(.trailing, 8)
         .padding(.vertical, 5)
         .background(selected ? CodexTheme.selected : (hovered ? CodexTheme.hover : Color.clear))
         .clipShape(RoundedRectangle(cornerRadius: CodexTheme.radiusSm))
@@ -631,16 +1154,20 @@ struct KnowledgeView: View {
     /// 而它其实只是这一段的元信息。挂在区头就不再有"它是不是一条数据"的歧义, 也少一行。
     private func sectionHeader<V: View>(_ title: String, count: Int, tint: Color,
                                         @ViewBuilder accessory: () -> V) -> some View {
+        // 度量对齐侧栏 P16 的区头 (2026-10-12)：12 regular + tracking 0.3 是"大而轻的货架标签"，
+        // 10 semibold 会把它读成次级按钮。内缩 10 / 上间距 14 与侧栏**同一个数**，不是巧合。
+        // ⚠️ `tint` 是**语义**不是度量：「常驻 · N」保留 accent（那一段是"始终进 prompt"的断言），
+        //    其余三区走灰。对齐的是字号与间距，不是颜色 —— 别顺手把它也统一了。
         HStack(spacing: 5) {
             Text("\(title) · \(count)")
-                .font(.system(size: 10, weight: .semibold))
+                .font(.system(size: 12))
                 .tracking(0.3)
                 .foregroundStyle(tint)
             Spacer()
             accessory()
         }
-        .padding(.horizontal, 2)
-        .padding(.top, 6)
+        .padding(.horizontal, 10)
+        .padding(.top, 14)
         .padding(.bottom, 4)
     }
 
@@ -696,6 +1223,10 @@ struct KnowledgeView: View {
             VStack(alignment: .leading, spacing: 12) {
                 if let entry = editingPackEntry {
                     packEditor(entry)
+                } else if let note = editingNote {
+                    noteEditor(note.doc, in: note.base)
+                } else if let proposal = editingProposal {
+                    proposalEditor(proposal)
                 } else if let base = editingBase {
                     baseEditor(base)
                 } else {
@@ -944,8 +1475,13 @@ struct KnowledgeView: View {
     /// 为什么必须同源: 另写一份格式化逻辑, 迟早出现"预览说有 12 个文件、agent 实际看到 9 个"。
     /// 而那条不一致**没有红灯** —— 用户只能肉眼比, 比出来也说不清哪边是对的。
     ///
-    /// `nil` = 这一库不进索引 (没启用 / 目录里没有可读文档)。**空库不画预览框是有意的**:
-    /// 上面那行「扫到 0 个文档」已经说了原因, 再画一个空框只是噪声。
+    /// `nil` = 这一库不进索引（只剩**没启用**这一种）。
+    ///
+    /// ⚠️ **P15.8 有意推翻**原来那句「空库不画预览框是有意的（再画一个空框只是噪声）」——
+    /// 空根现在**真的进** prompt（只给坐标, 文件段是 `（本根暂无笔记）`, 见
+    /// `KnowledgeBaseScan.indexBlock`), 预览再不画它就是在撒谎: 展示的文字与 agent 实际收到的
+    /// 不一致, 而"预览说的和 agent 看到的不一样"正是上面那段注释要根除的病。
+    /// 原来那行「扫到 0 个文档」照旧在, 它现在讲的是"这个根还空着", 不再是"它不进索引"。
     private var baseIndexBlock: KnowledgeBaseScan.IndexBlock? {
         guard let base = editingBase, base.enabled else { return nil }
         return KnowledgeBaseScan.indexBlock(for: base, docs: baseDocs)
@@ -1008,95 +1544,13 @@ struct KnowledgeView: View {
     /// 为什么描述必填 (`addKnowledgeBase` 会拒): 索引里只有文件名时, agent 拿到的是一串没有语义的
     /// 字符串 (`2024Q3-复盘.md` 说明不了这是财务还是技术) ⇒ 那个库等于白挂。而"静默回落到目录名"
     /// 更坏: 用户永远不会回来补一句真正有用的话。
-    private var mountSheet: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text(L("挂载知识库"))
-                .font(CodexTheme.fontTitle)
-                .foregroundStyle(CodexTheme.textPrimary)
-            HStack(alignment: .top, spacing: 6) {
-                Image(systemName: "folder")
-                    .font(.system(size: 10))
-                    .foregroundStyle(CodexTheme.textTertiary)
-                Text(mountPath)
-                    .font(CodexTheme.fontMonoSm)
-                    .foregroundStyle(CodexTheme.textSecondary)
-                    .textSelection(.enabled)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            .padding(10)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(CodexTheme.bgCard)
-            .clipShape(RoundedRectangle(cornerRadius: CodexTheme.radius))
-
-            VStack(alignment: .leading, spacing: 4) {
-                Text(L("这个目录里放的是什么资料？"))
-                    .font(CodexTheme.fontSmall)
-                    .foregroundStyle(CodexTheme.textSecondary)
-                TextField("例: 2024 年各渠道的复盘文档", text: $mountDesc)
-                    .textFieldStyle(.plain)
-                    .font(CodexTheme.fontBody)
-                    .padding(10)
-                    .background(CodexTheme.bgComposer)
-                    .clipShape(RoundedRectangle(cornerRadius: CodexTheme.radius))
-                    .overlay(RoundedRectangle(cornerRadius: CodexTheme.radius)
-                        .stroke(CodexTheme.border.opacity(0.45), lineWidth: 1))
-                Text(L("这句话会进每轮 prompt 的索引 —— agent 靠它判断要不要来查这个目录。"))
-                    .font(CodexTheme.fontTiny)
-                    .foregroundStyle(CodexTheme.textMuted)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-
-            if let reject = mountReject {
-                HStack(alignment: .top, spacing: 6) {
-                    Image(systemName: "exclamationmark.triangle")
-                        .font(.system(size: 10))
-                        .foregroundStyle(CodexTheme.toolError)
-                    Text(baseRejectText(reject))
-                        .font(CodexTheme.fontSmall)
-                        .foregroundStyle(CodexTheme.toolError)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-            }
-
-            HStack(spacing: 10) {
-                Spacer()
-                Button(L("取消")) { showMountSheet = false }
-                    .buttonStyle(CodexActionButtonStyle(kind: .danger))
-                Button(L("挂载")) { confirmMount() }
-                    .buttonStyle(CodexActionButtonStyle(kind: .primary, disabled: !mountReady))
-                    .disabled(!mountReady)
-            }
-        }
-        .padding(20)
-        .frame(width: 520)
-        .background(CodexTheme.bgChat)
-    }
-
-    private var mountReady: Bool {
-        !mountDesc.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-    }
-
+    /// 根描述可保存的条件。⚠️ **上限也在这里判**（P15.1）: 挂载弹窗下线之后,
+    /// `.descriptionTooLong` 唯一的入口就只剩这里 —— 不判的话按钮可点、点了**静默什么都不发生**。
     private var baseDescReady: Bool {
         guard let base = editingBase else { return false }
         let trimmed = draftBaseDesc.trimmingCharacters(in: .whitespacesAndNewlines)
         return !base.isBuiltin && !trimmed.isEmpty && trimmed != base.description
-    }
-
-    /// 拒绝原因 —— **在 View 侧拼**(同 `rejectText`: 域层在 `gen_strings.EXCLUDE_FILES` 里,
-    /// 在那里写 `L()` 的 key 永远进不了词表, 英文界面会静默回落中文且三道门都看不见)。
-    private func baseRejectText(_ reject: KnowledgeBaseRejection) -> String {
-        switch reject {
-        case .emptyDescription:
-            return L("描述不能是空的 — 索引里只有文件名的话, agent 拿到的是没有语义的字符串")
-        case .descriptionTooLong(let limit):
-            return String(format: L("描述太长 (上限 %lld 字, 它是一句话不是摘要)"), limit)
-        case .duplicatePath(let existing):
-            return String(format: L("这个目录已经挂过了 (%@)"), existing)
-        case .notADirectory:
-            return L("不是一个目录, 或者它已经不存在了")
-        case .builtinImmutable:
-            return L("内置库不可修改 — 它跟着 L1 落盘目录自动出现")
-        }
+            && trimmed.count <= KnowledgeBase.descriptionLimit
     }
 
     /// hover 详情。**只讲 key** —— 层的语义已由行上的 tag 说清, 再复述一遍是噪音。
@@ -1367,36 +1821,167 @@ struct KnowledgeView: View {
 
     // MARK: - 知识库动作 (P11.4b)
 
-    /// 选目录 —— 只到"拿到路径"为止, 真正挂上要等用户在弹窗里补齐描述 (见 `mountSheet`)。
-    private func pickDirectory() {
-        let panel = NSOpenPanel()
-        panel.canChooseDirectories = true
-        panel.canChooseFiles = false
-        panel.allowsMultipleSelection = false
-        panel.canCreateDirectories = false
-        panel.prompt = L("选择")
-        panel.message = L("选一个目录当资料库 — App 只读, 不会改动里面的任何文件")
-        guard panel.runModal() == .OK, let url = panel.url else { return }
-        mountPath = url.path
-        mountDesc = ""
-        mountReject = nil
-        showMountSheet = true
+    // MARK: - 笔记动作（P15.2 写入）
+
+    /// 打开一个笔记根目录（必要时**就地创建**）。
+    ///
+    /// 不直接 `open`: 目录不在时 `NSWorkspace.open` 会**静默什么都不做** —— 按钮看着能点、
+    /// 点了没反应（实测 2026-09-23, 与常驻区那个 folder 按钮同一条坑）。建目录**不破任何红线**:
+    /// P15.2 起正文都归 App 写了, 位置更是本来就由 App 声明。
+    private func openNoteDir(_ base: KnowledgeBase) {
+        if !FileManager.default.fileExists(atPath: base.path) {
+            try? FileManager.default.createDirectory(atPath: base.path,
+                                                     withIntermediateDirectories: true)
+        }
+        NSWorkspace.shared.open(URL(fileURLWithPath: base.path))
+    }
+
+    /// 在 Finder 里**选中这一份文件**（而不是打开它所在的目录）——
+    /// 用户此刻关心的是"这一篇在哪", `activateFileViewerSelecting` 正好回答这个。
+    private func revealNote(_ doc: KnowledgeBaseDoc, in base: KnowledgeBase) {
+        let abs = base.path + "/" + doc.relativePath
+        NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: abs)])
+    }
+
+    /// `.task(id:)` 的重扫键 —— 换选中那篇笔记时重读磁盘。
+    private var noteDraftTrigger: String {
+        guard case .note(let bid, let rel) = selection else { return "" }
+        return bid + "|" + rel
+    }
+
+    /// 从磁盘读一次编辑草稿。**每次打开 / 每次保存后**都调它（保存后调 = 把指纹换到新那一版,
+    /// 同时确认磁盘上真的是我们写的那一份）。
+    ///
+    /// 保存后**不能**只改 `noteDraftHash` 了事: 那样"编辑器里显示的内容"就永远只是我们的记忆,
+    /// 而磁盘的真源再没被核对过（`composeNote` 一旦有偏差, 界面会一直显示一份不存在的文本）。
+    private func loadNoteDraft() {
+        guard let note = editingNote,
+              let draft = store.knowledge.noteDraft(rootId: note.base.id,
+                                                    relativePath: note.doc.relativePath) else {
+            noteDraftTitle = ""
+            noteDraftBody = ""
+            noteDraftHash = ""
+            noteBaseline = ""
+            noteTitleEditable = false
+            noteReject = nil
+            noteRevisions = []
+            return
+        }
+        noteDraftTitle = draft.title
+        noteDraftBody = draft.body
+        noteDraftHash = draft.hash
+        noteBaseline = draft.raw
+        noteTitleEditable = draft.titleEditable
+        noteReject = nil
+        // 版本史跟着一起读 —— 判「来源」要拿它比指纹, 画「变更史」要它的全文。
+        noteRevisions = store.knowledge.noteRevisions(rootId: note.base.id,
+                                                      relativePath: note.doc.relativePath)
+    }
+
+    /// 改过没有 —— **与写盘共用 `composeNoteEdit`**（编辑面和写盘各算一份的话,
+    /// "按钮说没变、写下去却变了"就是只有在手点时才会露头的 bug）。
+    private func noteDraftDirty() -> Bool {
+        store.knowledge.composeNoteEdit(current: noteBaseline,
+                                        title: noteTitleEditable ? noteDraftTitle : nil,
+                                        body: noteDraftBody) != noteBaseline
+    }
+
+    private func saveNoteDraft() {
+        guard let note = editingNote else { return }
+        noteReject = store.knowledge.saveNote(
+            rootId: note.base.id,
+            relativePath: note.doc.relativePath,
+            title: noteTitleEditable ? noteDraftTitle : nil,
+            body: noteDraftBody,
+            baseHash: noteDraftHash)
+        guard noteReject == nil else { return }
+        flashSaved()
+        loadNoteDraft()
+        Task { await reloadRootScan() }
+        Task { await reloadBaseDocs() }
+    }
+
+    /// 「仍然覆盖」= 接受磁盘上现在这一版（重读指纹）, 再照常保存。
+    /// 它与「重新载入」是一对: 一个保住磁盘上的、一个保住编辑器里的, **由用户选**哪一份活下来。
+    private func forceSaveNoteDraft() {
+        guard let note = editingNote,
+              let fresh = store.knowledge.noteDraft(rootId: note.base.id,
+                                                    relativePath: note.doc.relativePath) else { return }
+        noteDraftHash = fresh.hash
+        saveNoteDraft()
+    }
+
+    private func deleteEditingNote() {
+        guard let note = editingNote else { return }
+        noteReject = store.knowledge.deleteNote(rootId: note.base.id,
+                                                relativePath: note.doc.relativePath)
+        guard noteReject == nil else { return }
+        selection = .none
+        baseDocs = []
+        Task { await reloadRootScan() }
+    }
+
+    /// 新建笔记的表单。**只有一个输入框** —— 归属由"入口只有一个、固定落全局根"保证,
+    /// 路径与文件名由标题派生（"能由产品回答的问题, 不要拿去问用户"）。
+    private var newNoteSheet: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text(L("新建笔记"))
+                .font(CodexTheme.fontTitle)
+                .foregroundStyle(CodexTheme.textPrimary)
+            Text(L("标题就是文件名。存到全局笔记目录, 下一轮组装就会带上它; 项目笔记去项目目录里建。"))
+                .font(CodexTheme.fontTiny)
+                .foregroundStyle(CodexTheme.textMuted)
+                .fixedSize(horizontal: false, vertical: true)
+            TextField(L("标题"), text: $newNoteTitle)
+                .textFieldStyle(.roundedBorder)
+                .onSubmit { createNoteFromDraft() }
+            if let reject = newNoteReject { noteRejectBanner(reject) }
+            HStack(spacing: 8) {
+                Spacer()
+                Button(L("取消")) { showNewNoteSheet = false }
+                    .buttonStyle(CodexActionButtonStyle(kind: .primary))
+                Button(L("创建")) { createNoteFromDraft() }
+                    .buttonStyle(CodexActionButtonStyle(kind: .primary))
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(newNoteTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+        }
+        .padding(20)
+        .frame(width: 400)
+    }
+
+    private func createNoteFromDraft() {
+        let rootId = KnowledgeBase.noteGlobalID
+        switch store.knowledge.createNote(rootId: rootId, title: newNoteTitle) {
+        case .failure(let reject):
+            newNoteReject = reject
+        case .success(let rel):
+            showNewNoteSheet = false
+            newNoteTitle = ""
+            newNoteReject = nil
+            selection = .note(rootId, rel)
+            // 顺序不能反: `loadNoteDraft` 靠 `editingNote` 找到那篇, 而它读的是 `baseDocs` ——
+            // 不先把新文件扫进来, 打开的就是一片空白（而且**没有红灯**: 看起来像"新建了个空笔记"）。
+            Task {
+                await reloadRootScan()
+                await reloadBaseDocs()
+                loadNoteDraft()
+            }
+        }
+    }
+
+    private func flashSaved() {
+        savedFlash = true
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 1_200_000_000)
+            savedFlash = false
+        }
     }
 
     private func loadBase(_ base: KnowledgeBase) {
         selection = .base(base.id)
         // 内置库描述只读 ⇒ 草稿留空 (它在 `baseDescReady` 里本来就恒 false)
         draftBaseDesc = base.isBuiltin ? "" : base.description
-    }
-
-    private func confirmMount() {
-        guard mountReady else { return }
-        if let reject = store.addKnowledgeBase(path: mountPath, description: mountDesc) {
-            mountReject = reject          // 被拒时**不关弹窗** —— 让用户原地改, 别让他重选一次目录
-            return
-        }
-        mountReject = nil
-        showMountSheet = false
     }
 
     private func saveBaseDescription() {
@@ -1424,6 +2009,259 @@ struct KnowledgeView: View {
     private var baseScanTrigger: String {
         guard let base = editingBase else { return "" }
         return "\(base.id)|\(base.enabled ? 1 : 0)"
+    }
+
+    /// 左列的重扫触发键 —— 根集合 / 路径 / 启用态任一变化就重扫。
+    ///
+    /// ⚠️ **不含文件内容**: 在 App 外往笔记目录里丢一篇, 左列要等下一次面板重开才出现。
+    /// 这是有意的取舍 —— 每次 `body` 重绘都去 walk 一遍目录树, 代价是那种"看起来没 bug、
+    /// 只是越来越卡"的开销; 而**注入路径是每轮现算的**（磁盘为准那条纪律由它保证, 不由 UI）。
+    private var rootScanTrigger: String {
+        store.knowledge.allKnowledgeBases
+            .map { "\($0.id)|\($0.enabled ? 1 : 0)|\($0.path)" }
+            .joined(separator: ",")
+    }
+
+    /// 扫左列的**每一个根**。走 `Task.detached` ⇒ 不占主线程（目录树可能很大）。
+    private func reloadRootScan() async {
+        let bases = store.knowledge.allKnowledgeBases
+        rootScan = await Task.detached {
+            bases.map { RootScan(base: $0, docs: KnowledgeBaseScan.docs(root: $0.path)) }
+        }.value
+    }
+
+    /// 一篇笔记的**可写编辑面**（P15.2）。
+    ///
+    /// 三个旋钮: **标题 · 正文 · 保存**。深度编辑（语法高亮 / 预览）**不做** —— 外部十家里的
+    /// 笔记类载体全是"明文 md + 外部编辑器", 而 App 里再养一个渲染器就是两套渲染必漂移。
+    /// 这里只保证三件事: 能改、改完能存、**存之前不会静默盖掉别人的改动**。
+    ///
+    /// P15.1 这里是一张只读信息面。那四行信息**留着** —— 它们回答的是"这份东西还值不值得信"
+    /// （在哪 / 多大 / 多久没动 / 摘要）, 与"能不能改"是两个问题, 不因为能写了就作废。
+    private func noteEditor(_ doc: KnowledgeBaseDoc, in base: KnowledgeBase) -> some View {
+        let days = KnowledgeBaseScan.staleDays(doc.modifiedAt)
+        let dirty = noteDraftDirty()
+        return VStack(alignment: .leading, spacing: 12) {
+            VStack(spacing: 6) {
+                TextField(L("标题"), text: $noteDraftTitle)
+                    .textFieldStyle(.plain)
+                    .font(.system(size: Tune.knowledgeTitleFontSize, weight: .semibold))
+                    .foregroundStyle(CodexTheme.textPrimary)
+                    .disabled(!noteTitleEditable)
+                Divider().overlay(CodexTheme.border.opacity(0.7))
+            }
+            HStack(spacing: 6) {
+                Text(base.displayName)
+                Text("·")
+                Text(doc.relativePath)
+                if !noteTitleEditable {
+                    Text("·")
+                    Text(L("txt / html 没有 frontmatter — 标题就是文件名"))
+                }
+            }
+            .font(CodexTheme.fontTiny)
+            .foregroundStyle(CodexTheme.textMuted)
+
+            VStack(alignment: .leading, spacing: 6) {
+                noteInfoLine(L("位置"), base.path + "/" + doc.relativePath)
+                noteInfoLine(L("大小"), String(format: L("%lld 字节"), doc.byteCount))
+                noteInfoLine(L("最后修改"), days.map { String(format: L("%lld 天前"), $0) }
+                                ?? String(format: L("近 %lld 天内"), KnowledgeBaseScan.staleAfterDays))
+                noteInfoLine(L("摘要"), doc.summary.isEmpty ? "—" : doc.summary)
+                // 判据 = **内容同一性**（拿磁盘上的指纹去版本史里认领那一条），不是"最新一条的
+                // origin" —— 后者在"最后写下的那版没被记过"（外部改 / 老库）时会答错。
+                // `noteBaseline` 就是刚读到的磁盘原文 ⇒ 这里不再读一次文件。
+                noteInfoLine(L("来源"), originLabel(KnowledgeStore.origin(ofContent: noteBaseline,
+                                                                         in: noteRevisions)))
+            }
+
+            if !noteRevisions.isEmpty { noteHistoryBlock }
+
+            if let reject = noteReject { noteRejectBanner(reject) }
+
+            VStack(alignment: .leading, spacing: 6) {
+                Text(L("正文"))
+                    .font(CodexTheme.fontSmall)
+                    .foregroundStyle(CodexTheme.textSecondary)
+                ZStack(alignment: .topLeading) {
+                    TextEditor(text: $noteDraftBody)
+                        .font(CodexTheme.fontBody)
+                        .scrollContentBackground(.hidden)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 10)
+                        .frame(minHeight: 240)
+                    if noteDraftBody.isEmpty {
+                        Text(L("这一篇还是空的…"))
+                            .font(CodexTheme.fontBody)
+                            .foregroundStyle(CodexTheme.textMuted)
+                            .padding(.leading, 12)
+                            .padding(.top, 10)
+                            .allowsHitTesting(false)
+                    }
+                }
+                .background(CodexTheme.bgComposer)
+                .clipShape(RoundedRectangle(cornerRadius: CodexTheme.radiusLg))
+                .overlay(RoundedRectangle(cornerRadius: CodexTheme.radiusLg)
+                    .stroke(CodexTheme.border.opacity(0.45), lineWidth: 1))
+            }
+
+            HStack(spacing: 8) {
+                Button(LK(savedFlash ? "✓ 已保存" : "保存")) { saveNoteDraft() }
+                    .buttonStyle(CodexActionButtonStyle(kind: savedFlash ? .success : .primary))
+                    .disabled(!dirty)
+                    .help(L("内容没变时不会写盘, 也不会留下一条变更记录"))
+                Button {
+                    showNoteDeleteConfirm = true
+                } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: "trash").font(.system(size: 10))
+                        Text(L("删除"))
+                    }
+                }
+                .buttonStyle(CodexActionButtonStyle(kind: .danger))
+                .help(L("移进「废纸篓」(还能捞回来); 当前内容先记进变更史"))
+                Spacer()
+                Button(L("在 Finder 中显示")) { revealNote(doc, in: base) }
+                    .buttonStyle(.plain)
+                    .font(CodexTheme.fontTiny)
+                    .foregroundStyle(CodexTheme.textSecondary)
+                Button(L("笔记目录")) { openNoteDir(base) }
+                    .buttonStyle(.plain)
+                    .font(CodexTheme.fontTiny)
+                    .foregroundStyle(CodexTheme.textSecondary)
+            }
+
+            Text(L("改完要点保存 —— 自动保存会把写了一半的句子也落盘, 还会跟你在外部编辑器里的改动抢。"))
+                .font(CodexTheme.fontTiny)
+                .foregroundStyle(CodexTheme.textMuted)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    // MARK: - 来源标记与变更史（P15.4）
+
+    /// 「谁写的」两态。**文案在这里拼** —— `NoteRevisionOrigin.rawValue` 是**落库字符串**
+    /// （`human` / `dream`）, 它不是展示层的东西（同 `KnowledgeKind.tag` 那条判据）。
+    ///
+    /// 为什么是这两个词而不是"人 / AI": 界面说的是"这篇笔记是谁攒出来的", 而 dream 的角色
+    /// 就是**替你攒**（它从不写盘, 攒出来的东西等人拍板）—— 这一点得在措辞上兑现, 否则
+    /// 用户会以为它已经自己写进去了。反过来说, `.human` 也包括"你在外部编辑器里改的"
+    /// （见 `KnowledgeStore.origin(ofContent:in:)` 那条推论）。
+    private func originLabel(_ origin: NoteRevisionOrigin) -> String {
+        switch origin {
+        case .human: L("你写的")
+        case .dream: L("它攒的")
+        }
+    }
+
+    /// 变更史最多列几条。超出的折成一行 —— 它住在正文上方, 不设上限会把编辑区顶到屏幕外。
+    private static let noteHistoryLimit = 5
+
+    /// 变更史（P15.4）。列到 `noteHistoryLimit` 条为止, 其余折成一行。
+    ///
+    /// ⚠️ **按行渲染**: 每条是独立的一行, 不用一个 `Text` 装整段
+    /// （一个 `Text` 承载整块文本是**平方级**开销, 而这里的条数由用户的使用频率决定 ——
+    /// boss 实测过 3431 行 36 s 那个坑）。
+    private var noteHistoryBlock: some View {
+        let shown = Array(noteRevisions.prefix(Self.noteHistoryLimit))
+        // 磁盘上**现在**这一版是哪一条 —— 每次渲染算一次（它只是个 sha256, 不吃 IO）。
+        let currentHash = KnowledgeStore.noteHash(noteBaseline)
+        return VStack(alignment: .leading, spacing: 5) {
+            Text(String(format: L("变更史 · %lld 条"), noteRevisions.count))
+                .font(CodexTheme.fontTiny)
+                .foregroundStyle(CodexTheme.textMuted)
+            ForEach(shown) { rev in
+                HStack(spacing: 8) {
+                    Text(Self.proposalStamp.string(from: rev.writtenAt))
+                        .font(CodexTheme.fontMonoXs)
+                        .foregroundStyle(CodexTheme.textTertiary)
+                    Text(originLabel(rev.origin))
+                        .font(.system(size: 10))
+                        .foregroundStyle(rev.origin == .dream ? CodexTheme.thinking
+                                                              : CodexTheme.textSecondary)
+                    Text(String(rev.sha256.prefix(8)))
+                        .font(CodexTheme.fontMonoXs)
+                        .foregroundStyle(CodexTheme.textMuted)
+                    Spacer(minLength: 2)
+                    // **哪一条是磁盘上现在这一版**。没有这个标记, 用户会默认"最上面那条 =
+                    // 当前状态", 而它只是"最近一次写入" —— 两者在外部改过之后**并不相同**,
+                    // 而那个差值恰恰是他此刻最该看见的东西。
+                    if rev.sha256 == currentHash {
+                        Text(L("当前"))
+                            .font(.system(size: 10))
+                            .foregroundStyle(CodexTheme.toolDone)
+                    }
+                }
+            }
+            if noteRevisions.count > shown.count {
+                Text(String(format: L("… 还有 %lld 条"), noteRevisions.count - shown.count))
+                    .font(CodexTheme.fontTiny)
+                    .foregroundStyle(CodexTheme.textMuted)
+            }
+        }
+    }
+
+    /// 写入被拒的**文案** —— 在 View 侧拼: 那个枚举住在 `Models/KnowledgeBase.swift`, 而该文件在
+    /// `gen_strings.py` 的 `EXCLUDE_FILES` 里 ⇒ 在那里 `L()` 的 key 永远进不了词表（同 `rejectText`）。
+    private func noteRejectText(_ reject: NoteWriteRejection) -> String {
+        switch reject {
+        case .emptyTitle:
+            return L("标题不能为空")
+        case .titleTooLong(let limit):
+            return String(format: L("标题太长 — 上限 %lld 字"), limit)
+        case .nameCollision(let existing):
+            return L("已经有同名笔记了") + " (\(existing)) — " + L("换一个标题")
+        case .pathEscapesRoot:
+            return L("这个路径不在笔记目录里")
+        case .noteMissing:
+            return L("这篇已经不在了 — 可能在 App 外被删掉或改名了")
+        case .baseHashMismatch:
+            return L("这篇在你编辑期间被外部改过 — 你的改动没有写盘")
+        case .writeFailed:
+            return L("写盘失败 — 检查目录权限与磁盘空间")
+        }
+    }
+
+    /// 拒绝条。⚠️ `baseHashMismatch` 那一种**必须带上下一步**: 只说"被拒了"是个死胡同,
+    /// 而用户此刻手上有一条改了一半的正文, 他需要一个明确的出口（同"禁用态按钮要自带还差什么"）。
+    private func noteRejectBanner(_ reject: NoteWriteRejection) -> some View {
+        HStack(alignment: .top, spacing: 6) {
+            Image(systemName: "exclamationmark.triangle")
+                .font(.system(size: 10))
+                .foregroundStyle(CodexTheme.toolError)
+            VStack(alignment: .leading, spacing: 8) {
+                Text(noteRejectText(reject))
+                    .font(CodexTheme.fontSmall)
+                    .foregroundStyle(CodexTheme.toolError)
+                    .fixedSize(horizontal: false, vertical: true)
+                if reject == .baseHashMismatch {
+                    HStack(spacing: 8) {
+                        Button(L("重新载入（丢掉我的改动）")) { loadNoteDraft() }
+                            .buttonStyle(CodexActionButtonStyle(kind: .primary))
+                        Button(L("仍然覆盖")) { forceSaveNoteDraft() }
+                            .buttonStyle(CodexActionButtonStyle(kind: .danger))
+                    }
+                }
+            }
+        }
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(CodexTheme.toolError.opacity(0.12))
+        .clipShape(RoundedRectangle(cornerRadius: CodexTheme.radius))
+    }
+
+    private func noteInfoLine(_ label: String, _ value: String) -> some View {
+        HStack(alignment: .top, spacing: 8) {
+            Text(label)
+                .font(CodexTheme.fontTiny)
+                .foregroundStyle(CodexTheme.textMuted)
+                .frame(width: 56, alignment: .leading)
+            Text(value)
+                .font(CodexTheme.fontMonoSm)
+                .foregroundStyle(CodexTheme.textSecondary)
+                .textSelection(.enabled)
+                .fixedSize(horizontal: false, vertical: true)
+        }
     }
 
     /// 换选中目标 (或它的启用态变了) 时扫一次文档清单。

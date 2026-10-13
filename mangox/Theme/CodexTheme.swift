@@ -378,6 +378,14 @@ enum Tune {
     // 定时任务 (P3.6/P3.9)
     static let scheduleHistoryCharLimit: Int = 4000    // 持续模式注入的近期摘录截取上限
     static let scheduleLogEditorMinHeight: CGFloat = 160 // 编辑器"工作日志"区块最小高
+
+    // P15.6: dream 的会话摘要预算 —— 这四个数取代了"让模型自己去 bash 读 pi-sessions"（那条路没有上界）。
+    // 各自管一段，缺一个就漏一段：窗口管"多旧的不看"，会话数管"看几个"，两级字符上限管"看多细"。
+    // 量级对齐 `distillMaterialCharLimit`（12000）—— 同一个"会话材料"家族，别差一个数量级。
+    static let dreamDigestWindowDays: Int          = 21     // 只看最近三周的会话
+    static let dreamDigestMaxSessions: Int         = 8      // 最多编进几个（按更新时间倒序取新）
+    static let dreamDigestMaxCharsPerSession: Int  = 2000   // 单会话上限（超了留尾部并标注）
+    static let dreamDigestTotalChars: Int          = 12000  // 整段上限（超了从最旧的会话开始丢）
 }
 
 // MARK: - ★ 文案区 (Copy)

@@ -1,0 +1,946 @@
+<!DOCTYPE html>
+<html lang="zh-Hans">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>P15 — 让 MangoX 越用越懂你</title>
+<!-- @style:begin · generated from docs/assets/design-doc.css — 请勿手改 -->
+<style>
+/* ============================================================================
+   design-doc.css —— MangoX 对齐文档统一样式
+   ----------------------------------------------------------------------------
+   ⚠️ 这是**唯一手改的样式源**。任何 docs/*.html 都不得自己写样式。
+      各文档里的 style 块由 scripts/docs/design_doc_css.py 从本文件生成：
+          python3 scripts/docs/design_doc_css.py --apply    # 同步
+          python3 scripts/docs/design_doc_css.py --check    # 不同步就退码 1
+      改完样式必须重跑 --apply，否则文档里的副本是旧的。
+
+   为什么不用外链：预览面板只服务单个文件（同级路径返回 403），
+   外链样式在面板里会静默失效 ⇒ 必须内联。单一来源靠脚本保证，不靠链接。
+
+   主题：跟随系统（prefers-color-scheme），两套色板都在 :root 里。
+   字号：正文 14px；标题 30 / 19 / 14；说明 12~13px。**不要小于 11px。**
+
+   —— 类名清单（骨架 = .wrap + 章节 h2，其余按需） ——
+   骨架   .wrap .eyebrow h1(.small) .metaline .tag h2(.n .en) h3
+   文本   .lead p code pre(.c .k) .foot ul.tight .kv .cite
+   强调块 .call(.lbl)  变体：.call.ok / .call.warn / .call.bad
+          .tldr > .tl(> .tln)
+   状态   .chip  变体：.c-ok .c-bad .c-warn .c-info .c-acc .c-mute
+   卡片   .grid(.g2 .g3) > .v(> .face > span)
+   对照   .flow > .lyr(.name .code .st)  + .arrowdown
+   条形   .bars > .bar(.on) > .track > .fill / .bv   + .barnote
+   表格   .tbl / .tw  > table > th/td(.num .sub)
+   待办   .todos > .todo(.blocked) > .tn / .tbody > .tt .td   + .cite
+   折叠   details.fold > summary
+   ============================================================================ */
+
+:root{
+  --bg:#fbfbf9; --card:#ffffff; --soft:#f4f4f0;
+  --fg:#1b1b19; --mute:#6a6a64; --faint:#9c9c95;
+  --line:#e5e4df; --line2:#d2d1cb;
+  --ok:#0f6e56; --okbg:#e3f5ee; --okbd:#9fe1cb;
+  --bad:#a32d2d; --badbg:#fcebeb; --badbd:#f7c1c1;
+  --warn:#82500b; --warnbg:#faeeda; --warnbd:#fac775;
+  --info:#185fa5; --infobg:#e8f1fb; --infobd:#b5d4f4;
+  --acc:#4a41b0; --accbg:#eeedfe; --accbd:#cecbf6;
+  --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
+}
+@media (prefers-color-scheme:dark){
+  :root{
+    --bg:#141417; --card:#1d1d21; --soft:#232328;
+    --fg:#ececea; --mute:#a2a29b; --faint:#74746e;
+    --line:#2e2e33; --line2:#414148;
+    --ok:#8adcbc; --okbg:#0e2f27; --okbd:#1d6e57;
+    --bad:#f4a4a4; --badbg:#361818; --badbd:#8f3b3b;
+    --warn:#f2c47f; --warnbg:#332610; --warnbd:#8a5f19;
+    --info:#9bc9f2; --infobg:#132539; --infobd:#255f94;
+    --acc:#b6b1f4; --accbg:#231f3e; --accbd:#4a41b0;
+  }
+}
+
+*{box-sizing:border-box}
+html{-webkit-text-size-adjust:100%}
+body{
+  margin:0;background:var(--bg);color:var(--fg);
+  font:14px/1.65 -apple-system,BlinkMacSystemFont,"PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;
+}
+.wrap{max-width:1060px;margin:0 auto;padding:44px 28px 72px}
+
+/* ---------- 页头 ---------- */
+.eyebrow{font:500 12px/1 var(--mono);letter-spacing:.08em;text-transform:uppercase;color:var(--faint)}
+h1{font-size:30px;line-height:1.25;font-weight:600;margin:12px 0 10px;letter-spacing:-.01em}
+h1 small{display:block;font-size:15px;font-weight:400;color:var(--mute);margin-top:8px;letter-spacing:0}
+.metaline{display:flex;flex-wrap:wrap;gap:8px;margin-top:18px}
+.tag{font:12px/1 var(--mono);padding:6px 10px;border:1px solid var(--line2);border-radius:999px;color:var(--mute);background:var(--card)}
+.tag b{color:var(--fg);font-weight:500}
+
+/* ---------- 章节 ---------- */
+h2{font-size:19px;font-weight:600;margin:52px 0 4px;padding-bottom:10px;border-bottom:1px solid var(--line);letter-spacing:-.01em}
+h2 .n{font:500 12px/1 var(--mono);color:var(--faint);margin-right:10px;vertical-align:2px}
+h2 .en{font:400 11px/1 var(--mono);color:var(--faint);letter-spacing:.06em;margin-left:10px;vertical-align:2px}
+h3{font-size:14px;font-weight:600;margin:28px 0 10px;color:var(--fg)}
+
+/* ---------- 文本 ---------- */
+p{margin:12px 0}
+.lead{color:var(--mute);font-size:13px;margin:8px 0 0}
+code{font:12.5px/1.5 var(--mono);background:var(--soft);padding:2px 5px;border-radius:5px;color:var(--fg)}
+pre{font:12.5px/1.7 var(--mono);background:var(--soft);border:1px solid var(--line);border-left:3px solid var(--accbd);
+    padding:14px 16px;border-radius:10px;overflow-x:auto;margin:12px 0;color:var(--fg)}
+pre .c{color:var(--faint)}
+pre .k{color:var(--acc)}
+.foot{color:var(--faint);font-size:12px;margin-top:44px;padding-top:18px;border-top:1px solid var(--line);font-family:var(--mono)}
+ul.tight{margin:12px 0;padding-left:20px}
+ul.tight li{margin:7px 0;font-size:13.5px}
+ul.tight li b{font-weight:600}
+.kv{display:grid;grid-template-columns:96px 1fr;gap:6px 14px;font-size:13px;margin:14px 0}
+.kv dt{color:var(--faint);font-family:var(--mono);font-size:11.5px;padding-top:2px}
+.kv dd{margin:0}
+.cite{font:11.5px/1.5 var(--mono);color:var(--faint);white-space:nowrap}
+hr{border:none;border-top:1px solid var(--line);margin:40px 0}
+
+/* ---------- 强调块 ---------- */
+.call{border:1px solid var(--accbd);background:var(--accbg);border-radius:12px;padding:16px 18px;margin:20px 0}
+.call .lbl{font:500 11px/1 var(--mono);letter-spacing:.08em;text-transform:uppercase;color:var(--acc);margin-bottom:8px}
+.call p{margin:0;font-size:14px}
+.call+.call{margin-top:10px}
+.call.ok{border-color:var(--okbd);background:var(--okbg)}   .call.ok .lbl{color:var(--ok)}
+.call.warn{border-color:var(--warnbd);background:var(--warnbg)} .call.warn .lbl{color:var(--warn)}
+.call.bad{border-color:var(--badbd);background:var(--badbg)}   .call.bad .lbl{color:var(--bad)}
+
+.tldr{display:flex;flex-direction:column;gap:1px;background:var(--line);border:1px solid var(--line);border-radius:12px;overflow:hidden;margin:10px 0 0}
+.tldr .tl{display:flex;gap:12px;align-items:flex-start;background:var(--card);padding:12px 16px;font-size:13.5px}
+.tldr .tl .tln{flex:none;color:var(--acc);font:500 13px/1.6 var(--mono)}
+.tldr .tl b{font-weight:600}
+
+/* ---------- 状态 chip ---------- */
+.chip{display:inline-block;font-size:11.5px;font-weight:500;padding:4px 9px;border-radius:999px;border:1px solid;white-space:nowrap}
+.c-ok{color:var(--ok);background:var(--okbg);border-color:var(--okbd)}
+.c-bad{color:var(--bad);background:var(--badbg);border-color:var(--badbd)}
+.c-warn{color:var(--warn);background:var(--warnbg);border-color:var(--warnbd)}
+.c-info{color:var(--info);background:var(--infobg);border-color:var(--infobd)}
+.c-acc{color:var(--acc);background:var(--accbg);border-color:var(--accbd)}
+.c-mute{color:var(--mute);background:var(--soft);border-color:var(--line2)}
+
+/* ---------- 卡片 ---------- */
+.grid{display:grid;gap:10px;margin:18px 0}
+.g2{grid-template-columns:repeat(2,1fr)}
+.g3{grid-template-columns:repeat(3,1fr)}
+.v{display:flex;align-items:center;gap:12px;background:var(--card);border:1px solid var(--line);border-radius:10px;padding:12px 14px}
+.v.top{align-items:flex-start}
+.v .face{flex:1;font-size:13px;min-width:0}
+.v .face>span{display:block;font-size:11.5px;color:var(--faint);margin-top:2px;font-family:var(--mono)}
+
+/* ---------- 对照（层 / 开关 / 流程） ---------- */
+.flow{display:flex;flex-direction:column;gap:8px;margin:18px 0}
+.lyr{display:flex;align-items:center;gap:14px;background:var(--card);border:1px solid var(--line);border-radius:10px;padding:13px 16px}
+.lyr .name{flex:none;width:112px;font-size:13px;font-weight:600}
+.lyr .code{flex:1;font-family:var(--mono);font-size:12px;color:var(--mute);min-width:0}
+.lyr .st{flex:none}
+.lyr.off{border-style:dashed}
+.arrowdown{text-align:center;color:var(--faint);font-size:15px;line-height:1;margin:-2px 0}
+
+/* ---------- 条形对比 ---------- */
+.bars{margin:18px 0;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:18px 20px}
+.bar{display:grid;grid-template-columns:150px 1fr 76px;align-items:center;gap:12px;margin-bottom:10px}
+.bar:last-child{margin-bottom:0}
+.bar .bn{font:12px/1.4 var(--mono);color:var(--mute)}
+.bar .track{height:26px;background:var(--soft);border-radius:6px;overflow:hidden}
+.bar .fill{height:100%;border-radius:6px;background:var(--line2);transition:width .6s ease}
+.bar.on .fill{background:var(--okbd);border:1px solid var(--ok)}
+.bar .bv{font:12px/1 var(--mono);color:var(--mute);text-align:right}
+.bar.on .bv{color:var(--ok);font-weight:500}
+.barnote{font-size:12px;color:var(--faint);margin-top:12px;padding-top:12px;border-top:1px solid var(--line)}
+
+/* ---------- 表格 ---------- */
+table{width:100%;border-collapse:collapse;margin:16px 0;font-size:13px}
+th{text-align:left;font-weight:500;color:var(--mute);font-size:11.5px;text-transform:uppercase;letter-spacing:.05em;
+   padding:10px 12px;border-bottom:1px solid var(--line2);white-space:nowrap}
+td{padding:11px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+tr:last-child td{border-bottom:none}
+tbody tr:hover{background:var(--soft)}
+td.mono,th.mono{font-family:var(--mono);font-size:12px}
+td .sub{display:block;color:var(--faint);font-size:12px;margin-top:3px;font-family:var(--mono)}
+.num{text-align:right;font-family:var(--mono);font-size:12px}
+.tbl{border:1px solid var(--line);border-radius:12px;overflow:hidden;background:var(--card)}
+.tbl table{margin:0}
+.tw{overflow-x:auto;border:1px solid var(--line);border-radius:12px;background:var(--card)}
+.tw table{margin:0;min-width:640px}
+/* 定义式表格：首列窄、键名不折行（契约 / 术语 / 字段表） */
+table.def th:first-child{width:150px}
+table.def th{white-space:nowrap}
+
+/* ---------- 待办与跟进 ---------- */
+.todos{margin:18px 0}
+.todo{display:flex;gap:14px;align-items:flex-start;background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px 16px;margin-bottom:8px}
+.todo .tn{flex:none;width:26px;height:22px;border-radius:6px;background:var(--soft);border:1px solid var(--line2);
+  font:500 12px/20px var(--mono);text-align:center;color:var(--mute);margin-top:1px}
+.todo .tbody{flex:1;min-width:0}
+.todo .tt{font-size:13.5px;font-weight:600}
+.todo .td{font-size:12.5px;color:var(--mute);margin-top:4px}
+.todo .td b{color:var(--fg);font-weight:500}
+.todo.blocked{border-color:var(--warnbd);background:var(--warnbg)}
+.todo.done{border-color:var(--okbd);background:var(--okbg)}
+.todo.done .tt{color:var(--ok)}
+
+/* ---------- 折叠 ---------- */
+details.fold{margin:16px 0}
+details.fold>summary{cursor:pointer;list-style:none;display:inline-flex;align-items:center;gap:8px;
+  font:12px/1 var(--mono);color:var(--info);background:var(--infobg);border:1px solid var(--infobd);
+  border-radius:999px;padding:7px 13px;user-select:none}
+details.fold>summary::-webkit-details-marker{display:none}
+details.fold>summary::before{content:"▸";font-size:10px;translate:0 1px}
+details.fold[open]>summary::before{content:"▾"}
+details.fold>summary:hover{border-color:var(--info)}
+details.fold[open]>summary{margin-bottom:4px}
+
+/* ---------- UI 原型 (mock) ----------
+   给「新页面长什么样」用的积木。**只在设计文档里用**, 不是产品样式。
+   为什么必须放这儿: lint ① 要求所有 class 都能在共享 CSS 里找到定义。 */
+.mocks{display:flex;flex-direction:column;gap:20px;margin:18px 0}
+.mock{background:var(--card);border:1px solid var(--line2);border-radius:12px;overflow:hidden}
+.mock .cap{font:500 11px/1 var(--mono);letter-spacing:.07em;text-transform:uppercase;color:var(--faint);
+  padding:9px 14px;border-bottom:1px solid var(--line);background:var(--soft)}
+.mock .win{display:flex;min-height:112px}
+.mock .pane{flex:1;padding:12px 14px;min-width:0}
+.mock .pane.side{flex:none;width:154px;border-right:1px solid var(--line);background:var(--soft)}
+.mock .tbar{display:flex;align-items:center;gap:6px;padding:9px 12px;border-bottom:1px solid var(--line)}
+.mock .dot{width:9px;height:9px;border-radius:50%;background:var(--line2);flex:none}
+.mock .ttl{font-size:12px;font-weight:500;color:var(--mute);margin-left:6px}
+.mock .row{display:flex;align-items:center;gap:8px;padding:6px 9px;border-radius:7px;font-size:12.5px}
+.mock .row.on{background:var(--accbg);color:var(--acc)}
+.mock .row .lab{flex:1;min-width:0}
+.mock .row .k{flex:none;color:var(--faint);font:11.5px/1.5 var(--mono)}
+.mock .row.on .k{color:var(--acc)}
+.mock .sep{height:1px;background:var(--line);margin:6px 0}
+.mock .mi{display:flex;gap:28px;justify-content:space-between;padding:5px 10px;border-radius:5px;font-size:12.5px}
+.mock .mi.hl{background:var(--accbg);color:var(--acc)}
+.mock .mi .k{color:var(--faint);font:11.5px/1.5 var(--mono)}
+.mock .mi.hl .k{color:var(--acc)}
+.mock .pill{display:inline-block;font:11px/1 var(--mono);padding:4px 8px;border-radius:999px;
+  border:1px solid var(--line2);background:var(--soft);color:var(--mute)}
+.mock .thumb{display:block;width:100%;height:74px;border:1px solid var(--line);border-radius:8px;
+  background:repeating-linear-gradient(45deg,var(--soft),var(--soft) 7px,transparent 7px,transparent 14px)}
+.mock .note{font-size:12px;color:var(--faint);padding:9px 14px;border-top:1px solid var(--line);background:var(--soft)}
+.mock .note b{color:var(--fg);font-weight:500}
+
+/* ---------- 窄屏 ---------- */
+@media (max-width:760px){
+  .g3,.g2{grid-template-columns:1fr}
+  .bar{grid-template-columns:1fr;gap:4px}
+  .bar .bv{text-align:left}
+  .lyr{flex-wrap:wrap;gap:8px}
+  .lyr .name{width:auto}
+}
+</style>
+<!-- @style:end -->
+</head>
+<body>
+<div class="wrap">
+
+<div class="eyebrow">P15 &nbsp;·&nbsp; 设计定稿（五门全定 · 悬空项全清 · 存量已移除 · <b>批 1~4 全部已施工 · P15.5 收尾（内置库退休）</b>）&nbsp;·&nbsp; 本版收口 &nbsp;·&nbsp; 2026-10-12</div>
+<h1>让 MangoX 越用越懂你 —— 三区收口，知识库区收窄成「笔记区」
+  <small>五道门全定之后，形态<b>比原方案更简单</b>：知识库区只剩<b>两个固定根</b>、区里只剩<b>一种实体</b>。这个收窄顺手消掉了三件本来要设计的东西 —— <b>作用域</b>（位置即归属）· <b>逐库写入策略</b>（目录固定 ⇒ 不存在"别人的仓库"）· <b>提案落盘</b>（落盘会被自己的扫描器扫进 prompt）</small>
+</h1>
+<div class="metaline">
+  <span class="tag">派生自 <b>2026-10-12 立 P + 五门拍板</b></span>
+  <span class="tag">单一来源 <b>本文件</b></span>
+  <span class="tag">外部调研 <b>10 家</b></span>
+  <span class="tag">现状证据 <b>本地库只读实测 + 12 处源码定位</b></span>
+  <span class="tag">本版 <b>批 1~4 + P15.5 已施工</b></span>
+  <span class="tag">2026-10-12</span>
+</div>
+
+<h2><span class="n">00</span>结论先行<span class="en">VERDICT</span></h2>
+
+<div class="call">
+  <div class="lbl">一句话</div>
+  <p>门 1 的答案<b>把门 3 一起答了</b>，而且答案比问题更大 —— 「目录固定成 <code>~/.mangox/note</code> 或 <code>&lt;项目&gt;/.mangox/note</code>」不只是给写入设了个边界，它<b>让"归属"变成了位置的同义词</b>：写进全局根就是全局、写进项目根就是项目，不需要第二个维度。<br>
+  连带效果是<b>三处减法</b>：<b>① 作用域维度不再需要设计</b>（位置即归属）· <b>② 逐库写入策略 <code>writePolicy</code> 不必存在</b>（目录固定 ⇒ 不会有"别人的仓库"这个问题 —— 那正是原方案里必须逐库声明的原因）· <b>③ 提案不能落盘、要落表</b>（落盘会被自己的扫描器当成笔记扫进 prompt，见 §03）。</p>
+</div>
+
+<div class="tldr">
+  <div class="tl"><span class="tln">①</span><div><b>门 1 是这一版最大的简化。</b>原方案要在 <code>KnowledgeBase</code> 上加一个三档 <code>writePolicy</code> 并逐库声明 —— 现在<b>整条不需要了</b>。收窄的代价是丢掉「挂任意目录做只读资料索引」这个能力（§01 末尾明写）；换来的是<b>这一区只剩一种实体、一个归属规则、一条写入路径</b>。</div></div>
+  <div class="tl"><span class="tln">②</span><div><b>提案必须落 DB，不能落 <code>_proposals/</code> 目录 —— 这条有可验证的理由。</b>扫描契约只挡 <code>hasPrefix(".")</code> 与 <code>excludedNames = {node_modules, .build, DerivedData}</code>（<code>Models/KnowledgeBase.swift:65-78, 97</code>）；<code>_proposals</code> <b>不在其中</b>（下划线不是点、也不在排除名单里）⇒ 提案文件会被当成笔记<b>扫进索引、每轮进 prompt</b>。改成一张 <code>note_proposals</code> 表，目录里因此只会有笔记。</div></div>
+  <div class="tl"><span class="tln">③</span><div><b>门 2 的答案把 P11.3 那条判断钉死了。</b>「知识库区里面就是笔记的概念，不存在知识条目」⇒ 这一区<b>彻底脱离 <code>KnowledgeItem</code> 的语义</b>（没有 <code>status</code>、没有 <code>layer</code>、没有 <code>trigger</code>/<code>counterfactual</code>）⇒ <b>P11.3 的守卫 8 / 11 / 14 与四条护栏一条都不在这条路径上</b>。叠上门 4（dream 自带阀门）⇒ <b>P11.3 继续冻结，且这次不是"先不做"，是"没有交集"</b>。</div></div>
+  <div class="tl"><span class="tln">④</span><div><b>补上第四个面：消费。</b>前三个形态都在回答"笔记怎么<b>产生</b>"（写 / 更新 / 审），<b>没有一个回答"产生之后怎么被用"</b>。而现状是：这一区进 prompt 的<b>只有文件名清单</b>（<code>indexBlock</code>），<code>KnowledgeBaseDoc</code> 连 mtime 都没有，段头还写着「以下是<b>挂载</b>的知识库」，那是"外部只读资料"的语境。⇒ <b>本版把索引块升级成「文件名 · 摘要 · 陈旧」（⚠️ 来源标记刻意不进索引块 —— 见 §03 那条注与 §05 风险表），并写死一条红线：每轮算出来的东西只能进易变段。</b></div></div>
+</div>
+
+<h3>状态矩阵</h3>
+<div class="grid g3">
+  <div class="v"><div class="face">门 1 · 知识库区形态<span>拍板 · 两个固定根</span></div><span class="chip c-ok">已定</span></div>
+  <div class="v"><div class="face">门 2 · 笔记 vs 知识条目<span>拍板 · 区内只有笔记</span></div><span class="chip c-ok">已定</span></div>
+  <div class="v"><div class="face">门 3 · 笔记归属<span>由门 1 一并答 · 位置即归属</span></div><span class="chip c-ok">已定</span></div>
+  <div class="v"><div class="face">门 4 · dream 与 P11.3<span>拍板 · dream 自带阀门</span></div><span class="chip c-ok">已定</span></div>
+  <div class="v"><div class="face">门 5 · 探针层<span>拍板 · 只留接口</span></div><span class="chip c-ok">已定</span></div>
+  <div class="v"><div class="face">逐库 <code>writePolicy</code><span>强 · 被"固定目录"消掉</span></div><span class="chip c-bad">不再需要</span></div>
+  <div class="v"><div class="face">提案落在哪<span>强 · 扫描契约只挡 4 个名字</span></div><span class="chip c-ok">落 DB 表</span></div>
+  <div class="v"><div class="face">陈旧度以谁为准<span>强 · mtime 无法被忘改</span></div><span class="chip c-ok">mtime 权威</span></div>
+  <div class="v"><div class="face">任意目录挂载<span>强 · 收窄的连带后果</span></div><span class="chip c-bad">本版取消</span></div>
+  <div class="v"><div class="face">内置库（L1 自动挂载）<span>强 · layer 缺省 always ⇒ L1 恒空 ⇒ 无生产者</span></div><span class="chip c-ok">✅ P15.5 退休</span></div>
+  <div class="v"><div class="face">类型命名 <code>KnowledgeBase*</code><span>强 · 改名连带半径大、收益只是名字</span></div><span class="chip c-mute">本版不改</span></div>
+  <div class="v"><div class="face">笔记怎么进 prompt<span>强 · 原设计只给文件名清单</span></div><span class="chip c-ok">索引块升级 · ✅ P15.1</span></div>
+  <div class="v"><div class="face">笔记是谁写的<span>强 · dream 写入必经 App ⇒ 可反推</span></div><span class="chip c-ok">来源标记 · ✅ P15.4</span></div>
+  <div class="v"><div class="face">陈旧阈值<span>中 · 2026-10-12 拍板</span></div><span class="chip c-ok">7 天</span></div>
+  <div class="v"><div class="face">检索产物放哪<span>强 · 每轮变会破前缀稳定性</span></div><span class="chip c-ok">只能进易变段</span></div>
+  <div class="v"><div class="face">每轮自动检索 / LLM 每轮打分<span>强 · 破前缀 + 命中靠措辞</span></div><span class="chip c-bad">本版不做</span></div>
+  <div class="v"><div class="face">区名与注入 token 改「笔记」<span>已定 · 产品与 prompt 说同一件事</span></div><span class="chip c-ok">已定</span></div>
+  <div class="v"><div class="face">存量那一行 + 那份文件<span>已定 · 陈旧文档，直接移除</span></div><span class="chip c-ok">移除</span></div>
+  <div class="v"><div class="face">项目笔记根要不要进 git<span>已定 · App 不代改 .gitignore</span></div><span class="chip c-ok">不进 git</span></div>
+  <div class="v"><div class="face">dream 的会话输入<span>强 · 原设计交给模型自己 bash 读 jsonl</span></div><span class="chip c-ok">App 侧有界摘要 · ✅ P15.6</span></div>
+  <div class="v"><div class="face">dream 的指令正文归谁<span>强 · 落库当用户字段 ⇒ 改常量不生效且零红灯</span></div><span class="chip c-ok">出厂常量 · 只读 · ✅ P15.6b</span></div>
+  <div class="v"><div class="face">dream 的名字 / 档期能不能改<span>中 · 与"固定死"的边界</span></div><span class="chip c-ok">可改 · 改了不还原</span></div>
+  <div class="v"><div class="face">列表里怎么看出哪条是固定任务<span>中 · 删除按钮不渲染 ⇒ 看着像丢了</span></div><span class="chip c-ok">行内锁 + tooltip · ✅ P15.6c</span></div>
+  <div class="v"><div class="face">dream 在 Plugins 面板里怎么被看见<span>中 · 它的 .ts 只在 fire 时落盘 ⇒ 纯扫描永远列不出</span></div><span class="chip c-ok">列表投影 + 展开工具名 · ✅ P15.7</span></div>
+  <div class="v"><div class="face">dream 的洞见该归到哪个根<span>强 · 空根不进注入段 ⇒ 归属坐标一个都不剩</span></div><span class="chip c-ok">空根进段 + 段头标归属 · 项目优先 · ✅ P15.8</span></div>
+  <div class="v"><div class="face">拍过板的提案还要不要留在列表里<span>中 · P15.4 有意留终态、整行降档显示</span></div><span class="chip c-ok">拍过板就删行 · 表 = 待审队列 · ✅ P15.8b</span></div>
+</div>
+
+<h2><span class="n">01</span>需求说明<span class="en">REQUIREMENT</span></h2>
+
+<p><b>要做什么</b> —— 让「用得越久、它越懂你」在 MangoX 里有<b>可观测的产出</b>：知识三区要承接得住「从对话里长出来的东西」，且任何一条知识都能被问出<b>「它多久没变了」「它凭什么是对的」</b>。</p>
+
+<p><b>现在为什么不行</b> —— 三区各有一个不同的洞，都不是「界面不好看」：</p>
+<ul class="tight">
+  <li><b>常驻区（本版不动）</b> —— persona pack 三份 md，是全库<b>唯一在真正起作用</b>的载体。它能工作恰恰因为<b>它是手写的</b>（有人对它负责）。这条现状本身就是证据，不是巧合。</li>
+  <li><b>自定义区 —— 闸门建好了，上游是空的。</b> <code>KnowledgeStatus</code> 有 <code>pending</code> / <code>active</code> 两态，左列也把待审候选<b>排在最前</b>（<code>KnowledgeView.swift:425</code>）。但实测 <code>pending</code> <b>0 条</b>、<code>source='session'</code> <b>0 条</b> —— <b>审核面在对空气说话</b>。</li>
+  <li><b>知识库区 —— 只读，且看不见时间。</b> <code>Models/KnowledgeBase.swift:6-8</code> 明写「App <b>只读不写</b>，只做两件事 —— 让 agent 知道它存在（索引）、告诉它去哪读（路径）」。而扫描产物 <code>KnowledgeBaseDoc</code> 只有 <code>relativePath</code> + <code>depth</code> 两项 —— <b>连 mtime 都不扫</b>。⇒ 从对话里长出来的东西<b>没有落地处</b>；腐烂<b>在结构上不可观测</b>。</li>
+</ul>
+
+<p><b>谁受益、在哪个场景受益</b> —— 三个具体场景，都不是假想的：</p>
+<ul class="tight">
+  <li><b>跨会话的连续性</b>：今天 <code>PROJECTS.md</code>（10-12 已按 §04 A 移除）里写着 Mangopi CLI 在 P2，而它<b>已经走到 P3</b>。要让 agent 不拿旧状态当当下事实，这份笔记得有人更新 —— 而更新它的只能是「记得去更新它的人」。</li>
+  <li><b>刚纠正过的事不必再纠正</b>：同一类错误在一个会话里被纠正两次、下个会话又被犯一次 —— 而那个纠正<b>没留下任何东西</b>（<code>session</code> 来源条目 0 条）。</li>
+  <li><b>写下的东西真的会被用</b>：那条唯一的条目是「任何回复以『老哥』称呼我」，落在 <code>kind=fact</code> / <code>layer=ondemand</code> / <code>enabled=0</code> —— <b>它一次都没进过 prompt</b>。用户写了、以为生效了、实际静默失效。</li>
+</ul>
+
+<p><b>明确不做什么</b>（放末尾，各带理由）：</p>
+<ul class="tight">
+  <li><b>不做任意目录挂载</b> —— <b>这是本版收窄的代价，必须明写</b>：原知识库区能挂<b>任意</b>目录做只读索引（成套资料有自己的生命周期：可能是 git 仓库、可能别人在维护）。收窄成两个固定根之后，这个能力<b>没了</b>。理由：留着它，"笔记"与"只读资料索引"就是两种语义挤在一区里，正是 P11 一路上在删的东西（<code>sensitivity</code> 档、<code>shared</code> 字段都这么删的）。<b>若将来要"外部资料索引"，那是另一个功能，不是这一区。</b>（⚠️ 且扫描器<b>不跟符号链接</b>，<code>KnowledgeBase.swift:99-101</code> ⇒ 软链进不来，"复制进去"是唯一绕法。）</li>
+  <li><b>不做条目 ↔ 笔记的桥</b>（不给"把知识条目导出成笔记"之类的动作）—— 桥 = 漂移源：同一份内容在 DB 行与文件里各有一份之后，"哪份是当前值"这个问题会立刻长出来。两个载体各自完整，比中间架一座桥便宜。</li>
+  <li><b>不做 GUI 笔记编辑器</b> —— 外部十家里的笔记类载体<b>全部是明文 md + 外部编辑器</b>（Claude Code 用 <code>/memory</code> 打开系统编辑器，Obsidian 实践者直接用文件）。App 内只提供"新建 / 改标题 / 改正文"的最小面，深度编辑交给系统默认编辑器（给一个「在 Finder 中显示 / 用默认应用打开」的入口）。</li>
+  <li><b>不做向量检索 / 语义召回，也不做每轮自动检索</b> —— 判据是<b>规模</b>：总预算 <code>Tune.knowledgeTotalCharLimit = 64000</code>，笔记均 800 字 ⇒ <b>约 80 篇以内的全文都装得下</b>，而实测条目 <b>1 条</b>、笔记 <b>1 份</b>。给不存在的量级建索引，是在解决"我没有的问题"。<b>但"检索"这件事本身要留一个口子</b>：agent 主动调 <code>note_search</code> 工具（第一版 = 朴素子串，产物进<b>会话消息流</b>、不碰注入块）。它是"笔记多到装不下"时唯一正确的形态 —— 而那时它<b>已经在了</b>。</li>
+  <li><b>不自动删任何知识</b> —— 外部十家<b>零先例</b>（§02 A）。</li>
+  <li><b>不让 LLM 判「这条知识对不对」</b> —— 判据不是"不可靠"，是<b>不可变红</b>：模型打出的"正确性"没有任何造反例能让它红，因此它不是判据、只是装饰。</li>
+  <li><b>dream 第一版不做编辑器</b> —— Claude Dreams 官方明说它做不了逐行手术（§02 A）。</li>
+  <li><b>探针层只留接口</b>（门 5）—— 现在没有笔记可挂，"笔记 → 探针 id"的映射会是空表。只允许 frontmatter 里出现 <code>probe:</code>，本版不解析。</li>
+</ul>
+
+<h2><span class="n">02</span>需求调研<span class="en">RESEARCH</span></h2>
+
+<h3>A · 外部十家：三问题各解法</h3>
+
+<div class="tw">
+<table>
+<tr><th>产品 / 载体</th><th>写入 · 谁写 / 谁批</th><th>更新 · 怎么治腐烂</th><th>审核 · 怎么看对不对</th><th>依据</th></tr>
+
+<tr>
+  <td class="mono">Cursor Memories</td>
+  <td>agent 自动提取 + 用户显式要求。<b>后台生成的必须经用户批准才落库</b>（原文："an unreviewed memory is an invisible system prompt you never agreed to"）。作用域：<b>项目 · 个人</b>，不进 repo、不可版本化。</td>
+  <td>靠<b>人审计</b>。官方立场："a stale memory is worse than no memory" —— 它会持续把 agent 推向一个你几个月前就弃掉的约定。</td>
+  <td>设置 → Rules &amp; Memories 里逐条审阅/编辑/删除；<b>矛盾时优先 delete 而非 update</b>。官方口径：<b>"违反它会被 code review 挑出来的，就该是 rule 不是 memory"</b>。</td>
+  <td class="cite">cursor 官方文档<br>+ localskills.sh 指南</td>
+</tr>
+
+<tr>
+  <td class="mono">Windsurf / Devin<br>Cascade</td>
+  <td>对话中自动生成 + 用户显式要求。<b>无审批闸门</b>。作用域：<b>workspace · 机器本地</b>（<code>~/.codeium/windsurf/memories/</code>），不提交仓库、创建与使用不耗额度。</td>
+  <td><b>官方明确不指望它</b>：文档原文「对于你希望 Cascade 稳定复用的知识，请将其写成 Rule，或添加到你仓库中的 <code>AGENTS.md</code>，<b>不要依赖自动生成的记忆</b>」。跨 workspace 不可见。</td>
+  <td>Customizations 面板里逐条 Edit。<b>产品自己给出的判据是"迁移"</b>：把 Memories 迁成 Skills / Rules —— 即承认这一层不是终点。</td>
+  <td class="cite">docs.devin.ai<br>cascade/memories</td>
+</tr>
+
+<tr>
+  <td class="mono">ChatGPT<br>Dreaming V3</td>
+  <td><b>后台进程</b>从历史对话合成，不需要显式"记住"指令。官方自述治三件事：<b>staleness / correctness / scalability</b>。</td>
+  <td>后台重综合：把一条「你计划 8 月去马来西亚」在月份过去之后<b>改写成已发生</b>。官方三个指标：事实召回 41.5% → 82.8%、偏好遵循 31.4% → 71.3%、随时间保持正确 9.4% → 75.1%。</td>
+  <td><b>memory summary 页</b>（顶部标"最后更新于 N 小时前"）+ <b>书籍图标溯源</b>（点开看这条回答用了哪几条记忆）+ 高亮做定点更正 + 「别再提这个」——<b>不删除信息</b>。⚠️ 实测反例：ZDNet 记者的 memory 里出现了<b>它从没做过的事</b>。</td>
+  <td class="cite">openai.com 官方<br>+ ZDNET 实测</td>
+</tr>
+
+<tr>
+  <td class="mono">Claude Dreams<br>（托管代理）</td>
+  <td><b>异步 job</b>，显式创建（可定时可手动）。输入 = <b>一个已有 memory store + 1~100 个历史会话</b>；产出 = <b>另一个全新的 store</b>。</td>
+  <td>合并重复 + <b>用最新值替换过期/矛盾项</b> + 浮现跨会话的新洞见。用户自选控制度：「dreaming can update memory automatically, or <b>you can review changes before they land</b>」。</td>
+  <td><b>本表里最干净的原语</b>：<b>「The input store is never modified, so you can review the output and discard it if you don't like the result.」</b> 能力边界同样关键：<b>它是 synthesis pass 不是 editor</b> —— 逐行指令「generally produce no change」。</td>
+  <td class="cite">platform.claude.com<br>managed-agents/dreams</td>
+</tr>
+
+<tr>
+  <td class="mono">Claude Platform<br>Memory Stores</td>
+  <td>agent 用标准工具集读写挂在 <code>/mnt/memory/</code> 的 store；<b>挂载点自己声明 <code>read_only</code> / <code>read_write</code>，由文件系统层强制</b>（写只读挂载直接失败）。挂载说明自动进系统提示词。</td>
+  <td>每次变更产生<b>不可变的 memory version</b>（<code>memver_...</code>），版本<b>属于 store 而非单条记忆</b> ⇒ <b>审计链覆盖已被删除的记忆</b>，保留 30 天。</td>
+  <td>List / Retrieve / <b>Update 带 <code>content_sha256</code> 乐观并发前置</b>（哈希不符就重读重试）· Delete · 版本端点审计「谁在何时改了哪一条」· <code>redact</code> 擦掉敏感内容。</td>
+  <td class="cite">platform.claude.com<br>managed-agents/memory</td>
+</tr>
+
+<tr>
+  <td class="mono">Claude Code<br>自动记忆</td>
+  <td>agent 自己在会话中写（"Saved N memories"）。<b>无审批</b>，但产物是<b>明文 md，随时可读可改可删</b>。</td>
+  <td><b>写入时给 frontmatter 打一个 <code>modified</code> ISO 时间戳</b> —— 官方原话：「shows how current the fact is, both to you and to Claude when it reads the memory back」。<b>陈旧度是文件自带属性，零基础设施。</b></td>
+  <td><code>/memory</code> 浏览并打开系统编辑器改 · <code>/context</code> 看这轮载入了哪些文件 · <code>InstructionsLoaded</code> hook 记录载入原因。<b>最硬的一条口径</b>：「CLAUDE.md content… <b>there's no guarantee of strict compliance</b>」⇒「若这条指令必须在某个时机执行，<b>写成一个 hook</b>。Hooks 在固定生命周期事件上执行，<b>不论模型决定做什么都会生效</b>」。</td>
+  <td class="cite">docs.claude.com<br>claude-code/memory</td>
+</tr>
+
+<tr>
+  <td class="mono">Letta / MemGPT</td>
+  <td><b>agent 自己</b>在正常循环里用工具改（<code>core_memory_append</code> / <code>core_memory_replace</code>）。<b>无审批</b>。内存块可跨 agent 共享。</td>
+  <td>三层层级（core 常驻提示词 / recall 历史可搜 / archival 长期向量库）+ <b>sleep-time compute</b>：空闲时另起后台 agent 重整。官方报：同等精度省约 5 倍测试期算力。</td>
+  <td>ADE 可视化检视与编辑内存块。⚠️ 官方承认<b>质量取决于模型编辑得好不好</b>；且 Letta <b>持有 agent 循环</b>，迁移 = 重写 agent。</td>
+  <td class="cite">letta 文档<br>+ arXiv:2504.13171</td>
+</tr>
+
+<tr>
+  <td class="mono">Mem0</td>
+  <td>管线（不是 agent）两阶段写：<b>Extraction</b>（抽候选事实）→ <b>Update</b>（与已有记忆比对）。<b>无审批</b>。写入必须带作用域键：<code>user_id / agent_id / run_id / app_id</code>。</td>
+  <td><b>写入即消解冲突</b>：逐个候选用 LLM 判定 <b>ADD / UPDATE / DELETE / NOOP</b> —— 「矛盾时更新旧事实而不是存一份重复」。官方给的失败画像很直白：50 条时矛盾罕见、5000 条时<b>"最后写的赢"是抛硬币</b>。</td>
+  <td>管理面板（OpenMemory）逐条查。<b>更强的是它"为什么文件不行"的论证</b>：文件式记忆有 <b>lost update</b>（无事务无锁）、<b>无冲突消解</b>、<b>无多租户</b> —— 并点名 Claude Code 的 <code>CLAUDE.md</code> 有<b>带复现步骤的损坏 issue</b>（二进制混入、写到一半被截断）。</td>
+  <td class="cite">docs.mem0.ai<br>+ mem0.ai/blog</td>
+</tr>
+
+<tr>
+  <td class="mono">Zep / Graphiti</td>
+  <td>管线持续摄入 <b>episode</b>（一次对话轮 / 一条 JSON / 一份文档），每个 episode <b>原样留档当 provenance</b>，再抽实体与事实。</td>
+  <td><b>双时态 + 标记而非删除</b>（形式化最彻底）：每条事实四个时间戳 —— 世界侧 <code>valid_at / invalid_at</code>、系统侧 <code>created_at / expired_at</code>。被取代的事实<b>写 <code>invalid_at</code> 关窗，不删</b>。官方对"为什么不删"的表述：删掉就丢了时间旅行查询、审计链、以及事后撤销能力。</td>
+  <td><b>provenance 回到源 episode</b>（每个事实可追到它从哪来）· 检索时尊重 validity 窗口 ⇒ <b>不可能把过期事实当当前事实返回</b>。⚠️ 代价明写：每位跑图库或向量库、每次写入可能触发多次 LLM 调用。</td>
+  <td class="cite">getzep.com<br>+ arXiv:2501.13956</td>
+</tr>
+
+<tr>
+  <td class="mono">Notion 官方<br>知识库指南</td>
+  <td><b>人（SME）</b>写，定期复核批准。<b>人工批准是流程的锚</b>。</td>
+  <td><b>verified 属性 + 过期通知</b>：内容快到期的<b>通知对应的 SME</b>；admin view 用筛选把过时内容挑出来。官方用园艺比喻：「把 wiki 当花园打理」。</td>
+  <td>定期复核 · 单一数据库集中存放防信息蔓延 · 反馈库 + 页面分析看哪些内容真被用。</td>
+  <td class="cite">notion.com/help/guides<br>ai-powered-knowledge-hubs</td>
+</tr>
+
+<tr>
+  <td class="mono">个人知识库实践<br>（Obsidian + Claude Code）</td>
+  <td>AI 读原始资料提取事实写入结构化笔记 —— <b>但规则先写进 <code>CLAUDE.md</code> 划边界</b>：不直接删文件、图片统一存放、不破坏 frontmatter。</td>
+  <td>三流程循环：<b>收录 / 查问 / 体检</b>。体检做<b>矛盾检测</b>与「更新旧结论」，不是重新写一遍。</td>
+  <td><b>「体检时 AI 不擅自删除，先出报告人工确认」</b> —— 与 Claude Dreams 的「输入永不被改」是同一条判据的两种实现。</td>
+  <td class="cite">xhh.club 实践长文<br>（2026）</td>
+</tr>
+</table>
+</div>
+
+<details class="fold"><summary>展开 · 上表按"结论强度"重排（哪几条能直接当判据用）</summary>
+<ul class="tight">
+  <li><b>可直接当判据的（官方文档原文，强）</b>：Claude Dreams「输入永不被修改」+「是 synthesis pass 不是 editor」· Claude Code「要强制就写 hook」+「<code>modified</code> 时间戳」· Claude Platform「挂载点声明 read_only/read_write」+「<code>content_sha256</code> 乐观并发」· Windsurf「可靠知识写 Rules 不要依赖 Memories」· Graphiti「invalidate 不 delete」· Notion「过期通知发给责任人」。</li>
+  <li><b>要打折看的（厂商自选基准，中）</b>：OpenAI 的三组提升数字 · Zep 的 DMR/LongMemEval 分数 · Letta 的省算力倍数 —— <b>结构性结论可信、具体倍数不可当承诺</b>。</li>
+  <li><b>只能当"存在反例"用的（弱）</b>：ZDNet 记者的 ChatGPT 记忆幻觉（后台合成<b>会写错</b>）· Cursor 那篇是第三方博客而非官方 · 个人知识库实践是单人经验。</li>
+</ul>
+</details>
+
+<details class="fold"><summary>展开 · flowix（上一轮问过的那条）</summary>
+<p class="lead">结论不变：<b>不做 GUI 笔记应用，可抄的是 round-trip</b>。flowix（<code>text2future/flowix</code>，Tauri 2 + TS + Rust，MIT）的形态是 <b>plain md 存磁盘 + MCP/CLI 让 agent 与人在同一篇文件上往返</b>。它与本节十家指向同一件事：<b>笔记的价值不在编辑器里，在于"人与 agent 改的是同一份真实文件"</b>。本版要复制的正是这一点（读写同一份 <code>.md</code>），而不是它的界面。</p>
+</details>
+
+<h3>B · 外部反复出现的六条（每条都能指回上表某一行）</h3>
+
+<div class="flow">
+  <div class="lyr"><div class="name">① 写入按后果分档</div><div class="code">不是按技术难度分档。人写的不设闸门（Windsurf 的 Rules / Claude Code 的 CLAUDE.md）；前台 agent 写的要么当场批（Cursor）要么落在明文可改处；<b>后台 agent 写的必须在隔离区产出</b>（Claude Dreams 的新 store / ChatGPT 的 summary）。</div><div class="st"><span class="chip c-ok">三家一致</span></div></div>
+  <div class="lyr"><div class="name">② 审核面要么带内、要么一眼可扫</div><div class="code">带内 = 写进文件自己（Claude Code 的 <code>modified</code> 时间戳）；一眼可扫 = 单独一页摘要（ChatGPT 的 memory summary）。<b>藏在第三层菜单里的审核面 = 没有审核面。</b></div><div class="st"><span class="chip c-ok">两家一致</span></div></div>
+  <div class="lyr"><div class="name">③ 零先例自动删除</div><div class="code">Graphiti 写 <code>invalid_at</code> 关窗不删 · ChatGPT「别再提这个」是软失效不删信息 · Notion 通知 SME 去改不替人删。<b>"删"这件事在十家里没有一次是自动发生的。</b></div><div class="st"><span class="chip c-ok">十家零反例</span></div></div>
+  <div class="lyr"><div class="name">④ 自动写入 ≠ 可靠载体</div><div class="code">Windsurf 官方推荐改用 Rules · Cursor「违反会被 code review 挑出来的就该是 rule」· Claude Code「CLAUDE.md 不保证遵守，<b>要强制就写 hook</b>」。⇒ <b>自动生成的知识只配当"提示"，不配当"约束"</b>；约束必须落在不靠模型自觉的载体上。</div><div class="st"><span class="chip c-bad">三家一致反对</span></div></div>
+  <div class="lyr"><div class="name">⑤ 后台整理只做"综合"</div><div class="code">Claude Dreams 的 pipeline 是 <b>synthesis pass 不是 editor</b>：能合并/替换/浮现，<b>做不了逐行手术</b>，<code>instructions</code> 只能给高层方向。⇒ 产出粒度只能是「整篇重写」或「新增一篇」，UI 因此必须是<b>并排 diff</b>。</div><div class="st"><span class="chip c-info">官方原文明写</span></div></div>
+  <div class="lyr off"><div class="name">⑥ 并发写会坏文件</div><div class="code">Mem0 点名 <code>CLAUDE.md</code> 的损坏 issue（有复现步骤）。<b>App 一旦允许写盘，就必须有乐观并发前置</b>（读时取哈希、写时带哈希）—— 或把写的入口收敛到单一写者。</div><div class="st"><span class="chip c-warn">有实录反例</span></div></div>
+</div>
+
+<h3>C · MangoX 现状（全部为源码定位，可复查）</h3>
+<div class="tw">
+<table>
+<tr><th>要面</th><th>现状</th><th>出处</th></tr>
+<tr><td class="mono">知识库的写能力</td><td><b>结构上不存在</b>。六字段里（<code>id / path / description / enabled / isBuiltin / createdAt / updatedAt</code>）没有任何写入开关；文件头注释明写「App <b>只读不写</b>, 只做两件事」。</td><td class="cite">Models/KnowledgeBase.swift:6-8, 18-38</td></tr>
+<tr><td class="mono">扫描结果的时间</td><td><code>KnowledgeBaseDoc</code> 只有 <code>relativePath</code> + <code>depth</code> <b>两项</b>。扫描只读目录项、不读正文（这是它成本与文件总大小无关的原因），<b>但连 <code>contentModificationDate</code> 也没取</b> —— 遍历时那次 <code>attributesOfItem</code> 已经在手上。</td><td class="cite">Models/KnowledgeBase.swift:56-60, 90-113</td></tr>
+<tr><td class="mono"><b>扫描契约的排除名单</b><br>（决定提案能否落盘）</td><td>只挡 <code>hasPrefix(".")</code> 与 <code>excludedNames = {node_modules, .build, DerivedData}</code>。<b><code>_proposals</code> 不在其中</b>（下划线不是点，也不在名单里）⇒ 落盘的提案会被当笔记扫进索引。</td><td class="cite">Models/KnowledgeBase.swift:65-78, 97</td></tr>
+<tr><td class="mono">扫描器不跟符号链接</td><td>按 <code>attributesOfItem[.type]</code> 显式排除 <code>.typeSymbolicLink</code> —— 防环 + 防越界。<b>推论：软链到库外的目录不会进索引。</b></td><td class="cite">Models/KnowledgeBase.swift:99-101</td></tr>
+<tr><td class="mono">注入的是索引</td><td><code>indexBlock</code> 产出「<code>[知识库] 名 / 路径 / 说明 / 文件 (N, 深度≤3): /   a.md …</code>」—— <b>全库只给文件名清单</b>，正文要 agent 自己按路径 <code>read</code>。</td><td class="cite">Models/KnowledgeBase.swift:127-149</td></tr>
+<tr><td class="mono">注入 token 与段头</td><td><code>token = "[知识库]"</code> · <code>segmentHeader</code> = 一句「以下是挂载的知识库…」；两者都是 <b>prompt 契约字节，恒中文、不许本地化</b>。</td><td class="cite">Models/KnowledgeBase.swift:80-84</td></tr>
+<tr><td class="mono">第三区的区头与入口</td><td>区头 = <code>L("知识库")</code>；入口三处文案 = <code>L("挂载目录…")</code> / <code>L("挂载知识库")</code> / <code>L("挂载")</code>。</td><td class="cite">KnowledgeView.swift:435, 558, 1013, 1065</td></tr>
+<tr><td class="mono">内置库机制</td><td><code>builtin:l1-global</code> / <code>builtin:l1-project:&lt;id&gt;</code>；<code>allKnowledgeBases = knowledgeBases + builtinKnowledgeBases</code>。<b>实测空转</b>：L1 落点 <code>agent/memory/</code> 是空的，因为 <code>layer</code> 缺省 <code>.always</code> ⇒ 没有 <code>ondemand</code> 条目 ⇒ 无文件可落。<b>⇒ ✅ P15.5 已整条退休</b>（它正是左列多出那三行「按需知识 · 全局 / xx（按需知识）」的来源，破门 1「区内只有笔记」；依据与代价见 §03 与 §05）。</td><td class="cite">KnowledgeStore.swift:125-129 · 实测 §02 D · 退休记录 §03</td></tr>
+<tr><td class="mono">条目侧的闸门</td><td><code>KnowledgeStatus</code> = <code>pending</code>（永不注入）/ <code>active</code>，与 <code>enabled</code> <b>正交</b>。左列把待审候选排最前。<b>闸门齐备，但没有任何东西能产出 pending。</b></td><td class="cite">KnowledgeModels.swift:20-25 · KnowledgeView.swift:425-428</td></tr>
+<tr><td class="mono">编辑器只有 3 个旋钮</td><td>作用域 / 标题 / 正文。<code>kind</code> / <code>layer</code> / <code>priority</code> / <code>key</code> / <code>trigger</code> / <code>counterfactual</code> <b>六列保留、编辑器不再写</b>。撤下的判据在代码里：「要加回任何一个输入口之前, 先回答"用户凭什么知道该选哪一档"」。</td><td class="cite">KnowledgeView.swift:1117-1148 · KnowledgeModels.swift:104-134</td></tr>
+<tr><td class="mono"><b>已有的写盘纪律</b><br>（本版要先例可抄）</td><td>L1 落盘已经在做三件正确的事：<b>① 内容相同就不写</b>（「避免每次组装都磨 mtime —— 备份/同步工具会因此反复嘬盘」）<b>② 只删"带自己标记"的文件</b>（「没有标记 = 用户的文件, 不动」）<b>③ 标记判定只读开头 400 字符</b>。⇒ <b>App 不是"完全不写盘"，而是"只碰自己写过的东西"。</b></td><td class="cite">State/KnowledgeStore.swift:1177-1178, 1184-1188, 1194-1198</td></tr>
+<tr><td class="mono">注入段序</td><td><b>persona 段 &lt; 稳定段 &lt; 索引段 &lt; 易变段</b>，守卫 17 直接比偏移；persona 段恒在偏移 0、不参与 priority 降级。</td><td class="cite">KnowledgeStore.swift:443-450, 484-547</td></tr>
+<tr><td class="mono">三个载体的类型</td><td><code>PersonaPackEntry</code>（<b>无</b>审核态 / 启停 / 作用域，只读）与 <code>KnowledgeItem</code>（<b>全套</b> DB 语义）<b>只在呈现层合流，数据层不混成同一类型</b>。</td><td class="cite">Models/PersonaPack.swift:15-22</td></tr>
+</table>
+</div>
+
+<h3>D · 关键实测（2026-10-12，全部只读）</h3>
+
+<pre><span class="c"># ① 三个载体的实际产出 —— 三区里到底有多少活的</span>
+DB="file:$HOME/.mangox/mangox.db?mode=ro"
+sqlite3 "$DB" "SELECT COUNT(*) FROM knowledge_items;"                       <span class="k">→ 1</span>
+sqlite3 "$DB" "SELECT COUNT(*) FROM knowledge_items WHERE enabled=1;"        <span class="k">→ 0</span>
+sqlite3 "$DB" "SELECT COUNT(*) FROM knowledge_items WHERE source='session';" <span class="k">→ 0</span>
+sqlite3 "$DB" "SELECT COUNT(*) FROM knowledge_items WHERE status='pending';" <span class="k">→ 0</span>
+sqlite3 "$DB" "SELECT COUNT(*) FROM knowledge_bases;"                        <span class="k">→ 1</span>
+sqlite3 "$DB" "SELECT COUNT(*) FROM knowledge_bases WHERE enabled=1;"         <span class="k">→ 0</span>
+
+<span class="c"># ② 原材料 —— 对话已经堆在那儿了</span>
+ls ~/.mangox/pi-sessions/*.jsonl | wc -l      <span class="k">→ 885</span>
+du -sh ~/.mangox/pi-sessions                  <span class="k">→ 3.5M</span>
+ls ~/.mangox/agent/*.md | wc -l               <span class="k">→ 3</span>
+cat ~/.mangox/agent/*.md | wc -c              <span class="k">→ 11278</span>
+ls ~/.mangox/agent/memory/*.md 2>/dev/null | wc -l   <span class="k">→ 0</span>（L1 落点，空）
+
+<span class="c"># ③ 腐烂的时间证据 —— 唯一那份笔记</span>
+grep -o 'updated: [0-9-]*' ~/.mangox/kb/projects/PROJECTS.md   <span class="k">→ updated: 2026-09-22</span>
+stat -f "%Sm" -t "%Y-%m-%d" ~/.mangox/kb/projects/PROJECTS.md  <span class="k">→ 2026-09-22</span>
+date +%Y-%m-%d                                                 <span class="k">→ 2026-10-12（相距 20 天）</span></pre>
+
+<div class="call warn">
+  <div class="lbl">⚠️ ③ 这条读数已不可复现（2026-10-12 11:00）</div>
+  <p>③ 读的那份 <code>~/.mangox/kb/projects/PROJECTS.md</code> <b>已按 §04 A 移除</b> ⇒ 那两行命令现在会报 <code>No such file or directory</code>。上面记的是<b>移除前的实测值，保留作为立项依据</b>；千万别再把它当「现在跑得出来」的判据。①② 两组（会话数 / 常驻 md）不受影响。</p>
+</div>
+
+<div class="call warn">
+  <div class="lbl">这张对照表是本次立项的起点</div>
+  <p><b>一边：885 个会话 / 3.5 MB / 20 天前的笔记。</b><b>另一边：1 条被关掉的条目 + 1 个被停用的库 + 3 份手写 md。</b>两者之间的落差不是"通道不够多"—— 通道有三个。<b>落差在于：通道的出口没有连接任何有活性的入口。</b>而这恰好解释了 P11.3 为什么该冻结：一个"该归档哪一条"的治理问题，在条目总量为 <b>1</b> 的时候不成立。</p>
+</div>
+
+<div class="call">
+  <div class="lbl">唯一那份笔记的自述（原文摘录）</div>
+  <p><code>PROJECTS.md</code> 里写着：<b>「里面的状态<b>会过期</b>，而过期的内容每轮都在场是有害的（会被当成「当下的事实」）」</b>、<b>「更新它的时候顺手改 <code>updated:</code>，好知道它有多旧」</b>。<br>
+  ⇒ 这两句说明<b>写它的人已经识别出了腐烂问题，并且自造了一套防腐协议</b>（手工维护 <code>updated:</code>）。协议失败的原因不在协议本身，在于<b>没有任何东西读那个字段</b> —— 没有消费者，就没有失约的代价。这是 P15 要补的那一层，也是本版<b>选 mtime 当权威而不读那个 <code>updated:</code></b> 的直接依据（§03）。⚠️ <b>这份文件本版按 §04 A 移除</b> —— 引用它是因为这段自述是设计依据，不是因为它还在。</p>
+</div>
+
+<h3>E · 能变红的判据（三条；起手全红，①② 已随 P15.1 变绿）</h3>
+
+<pre><span class="c"># ① 两个固定根有没有存在 —— 今天 0</span>
+grep -rc 'note:global' mangox/ | grep -v ':0$'
+
+<span class="c"># ② 扫描结果有没有时间 —— 今天 0</span>
+grep -c modifiedAt mangox/Models/KnowledgeBase.swift
+
+<span class="c"># ③ 产出有没有真的长出来 —— 今天 0（这一条是 P15 成败的总判据）</span>
+sqlite3 "file:$HOME/.mangox/mangox.db?mode=ro" \
+  "SELECT COUNT(*) FROM knowledge_items WHERE enabled=1;"
+ls ~/.mangox/note/*.md 2>/dev/null | wc -l</pre>
+
+<p><b>这三条判据起手全是 <code>0</code> —— 它们当时是红的，这正是 P15 存在的理由。</b>期望值全部<b>可机检</b>：①② <b>已随 P15.1 成立</b>（实测 <code>1</code> / <code>6</code>）；③ 与 P11.3 的解冻条件同源（启用条目 <code>≥ 20</code>、<code>source='session'</code> <code>≥ 5</code>），是<b>「越用越懂你」这句话唯一的量化口径</b>。<b>③ 仍红</b> —— 它的达成需要真实使用积累 —— <b>P15 能保证的是"通道通了、信号有了"，不能保证"数会自己涨"。</b></p>
+
+<h2><span class="n">03</span>路径与方案<span class="en">APPROACH</span></h2>
+
+<div class="call bad">
+  <div class="lbl">本版的诚实前提</div>
+  <p>这是<b>设计文档，不是实施方案</b>。五道门已定（§04）。<b>批 1（P15.1）、批 2（P15.2）、批 3（P15.3）、批 4（P15.4）已全部施工</b>（每批先给修改面、看新页面长什么样，再动手）—— §03 改动面表的「批」列即当前进度；§04 A 那处已<b>执行</b>（存量移除，10-12 11:00）；dream 的两处也已定（触发方式 / <code>cwd</code>） —— <b>本文没有悬空项。</b>⚠️ 施工完成后<b>仍未提交</b>：工作区在 <code>cc0e111</code> 之上（见 §04 门禁块的口径说明）。</p>
+</div>
+
+<h3>目标形态一：三区最终形态</h3>
+
+<div class="flow">
+  <div class="lyr"><div class="name">常驻区</div><div class="code">persona pack 三份 md（<code>~/.mangox/agent/{SOUL,RULES,USER}.md</code>）+ DB 稳定段条目（<code>kind ∈ {persona,user,rule}</code>）。手写、全 <code>always</code>、进 prompt 最前且不参与降级。</div><div class="st"><span class="chip c-mute">本版不动</span></div></div>
+  <div class="arrowdown">▼</div>
+  <div class="lyr"><div class="name">自定义区</div><div class="code">DB <code>knowledge_items</code>：<b>手动注入的条目</b>，编辑器 3 旋钮（作用域 / 标题 / 正文）。数据模型本版不动 —— 缺的是上游（<code>source='session'</code> = 0），不是缺闸门。</div><div class="st"><span class="chip c-warn">不动 · 闸门空转</span></div></div>
+  <div class="arrowdown">▼</div>
+  <div class="lyr"><div class="name">笔记区</div><div class="code">（原知识库区，<b>整个重构</b>）<b>两个固定根</b>：<code>~/.mangox/note/</code>（全局）· <code>&lt;项目&gt;/.mangox/note/</code>（项目）。<b>区里只有一种实体 = 笔记（一文件一篇）</b>，<b>不存在知识条目</b>；归属由位置决定。</div><div class="st"><span class="chip c-acc">本版主战场</span><span class="chip c-ok">P15.2 起可写</span></div></div>
+  <div class="arrowdown">▼</div>
+  <div class="lyr off"><div class="name">dream job</div><div class="code">横跨三区：<b>输入 = 会话 + 现有笔记，产出 = 提案（落 DB 表），输入永不被改写</b>。自带阀门 = 提案经人采纳才落地。<b>第一版就是完整形态</b>：<b>会话 ⇒ 浮现新洞见</b> + <b>笔记之间 ⇒ 合并重复 / 替换过期值</b>，三件事一起上、不拆。承载 = 复用现成的 <code>Scheduled</code> 任务，不造新机制。触发 = <b><code>cron</code> + 手动</b>（<code>cron</code> 那一路自带开关：关掉只停定时、手动仍可跑）。</div><div class="st"><span class="chip c-info">新增 · 第一版即完整形态</span></div></div>
+</div>
+
+<h3>目标形态二：笔记区的结构（目录 / 索引 / 提案各在哪）</h3>
+
+<pre><span class="c"># 两个固定根（不再由用户填路径）</span>
+~/.mangox/note/                    <span class="c">← 全局笔记（跟人走）</span>
+    PROJECTS.md                    <span class="c">← 一文件 = 一篇笔记；允许子目录（复用 maxDepth = 3）</span>
+    pi-engine.md
+    <span class="c">… 这里只会有 .md / .txt / .html —— 沿用现有扫描白名单</span>
+
+&lt;项目目录&gt;/.mangox/note/           <span class="c">← 项目笔记（跟项目走）</span>
+    this-project.md
+
+<span class="c"># 提案不在这里 —— 它在 DB 表里（理由见下方「为什么不是别的做法」第 1 条）</span>
+note_proposals(id, root_id, target_path, base_hash, content, reason, sources, created_at, status, decided_at)   <span class="c">← P15.3 落地 · P15.4 补 decided_at（"何时拍的板"）</span>
+note_revisions(id, root_id, path, content, sha256, written_at, origin)   <span class="c">← P15.2 落地；<b>P15.4 改了记账时机</b>（每写下一版记一条 ⇒ 当前版才查得到作者）；变更史与来源标记均已显示</span></pre>
+
+<p><b>三个"位置"决定的三件事</b>：</p>
+<div class="tw">
+<table>
+<tr><th>决定</th><th>怎么落</th><th>依据</th></tr>
+<tr><td><b>归属</b>（门 3）</td><td>写进全局根 = 全局；写进项目根 = 项目。<b>不需要任何附加维度</b>。</td><td class="cite">boss 门 1 的回答 · 同 Windsurf 的 workspace 作用域</td></tr>
+<tr><td><b>能不能写</b>（门 1）</td><td>两个根都可写 —— <b>目录固定 ⇒ 不存在"别人的仓库"</b>。<code>writePolicy</code> 整条取消。</td><td class="cite">boss 门 1 的回答 · 原方案依据 <code>KnowledgeBase.swift:6-8</code></td></tr>
+<tr><td><b>根在不在</b></td><td>目录不存在 ⇒ 入口<b>就地建目录</b>（不弹错、不判空）。</td><td class="cite">同常驻区 folder 按钮：<b>藏起来的入口 = 没有入口</b></td></tr>
+</table>
+</div>
+
+<h3>目标形态三：UI 原型</h3>
+
+<div class="mocks">
+
+  <div class="mock">
+    <div class="cap">① 笔记区 —— 两个根、一文件一篇、陈旧度在行内（<b>P15.2 起可新建 / 改写 / 删除</b>；「来源」「变更史」两栏 <b>P15.4 已完成</b> —— ⚠️ 但<b>来源标记的落点与这张原型不同</b>：它在笔记本体的信息面上，<b>不逐行显示</b>，理由见下方注）</div>
+    <div class="win">
+      <div class="pane side">
+        <div class="pill">笔记</div>
+        <div class="row"><span class="lab">全局</span><span class="k">4 篇</span></div>
+        <div class="row on"><span class="lab">Mangopi CLI.md</span><span class="k">它攒的 · 20 天</span></div>
+        <div class="row"><span class="lab">pi-engine.md</span><span class="k">你写的</span></div>
+        <div class="row"><span class="lab">偏好与习惯.md</span><span class="k">你写的</span></div>
+        <div class="sep"></div>
+        <div class="row"><span class="lab">mangox（项目）</span><span class="k">2 篇</span></div>
+        <div class="row"><span class="lab">this-project.md</span><span class="k">今天</span></div>
+        <div class="sep"></div>
+        <div class="row"><span class="lab">＋ 新建笔记</span><span class="k">⌘N</span></div>
+      </div>
+      <div class="pane">
+        <div class="row"><span class="lab"><b>Mangopi CLI.md</b></span><span class="k">全局 · 它攒的 · 20 天未更新</span></div>
+        <div class="row"><span class="lab">头一行</span><span class="k">在推的项目与状态</span></div>
+        <div class="sep"></div>
+        <div class="row"><span class="lab">变更史</span><span class="k">2 条</span></div>
+        <div class="row on"><span class="lab">2026-10-12 dream 提案 · 3 类提案</span><span class="k">待你审</span></div>
+        <div class="row"><span class="lab">2026-09-22 你写入</span><span class="k">已生效</span></div>
+        <div class="sep"></div>
+        <div class="row"><span class="lab">在 Finder 中显示</span><span class="k">用默认应用打开</span></div>
+      </div>
+    </div>
+    <div class="note"><b>三件东西从"要点进去看"变成"一眼看得见"</b>：这个根属于谁（分组标题）、这篇多久没变（行尾天数）、它被谁改过（变更史）。陈旧天数<b>只在超过阈值（本版 7 天）时出现</b> —— 天天显示"1 天"是噪音；来源标记则 <b>P15.4 已做，但换了落点</b>：它在<b>笔记本体的信息面上</b>（<code>你写的</code> / <code>它攒的</code>），<b>不逐行显示</b> —— 判据要读**整篇**的 <code>sha256</code> 去版本史里认领那一条，而列表渲染路径每次重扫都要跑一遍；那是"成本与文件总大小无关"那条契约（<code>KnowledgeBase.swift:86</code>）不该被破的地方（§05 已登记）。这与恒定显示"命中 <code>—</code>"那种诚实占位不是一回事。<b>「挂载目录…」这个入口没有了</b> —— 路径不再由用户填，取而代之的是「＋ 新建笔记」。</div>
+  </div>
+
+  <div class="mock">
+    <div class="cap">② dream 提案卡 —— 会话 + 笔记进，三类提案出，输入永不被改写</div>
+    <div class="win">
+      <div class="pane">
+        <div class="pill">输入 · 会话 + 笔记（只读）</div>
+        <div class="row"><span class="lab"><b>会话</b> 885 份 · 本轮只读近 3 周</span><span class="k">pi-sessions</span></div>
+        <div class="row"><span class="lab"><b>Mangopi CLI.md</b> — v0.2 用 everything-is-plugin 重写，分 P0 → P3 过门禁</span><span class="k">09-22</span></div>
+        <div class="row"><span class="lab"><b>持久化选型.md</b> — 在评估 JSON vs SQLite</span><span class="k">09-30</span></div>
+      </div>
+      <div class="pane">
+        <div class="pill">提案 · note_proposals（待你拍）</div>
+        <div class="row on"><span class="lab">＋ 新洞见 · 「shell 的 grep 是 toybox，<code>\|</code> 静默返回空」—— 会话里复现 3 次、还没成篇</span><span class="k">增</span></div>
+        <div class="row on"><span class="lab">＝ 合并 · <b>Mangopi CLI.md</b> 与 <b>持久化选型.md</b> 是同一条线，并成一篇</span><span class="k">并</span></div>
+        <div class="row on"><span class="lab">↻ 替换 · 持久化「在评估」⇒「已定 · JSON」，旧值进变更史</span><span class="k">换</span></div>
+      </div>
+    </div>
+    <div class="note"><b>左半边永远只是看，右半边才是改。</b>第一版就同时出三类：<b>从会话里攒出新洞见</b>（增）、<b>跨笔记合并</b>（并）、<b>过期值替换</b>（换）—— 每条带动作标记与来源会话指针；底部是「整份采纳 / 丢弃 / 逐条看」。<b>提案没被采纳之前，磁盘上的笔记一个字节都没变</b> —— 这是 Claude Dreams 那条「输入永不被修改」在本地形态下的等价物。<b>这也正是 dream 自带阀门（门 4）的落地形状</b>：阀门 = 采纳这一步。</div>
+  </div>
+
+</div>
+
+<h3>目标形态四：消费面 —— 笔记怎么进 prompt、怎么被找到</h3>
+
+<p><b>这是补上的第四个面。</b>现状是：这一区进 prompt 的<b>只有文件名清单</b>（<code>indexBlock</code>，<code>Models/KnowledgeBase.swift:127-149</code>），<code>KnowledgeBaseDoc</code> 只有 <code>relativePath</code> + <code>depth</code>、<b>连 mtime 都没有</b>（<code>:56-60</code>），段头还写着「以下是<b>挂载</b>的知识库 (只给索引…)」（<code>:84</code>）—— 那是"外部只读资料"的语境，与"笔记"说反话。</p>
+
+<div class="grid g2">
+  <div class="v top"><div class="face"><b>三个载体进 prompt 的待遇，差别没人设计过</b><br>常驻区 = 全文注入、偏移 0、不降级；自定义区 <code>always</code> = 全文注入；<b>笔记区 = 只有文件名清单</b>；自定义区 <code>ondemand</code> = <b>连文件名都不给</b>（<code>KnowledgeStore.swift:468</code> 只计数）。⇒ 可发现性实际排序是 <code>always 条目 &gt; 笔记 &gt; ondemand 条目</code>，<b>这是三条独立代码路径的副产品</b>。</div><span class="chip c-bad">现状</span></div>
+  <div class="v top"><div class="face"><b>「使用」有四个消费者，此前只写了一个</b><br>① agent 的 prompt（注入）· ② agent 按需 <code>read</code>（已有，但<b>有效性完全依赖 ① 给的路标</b>）· ③ <b>dream 的下一轮输入</b>（"越用越懂你"飞轮的第一环）· ④ 人自己在界面看。</div><span class="chip c-warn">本版补</span></div>
+</div>
+
+<p><b>本版改的就一件事：索引块升级。从"文件名清单"变成"文件名 · 标题 · 一行摘要 · 陈旧标记"（<b>标题只在它跟文件名不同时才补</b> —— 相同就是一处零信息重复）。</b> ⚠️ <b>来源标记刻意不进索引块</b> —— 判「谁写的」要读**磁盘整篇的 <code>sha256</code>**，而索引块是每轮组装都要重算的东西 ⇒ 它进去就把"每轮成本与笔记总大小无关"这条契约破了（摘要那一次只读头 512 字节，已经是这条线上吃到极限的让步）。它的落点是<b>笔记本体的信息面</b>（P15.4 已做）。</p>
+
+<div class="grid g2">
+  <div>
+    <p><b>现在</b></p>
+    <pre>以下是挂载的知识库 (只给索引; 需要时用 read 工具按路径自行取用):
+[知识库] projects
+路径: /Users/moofs/.mangox/kb/projects
+说明: 各项目的当前状态（会过期）
+文件 (1, 深度≤3):
+  PROJECTS.md</pre>
+  </div>
+  <div>
+    <p><b>本版（同样这几篇）</b></p>
+    <pre>以下是你的笔记 (只给索引与摘要; 需要正文时用 read 工具按路径取):
+[笔记] 全局笔记
+路径: ~/.mangox/note
+说明: 全局笔记 (跟人走): 与具体项目无关的偏好、习惯与结论
+文件 (3, 深度≤3):
+  Mangopi CLI.md · 在推的项目与状态 · 20 天未更新
+  部署备忘.md · 服务器备忘 · 服务器与端口速查
+  pi 契约缺口.md · docs/pi-contract 至今没落盘</pre>
+  </div>
+</div>
+
+<p>⚠️ <b>标题列只在 frontmatter <code>title:</code> 与文件名不同时才补</b> —— 相同就是一处零信息重复，不补。上例第 2 行有 <code>title:</code>、第 1 / 3 行没有 ⇒ 只有它多出一列。判等与「<code>title</code> 缺省回落值」<b>同源</b>（都走 <code>KnowledgeBaseScan.fileStem</code> = 文件名去扩展名）：判据若改成"连扩展名一起比"，冒烟 <code>T8c</code> 的<b>反例</b>那一条立刻红。</p>
+
+<div class="call">
+  <div class="lbl">摘要从哪来（取，不是生成）</div>
+  <p>顺序：frontmatter <code>summary:</code> → 否则<b>正文首行</b> → 否则留空。<b>读摘要只读文件头 512 字节</b>，沿用 <code>isOurL1File</code> 那条「只读开头 400 字符」的既有形状（<code>KnowledgeStore.swift:1194-1198</code>），不新发明机制。<br>
+  ⚠️ 这<b>破了 <code>KnowledgeBase.swift:86</code> 那条「只读目录项、不读文件正文 ⇒ 成本与文件总大小无关」的契约</b> —— 代价换到的是"agent 能靠一句话判断该不该读"。登记在 §05。</p>
+</div>
+
+<div class="call bad">
+  <div class="lbl">红线 —— 每轮算出来的东西，只能进易变段</div>
+  <p>段序（persona &lt; 稳定段 &lt; 索引段 &lt; 易变段）是<b>结构性不变量</b>，<code>State/KnowledgeStore.swift:443-450</code> 明说前缀稳定性是 cache 的前提，<b>守卫 17 直接比偏移</b>。而任何"每轮算出来"的东西（自动检索的 top-k、LLM 每轮打的相关度分）<b>每轮都不同</b> ⇒ <b>它只能进易变段</b>。<br>
+  ⚠️ <b>这条最容易被将来的人破坏，而且破坏时门禁全绿</b>：守卫 17 比的是<b>偏移</b>，检索产物塞进索引段 ⇒ 段的位置没变、偏移没变，<b>但同一位置上的字节每轮在变</b> —— 结构性判据抓不住"结构没变、内容在变"这种失效。<b>P15.1 已补（冒烟 T-KB 内容层①②）：段内字节 == 纯函数重算 · 连续两次组装逐字节相同 —— 两条都比字节、不比偏移。</b></p>
+</div>
+
+<div class="grid g2">
+  <div class="v top"><div class="face"><b>做：<code>note_search</code> 工具（朴素子串）</b><br>agent 主动调，产物进<b>会话消息流</b> —— <b>完全不碰注入块、不动段序、不破前缀</b>。而且命中是<b>确定性、可解释、能写断言的</b>（"输入 X ⇒ 必须命中 <code>Y.md</code>"）—— 这是 LLM 打分给不了的性质。</div><span class="chip c-ok">本版做</span></div>
+  <div class="v top"><div class="face"><b>不做：每轮自动检索 / LLM 每轮打相关度分</b><br>破前缀（只能进易变段）+ 命中靠用户措辞 + 多一次模型调用。LLM 每轮打分还有第三个问题：<b>同样输入可能给不同分</b>，比 grep 更不稳。</div><span class="chip c-bad">本版不做</span></div>
+</div>
+
+<p><b>「LLM 打分」不是不做，是换位置、换指标。</b>相关度（query-relative）每轮变；<b>重要性（query-free）可以离线一次算清、固化进文件 / DB</b> —— 所以打分归 <code>dream</code>，它产出的不是"这条和当前提问多相关"，而是「<b>这篇该不该常驻</b>」。<b>相关度这一环有个零成本的替代</b>：摘要既然全在索引里，<b>主模型读 prompt 的那一刻本来就在做 rerank</b> —— 不用第二次调用、不用固化分数、不破前缀。</p>
+
+<div class="call ok">
+  <div class="lbl">来源标记不需要额外检测机制</div>
+  <p><b>dream 的写入必经 App</b> ⇒ App 有完整记录（落 <code>note_revisions.origin</code>）；反过来，<b>凡不在记录里的就归「你写的」</b> —— 哪怕你直接在外部编辑器往 <code>~/.mangox/note/</code> 扔一个 <code>.md</code>，也能被正确归类。<b>不用去猜文件是谁写的，也不用引入任何检测。</b>这也是"用户能新建笔记"（门 1 的「可写」保持原样）与"来源可辨"这两件事能同时成立的原因。<br>
+  <b>P15.4 施工时又把判据收紧了一步</b>：不是"读最新一条的 <code>origin</code>"，而是<b>拿磁盘上的 <code>sha256</code> 去版本史里认领那一条</b> —— 认到就用它的 <code>origin</code>（精确），认不到才回落 <code>.human</code>。差别在"最后写下的那一版<b>没被记过</b>"这个情形：<b>「最新一条」会说谎，<code>sha256</code> 认领不会</b>。落点是笔记本体的信息面（列表行不做，理由见 §05）。</p>
+</div>
+
+<h3>改动面（逐文件逐行）</h3>
+
+<div class="tw">
+<table>
+<tr><th>文件:行号</th><th>现状</th><th>拟改成什么</th><th>批</th></tr>
+
+<tr><td class="mono">Models/KnowledgeBase.swift:18-38<span class="sub">KnowledgeBase</span></td>
+<td>六字段，<code>path</code> / <code>description</code> 由用户填（描述必填、≤200 字，<code>KnowledgeBaseRejection.emptyDescription</code> / <code>descriptionTooLong</code> 就是为它俩设的）。</td>
+<td><b>两个根作为派生实例</b>：<code>id = "note:global"</code> / <code>"note:project:&lt;projectId&gt;"</code>（沿用现有 <code>builtin:l1-global</code> 的 id 形状），<code>path</code> 由 scope 派生、<code>description</code> 由 App 写死两句。<b>用户不再填路径与描述</b> ⇒ 「能由产品回答的问题，不要拿去问用户」。<code>enabled</code> 保留（一个根一个停用开关）。<span class="chip c-warn">P15.1</span></td>
+<td class="num">1</td></tr>
+
+<tr><td class="mono">Models/KnowledgeBase.swift:56-60<span class="sub">KnowledgeBaseDoc</span></td>
+<td>只有 <code>relativePath</code> + <code>depth</code> 两项。</td>
+<td>加 <code>modifiedAt: Date</code> · <code>byteCount: Int</code> · <code>title: String</code>（title 取 frontmatter 的可选 <code>title</code>，缺省回落"文件名去扩展名"）。遍历时那次 <code>attributesOfItem</code> 已在手，取时间与大小<b>零额外 IO</b>；仍不读正文。<span class="chip c-warn">P15.1</span></td>
+<td class="num">1</td></tr>
+
+<tr><td class="mono">Models/KnowledgeBase.swift:65-78<span class="sub">KnowledgeBaseScan 常量区</span></td>
+<td>四个常量：<code>maxDepth</code> / <code>extensions</code> / <code>excludedNames</code> / <code>maxLinesPerBase</code>·<code>maxCharsPerBase</code>。</td>
+<td>加 <code>staleAfterDays = 7</code>（<b>只在这里定义一次</b>，UI 与索引都读它 —— 同 <code>maxDepth</code> 的写法）。<span class="chip c-warn">P15.1</span></td>
+<td class="num">1</td></tr>
+
+<tr><td class="mono">Models/KnowledgeBase.swift:127-149<span class="sub">indexBlock(for:docs:)</span></td>
+<td>每个文件一行纯 <code>relativePath</code>（块头 = <code>[知识库] 名</code> / <code>路径:</code> / <code>说明:</code> / <code>文件 (N, 深度≤3):</code>）；<code>maxLinesPerBase=120</code>、<code>maxCharsPerBase=2000</code> 是它的两条上限。</td>
+<td><b>行内容改为 <code>相对路径 [· 标题] · 摘要 · N 天未更新</code></b>。相对路径<b>必须在最前</b> —— 它是 agent 唯一能拿去 <code>read</code> 的定位符（只给标题等于给了一张没有馆址的卡片）；<b>标题列只在 <code>title</code> 与文件名不同时才补</b>（判等与「<code>title</code> 缺省回落值」同源 = <code>KnowledgeBaseScan.fileStem</code>）；陈旧标记<b>只在超阈值时出现</b>。摘要来源 = frontmatter <code>summary:</code> → 否则正文首行 → 否则留空（<b>取，不是生成</b>），<b>只读文件头 512 字节</b>。⚠️ 它<b>改了注入块字节</b> ⇒ 守卫 16 / 自检 ⑦ 要跟着核（语义不变，都是「启用的根 ⇒ 索引段在块内」）；<b>守卫 6 的判据被这次改动证伪并重写</b>（见 §05）。<b>来源标记不在本批</b> —— 要 <code>note_revisions</code> 才能判「谁写的」（P15.4）。<span class="chip c-warn">P15.1</span></td>
+<td class="num">1</td></tr>
+
+<tr><td class="mono">KnowledgeView.swift:435, 558, 1013, 1065<span class="sub">区头 + 挂载入口</span></td>
+<td>区头 <code>L("知识库")</code>；三处挂载入口文案。</td>
+<td>⚠️ <b>待一句话确认（§04 B）</b>：区头改 <code>L("笔记")</code>，「挂载目录…」入口<b>下线</b>，换成「＋ 新建笔记」。区头计数从"库数"改成"笔记篇数"。<span class="chip c-warn">P15.1</span></td>
+<td class="num">1</td></tr>
+
+<tr><td class="mono">Models/KnowledgeBase.swift:80-84<span class="sub">token / segmentHeader</span></td>
+<td><code>token = "[知识库]"</code>；段头「以下是挂载的知识库 (只给索引…)」。</td>
+<td>⚠️ <b>待一句话确认（§04 B）</b>：改成 <code>"[笔记]"</code> + 相应段头。这是<b>一次显式的 prompt 契约变更</b>（这两个字面量不进词表 —— 它们恒中文，是给模型看的），但受影响断言要逐条核（守卫 16 / 自检 ⑦ / 索引预览与组装器同源这条）。<b>此时改无兼容负担 —— P15 尚未发布。</b><span class="chip c-warn">P15.1</span></td>
+<td class="num">1</td></tr>
+
+<tr><td class="mono">Models/KnowledgeBase.swift:42-52<span class="sub">KnowledgeBaseRejection</span></td>
+<td>五枚举：<code>emptyDescription</code> / <code>descriptionTooLong</code> / <code>duplicatePath</code> / <code>notADirectory</code> / <code>builtinImmutable</code>。</td>
+<td><b>保留整个枚举不动</b>，只加 <code>noteRootMissing</code>。理由：前三个在收窄后<b>不可达</b>，但删它们要论证"确实无消费者"，而保留的成本是零（没有 UI 会显示它们）。<b>这是"不动"比"删"更省事的一次。</b><span class="chip c-warn">P15.1</span></td>
+<td class="num">1</td></tr>
+
+<tr><td class="mono">State/KnowledgeStore.swift:125-129<span class="sub">内置库 + allKnowledgeBases</span></td>
+<td><code>allKnowledgeBases = knowledgeBases + builtinKnowledgeBases</code>。</td>
+<td>再并上派生出来的两个笔记根，成为第三个合成来源。⚠️ <s>内置库本版不动</s> —— <b>P15.5 改判：整条退休</b>。<br>
+<b>原写「本版不动」的理由</b>是「它现在空转（<code>layer</code> 缺省 <code>.always</code> ⇒ 无 <code>ondemand</code> 条目 ⇒ L1 恒空），但它是 <b>P11.3 复活时要用的机制</b>，退休它属于那边的事」。<b>推翻它的两条依据（都是实测，2026-10-12）</b>：<b>① 它破门 1</b> —— 它和两个笔记根混在同一段列表里，界面上就是三行「按需知识 · 全局 / xx（按需知识）」，而门 1 说这一区里<b>只有笔记</b>；<b>② 它没有生产者</b> —— 两个 L1 落点都是空目录（新建知识点一律 <code>.always</code>），库里唯一那条 <code>ondemand</code> 条目 <code>enabled = 0</code>；且索引段本来就是「<b>空库不注入</b>」⇒ 它<b>从来没进过 prompt</b>。⇒ 退休它<b>零可观察差异</b>。<span class="chip c-ok">✅ P15.5</span></td>
+<td class="num">1 / 5</td></tr>
+
+<tr><td class="mono">State/KnowledgeStore.swift<span class="sub">P15.5 退休内置库（连带面）</span></td>
+<td>退休前那一套是<b>四件东西</b>：<code>builtinKnowledgeBases</code>（现算的 L1 根）· <code>builtinGlobalID</code> / <code>builtinProjectPrefix</code> · <code>builtinDisabled</code>（停用集合，不落库）· <code>effectiveKnowledgeBases</code>（把停用折算进 <code>enabled</code> 的第二张表）。</td>
+<td><b>四件一起清</b>，但分开处置两件事：<br>
+<b>① 根本身 → 删干净</b>：<code>allKnowledgeBases = noteKnowledgeBases + knowledgeBases</code>；<code>deleteKnowledgeBase</code> 的 <code>guard !id.hasPrefix("builtin:")</code> 与 <code>toggleKnowledgeBase</code> 的 <code>builtin:</code> 分支一并删 —— <b>它们此后没有生产者</b>（本项目对"没有生产者的枚举/守卫"的处置是删掉，§11f 有先例）。<br>
+<b>② 「停用」开关 → 换个主人，不能一起删</b>：左列<b>每一行（含两个笔记根）</b>都有开关，而固定根的 <code>enabled</code> 是<b>构造出来的</b>（现算、写不回去）⇒ 删掉这条路的后果是<b>开关点了没反应</b>（不报错、不变红）。所以集合改名 <code>fixedRootDisabled</code>，并由 <code>noteKnowledgeBases</code> <b>在构造时折算进 <code>enabled</code></b> —— 折算点从"第二张表"收成"一个构造点"，<code>effectiveKnowledgeBases</code> 这个名字随之消失（<b>两个名字指同一件事正是本项目反复吃亏的"两个真源"</b>）。<br>
+<b>③ 代价（有意接受）</b>：<code>ondemand</code> 条目从"有路标"退回<b>隐形</b>。今天无生产者，<b>P11.3 解冻时必须一并重建那道路标</b>，且<b>不建议照抄本次退休的形态</b>（把落盘目录当成一个"库"挂进来，正是它破门 1 的原因）。<span class="chip c-ok">✅ P15.5</span></td>
+<td class="num">5</td></tr>
+
+<tr><td class="mono">State/KnowledgeStore.swift:1177-1198<span class="sub">syncL1Files / isOurL1File</span></td>
+<td>已有的三件写盘纪律：内容相同不写 · 只删带自己标记的文件 · 无标记一律当用户的。</td>
+<td><b>新写入路径照抄这个形状</b>：写前比内容（不同才写）· 原子替换（<code>atomically: true</code>）· <b>改写前比对 <code>base_hash</code></b>（外部改过就拒绝 + 提示，= Claude Platform <code>content_sha256</code> 的本地版）。<span class="chip c-ok">已施工 · P15.2</span></td>
+<td class="num">2</td></tr>
+
+<tr><td class="mono">（新增）<span class="sub">Models/KnowledgeBase.swift · State/KnowledgeStore.swift</span></td>
+<td>无 —— 这一区此前是<b>只读</b>的，笔记从不由 App 落盘。</td>
+<td><b>人写笔记的四条路</b>：新建 / 改标题 / 改正文 / 删除。<b>写盘纪律照抄 <code>syncL1Files</code></b>（内容相同不写 · <code>atomically: true</code> · 目录 <code>withIntermediateDirectories: true</code>）；<b>顺序</b>：边界 → 还在不在 → <b>指纹（<code>baseHashMismatch</code>）</b> → 内容真变了没 → <b>记旧版</b> → 原子写（「外部改过」比「你没改」严重 ⇒ 指纹必须排在「内容没变」<b>之前</b>）。★ <b>所有路径必须走 <code>resolvedNoteDir</code></b> —— 绕过它写进用户真实 <code>~/.mangox/note/</code> 是<b>零红灯</b>的（守卫 24 守它）。<b>改标题 = 改 frontmatter <code>title:</code></b>（<code>splitFrontmatter</code> / <code>composeNote</code> 只换那一行，其余逐字保留）；<b>删除 = 记旧版 + 进系统废纸篓</b>（<code>trashItem</code>，可捞回）；每次写盘前把<b>整篇旧文</b>记进 <code>note_revisions</code>。<span class="chip c-ok">已施工 · P15.2</span></td>
+<td class="num">2</td></tr>
+
+<tr><td class="mono">State/PersistenceStore.swift<span class="sub">（新增两张表）</span></td>
+<td>无。</td>
+<td>加 <code>note_proposals</code>（P15.3 用）与 <code>note_revisions</code>（<b>P15.2 起用</b> —— 写盘是它唯一的产地）。<b>只加表，不动任何现有表</b>（P11 判据：DB 列只增不删，<code>knowledge_bases</code> 表与它那一行原样留着）。<span class="chip c-ok">note_revisions 已施工 · P15.2</span><span class="chip c-ok">note_proposals 已施工 · P15.3</span></td>
+<td class="num">2 / 3</td></tr>
+
+<tr><td class="mono">（新增）<span class="sub">note_search</span></td>
+<td>无 —— agent 现在没有任何主动检索笔记的手段，只能拿到文件名清单后自己按路径 <code>read</code>。</td>
+<td><b>纯函数 <code>noteSearch(query) -&gt; [NoteHit]</code> + 一个 agent 工具壳</b>，第一版实现 = <b>朴素子串</b>（对齐已有的 <code>Views/Workspace/WorkspaceView.swift:389</code> 的 <code>.contains(query)</code>）。产物进 <b>会话消息流</b>，<b>不进注入块</b>（§03 红线）。<b>将来换 FTS5 / embedding 不改调用点。</b><span class="chip c-warn">未做 · 未列入任何批次</span></td>
+<td class="num">1</td></tr>
+<tr><td class="mono">（新增）<span class="sub">提案提交工具</span></td>
+<td>无 —— dream 现在没有任何把结论写成提案的手段。这是 P15.3 <b>真正的增量</b>（调度本身是现成的 <code>Scheduled</code> 机制）。</td>
+<td>一个 agent 工具壳，把结构化提案写进 <code>note_proposals</code>（<code>target_path</code> / <code>base_hash</code> / <code>content</code> / <code>reason</code> / <code>sources</code>）。<b>只写表、不碰磁盘</b> —— 写盘只发生在人点采纳那一刻（门 4）。<span class="chip c-ok">已施工 · P15.3</span></td>
+<td class="num">3</td></tr>
+
+<tr><td class="mono">State/KnowledgeStore.swift<span class="sub">采纳 / 丢弃</span><br>Views/Knowledge/KnowledgeView.swift</td>
+<td>提案面是<b>只读</b>的（P15.3）：能看、能点开，<b>不能拍板</b> —— 从提案到磁盘<b>不存在任何一条代码路径</b>，那正是 T5 在批 3"结构性成立"的原因。缺的就是那个入口。</td>
+<td><b><code>adoptProposal</code> = 把 <code>content</code> 整篇原子写进 <code>targetPath</code></b>（三个 kind 同一条形态 —— <code>content</code> 的契约就是"整篇新文本, 不是 diff", 见 <code>mangox-dream.ts</code> 的工具描述）。区别只剩"目标该不该已经存在"：<b>insight</b> ⇒ 必须<b>不存在</b>（存在了就说明期间有人在外部建了同名文件 ⇒ <code>nameCollision</code>, 与 <code>createNote</code> 同一口径）；<b>merge / replace</b> ⇒ 必须存在且<b>指纹对得上</b>（乐观并发，同 <code>saveNote</code> ③）。<b><code>discardProposal</code> 只改状态、不碰磁盘</b> —— 它是 dream 那道阀门的另一半。落盘成功后记一条 <code>.dream</code> 版本（<b>来源标记靠它认领</b>）并把提案置终态；<code>status</code> 与 <code>decided_at</code> <b>同一次 UPDATE</b>（拆两条会在中间留下一行"已采纳但没有拍板时刻"）。<b>被拒的提案留在待审</b>（先置终态再写盘的实现会在冒烟里红）。★ <b>采纳路径必须走 <code>noteAbsPath</code></b>（守卫 25）。<span class="chip c-ok">已施工 · P15.4</span></td>
+<td class="num">4</td></tr>
+
+<tr><td class="mono">（新增）<span class="sub">Models/NoteDiff.swift</span></td>
+<td>无 —— 提案面只能单栏看"新内容"，<b>没有对照</b>（所以 P15.3 那份预览必须截断行数：它回答不了"改了哪里"）。</td>
+<td><b>行级 diff 的纯函数</b>（LCS）。★ 并排两侧<b>共用同一个行号空间</b> ⇒ "左边第 3 行与右边第 3 行是同一根横线"这件事由数据结构本身表达，而不是靠"两边下标相等"暗示（插入/删除过行之后那个暗示就不成立了 —— 而那正是 diff 要表达的东西）。★ <b>放模型层而不是 View 里</b>：它是**判据**（"哪些行变了"必须能被断言），而 View 里的东西冒烟看不见（能编译、没法调）。带规模护栏（超 <code>maxCells</code> 退化成"整段删 + 整段增"，<b>语义依然诚实</b>，只是对不细）。<span class="chip c-ok">已施工 · P15.4</span></td>
+<td class="num">4</td></tr>
+</table>
+</div>
+
+<div class="call ok">
+  <div class="lbl">施工状态（2026-10-12 立 · 10-13 追六批：P15.6 输入 / P15.6b 指令 / P15.6c 标记 / P15.7 面板 / P15.8 归属 / P15.8b 删行）</div>
+  <p><b>批 1（P15.1 · 索引行带标题/摘要/陈旧）、批 2（P15.2 · 人写笔记）、批 3（P15.3 · dream）与批 4（P15.4 · 审阅面）已全部施工完毕</b>，门禁读数见 §04 门禁块（<b>批 4：冒烟 1091 PASS / 0 FAIL · 词表 672/672</b>）。<b>10-13 又追了两批、都在 P15.6 名下</b>：<b>批 5 = dream 的输入换成 App 侧算好的有界摘要</b>（boss：「<i>我看了新的 prompt，感觉还是不行，还是得从根因上来</i>」—— 把 prompt 写细不是修，是给补丁抛光）· <b>批 5b = dream 的指令取出厂常量</b>（boss 实测：「<i>schedule 里面那个定时任务 dream 和以前一样啊</i>」，详见 §03 批 5b）· <b>批 5c = dream 行的锁标记</b>（boss：「<i>要有点区别，毕竟不可改</i>」，详见 §03 批 5c）· <b>批 5d = dream 进 Plugins 面板</b>（boss：「<i>note_proposal 这个工具我建议能在左侧 plugins 里面能找到</i>」，详见 §03 批 5d）· <b>批 5e = dream 的洞见该归到哪个根</b>（boss 实测：「<i>他把 mangox 的雷放到了全局笔记，这个就会导致所有的会话都有可能读到这个笔记</i>」—— 详见 §03 批 5e）。<b>批 5f = 拍过板的提案直接删行</b>（boss：「<i>还有个点，已经丢弃的提案，直接删除吧，不要留着了</i>」；问"已采纳的要不要一起删"时他答「<i>按理说已经采纳的提案要进入笔记区域啊</i>」—— 详见 §03 批 5f）。<b>六批读数：1172 PASS / 0 FAIL · 词表 670/670</b>。⚠️ 表里「现状」列引的<b>行号是施工前的读数</b> —— <code>Models/KnowledgeBase.swift</code> 已整文件重写、<code>KnowledgeView.swift</code> 已改，偏移全变了；要逐行对照请回看 <code>cc0e111</code>。<br>
+  <b>批 4 施工中三处拍板（都是动手前问的）</b>：<b>① 「谁写的」怎么算 ⇒ 版本史记账时机前移</b>（<code>note_revisions</code> 从"覆盖前留旧版"变成"<b>每写下一版记一条</b>"）· <b>② 并排 diff 做到行级</b>（不做逐字符）· <b>③ 拍完板的提案留终态可回看</b>（不从列表消失，连带补 <code>decided_at</code> 列）。<br>
+  <b>P15.5（收尾 · 内置库退休）</b>：用户看着左列问「按需知识怎么还有，这几条可以去掉了」⇒ 三行「按需知识」是 <b>P11.4 的内置 L1 库</b>，退休范围<b>由用户选定为"整条退休"</b>（选项：整条退休 / 挪进自定义区 / 只在左列不渲染）。<b>它不在原计划的四批里</b> —— 是 P15 收口后由界面实况暴露出来的遗留，因此单列一批。</p>
+</div>
+
+<div class="call warn">
+  <div class="lbl">本版不动的东西（列出来，因为"没提"会被读成"忘了"）</div>
+  <p><b>① 类型命名</b>：<code>KnowledgeBase</code> / <code>KnowledgeBaseDoc</code> / <code>KnowledgeBaseScan</code> / <code>KnowledgeView</code> 全部<b>不改名</b>（只有 UI 文案层改叫「笔记」）。理由：改名要连带 ~8 个文件的引用、冒烟断言、守卫措辞，而收益<b>只是名字</b> —— 与项目"改命名的连带半径"那条判据一致。<b>要改就单独开一次重命名批次。</b><br>
+  <b>② <code>knowledge_bases</code> 表</b>：<b>不 DROP 表、不删列</b>；但表里<b>现存的那一行按 §04 A 移除</b>（删行 ≠ 删表，回滚时补一行即可）。新代码不再把它当"挂载记录"消费。<br>
+  <b>③ 自定义区</b>：<code>KnowledgeItem</code> 的数据模型与编辑器一字不动。<br>
+  <b>④ 编辑器的 <code>kind</code> 六列</b>：继续撤下。判据不变 ——「用户凭什么知道该选哪一档」现在仍答不出来。<b>别因为"笔记要写元数据"就把它放回来。</b></p>
+</div>
+
+<h3>为什么这么做，为什么不是别的做法</h3>
+
+<ul class="tight">
+  <li><b>为什么提案落 DB 表而不是落 <code>_proposals/</code> 目录</b> —— 这条不是审美，是<b>会出错的</b>：扫描契约只挡 <code>hasPrefix(".")</code> 与 <code>excludedNames</code> 那三个名字（<code>Models/KnowledgeBase.swift:65-78, 97</code>），<code>_proposals</code> 两头都不占 ⇒ 提案文件<b>会被扫成笔记、进索引、每轮吃 prompt 预算</b>，而且它是"未采纳的东西"，出现在注入里正是本版最不能接受的事。落表还顺带解决了另外两件：提案是<b>带状态的对象</b>（待审 / 已采纳 / 已丢弃），文件系统不表达状态；以及"输入永不被改写"这条不变量，靠 <code>base_hash</code> 比对比靠"文件没被写"更容易断言。</li>
+  <li><b>为什么用 mtime 当陈旧度权威，不读 <code>PROJECTS.md</code> 里那个手写的 <code>updated:</code></b> —— 那份文件<b>本版按 §04 A 移除</b>，但它本身就给出了答案：它自造了 <code>updated:</code> 协议，结果是 <b>20 天没人改它</b>，而且<b>没有任何代码读它</b>。判据是<b>"不可忘改"</b>：系统维护的时间戳没人能忘，手写的字段只要忘记一次就永久说谎。⚠️ 代价明写在 §05：<code>git checkout</code> / 复制 / 备份还原都会改 mtime，那个方向上它反而会说"刚更新过"。</li>
+  <li><b>为什么项目笔记根放在 <code>&lt;项目&gt;/.mangox/note/</code> 而不是 DB 里加一列</b> —— 位置即归属会让"这个根在哪"变成可推导的，而 DB 列是第二真源。同族先例：凡是能由位置/结构推出的，不要再存一份。</li>
+  <li><b>为什么不把 <code>writePolicy</code>「留着以后用」</b> —— 留着它就得给每个根写一遍"能不能写"，而两个根<b>都是我们的目录</b>，答案永远相同。这正是 P11 删 <code>sensitivity</code> 时用的判据：<b>两个东西永远同值 ⇒ 其中一个没有信息</b>。</li>
+  <li><b>为什么不让 agent 直接写笔记（只有 dream 提案 + 人采纳）</b> —— ① 外部十家里"自动写入"的三家官方都不推荐把它当可靠载体（提炼 ④）。② 单写者带来一个免费的礼物：<b>并发写坏文件（提炼 ⑥）在这条路径上根本不会发生</b> —— 写盘只发生在"人点采纳"的那一刻。③ 判据：本版没有"agent 必须立刻写盘"的场景；等真出现了再加，<b>别预付</b>。</li>
+  <li><b>为什么不做"每轮按用户输入自动检索"</b> —— 它技术上最直接（query 现成，<b>没有</b>"agent 不知道怎么搜"的循环依赖），但产物<b>只能进易变段</b>（§03 红线），且命中率<b>完全取决于用户这次怎么措辞</b>。而"agent 主动调 <code>note_search</code>"这条路产物进<b>会话消息流</b>，<b>连注入块都不碰</b> —— 同一件事，后者的架构代价是零。这两条的关系不是备选，是<b>配套</b>：工具路需要 agent 知道"有什么可搜"，而那正好由索引块的摘要行提供。</li>
+  <li><b>为什么不做条目 ↔ 笔记的桥</b> —— 桥两侧的"当前值"会立刻分叉，而分叉的消解机制（谁的赢？）又要新设计一套。两个载体各自完整、互不引用，比架桥便宜。</li>
+</ul>
+
+<h3>「可执行文档」的位置（门 5 = 只留接口）</h3>
+
+<div class="call ok">
+  <div class="lbl">外部背书（原文）</div>
+  <p><b>Claude Code 官方</b>：「若这条指令必须在某个时机执行、例如每次提交前或每次编辑文件后，<b>写成 hook</b>。Hooks 在固定生命周期事件上作为 shell 命令执行，<b>不论模型决定做什么都会生效</b>。」<br>
+  <b>Windsurf 官方</b>：「违反它会导致 code-review 意见的事实，就属于 rule，不属于 memory。」<br>
+  <b>Notion 官方</b>：给内容配 <b>verified 属性 + 过期时间</b>，到期<b>通知责任人</b>去复核。<br>
+  ⇒ 三家从三个角度说同一件事：<b>靠"提醒人记得看"的机制都会失效；有效的机制要么挂在可执行事件上（hook / 探针），要么挂在责任人 + 到期通知上（SLA）。</b></p>
+</div>
+
+<div class="grid g2">
+  <div class="v top"><div class="face"><b>强通道 · 探针</b>（本版只留接口）<br>笔记里的<b>断言性</b>内容在 frontmatter 声明 <code>probe: &lt;id&gt;</code>，将来挂到 <code>scripts/diag/</code> 已有的 <b>12 支判据件</b>上。断言失效 ⇒ 门禁红。</div><span class="chip c-warn">只允许写，不解析</span></div>
+  <div class="v top"><div class="face"><b>弱通道 · 时间指纹</b>（本版实现）<br><b>陈述性</b>内容（"他喜欢结论先行"）没有探针可挂 —— 只能被"带内陈旧标记 + 变更史"标出来等人看。<b>不假装这条能自动判真伪。</b></div><span class="chip c-warn">只能提示</span></div>
+</div>
+
+<div class="call bad">
+  <div class="lbl">代价与临时妥协</div>
+  <p>① 🔴 <b>丢掉「挂任意目录做只读索引」的能力</b>（§01 已明写）。消掉条件：将来若要，作为独立功能重开，不塞回这一区。<br>
+  ② ⚠️ <b>陈旧度只反映"多久没变"，不反映"对不对"</b>。20 天没变但依然正确的笔记，和 20 天没变且已经错了的笔记，在 UI 上长得一样。消掉条件：探针层落地（本版只留接口）。<br>
+  ③ ⚠️ <b>mtime 会被 git check-out / 复制 / 备份还原改掉</b> ⇒ 陈旧度可能显示"刚更新过"而内容很旧。消掉条件：改读 git 提交时间，或引入文件内时间戳交叉校验 —— 两者都要新契约，另批。<b>这是本版唯一一处把判据建立在不受我们控制的上游行为上。</b><br>
+  ④ ⚠️ <b>提案制把审阅成本转移给了人</b>。这是有意的（外部十家里"人批准"出现在四处），但提案多到人不想看时机制会整体失效。结法：<b>diff 为空则整份不产出</b> + 单次条数上限 + 提案落表不弹通知。<br>
+  ⑤ ⚠️ <b>§02 E 的三条判据里 ①（两个固定根）②（扫描结果带时间）已随 P15.1 变绿（实测 <code>1</code> / <code>6</code>）；③（产出真的长出来）仍红。</b>③ 与 P11.3 的解冻条件同源，要靠真实使用积累 —— <b>别把"文档写了"读成"问题解决了"。</b></p>
+</div>
+
+<h2><span class="n">04</span>待办与跟进<span class="en">TODO</span></h2>
+
+<h3>五道门（2026-10-12 全部拍板）</h3>
+<div class="todos">
+  <div class="todo done"><div class="tn">门1</div><div class="tbody"><div class="tt">知识库区扩成可写 —— 目录固定成两个</div><div class="td"><b>已定</b>：仅 <code>~/.mangox/note/</code>（全局）与 <code>&lt;项目&gt;/.mangox/note/</code>（项目）。⇒ 连带：<code>writePolicy</code> 取消 · 任意目录挂载取消 · 归属由位置决定。</div></div></div>
+  <div class="todo done"><div class="tn">门2</div><div class="tbody"><div class="tt">笔记与知识条目的关系</div><div class="td"><b>已定</b>：<b>知识库区里只有笔记，不存在知识条目</b>（条目归自定义区）。⇒ 这一区彻底脱离 <code>KnowledgeItem</code> 语义（无 <code>status</code> / <code>layer</code> / <code>trigger</code> / <code>counterfactual</code>）⇒ 与 P11.3 的护栏<b>没有交集</b>。</div></div></div>
+  <div class="todo done"><div class="tn">门3</div><div class="tbody"><div class="tt">笔记归属：全局还是跟项目走</div><div class="td"><b>已由门 1 一并答</b>：位置即归属 —— 全局根 / 项目根两种，<b>不引入额外的 scope 维度</b>。</div></div></div>
+  <div class="todo done"><div class="tn">门4</div><div class="tbody"><div class="tt">dream 与 P11.3：一起解冻还是自带阀门</div><div class="td"><b>已定：自带阀门</b>。落到形态 = 提案落 <code>note_proposals</code> 表，<b>人点采纳才写盘</b>。⇒ <b>P11.3 继续冻结</b>，且这次不是"先不做"，是<b>"没有交集"</b>（门 2 已切断共用面）。</div></div></div>
+  <div class="todo done"><div class="tn">门5</div><div class="tbody"><div class="tt">可执行文档（探针层）本版做不做</div><div class="td"><b>已定：只留接口</b>。frontmatter 允许出现 <code>probe:</code>，本版不解析、不挂探针、不进门禁。</div></div></div>
+</div>
+
+<h3>由上面的回答连带出来的三处（2026-10-12 全部定下）</h3>
+<div class="todos">
+  <div class="todo done"><div class="tn">A</div><div class="tbody"><div class="tt">存量那一行 + 那份文件怎么处理<span class="chip c-ok">已定 10-12 · ✅ 已执行</span></div><div class="td"><b>已定：直接移除</b> —— 不迁移、不留副本、不进 <code>note/</code>。现状：<code>knowledge_bases</code> 里 1 行（挂的是<b>目录</b> <code>~/.mangox/kb/projects</code>，<code>enabled=0</code>），该目录里 1 份 <code>PROJECTS.md</code>（2037 字节，2026-09-22 之后再没动过）。<br><b>移除三样</b>：① 文件 <code>~/.mangox/kb/projects/PROJECTS.md</code> ② <code>knowledge_bases</code> 那一行 ③ 空掉的 <code>~/.mangox/kb/</code> 整棵（已实测：<code>kb/</code> 下只有 <code>projects/</code>，<code>projects/</code> 下只有那一份）。<br>理由 = <b>它想承接的那件事（跨会话连续性）已由笔记区 + 索引摘要接管</b>，而它自己 20 天没人动、<code>updated:</code> 字段零消费者（§03 正是拿它当反例）。<b>不进 <code>.workbuddy/archive/</code></b> —— 那里是给「要搬走的东西」留副本的，这条不搬。<b>执行顺序：先删 DB 行、再删文件</b>（反了会让索引指向不存在的路径、打出误导性告警）。<b>✅ 已执行 2026-10-12 11:00</b>：删行后 <code>COUNT = 0</code> · <code>rm</code> 文件 + <code>rmdir</code> 两级空目录（<code>rmdir</code> 只删空目录 ⇒ 三步全成功本身即是「下面没有别的东西」的证明）· <code>~/.mangox/kb</code> 已不存在。回滚材料在 <code>/tmp/mangox-kb-removal-20261012-110035/</code>（整棵 <code>kb/</code> + <code>mangox.db</code> + <code>.dump knowledge_bases</code>）—— ⚠️ <b>那是 /tmp 安全网、会被系统清理，不是留档</b>，本段「不留副本」的约定不变。<br>⚠️ 一处连带：<code>Views/Knowledge/KnowledgeView.swift:231</code> 的 <code>.help()</code> 文案拿它当示例（"做法同 PROJECTS.md"）—— 该文案在 P15.1 本来就要重写（门 1 取消了"任意目录挂载"），不单独修。</div></div></div>
+  <div class="todo done"><div class="tn">B</div><div class="tbody"><div class="tt">区名与注入 token 改「笔记」<span class="chip c-ok">已定 10-12</span></div><div class="td"><b>已定</b>（随"用户能新建笔记"一并定下）：UI 区头 <code>L("知识库")</code> → <code>L("笔记")</code>，<code>token "[知识库]"</code> → <code>"[笔记]"</code>，段头「以下是<b>挂载</b>的知识库」→「<b>以下是你的笔记</b>」。依据：<b>产品与 prompt 说同一件事才不会让人误解</b>，且此时改无兼容负担（P15 未发布）。代价：动的是 <b>prompt 契约字节</b>，守卫 16 / 自检 ⑦ / 索引预览同源那条断言都要跟着核一遍。</div></div></div>
+  <div class="todo done"><div class="tn">C</div><div class="tbody"><div class="tt">项目笔记根要不要进 git<span class="chip c-ok">已定 10-12</span></div><div class="td"><b>已定：不进 git</b>，且 <b>App 不代你改 <code>.gitignore</code></b>（那是你的仓库，越界）—— 只在 UI 与文档里把事实说清。事实是：<code>.mangox/</code> 是点开头，<b>会不会被提交取决于各仓库自己的 <code>.gitignore</code></b>，没被忽略时它会出现在 <code>git status</code> 里。外部同形：Windsurf 的 memories 是 <b>workspace 作用域 + 机器本地 + 不进 repo</b>。</div></div></div>
+</div>
+
+<h3>分批（每批独立可验；顺序不许倒）</h3>
+<div class="todos">
+  <div class="todo done"><div class="tn">1</div><div class="tbody"><div class="tt">P15.1 · 笔记区立起来 <span class="chip c-ok">已施工 10-12</span></div><div class="td">两个固定根派生（<code>note:global</code> / <code>note:project:&lt;id&gt;</code>）· 根的路径与描述由产品写死 · <code>KnowledgeBaseDoc</code> 加 <code>modifiedAt</code>/<code>byteCount</code>/<code>title</code> · <code>staleAfterDays = 7</code> · 索引行带标题与陈旧度 · 区头与入口改写、旧的「挂载目录…」下线 · 存量那行/那份文件的移除。<b>不含任何写入能力</b>。</div></div></div>
+  <div class="todo done"><div class="tn">2</div><div class="tbody"><div class="tt">P15.2 · 人写笔记 <span class="chip c-ok">已施工 10-12</span></div><div class="td">新建 / 改标题 / 改正文 / 删除 + <code>note_revisions</code> 留旧版（「不删旧知识」的落地）+ 写入前比内容、改写前比 <code>base_hash</code> + 原子替换 + 目录不存在就地建。<br><b>三处开工前拍板</b>：改标题 = <b>写 frontmatter <code>title:</code></b>（不移动文件）· 删除 = <b>记旧版 + 进系统「废纸篓」</b>（<code>trashItem</code>，还能捞回来）· <code>note_revisions</code> <b>加表在 P15.2</b>（写盘是它唯一产地）、<b>「变更史」界面留 P15.4</b>。</div></div></div>
+  <div class="todo done"><div class="tn">3</div><div class="tbody"><div class="tt">P15.3 · dream（<b>第一版就是完整形态</b>）<span class="chip c-ok">已施工 10-12</span></div><div class="td"><b>输入 = 会话 + 笔记，产出 = 提案，输入只读</b>。三件事一起上、不拆：① <b>会话 ⇒ 浮现新洞见</b>（<b>〔P15.6 翻案〕</b>原设计是"从 <code>~/.mangox/pi-sessions/*.jsonl</code> 里读出还没成篇的结论", 现在改成 <b>App 侧算好的有界摘要</b> —— 见批 5）② <b>跨笔记合并</b>（合并重复 / 收拢同主题）③ <b>替换过期值</b>（新值覆盖旧值，旧值进 <code>note_revisions</code>）。<br><b>承载 = 复用现成的 <code>Scheduled</code> 任务，不造新机制</b>：一次 fire = 一个完整 agent 回合（<code>State/SchedulerService.swift:139-144</code> 的 <code>beginTurn(…, unattended: true)</code>）、<b>带完整工具集</b> ⇒ <b>笔记</b>由它自己 <code>read</code>, <b>MangoX 侧零 JSONL 解析代码</b>；<b>〔P15.6 翻案〕</b>会话那条不再"都由它自己 read" —— 摘要在 fire 期由 App 算好拼进 prompt（仍然零 JSONL 解析：数据源换成自家 <code>events</code> 表。换来的是"读多少"有了确定的上界，见批 5）；<code>config</code> 让 dream 单独选模型（不污染主会话）；<code>logSessionId</code> 给固定日志会话。<br><b>⚠️ 本版仍不写盘</b>：提案文本落在日志会话与 <code>note_proposals</code> 表里，<b>磁盘上的笔记一个字节都不动</b>，直到人点采纳。<b>真正的增量不是调度（那是现成的），而是一个「提交提案」的工具</b>。<br><b>触发方式（10-12 已定）：<code>cron</code> + 手动，且 <code>cron</code> 那一路带开关</b>（关掉开关只停定时、手动仍可跑）。<b>零新代码</b>：<code>State/SchedulerService.swift</code> 已有 <code>toggleScheduled</code>（<code>:55-57</code>）· tick 只跑 <code>where task.enabled</code>（<code>:75</code>）· 手动入口 <code>runScheduledFire</code>（<code>:86</code>）<b>不检查 <code>enabled</code></b> ⇒ 语义天然就是「开关只管定时」。真正要补的是 <b>UI 上一个「立即运行」按钮</b>（<code>Views/Scheduled/ScheduledView.swift:219</code> 现在只有开关、没有手动入口）。<br><b>全局 dream 任务的 <code>cwd</code>（10-12 已定）：按 home。</b><code>projectId</code> 留空即可 —— <code>SchedulerService.swift:135</code> 取不到项目 ⇒ <code>cwd = nil</code> ⇒ <code>Agent/PiRpcTransport.swift:553</code> 的 <code>desiredCwd ?? NSHomeDirectory()</code> 回落。<b>零新代码、零新配置</b>（同款语义已在 <code>State/MailboxSentinelService.swift:341</code> 用过并留了注释）。</div></div></div>
+  <div class="todo done"><div class="tn">4</div><div class="tbody"><div class="tt">P15.4 · 审阅面 <span class="chip c-ok">已施工 10-12</span></div><div class="td">变更史（谁写的 / 何时 / 采纳没）+ 并排 diff + 整份采纳 / 丢弃。这是「审核问题」的用户可见那一半。<br>
+  <b>形态</b>：左列提案行按终态分档（待审在前、已处理的沉底并降档）· 审阅面 = 元信息 + 来源指针 + <b>并排 diff（行级）</b> + 采纳 / 丢弃 · 笔记本体加「来源」行与「变更史」块。<br>
+  <b>三处关键判据（都能变红）</b>：<b>① 来源</b> = 拿磁盘上的 <code>sha256</code> 去版本史里**认领**那一条（不是"最新一条的 origin" —— 后者在"最后写下的那版没被记过"时会答错）；认不到 ⇒ <code>.human</code>，依据是"dream 的写入必经 App"这条**结构性推论**（§04 提炼）。<b>② 采纳 = 整篇原子写</b>（三个 kind 走同一条形态，因为 <code>content</code> 的契约就是"整篇新文本、不是 diff"），区别只剩"目标该不该已经存在"。<b>③ 被拒的提案留在待审</b> —— 先置终态再写盘的实现会在冒烟里红。<br>
+  <b>连带的两处修正</b>：<code>note_revisions</code> <b>记账时机前移</b>（每写下一版记一条；否则"当前版是谁写的"永远查不到）· <code>loadNoteProposals</code> 的 <code>ORDER BY</code> 补上 <code>CASE WHEN status='pending'</code>（P15.3 的注释写着"待审在前"而 SQL 里没有 —— 那时只有一种状态，**不一致看不出来**）。</div></div></div>
+  <div class="todo done"><div class="tn">5</div><div class="tbody"><div class="tt">P15.6 · dream 的输入换成 <b>App 侧算好的有界摘要</b> <span class="chip c-ok">已施工 10-13</span></div><div class="td"><b>起因是一次返工</b>：批 3 把"读会话"整个交给了模型自己去 <code>bash</code> 读 <code>~/.mangox/pi-sessions/*.jsonl</code>（只读最近三周）。那条指令有三个治不好的病 —— ① <b>没有上界</b>（一个 jsonl 几十 KB，而其中绝大多数字节是工具输出）② <b>数据源是第三方文件格式</b>（形状不由本仓定义）③ 于是"读多少、跳哪些行"全靠模型自觉。另有两处根本说不清：目录里混着快照与 fork 产物（<b>三种文件名</b>），而<b>文件名才是会话 id</b>、文件第一行那个 <code>id</code> 是 pi 内部的会话号，两者不是一回事。<br><b>改法 = 复用已经上线的形状，不发明新的</b>：记忆提炼（P3.7 · <code>KnowledgeStore.swift:968</code>）早就在做同一件事 —— <code>replayMessages</code> 取数、<code>msg.content</code> 只认 <code>.text</code>（工具卡在<b>类型层面</b>就被挡住，不是靠模型自觉跳）、尾部截断带省略标记。本批把这三步抽成纯函数 <code>KnowledgeStore.sessionMaterial(from:)</code>（<b>"什么叫一段会话材料"的唯一真源</b>，distill 与 dream 共用），再在 <code>SchedulerService.sessionDigest(_:excludeIds:now:)</code> 里补上会话级预算与点名。<br><b>四个预算数全部住 <code>Tune</code></b>：窗口 <b>21 天</b> · 最多 <b>8 个会话</b>（updatedAt 倒序）· 单会话 <b>2000 字符</b>（超了留尾部并标注）· 整段 <b>12000 字符</b>（超了<b>从最旧的会话</b>继续丢）—— 量级对齐 <code>distillMaterialCharLimit</code>，同一个"会话材料"家族不差一个数量级。丢掉的<b>一律点名</b>（"另有 N 个会话未列出"）—— 折省略，不静默截断（P15 老判据）。<br><b>排除两类会话</b>：任务日志会话（含 dream 自己的 —— 否则 dream 会把自己的历次运行当成人说过的话来提炼，<b>自我循环</b>）与侧问会话（fork，内容已在源会话里）。被排除的<b>照样计入点名</b>：它没列出来就是没列出来。<br><b>承载</b>：摘要<b>不进 <code>task.prompt</code></b> —— 那是用户在编辑器里看得见、会去改的东西；它在 fire 期由 <code>buildScheduledPrompt</code> 现算后拼在指令<b>之后</b>（先立规矩再给料；与持续任务的【近期运行摘录】同一套路）。<br><b>模型面前因此消失的三件事</b>：任何磁盘路径（摘要里零路径 ⇒ 没有可挖的入口）· 工具输出（结构上不成材料）· 会话与文件的对应关系（<b>会话 id 直接印在段头</b>，<code>sources[].ref</code> 照抄即可）。<br><b>如实登记两条边界</b>（都是"跑一次流程"才看见的，不登记就没人在意）：<code>note_proposal</code> 是<b>扩展工具</b>（<code>PiRpcTransport.ensureDreamExtensionFile()</code> 部署的 <code>mangox-dream.ts</code>），只在 <b>standard / full 档</b>可见（<code>AgentMode.exposesExtensionTools</code>）⇒ prompt 必须写"找不到这个工具就直接收场、不许用写文件模拟"；没有 <code>[笔记]</code> 段（所有笔记根都空）时模型不知道该往哪写 ⇒ 只提 insight 写到全局根（路径由 <code>KnowledgeStore.productionNoteDir(projectPath: nil)</code> <b>插值进来</b>，不手抄一份）。<br><b>⚠️ 追加 · boss 一问"DB 查询性能考虑过没"查出来的真缺陷</b>（同日，第二版返工）：初版的 <code>buildDreamDigest</code> 逐会话调 <code>loadMessages</code> ⇒ 读的量 = <b>全库 events</b>，与 12000 字符的摘要预算<b>完全脱钩</b>；而我上一轮在注释里写的"几十次 SELECT 可接受"是<b>估算不是实测</b>（本项目禁的就是这个）。现测三件事：<b>① 查询侧没问题</b> —— <code>EXPLAIN QUERY PLAN</code> 出 <code>SEARCH events USING INDEX idx_events_session (session_id=?)</code>，索引在、无全表扫、无 temp b-tree（你的库现状 52 行 / 48.9 KB ⇒ 亚毫秒）；<b>② 解码</b>是主成本（<code>JSONDecoder</code> 实测 <b>≈133 MB/s</b>）；<b>③ 实测约 <b>64%</b> 的字节解码完就被 <code>sessionMaterial</code> 丢掉</b>（<code>tool</code> 卡占 50.9 KB + <code>think</code> 占 11.2 KB vs 真正要用的 <code>text</code> 35.0 KB）。<br><b>修法 = 给"读多少"一个可证明的界</b>：<code>dreamShortlist</code> 只取全体按 <code>updatedAt</code> 倒序的前 <code>MaxSessions + |excludeIds|</code> 个（<b>证明打字在注释里</b>：若某个会话被最终保留却在全体里排到界外，则它前面至少有 <code>MaxSessions+1</code> 个"未被排除的窗口内"会话，矛盾）。这个界<b>与窗口策略无关</b> ⇒ 窗口怎么改都不会失效；省掉的数量交给新参数 <code>priorOmitted</code> <b>如实点名</b>（<b>省的读不许变成少说的数</b>）。<br><b>判据 20 条</b>，其中两条是这次的：<b>⑩ 性质判据</b> —— "只读短名单"与"读全体"必须<b>逐字相等</b>（界取小 ⇒ 立刻红，实测 <code>只读 8/40</code> 那条）；<b>⑪</b> <code>priorOmitted</code> 进点名行。<br><b>刻意不做的一条（登记理由）</b>：不给单会话加 <code>LIMIT</code> 式尾读 —— 「取尾部 N 条事件」与「要多少字符」无固定映射，尾部若恰好全是工具卡就会<b>静默少给料</b>；收益只是超大单会话，不值得引入这类看不见的丢失。<br><b>20 条的清单</b>（全部纯函数，造数据即可造反例，不需要真库真磁盘真模型）：只取 text / 角色前缀 / 段头声明窗口 / id 印段头 / 零路径 / 排除集合不列出但计入点名 / 窗口外丢弃并点名 / 会话数上限 + 点名 / 留最新 / 单会话截尾标注 / 整段不超预算 / 总量点名 / 两种空态 / <code>dreamPrompt</code> 里不再有 <code>bash</code> 与 <code>pi-sessions</code>。<b>反例实测</b>：让 <code>sessionMaterial</code> 放行工具卡 ⇒ <b>2 条红</b>；把窗口条件摘掉 ⇒ <b>2 条红</b>（④ 窗口外不进 + ⑨ 窗口外点名）；把 <code>dreamShortlist</code> 的界取小成 <code>prefix(MaxSessions)</code> ⇒ <b>恰好 1 条红</b>（⑩ 性质判据）；三处恢复后归零。</div></div></div>
+  <div class="todo done"><div class="tn">5b</div><div class="tbody"><div class="tt">P15.6b · dream 的指令是 <b>出厂常量</b>，不是用户字段 <span class="chip c-ok">已施工 10-13</span></div><div class="td"><b>起因是 boss 的一次实测</b>：他说「<i>schedule 里面那个定时任务 dream 和以前一样啊</i>」。那句"一样"是<b>真的</b>，而且比"一样"更糟 —— fire 拿到的是 <b>旧指令 + 新摘要</b>：旧指令让它 <code>bash</code> 读 jsonl，新摘要又说"零磁盘路径、别再挖" ⇒ <b>自相矛盾</b>。<br><b>根因一句话</b>：dream 是<b>产品固定死的任务</b>，但它的指令正文<b>住在用户可编辑的字段里、又被复制进 DB</b>。<code>scheduled_tasks</code> 里那一行（实测 549 字符、<code>cron = "0 3 * * *"</code>）是<b>种任务时复制进去的一份副本</b>，而 <code>seedDreamTaskIfNeeded</code> 的判据只有「表里有没有」、没有「在不在当期」⇒ 我改了 <code>dreamPrompt</code> 常量，存量行<b>纹丝不动</b>，且<b>零红灯</b>。同族判据：「持久化键不许是容器里的位置」；这条是它的另一半 —— <b>能从常量推导的产品文案不许落库当用户字段</b>。<br><b>本批新立的一条判据（写给所有"表单里有一栏其实无关"的地方）</b>：<b>能改的东西必须真的生效；不生效的东西必须看出来不能改</b> —— 否则那一栏<b>在说谎</b>：用户改了、保存了、界面还回显"已保存"，却没有任何效果。反面做法是"能改但 fire 不看" —— 它把不一致从"库里的旧副本"升级成"用户以为他改动了行为"。<br><b>改法三层，各管一段（分层不是冗余，下面写明各自职责）</b>：<br>　① <b>fire 层</b> = <code>SchedulerService.dreamFirePrompt(digest:)</code> —— 指令正文取<b>常量</b>，摘要（有的话）拼在其后。<b>刻意不接收 <code>task</code> 参数</b>：参数里没有它，就<b>不可能</b>读错 <code>task.prompt</code>。抽成 internal static 还为了让冒烟能造"存量旧行"。<br>　② <b>域层</b> = <code>updateScheduled</code> 对 dream 一律把 <code>prompt</code> <b>归一到当前常量</b>。守卫放这里的理由与 <code>deleteScheduled</code> 逐字相同：视图侧只是<b>可见性</b>，而 <code>updateScheduled</code> 是<b>公开写路径</b> —— 将来的批量编辑 / 导入配置都会绕过视图。归一化<b>不吞任何用户输入</b>（这一栏本来就不可改），并且顺手治好存量旧行。<br>　③ <b>视图层</b> = dream 的指令那一栏换成<b>只读卡片</b>（<code>ScrollView</code> + <code>.textSelection(.enabled)</code>，<b>与编辑态看起来一样</b>）＋ 一句底注说明"为什么改不了"（<b>不说就会像坏了</b>）。<code>loadDraft</code> 回填<b>常量</b>（不读 <code>task.prompt</code> —— 回填旧副本会让只读的那栏显示错误指令）。<br><b>两处拍板（10-13）</b>：<b>A · 指令取常量、不可改</b>（不是"能改但 fire 不看"）；<b>存量那行不动库、下次启动自动生效</b> —— 理由：<code>dreamFirePrompt</code> 已经让它<b>永远没有效果</b>，做一次静默迁移反而是"替用户改数据"。<b>代价明写</b>：库里那一行会一直留着旧文案，直到用户下一次编辑它（归一化顺手对齐）。<b>刻意不迁移</b>，不是漏了。<br><b>冒烟夹具必须是"真·存量"</b>：不是往内存塞个假值就算 —— 先把旧文案<b>落盘</b>，再用一个<b>新 <code>ChatStore</code> 打开同一个库</b>把它读回来（= <b>老库 + 新版本启动</b>，正是 boss 踩到的那条路径）。以前冒烟里的 dream 任务<b>全是新种的</b>，永远走不到"存量" ⇒ 这条路径<b>一条判据都没有</b>。新增 <b>11 条</b>（含 2 条反例）：预置常量正确 · <b>夹具自证"读到的确实是旧副本"</b> · 档期是用户字段原样保留 · fire 不含旧副本一个字节 · fire 以常量打头 · 旧行任何字段都不混进指令 · <b>归一成当前常量</b> · <b>归一化落到了盘上</b> · <b>归一化只碰 prompt</b>（名字/档期原样）· 普通任务照常回写 · 普通任务 fire 拿到的就是 <code>task.prompt</code>。<br><b>反例实测三组（各自单独跑 —— 共用夹具时红条数不是任何一条的错）</b>：① 删掉 <code>updateScheduled</code> 的归一化 ⇒ <b>2 条红</b>；② dream 分支改回读 <code>task.prompt</code> ⇒ <b>2 条红</b>（实测字样 <code>[旧版指令: 用 bash 读 ~/.…]</code> —— <b>红行自己就是证据</b>）；③ 归一化丢掉 <code>isDreamTask</code> 门、无差别应用 ⇒ <b>恰好 1 条红</b>（普通任务那条反例；<b>这条是"守卫不许过宽"的守门人</b>）。三处恢复后归零。<br><b>本地化</b>：新 UI 文案 1 条 ⇒ 词表 <b>672 → 673</b>；<b>指令正文本身不进词表</b>（它是给模型看的，且含 <code>[笔记]</code> 这类<b>契约 token</b>，本地化会破门）。<br><b>⚠️ 同日再确认（10-13 · 关于"档期"）</b>：boss 明确 —— dream <b>不可删</b>，但<b>内容可改、包括 <code>cron</code></b>；<b>改了就不许还原</b>；只有「<b>那一行不在了</b>」（删库 / 清库 / 将来某 bug）才补种回<b>出厂档期 = 每周日 03:00</b>。<b>这与本批方向一致、不是反转</b>：本批的归一化<b>只碰 <code>prompt</code></b> —— 指令正文是产品文案，档期是用户意图。<br><b>本轮补的是"守门判据"、不是代码</b>：这条语义此前<b>没有正面判据</b> —— 原有的补种判据只验"缺了就补"，<b>没验"在的时候不许动它"</b>。少了它，把 <code>seedDreamTaskIfNeeded</code> 写成"每次启动都重写成出厂态"也能全绿，而那恰好会<b>把用户改的档期静默吞掉</b>（与本批那条实锤同族：<b>库里的值被别处的真源悄悄盖掉，且零红灯</b>）。新增 2 条 —— ① <b>正面</b>：改过 <code>cron</code>/名字的行，再跑一次 seed（= 下一次启动）<b>原样不动</b>；② 补种的"出厂态"里<b>档期也要回到常量</b>（原先只断了开关）。<b>跨重启的正面证据早就在</b>：批 5b 那个"新 store 打开老库"的夹具本身就断言了用户改过的 <code>cron</code> 原样保留（本次把它的措辞对齐到这条语义）。<b>反例实测两组</b>：① 把 seed 改成"每次抹了重种" ⇒ <b>4 条红</b>，新判据自己打出 <code>实测 0 3 * * 0 · dream</code>（用户改的是 <code>0 5 * * 1</code> / "我的整理助手" —— <b>红行自己就把"被还原了"说了出来</b>）；② 把归一化写宽、连 <code>cron</code> 一起归一 ⇒ <b>3 条红</b>，新判据打出 <code>实测 0 3 * * 0 · 我的整理助手</code>（<b>名字保住了、只有 cron 被吞</b> ⇒ 红行精准指向档期）。两处恢复后归零。</div></div></div>
+  <div class="todo done"><div class="tn">5c</div><div class="tbody"><div class="tt">P15.6c · dream 在列表里 <b>看得出是固定任务</b>（行内锁标记） <span class="chip c-ok">已施工 10-13</span></div><div class="td"><b>起因</b>：boss「<i>我觉得在样式上 dream 和其他的定时任务要有点区别，毕竟不可改，你看看加个什么小标记</i>」。<b>它要解决的其实是另一个问题</b>：dream <b>不可删</b> ⇒ 行里<b>根本没有删除按钮</b>，而"按钮不存在"和"按钮坏了"在用户眼里长得一样。一个标记把"<b>为什么这条没有删除按钮</b>"答在明面上。<br><b>先给四个候选 + 真度量原型，再动手</b>（这一环是刻意的 —— boss 的界面决定他要在看到样式之后做，不在之前）：<b>A 名字后小锁</b> · B 小图钉 · C 徽章「固定」（复用 <code>mboxBadge</code>）· D emoji 🔒。原型按 <code>ScheduledView.row</code> 的<b>真实度量</b>（名称 13 / 档期 10 / 上下文 mono 9）与暗色板实值（<code>#23232C</code> / <code>#C8C8D0</code> / <code>#6C6C77</code>）出。<br><b>选 A，并弃掉 emoji（boss 原话是"比如🔒"，不是要求）</b>，三个理由全从既有红线推出：① <b>emoji 不跟主题</b> —— 它是彩色固有色，亮/暗下都落在板子外，破「颜色是语义」；② <b>不能用 <code>accent</code></b> —— 那支暖红在这套板子里的语义是"品牌 / 可点"，把锁染成它会读成<b>按钮</b>；③ <b>贴名字走不占槽位</b>，C 那个胶囊最清楚但最吃宽度，而名字是用户字段（"我的整理助手 · 会话与笔记归档"），稍长就被挤掉。⇒ 落成 <code>lock.fill</code> 9pt + <code>textMuted</code>（选中行升到 <code>textSecondary</code>）+ <code>.fixedSize()</code>（<b>保证名字先截、锁留住</b>）。<br><b>两处都放（boss 拍板）</b>：列表行那处答"为什么不能删"，编辑器那张只读指令卡片<b>底注行前</b>那处答"为什么这栏是灰的" —— 两处问的不是同一件事。两处<b>共用同一个 <code>markerView</code></b>，不是两份实现。<br><b>标记的含义必须小于等于事实</b>：dream <b>能改名、能改档期、能开关</b>，只有"删除"与"指令正文"是锁的 ⇒ 一个笼统的"不可改"会让标记<b>比事实说得多</b>（同 P15.6b「这一栏在说谎」那条，只是方向反过来）。所以 tooltip 把话说全：<code>App 固定任务：不可删除；名字与档期照常可改</code>。<br><b>取舍做成纯函数</b> <code>SchedulerService.rowMarker(_:) -&gt; RowMarker?</code>（<code>enum RowMarker { case pinned }</code>）—— <b>这不是洁癖</b>：视图层<b>只编译不执行</b>，冒烟抓不到"标记渲没渲" ⇒ 取舍不挪进纯函数的话，<b>这个改动一条判据都加不了</b>（同 <code>canDelete</code> / <code>dreamShortlist</code>）。判据<b>只走 <code>canDelete</code></b>，不重写一遍 <code>isDreamTask</code>。<br><b>判据 7 条</b>：dream 有标记 · <b>同名不同 id ⇒ 零标记</b>（普通 / 等待型 / 停用的一律零）· <b>性质判据</b>：标记的"有/无"与 <code>canDelete</code> <b>逐条一致</b>（5 个夹具全过）。<br><b>反例实测三组（各自单独跑）</b>：① <code>rowMarker</code> 恒 <code>nil</code> ⇒ <b>2 条红</b>（性质判据打出 <code>task=[dream] 标记=false canDelete=false</code>）；② 判据改成<b>认名字</b> <code>name == "dream"</code> ⇒ <b>2 条红</b>（打出 <code>task=[dream] 标记=true canDelete=true</code> —— 一个<b>名叫 dream 的普通任务拿到了锁，而它其实能删</b>；而真实 dream <b>是可以被改名的</b> ⇒ 那种写法下用户一改名标记就静默消失）；③ <b>无条件全标</b> ⇒ <b>5 条红</b>。三处恢复后归零。<br><b>⚠️ 如实登记一个缺口（本轮不补，理由在这里）</b>：<b>渲染层没有门</b> —— 判据只证明了"<b>该不该显</b>"，<b>证明不了"真的画出来了"</b>。要真出图得走 <code>NSHostingView</code> 离屏渲染那条路（<code>scripts/diag/toolcard_preview.py</code> 是现成机制），但那要拖进整个 <code>ChatStore</code>；本轮判"不值"，因为样式已由<b>按真实度量出的原型</b>过过目、且 <code>xcodebuild</code> 证明它编译得过。<b>要 PNG 我再补探针 —— 这是主动留的，不是漏的。</b><br><b>本地化</b>：tooltip 1 条 ⇒ 词表 <b>673 → 674</b>（<code>.help("中文")</code> 走<b>含汉字字面量</b>那条取词路径，接线门把 <code>.help</code> 列为汇聚点 —— 两条都验过）。</div></div></div>
+  <div class="todo done"><div class="tn">5d</div><div class="tbody"><div class="tt">P15.7 · dream 进 <b>Plugins 面板</b>（列表投影 + 展开它注册的工具） <span class="chip c-ok">已施工 10-13</span></div><div class="td"><b>起因</b>：boss「<i>note_proposal 这个工具我建议能在左侧 plugins 里面能找到</i>」。<br><b>实测根因（不是推断）</b>：<code>ls ~/.mangox/extensions/</code> 里只有 <code>mangox-approval.ts</code> 与 <code>mangox-codemode.ts</code> —— <b>没有 <code>mangox-dream.ts</code></b>。因为双闸门的第一道（挂载闸门）就是"<code>dreamSpool != nil</code> 才调 <code>ensureDreamExtensionFile()</code>"⇒ <b>文件只在 fire 的那一次存在</b>。而面板的数据源是<b>纯磁盘扫描</b>（<code>ChatStore.scanExtensions</code>，三区、无合成项）⇒ 平时扫不到它，<b>是设计的必然结果，不是 bug</b>。顺手确认：<code>note_search</code> 全仓只在本文档里出现、<b>代码里没有实现</b> ⇒ 本批要露的只有 <code>note_proposal</code> 一个。<br><b>三条落点先摊开、boss 拍三次板（都取推荐项）</b>：<b>① 落盘策略</b> = <b>列表合成、磁盘不动</b>（另一条是"启动即落盘、与 approval 对齐"—— 那会新增本仓<b>第 3 段改用户磁盘</b>的写盘点，前两段是 P15.2 笔记写盘与 P15.4 采纳写盘）⇒ <code>ensureDreamExtensionFile()</code> 的<b>调用时机一个字没改</b>；<b>② 列表呈现</b> = <b>一行 + 展开它注册的工具</b>（唯一让工具名直接躺在列表里的做法）；<b>③ 开关位</b> = <b>换成"按需加载"胶囊、不给开关</b>。<br><b>③ 那条是必须先说清的坑</b>：dream <b>不是恒挂</b>（只有那次 fire 挂），而面板的启停开关是<b>全局二值</b> ⇒ 照 approval 那样给一颗"开"的开关，<b>面板就在说谎</b> —— 正是 P15.6b「在说谎」那条的<b>镜像</b>。所以分派判据是 <code>isOnDemand</code> 而<b>不是 <code>isBuiltIn</code></b>：approval 与 dream <b>都是内置</b>，只有挂载策略不同（approval 四档恒挂 ⇒ 保持原来的禁用开关，<b>一个字没动</b>）。<br><b>实现上两处刻意</b>：<b>① 内置的"挂载策略 + 工具名"只有一处赋值</b> —— 磁盘扫描与 dream 投影走同一个 <code>ChatStore.managedItem(name:path:)</code>。分头写的话，dream 刚跑过（磁盘上真有那个 <code>.ts</code>）会走扫描分支，那一项会<b>从"按需胶囊"变回"恒开开关"</b>：同一个东西两种说法，<b>且换脸前后都是绿的</b>。<b>② 判重不能省</b> —— 不去重就是两条同名项（一条能点开源码、一条不能，用户只会当成坏了）。<br><b>提取源码常量时踩到的一个真坑</b>：那段 TS 从函数体提到了类型级 <code>static let</code>，而 Swift 多行字符串的缩进是<b>按闭合定界符那一行剥的</b> —— 定界符与内容行缩进不一致就会<b>给每一行留下前导空格</b>，写出去的扩展"看着没事"、只是 <code>import</code> 不再顶格（<b>零红灯</b>）。做法是让内容行与 <code>"""#</code> 同为 8 空格（剥 8 ⇒ 字节不变），并<b>把这条做成判据</b>：断言首行无前导空白 + 正文里的 4 空格缩进原样保留 —— <b>剥多了或剥少了都会红</b>。<br><b>与 P15.6b 同源的那条判据</b>：<code>PiRpcTransport.dreamToolNames</code> 与那段 TS 是<b>两张表</b> ⇒ 冒烟断言"表里每个名字都能在源码里找到 <code>name: "…"</code>"，<b>改了源码忘改表会红、反过来也红</b>。<br><b>判据 11 条</b>：常量缩进 2 条 · 工具名表与源码同源 1 条 · 投影项存在且四个字段对 2 条 · 源码预览走常量 1 条 · <b>判重</b>（磁盘上真有文件时只许一条，且磁盘那条也要带 <code>isOnDemand</code> 与工具名）3 条 · <code>isOnDemand</code> 分派（approval 恒挂必须为 false）1 条 · 投影项停不掉也删不掉 1 条。<br><b>反例实测两组（各自单独跑）</b>：去掉那条判重 ⇒ <b>恰好 1 条红</b>；把"内置属性"改回<b>分头赋值</b> ⇒ <b>恰好 1 条红</b>，且<b>投影项那条仍绿</b>（证明这两条判据分工不同、不是重复的）；两处恢复后归零。<br><b>⚠️ 渲染层同样无门（登记，不是漏）</b>：判据只证"列表的数据对不对"，证不了"真的画出来了" —— 与批 5c 同一个形状。样式已由按真实度量出的原型过目、编译得过；<b>要 PNG 得再补 <code>NSHostingView</code> 探针</b>。</div></div></div>
+  <div class="todo done"><div class="tn">5e</div><div class="tbody"><div class="tt">P15.8 · dream 的洞见 <b>该归到哪个根</b>（空根进段 + 段头标归属 + 指令写明规则） <span class="chip c-ok">已施工 10-13</span></div><div class="td"><b>起因是 boss 的一次实测</b>：「<i>有个小问题，运行 dream 后正常提案了，但是他把 mangox 的雷放到了全局笔记，这个就会导致所有的会话都有可能读到这个笔记</i>」。<b>实测确认（不是推断）</b>：<code>note_proposals</code> 那一行 <code>root_id = note:global</code> · <code>target_path = MangoX 三处产品级雷.md</code> · <code>sources[0].ref = CD59B7B8-…</code>；<code>sessions</code> 表里这个会话的 <code>project_id</code> = <b>mangox 项目</b>（<code>/Users/moofs/Code/mangox</code>）⇒ <b>它本该归项目根</b>；磁盘上 <code>~/.mangox/note/</code> 有 1 篇，而 <code>mangox/.mangox/note</code> 与 <code>mangopi-cli/.mangox/note</code> <b>都不存在</b>。<br>
+  <b>根因（三行代码，缺一不成立）</b>：① <code>KnowledgeStore.noteKnowledgeBases:127</code> 列全了全局 + 每个有 path 的项目根 ② <code>knowledgeIndexSegment:205</code> <b>空根 <code>continue</code></b>（P11.4 §3.4「空库不注入」）③ ⇒ 模型看到的 <code>[笔记]</code> 段<b>只有全局一个根</b>，而硬约束是「<code>target_path</code> 父目录必须是<b>本段列出的</b>某一个根」⇒ <b>唯一合法根 = 全局</b>。<b>第二层同样空</b>：<code>sessionDigest</code> 的段头只有 <code>id · 标题 · 日期</code>（<b>没有归属</b>），prompt 全文<b>没有归属规则</b>，而唯一出现具体路径的那处（<code>:142-143</code>）写的正是<b>全局根</b> —— 它是个<b>反向锚点</b>。<br>
+  <b>判断：这是判据的适用条件变了，不是补丁</b>。「空库不注入」成立于 P11.4 的"根 = 用户挂载的任意目录"—— 那时"这个目录空着"确实没有可行动信息。P15.1 起根固定成两个、门 1 定「<b>归属 = 位置</b>」，而「这个根存在、可以往这里写」<b>就是</b>可行动信息：dream 唯一的任务就是判断一条洞见该归到哪儿。<b>省下的那两行预算，代价是删掉了归属判断的全部依据。</b><br>
+  <b>三处一起补（boss 拍板，且"全局根"定位 = 项目优先、全局是例外）</b>：<b>① 空根照进段</b>（<code>indexBlock</code> 只在 <code>!enabled</code> 时返回 nil；块形状与有文件的一致 —— 3 行头 + 一行 <code>（本根暂无笔记）</code>，成本 <b>≈90 字/根 = 64000 预算的 0.3%</b>，<b>刻意不压成一行</b>：模型不必处理两种结构）· <b>② 摘要段头补 <code>· 归属 &lt;根名&gt;</code></b> · <b>③ 指令写明「项目优先，全局是例外」+ 拆掉 <code>:142-143</code> 那个全局路径锚点</b>（<code>[笔记]</code> 段现在只在"所有根都被停用"时缺席 ⇒ 那一支改成"没有可写的落点，直接结束"）。<b>改常量即生效</b>（fire 走 <code>dreamFirePrompt</code>、<b>不读</b> <code>task.prompt</code>；面板编辑框也回填常量）⇒ <b>不需要迁移</b>。<br>
+  <b>两处"同源"要分清，它们是两种东西</b>：<code>KnowledgeBase.noteRootLabel(projectTitle:)</code> 是项目根显示名的<b>唯一产出点</b>（<code>noteKnowledgeBases</code> 与段头共用同一个函数）；而段头那格<b>由构造保证</b>不会指错 —— <code>SchedulerService.sessionRootLabels</code> 从 <code>noteKnowledgeBases</code> 的<b>启用态</b>派生名字，于是"项目没有 path"与"项目根被用户停用"这两种会话自动回落「全局笔记」，<b>结构上不可能指向一个段里不存在的根</b>。<br>
+  <b>连带两处（都不在"三处"里，但漏掉任何一处都会留下不一致）</b>：① <code>KnowledgeView.baseIndexBlock</code> 的<b>有意推翻</b> —— 原来那句「空库不画预览框是有意的」成立于"空库不进索引"，现在空根<b>真的进</b> prompt，预览不画它就是在撒谎；② <b>三条既有判据重瞄</b>：<code>T-KB 内容层①</code> 的纯函数重算、<code>守卫 16</code>（「停用 ⇒ 整段消失」→「停用 ⇒ <b>那个根</b>的块消失」+ 补一条「全停用 ⇒ 整段消失」保住本意）、<code>T-KB 索引段计数</code>（写死的 <code>== 1</code> 改成内容判据 —— <b>顺带治好 <code>:179</code> 记下的那条脆弱性</b>：旧断言会随用户 <code>~/.mangox/note</code> 里有没有笔记<b>随机红</b>）。<br>
+  <b>判据 16 条</b>（冒烟 P15.8 段）；<b>反例四组，各自单独跑</b>：ⓐ <code>indexBlock</code> 加回 <code>!docs.isEmpty</code> ⇒ <b>7 红</b>（本段 6 + 守卫 16），<b>②③⑤ 仍绿</b>（三条分工不同，不是同一件事的三种写法）· ⓑ <code>sessionRootLabels</code> 自己拼名字 ⇒ <b>3 红</b> · ⓒ <code>noteKnowledgeBases</code> 换回内联拼串 ⇒ <b>5 红</b>（含"同源"那条）· ⓓ 指令删掉归属规则 ⇒ <b>恰好 1 红</b>。⚠️ <b>只改 <code>noteRootLabel</code> 的格式是抓不到的</b>（实测 <b>FAIL 0</b>）—— 两处同源由构造保证（比断言更强），所以 ⓑⓒ 打的是"<b>有人绕过那个函数自己拼</b>"，而不是"有人改了格式"。<br>
+  <b>否掉的一条（有意不做）</b>：App 侧硬拦「<code>target</code> 必须落在来源会话所属项目的根」——「这条结论是不是<b>跨项目</b>的」是<b>语义</b>，App 判不了；而规则本身明文给跨项目留了口子（"明确跨项目"也算对）⇒ 硬拦会把<b>合法情况判成错</b>。<b>归属判在 prompt，纠错判在人</b>（每条提案本来就要人采纳，路径就印在那一行上）。</div></div></div>
+  <div class="todo done"><div class="tn">5f</div><div class="tbody"><div class="tt">P15.8b · 拍过板的提案 <b>直接删行</b>（提案表 = 待审队列，"终态"这个概念整条取消） <span class="chip c-ok">已施工 10-13</span></div><div class="td"><b>起因</b>：boss 看了左列那张图 —— 提案区里挂着一条「<i>已丢弃 · 全局笔记 / MangoX 三处…</i>」，判据是「<i>还有个点，已经丢弃的提案，直接删除吧，不要留着了</i>」。问"已采纳的要不要一起删"时他的回答把根也说清了：「<i>按理说已经采纳的提案要进入笔记区域啊</i>」—— <b>产出已经变成笔记区里的一篇，提案行就是冗余</b>。<br><b>这条推翻的是 P15.4 的一条拍板</b>，被推翻的原文在 <code>KnowledgeStore.swift</code>：「<i>丢弃同样要落 <code>dismissed</code> 终态与 <code>decided_at</code>, 否则它会永远挂在收件箱里 —— 而"我不想做这个决定"和"我还没做决定"是两件事, 收件箱必须分得清。</i>」当时的解是<b>留在列表里、整行降档、副标换成终态</b>。<b>新的判据</b>：① 丢弃 = 我不想做这个决定 ⇒ 它<b>没有任何后续动作</b> ⇒ 留着就是噪音；② 采纳 = 产出已经落在磁盘上 ⇒ 记录在笔记区里，提案行是冗余。⇒ <b>收件箱只回答一个问题：「还剩几件等我拍」</b>。<br><b>于是「终态」整条取消，四样东西跟着死</b>（生产者没了就不留 —— 同 <code>custom_models</code> 那次的口径）：<code>NoteProposalStatus</code> 收敛成<b>只剩 <code>pending</code></b>（<b>列不删</b>：DB 判据"列只增不删"，旧版打开新库会立刻崩）· <code>decidedAt</code> 字段删 · <code>PersistenceStore.setNoteProposalStatus</code> 删（无调用者）· <code>loadNoteProposals(status:)</code> 去掉过滤参数与 <code>CASE … ORDER BY</code>（只剩"新的在前"）。视图侧删掉 <code>proposalStatusLabel</code> / <code>proposalStatusColor</code> / 审阅面的终态分支 / <code>proposalStampLine</code> 的「拍板于」。<br><b>⚠️ 存量行不能靠"不读它"来解决</b>：<code>NoteProposalStatus</code> 只剩一个值之后，老库里那两条终态行会<b>解析不出状态</b> ⇒ <code>guard let status</code> 直接把它们静默丢掉 —— <b>行还躺在库里、界面上谁也看不见、门禁也不会红</b>。因为 <code>migrate()</code> 是"明确删掉，不让它静默"：<code>DELETE FROM note_proposals WHERE status &lt;&gt; 'pending'</code>（一行，落在 <code>migrate()</code> 里，<b>App 每次启动都跑</b>）。<br><b>⚠️ 那条 DELETE 是带地雷的</b>：将来若重新引入终态行，<b>这一行必须一起删</b> —— 否则它会每次启动静默吃掉新写进去的行。已写进代码注释与本节。<br><b>关键区分：删的只能是"拍过板"，不能是"没拍过板"</b> —— 采纳<b>失败</b>的三条路（<code>nameCollision</code> / <code>baseHashMismatch</code> / <code>noteMissing</code> / <code>writeFailed</code>）<b>一律留在待审</b>（那是 P15.4 那条判据的正面：人得能重试），删掉它等于<b>把一次失败的采纳伪装成一次拍板</b>。<br><b>判据</b>：冒烟 <b>1172 PASS / 0 FAIL</b>（1171 ⇒ <b>+1</b>，含一条新增的<b>存量移除真门禁</b>：照 T22 那套"<code>PersistenceStore(path:)</code> + 底层句柄 <code>Database</code> 写一行老版终态行 + 重开 store"造 —— <b>公开 API 造不出来，那正是本批的正面</b>；断言<b>只删终态行、同库的待审行原样保留</b>，把 <code>DELETE</code> 写宽了立刻红）。三条旧判据重瞄：采纳 ⇒ <b>行不在表里</b>（原来断言 <code>.accepted</code>）· 丢弃 ⇒ <b>行从表里消失</b>（原来断言 <code>.dismissed + decidedAt</code>）· 列表顺序判据<b>整条取消</b>（只剩一种状态，排序无从谈起）。</div></div></div>
+</div>
+
+<h3>验收项</h3>
+<div class="todos">
+  <div class="todo done"><div class="tn">T1</div><div class="tbody"><div class="tt">判据 ① 变绿：两个固定根存在</div><div class="td">验收：<code>grep -rc 'note:global' mangox/</code> 有非零文件（<b>实测 1</b>）。<span class="chip c-ok">已做 · P15.1</span></div></div></div>
+  <div class="todo done"><div class="tn">T2</div><div class="tbody"><div class="tt">判据 ② 变绿：扫描结果带时间</div><div class="td">验收：<code>grep -c modifiedAt mangox/Models/KnowledgeBase.swift</code> <b>≥ 1</b>（<b>实测 6</b>）。<span class="chip c-ok">已做 · P15.1</span></div></div></div>
+  <div class="todo done"><div class="tn">T3</div><div class="tbody"><div class="tt">陈旧标记能出现、也能不出现（<b>这条要造反例</b>）</div><div class="td">验收：造一份 <code>mtime</code> 改到 <b>8 天前</b>（阈值 7 天之上）的夹具笔记 ⇒ 索引与行尾<b>出现</b>陈旧标记；改回今天 ⇒ 标记<b>消失</b>。<b>两条都要过</b> —— 只验"能出现"的判据会在阈值判断写反时照样绿。<b>已做</b>：冒烟 T3 三条（恰好到阈值 ⇒ 出 · 差一天 ⇒ 不出 · <code>modifiedAt = nil</code> ⇒ 不猜），<code>now</code> 走注入参数 ⇒ 确定性可断言。<span class="chip c-ok">已做 · P15.1</span></div></div></div>
+  <div class="todo done"><div class="tn">T4</div><div class="tbody"><div class="tt">外部改过的笔记不许被覆盖（乐观并发）</div><div class="td">验收：取一份笔记读入 → <b>在外部把文件改掉</b> → 提交改写 ⇒ 返回冲突（<code>base_hash</code> 不符）且<b>磁盘文件一个字节没变</b>（前后哈希比对来证）。<b>已做</b>：冒烟 T4 —— 被拒 · <b>反例</b>（被拒时磁盘一字节没变 + 不记旧版）· 「仍然覆盖」= 重读指纹后再存 · 被盖掉的外部那一版同样进旧版。<span class="chip c-ok">已做 · P15.2</span></div></div></div>
+  <div class="todo done"><div class="tn">T5</div><div class="tbody"><div class="tt">dream 不改输入（<b>本版最重要的一条不变量</b>）</div><div class="td">验收：跑一次 dream ⇒ 对两个笔记根做<b>整树哈希</b>（路径 + mtime + 字节），跑前跑后<b>完全相同</b>；产出只出现在 <code>note_proposals</code> 表里。这是 <code>The input store is never modified</code> 的本地等价判据。<br><b>批 3 起它「结构性成立」，批 4 起那道结构变了 —— 但结论不变</b>：从提案到磁盘的路径<b>现在存在了</b>（<code>adoptProposal</code>），所以"不改输入"不再是"做不到"，而是"<b>要人按下才算</b>"。判据随之从"没有路径"换成"<b>只有一个入口，且 dream 的 fire 自己仍然一个字节都不写</b>"。<b>已做</b>：冒烟钉住三件 —— ① 收口只写表 ② spool 用完即删（常态下那个目录是空的）③ <b>采纳才写盘</b>（insight 采纳后正文真的落盘 + 归属 <code>.dream</code>）与 <b>丢弃一个字节不写</b>（磁盘哈希与版本史条数双验）。⚠️ <b>整树哈希那种端到端验证仍红</b> —— 要真跑一次 dream（App + 真模型），属实机项。<span class="chip c-ok">已做 · 结构性边界后移一道门 · 整树哈希待实机</span></div></div></div>
+  <div class="todo blocked"><div class="tn">T6</div><div class="tbody"><div class="tt">判据 ③ 变绿：产出真的长出来了</div><div class="td">验收：<code>SELECT COUNT(*) FROM knowledge_items WHERE enabled=1;</code> 与 <code>ls ~/.mangox/note/*.md</code> 都不再是 <code>0</code>。<span class="chip c-warn">未做 · 需真实使用积累</span></div></div></div>
+  <div class="todo done"><div class="tn">T7</div><div class="tbody"><div class="tt">门禁</div><div class="td">验收：<code>bash scripts/smoke/run.sh</code> ALL PASS（前台 + 免沙箱）+ <code>xcodebuild … build</code> 出 BUILD SUCCEEDED 且<b>编译警告 0</b>（判据是编译警告，不是 <code>grep -c 'warning:'</code> —— 后者会把 xcodebuild 自身的目的地提示算进去）+ 本地化三道门绿（<b>动 UI 文案与注入 token ⇒ 词表条数与接线门必跑</b>）。<b>读数（10-12）：979 PASS / 0 FAIL · BUILD SUCCEEDED + 警告 0 · 621/621 + 接线 0 + e2e 642 PASS</b>。<span class="chip c-ok">已做 · P15.1</span></div></div></div>
+  <div class="todo done"><div class="tn">T8</div><div class="tbody"><div class="tt">索引块真的带上摘要 / 陈旧（来源拆到 T8b）</div><div class="td">验收：造三篇夹具（一篇 frontmatter 有 <code>summary</code>、一篇只有正文、一篇两样都空）⇒ 索引段三行<b>都有摘要</b>（前者取 frontmatter、中者取首行）；把一篇 mtime 改到 8 天前 ⇒ 该行<b>出现</b>天数、改回今天 ⇒ <b>消失</b>。<b>已做</b>：冒烟 T3 正例/反例 + T8 四条（frontmatter 命中 · 无 frontmatter 回落 · 两样都空留空串不发明占位 · <code>---</code> 不闭合只当正文）。<span class="chip c-ok">已做 · P15.1</span></div></div></div>
+  <div class="todo done"><div class="tn">T8c</div><div class="tbody"><div class="tt">索引行带「标题」列，且 <code>title</code> == 文件名时<b>一格都不补</b>（<b>这条要造反例</b>）</div><div class="td">验收：一篇 frontmatter <code>title:</code> 与文件名<b>不同</b> ⇒ 索引行<b>补</b>标题列；<b>相同</b>（含"没写 title ⇒ 回落成文件名去扩展名"）⇒ <b>不补</b>。<b>已做</b>：冒烟 <code>T8c</code> 四条 —— frontmatter 命中（实测 <code>  fm.md · 带标题的 · 来自 frontmatter 的摘要 · 95 天未更新</code>）· <b>反例</b>（相等即不补）· 无 frontmatter 那篇 = <code>路径 · 摘要</code>（实测 <code>  body.md · 正文首行当摘要 · 95 天未更新</code>）· <code>fileStem</code> 吃得下<b>相对路径</b>（带子目录 / 带空格）。⚠️ 判等与回落值<b>同源</b>（<code>KnowledgeBaseScan.fileStem</code>）—— 判据换成含扩展名的比较，这里立刻红。<span class="chip c-ok">已做 · P15.1</span></div></div></div>
+<div class="todo done"><div class="tn">T8b</div><div class="tbody"><div class="tt">来源标记（「它攒的」/「你写的」）<span class="chip c-ok">已做 · P15.4</span></div><div class="td">验收：dream 提案被采纳后写盘的那篇标「它攒的」、外部新建的标「你写的」，且判据<b>不猜</b>。<br><b>判据比原设计更精确了一步</b>：原口径是「凡不在记录里的就归『你写的』」，本批改成 <b>拿磁盘上的 <code>sha256</code> 去版本史里认领那一条</b> —— 认到就用它的 <code>origin</code>（精确），认不到才回落 <code>.human</code>。差别在"最后写下的那一版**没被记过**"这个情形（外部改过 / 老库）：<b>"最新一条的 origin"会说谎，<code>sha256</code> 认领不会</b>。<br><b>已做</b>：冒烟五条 —— 新建（空正文）归 <code>.human</code> · 采纳 insight 后归 <code>.dream</code> · 采纳 replace 后归 <code>.dream</code> · <b>外部扔进来的文件零记录 ⇒ 回落 <code>.human</code></b>（这条是"不猜"的判据）· 被拒 / 丢弃的提案不留下任何一条。<br>⚠️ <b>来源标记只做在笔记本体的信息面上，列表行不做</b> —— 判据要读**整篇**的哈希，而列表渲染路径每帧（每次重扫）都跑；那是"成本与文件总大小无关"那条契约（<code>KnowledgeBase.swift:86</code>）不该被破的地方。已登记在 §05。</div></div></div>
+  <div class="todo blocked"><div class="tn">T9</div><div class="tbody"><div class="tt"><code>note_search</code> 能命中，且产物不进注入块</div><div class="td">验收：给定一篇含「老哥」的笔记，<code>note_search("老哥")</code> 命中它；<b>同时</b>断言注入块文本<b>不因这次搜索而改变</b>（前后逐字节相等）—— 这才是"产物进消息流、不进注入块"的判据，光验"能搜到"会在产物被塞进索引段时照样绿。<span class="chip c-warn">未做</span></div></div></div>
+  <div class="todo done"><div class="tn">T10</div><div class="tbody"><div class="tt">存量真的没了（<b>这条今天已经绿了</b>）</div><div class="td">验收：<code>sqlite3 "file:$HOME/.mangox/mangox.db?mode=ro" "SELECT COUNT(*) FROM knowledge_bases;"</code> → <code>0</code>，且 <code>test -e ~/.mangox/kb</code> 为假。<span class="chip c-ok">已做 · 10-12 11:00</span></div></div></div>
+  <div class="todo done"><div class="tn">T11</div><div class="tbody"><div class="tt">新建笔记：标题 → 文件名（净化 + 撞名拒 + 就地建目录）</div><div class="td">验收：标题含 <code>/</code> <code>:</code> 或为空 ⇒ 净化或拒；与已存在的文件撞名 ⇒ <code>.nameCollision</code>，<b>不猜「覆盖还是改名」</b>；根目录不存在 ⇒ <b>就地建目录</b>，不弹错、不判空。新建那篇文件<b>是空的</b>（标题 == 文件名 ⇒ 不写 frontmatter <code>title:</code>，同 T8c 判据）。<b>已做</b>：冒烟 T11 九条 —— 净化 4 条（分隔符 / 冒号 · 中文空格括号原样留 · 洗空了给 <code>nil</code> · 点开头补前缀）· <b>三条反例</b>（撞名 / 空标题 / 超长标题）· 写完立刻可扫 + 立刻进注入快照 + 索引行 = 纯路径。<span class="chip c-ok">已做 · P15.2</span></div></div></div>
+  <div class="todo done"><div class="tn">T12</div><div class="tbody"><div class="tt">打开 → 改标题 / 改正文 → 存回磁盘（<b>只动该动的那一行</b>）</div><div class="td">验收：改标题<b>只换 frontmatter <code>title:</code> 那一行</b>，注释 / 键顺序 / 用户自己写的键<b>逐字保留</b>；标题清空 ⇒ <b>删掉那一行</b>（不写空值）；原本没有 frontmatter ⇒ <b>补在最前</b>；<code>---</code> 不闭合 ⇒ <b>整篇当正文</b>（与 <code>parseHead</code> 同一口径）；<code>.txt</code> <b>一个字节的 frontmatter 都不塞</b>（往纯文本里插 <code>---</code> 是数据损坏）。<b>已做</b>：冒烟 T12 + frontmatter 往返 4 条 + 非 <code>.md</code> 2 条 + 内容没变返回成功但不记旧版（2 条）。<span class="chip c-ok">已做 · P15.2</span></div></div></div>
+  <div class="todo done"><div class="tn">T13</div><div class="tbody"><div class="tt">覆盖前留旧版（<code>note_revisions</code>，存整篇原文不是 diff）</div><div class="td">验收：每次改写<b>成功</b>前把<b>整篇旧文</b>记进 <code>note_revisions</code>（<code>origin</code> 记来源、<code>sha256</code> = 打开时那一版指纹）；<b>内容没变则不记</b>（否则「每点一次保存就多一条历史」）；删掉的笔记也<b>先留档</b>。<b>已做</b>：冒烟 T13（<code>content</code> = 整篇原文 + <code>origin=human</code> + 指纹一致）+ 两条反例（内容没变不记 · 被拒时不记）+ 删除留档 + 表往返一致。<span class="chip c-ok">已做 · P15.2</span></div></div></div>
+  <div class="todo done"><div class="tn">T14</div><div class="tbody"><div class="tt">删除 = 记旧版 + 进系统「废纸篓」</div><div class="td">验收：删除前先留档，再让文件<b>离开笔记根</b>；生产走 <code>trashItem</code>（<b>「废纸篓」，还能捞回来</b>），冒烟走 <code>removeItem</code>（<b>不许往用户真实 <code>~/.Trash</code> 丢夹具</b> —— 政策与执行拆开，断言查政策）；删一篇已经不在的 ⇒ <code>.noteMissing</code>，<b>不静默成功</b>。<b>已做</b>：冒烟 T14 三条 + <code>.noteMissing</code> 反例 + 守卫 24 的政策/执行两条。<span class="chip c-ok">已做 · P15.2</span></div></div></div>
+</div>
+
+<div class="call">
+  <div class="lbl">批 1~5f 的门禁读数（判据是「能变红」，不是「跑过了」）</div>
+  <p><b>批 1（P15.1）</b>：<b>冒烟</b>：<code>bash scripts/smoke/run.sh</code>（前台 + 免沙箱）→ <b>979 PASS / 0 FAIL / ALL PASS</b>。其中带 <code>P15.1</code> 前缀的 <b>24 条</b>（含新增的 <code>T8c</code> 4 条）、<code>守卫 23</code> 1 条、<code>T-KB 内容层①②</code> 2 条；守卫 6 的判据<b>被本批证伪并重写</b>（§05）。<b>本地化三门</b>：<code>gen_strings.py --check</code> → <b>621/621 覆盖 · 0 缺 · 0 废</b>；<code>scan_wiring.py --check</code> → <b>可疑未接线 0 · 冻结取词 0</b>；<code>e2e_probe.py</code> → <b>642 PASS / 0 FAIL</b>（含 1 条反例）。<br><b>批 2（P15.2）</b>：<b>冒烟</b> → <b>1020 PASS / 0 FAIL / ALL PASS</b>（净增 <b>41 条</b>：守卫 24 · 守卫 25 · frontmatter 往返 · 文件名净化 · <b>T11~T14</b> · 乐观并发 · 表往返）；<b>词表</b> <code>642/642</code>（补 23 条 / 删 2 条）· <b>接线门</b> 可疑 0 / 冻结 0 · <b>e2e</b> <code>663 PASS</code>。<b>反例实测</b>：往 <code>composeNote</code> 注入「从解析出的键重建 frontmatter」的错法 ⇒ <b>恰好 3 条红</b>，恢复后残留计数 0。<br><b>批 3（P15.3 · dream）</b>：<b>冒烟</b> → <b>1064 PASS / 0 FAIL / ALL PASS</b>。⚠️ <b>口径先说清</b>：P15 三批的断言至今都还在工作区（<code>cc0e111</code> 之后没提交过），所以能比的是两个<b>工作区</b>读数 —— 相对<b>批 2 的 1020</b> 净增 <b>44 条</b>；相对 <code>cc0e111</code> 现测的 <b>951</b> 则是 <b>113 条</b>（含批 1~3）。<b>词表</b> <code>657/657</code>（补 15 条）· <b>接线门</b> 可疑 0 / 冻结 0 · <b>e2e</b> <code>678 PASS</code>。<b>本批还修了一条判据</b>：<code>scan_wiring.py</code> 里找三引号是<b>裸 <code>find</code></b>，于是注释里提一句"三引号长什么样"就被当成真定界符 —— 配对数变奇数后最后一个找不到伙伴，代码里那句 <code>end = len(text) if end &lt; 0</code> 便把它一路延到文件末（实测 <b>13 处</b>正常接了 <code>L()</code> 的文案被误报成 <code>EMBEDDED</code>）。已改成只认合法定界符（前置 + 后置两条必要条件），<b>造反例两项</b>：真·串内裸中文必须<b>红</b> / 注释里行尾三引号必须<b>绿</b>，两例都过。<br><b>批 4（P15.4 · 审阅面）</b>：<b>冒烟</b> → <b>1091 PASS / 0 FAIL / ALL PASS</b>（相对批 3 的 1064 净增 <b>27 条</b>，全部带 <code>P15.4</code> 前缀）。⚠️ <b>另外改了 3 条 P15.2 的旧判据</b> —— 它们验的是"覆盖前留旧版"，而记账时机在本批前移了（见下）；改后的判据问的是「<b>有没有多</b>」而不是「是不是 1」，<b>因为写成固定条数的判据会在记账时机变动时假红</b>（这一条是实测撞出来的）。<b>词表</b> <code>672/672</code>（补 <b>18</b> 条 / 删 <b>3</b> 条孤儿：被并排 diff 取代的单栏预览两条 + 一句过期的免责声明）· <b>接线门</b> 可疑 0 / 冻结 0 · <b>e2e</b> <code>693 PASS</code>。<b>反例实测</b>：<code>NoteDiff</code> 的初见判据<b>期望值写错了</b>（把 <code>"a\nb\nc\n"</code> 当成 3 行 —— 切分口径是 <code>omittingEmptySubsequences: false</code>，<b>尾部换行算一行</b>，实际 5 行）⇒ <b>恰好 3 条红</b>，改正后全绿；顺带把"尾部换行是一处真实差异"单独钉了一条。<br><b>P15.5（内置库退休 · 收尾批）</b>：<b>冒烟</b> → <b>1091 PASS / 0 FAIL / ALL PASS</b>。⚠️ <b>它和批 4 同为 1091，别读成"没动过"</b> —— 删掉了守内置库的那一组（「自动挂成内置库 / 可停用 / 可重新启用 / 不可删」四条 + Q13 里两条），也新增了 <b>7 条带 <code>P15.5</code> 前缀的</b>，<b>净 0</b>。<b>词表零改动</b> <code>672/672</code> —— 「按需知识 · 全局」与「&lt;项目&gt;（按需知识）」这两条住在 <code>KnowledgeStore.swift</code>，而该文件在 <code>gen_strings.py</code> 的 <code>EXCLUDE_FILES</code> 里（§05 风险表「固定根的名字与描述不进词表」那条记的就是这个背面）⇒ 退休它一个词表条目都不用动。<b>接线门</b> 可疑 0 / 冻结 0 · <b>e2e</b> <code>693 PASS</code>。<br><b>改判了两条旧判据</b>：① P15.1 那条「按需条目的<b>指针</b>在 prompt 里」的<b>反向锁</b>改成<b>缺口登记</b>（断言它<u>确实不在</u>，注释里写明 P11.3 解冻时要把这道锁重建回来）② 「关掉 ⇒ 不进 prompt」那条<b>去掉了 <code>text != nil</code> 这一半</b> —— 内置库退休后该夹具的 <code>text</code> 整块为 <code>nil</code>（persona 0 条 + 索引段也没了），而"整块为 nil"与"这一条不在块里"是<b>同一件事</b>；判据改问「关掉后常驻条目不在 ∧ 常驻计数 -1」。<br><b>反例实测（跑了一遍真红的）</b>：把 <code>noteKnowledgeBases</code> 的折算行 <code>enabled: !fixedRootDisabled.contains(id)</code> 还原成 <code>enabled: true</code> ⇒ 固定根的停用开关<b>点了没反应</b>，冒烟<b>恰好红 2 条</b>（<code>T-KNOW 停用的固定根仍在列表里</code> · <code>固定根的停用真的反映到扫描列表</code>）—— 正是为抓这类<b>不报错、不变红</b>的静默失效而设的两条；还原后 <code>cmp</code> 逐字节一致、判据回绿。<br><b>各批共同的构建读数</b>：<code>xcodebuild … build</code> → <b>BUILD SUCCEEDED</b>、<b>编译警告 0</b>。<b>文档样式门</b> <code>design_doc_css.py --check</code> 的读数见文末。<br>⚠️ <b>五批的读数都已在上文</b>，不存在"未施工"的那一批了。另：§02 D 那批只读命令跑在真实库上、结果是 <code>1 / 0 / 0 / 0 / 1 / 0</code> 与 <code>885 / 3.5M</code>；<b>不要把「文档写完」读成「验证过」</b>。<br><b>批 5（P15.6 · dream 的输入）</b>：<b>冒烟</b> → <b>1124 PASS / 0 FAIL / ALL PASS</b>（净增 <b>20 条</b>，全部带 <code>P15.6</code> 前缀；已核对这 20 条<b>确实执行</b>，不是"块没跑到"的假绿）。<b>词表</b> <code>672/672</code> <b>读数不变</b>（本批<b>没有</b>增删任何 <code>L()</code>：改的是恒中文字面量，只加常量与纯函数）· <b>接线门</b> 可疑 0 / 冻结 0 · <code>xcodebuild</code> <b>BUILD SUCCEEDED + 编译警告 0</b>。<b>反例实测三组</b>：<code>sessionMaterial</code> 放行工具卡 ⇒ <b>2 条红</b>；摘掉窗口条件 ⇒ <b>2 条红</b>；<code>dreamShortlist</code> 的界取小 ⇒ <b>恰好 1 条红</b>；三处恢复后归零。<br><b>批 5b（P15.6b · 指令取出厂常量）</b>：<b>冒烟</b> → <b>1137 PASS / 0 FAIL / ALL PASS</b>（1124 → 净增 <b>13 条</b>：11 条 <code>P15.6b</code> + 2 条 <code>P15.3 档期</code>）。<b>词表 <code>672 → 673</code></b>（新 UI 说明文案 1 条；<b>指令正文不进词表</b> —— 含 <code>[笔记]</code> 契约 token，本地化会破门）· <b>接线门</b> 可疑 0 / 冻结 0 · <b>e2e 探针</b> <code>694 PASS / 0 FAIL</code>（含 1 条反例）· <code>xcodebuild</code> <b>BUILD SUCCEEDED + 编译警告 0</b>。<b>反例实测三组（各自单独跑）</b>：删掉域层归一化 ⇒ <b>2 条红</b>；dream 分支改回读 <code>task.prompt</code> ⇒ <b>2 条红</b>；归一化丢掉 <code>isDreamTask</code> 门 ⇒ <b>恰好 1 条红</b>；三处恢复后归零。<b>档期语义另加两组</b>（见 §03 批 5b 末尾）：seed 改成"每次抹了重种" ⇒ <b>4 条红</b>；归一化连 <code>cron</code> 一起归一 ⇒ <b>3 条红</b>。<b>⚠️ 本批的夹具变了形态</b>：以前 dream 的冒烟任务<b>全是新种的</b>（所以"存量旧行"这条真实路径<b>一条判据都没有</b>）。现在夹具是<b>先把旧文案落盘、再用新 store 打开同一个库读回来</b> —— 只有这样才能在门里复现"老库 + 新版本启动"。<br><b>批 5c（P15.6c · 行内锁标记）</b>：<b>冒烟</b> → <b>1144 PASS / 0 FAIL / ALL PASS</b>（1137 → 净增 <b>7 条</b>，全部带 <code>P15.6c</code> 前缀）。<b>词表 <code>673 → 674</code></b>（tooltip 1 条）· <b>接线门</b> 可疑 0 / 冻结 0 · <b>e2e 探针</b> <code>695 PASS / 0 FAIL</code> · <code>xcodebuild</code> <b>BUILD SUCCEEDED + 编译警告 0</b>。<b>反例实测三组（各自单独跑）</b>：<code>rowMarker</code> 恒 <code>nil</code> ⇒ <b>2 条红</b>；判据改成认<b>名字</b> ⇒ <b>2 条红</b>（打出 <code>task=[dream] 标记=true canDelete=true</code> —— 名叫 dream 的普通任务拿到了锁，而它其实能删）；<b>无条件全标</b> ⇒ <b>5 条红</b>；三处恢复后归零。<b>⚠️ 渲染层无门（登记，不是漏）</b>：判据只证"该不该显"，证不了"真的画出来了" —— 详见 §03 批 5c 末尾。<br><b>批 5d（P15.7 · dream 进 Plugins 面板）</b>：<b>冒烟</b> → <b>1155 PASS / 0 FAIL / ALL PASS</b>（1144 → 净增 <b>11 条</b>，全部带 <code>P15.7</code> 前缀）。<b>词表 <code>674 → 676</code></b>（"按需加载"胶囊 1 条 + 它的 tooltip 1 条；<b><code>note_proposal</code> 这个工具名不进词表</b> —— 它是契约 token，本地化会让面板显示的名字与真实注册名对不上）· <b>接线门</b> 可疑 0 / 冻结 0 · <b>e2e 探针</b> <code>697 PASS / 0 FAIL</code>（含 1 条反例）· <code>xcodebuild</code> <b>BUILD SUCCEEDED + 编译警告 0</b>。<b>反例实测两组（各自单独跑）</b>：去掉那条判重 ⇒ <b>恰好 1 条红</b>（正是"磁盘上有真文件时只许一条"）；把"内置属性"改回<b>分头赋值</b>（投影项自己设 <code>isOnDemand</code>、磁盘项不设）⇒ <b>恰好 1 条红</b>，且<b>投影项那条仍绿</b>（两条判据分工不同，不是重复的）；两处恢复后归零。<b>⚠️ 本批刻意不新增写盘点</b>：列出来的那条是<b>投影</b>的 ——「面板有」≠「磁盘上有」，这是有意的（§03 批 5d 与 §05 都登记了）。<br><b>批 5e（P15.8 · 归属）</b>：<b>冒烟</b> → <b>1171 PASS / 0 FAIL / ALL PASS</b>（相对批 5d 的 1155 <b>净增 16 条</b>）。⚠️ <b>另外重瞄了 3 条既有判据</b>（<code>T-KB 内容层①</code> / <code>守卫 16</code> / <code>T-KB 索引段计数</code>）—— 它们成立于"只有挂载的库才进段"的年代，<b>重瞄的理由与它们现在还守什么</b>都写在 §03 批 5e。<b>词表</b> <code>676/676</code>（<b>不动</b>：新文案全在 <code>EXCLUDE_FILES</code> 里 —— <code>（本根暂无笔记）</code> 与 <code>归属</code> 都是注入面文本，与 <code>[笔记]</code> token 同款、恒中文）· <b>接线门</b> 可疑 0 / 冻结 0 · <b>e2e 探针</b> <code>697 PASS / 0 FAIL</code> · <code>xcodebuild</code> <b>BUILD SUCCEEDED + error 0</b>（⚠️ <b>warning 1</b>：来自批 5d 的 <code>Models/ExtensionModels.swift:60</code>，<b>本次没动那个文件</b>；批 5d 报的"警告 0"与本读数不一致。⚠️ <b>批 5f 已把它确证</b>：换<b>全新 derivedData</b> 重编可稳定复现这 1 条（107 个编译任务）⇒ 批 5d 的"0"是<b>增量构建没重编那个文件</b>；同批还实测出<b>增量构建会空转</b>（有一次 0 个 <code>SwiftCompile</code> 也照样报 "BUILD SUCCEEDED"）⇒ 判 <code>xcodebuild</code> 要看<b>编译任务数</b>，不能只看那一行结论。登记在 §05）。<b>反例四组（各自单独跑）</b>：ⓐ 空库不注入加回去 ⇒ <b>7 红</b> · ⓑ 归属名自己拼 ⇒ <b>3 红</b> · ⓒ <code>noteKnowledgeBases</code> 换回内联拼串 ⇒ <b>5 红</b> · ⓓ 指令删掉归属规则 ⇒ <b>恰好 1 红</b>；四处恢复后归零。<b>⚠️ 渲染层与"模型照不照做"同样无门</b>：本批判据只到"注入段与指令的字节对不对"，<b>证不了模型照不照它做</b>（与批 5d 的渲染层缺口同形，登记在 §05）。<br><b>批 5f（P15.8b · 拍过板就删行）</b>：<b>冒烟</b> → <b>1172 PASS / 0 FAIL / ALL PASS</b>（相对批 5e 的 1171 <b>净增 1 条</b>；同时<b>删掉 4 条随终态作废的旧判据</b>、重瞄 3 条 —— 净增 1 是"减 4 加 5"的结果，不是没动）。<b>词表</b> <code>676 → 670</code>（<b>加 1</b> 条新的丢弃 tooltip、<b>删 7</b> 条随终态作废的 key：<code>待审</code> / <code>已采纳</code> / <code>已丢弃</code> / 两句终态说明 / <code>拍板于 %@</code> / 旧的丢弃 tooltip）· <b>接线门</b> 可疑 0 / 冻结 0 · <b>e2e 探针</b> <code>691 PASS / 0 FAIL</code> · <code>xcodebuild</code> <b>BUILD SUCCEEDED + error 0</b>，<b>警告 1</b>（同一条 <code>Models/ExtensionModels.swift:60</code>，见上）。<b>新增一条真门禁（存量移除）</b>：照 T22 那套用<b>底层句柄 <code>Database</code></b> 造一行老版终态行、重开 store，断言<b>只删终态行、同库的待审行原样保留</b> —— <code>DELETE</code> 写宽了立刻红（<b>公开 API 造不出这行，那正是本批的正面</b>）。⚠️ <b>本批第一次 <code>xcodebuild</code> 是空转</b>（复用 <code>/tmp/mangox-dd</code>，<b>0 个 <code>SwiftCompile</code> 任务</b>，照样报 BUILD SUCCEEDED）⇒ 换<b>全新 derivedData</b> 重跑才算数（107 任务）。</p>
+</div>
+
+<h2><span class="n">05</span>风险与边界<span class="en">RISK &amp; BOUNDARY</span></h2>
+
+<div class="tw">
+<table>
+<tr><th>风险</th><th>现象</th><th>结法</th></tr>
+<tr><td>目录固定后用户想挂外部资料</td><td>「我把一整个笔记仓库放在 <code>~/Documents/notes</code>，它进不来」</td><td>🔴 <b>本版有意接受</b>（§01 明写代价）。结法方向：将来作为<b>独立功能</b>（外部资料索引）重开 —— 它与"笔记"是两种语义，塞回同一区就会重演"两种东西挤一个概念"。<b>短期绕法只有复制</b> —— 扫描器显式排除符号链接（<code>KnowledgeBase.swift:99-101</code>），软链进不去</td></tr>
+<tr><td>项目笔记根进了 git</td><td><code>.mangox/note/</code> 出现在 <code>git status</code> 里被提交进去 ⇒ 机器本地的记忆跑进了项目历史</td><td><b>App 不代改用户 <code>.gitignore</code></b>（越界）；在 UI 与文档里说明清楚。外部同形 = Windsurf 的 memories 是机器本地不进 repo</td></tr>
+<tr><td>外部编辑与 App 写入撞车</td><td>笔记是明文 md，用户随时可能用外部编辑器改；App 拿着旧内容覆盖 ⇒ 静默丢掉外部改动</td><td><b>改写前比对 <code>base_hash</code></b>（读入时记、写时带）；不符 ⇒ 拒绝 + 提示重读。Claude Platform <code>content_sha256</code> 乐观并发的本地版（T4 是它的验收，<b>P15.2 已落地</b>）</td></tr>
+<tr><td>提案表膨胀</td><td>dream 每跑一次出一批提案，全部留在 <code>note_proposals</code> 里</td><td>只有三种终态（待审 / 已采纳 / 已丢弃），<b>采纳与丢弃后内容可清</b>（留 <code>base_hash</code> 与理由即可）；<b>diff 为空则整份不产出</b></td></tr>
+<tr><td>dream 一次要读的会话太多</td><td>会话 JSONL 单份几十 KB 起、总量已 3.5 MB ⇒ 一次 fire 装不下，「新洞见」这一支跑不完</td><td><b>只喂最近的窗口</b>（不重读全量；<code>get_entries</code> 的 <code>since</code> 游标是同一形状）· <b>dream 单独选模型</b>（<code>ScheduledTask.config</code> 已支持 provider / modelId / thinkingLevel，不污染主会话）· <b>跑不完不算失败</b>：提案尽力而为，出几条算几条</td></tr>
+<tr><td>「新洞见」把没说过的话总结成"事实"</td><td>会话里没人这么说过，dream 编出一条 ⇒ 人一采纳就变成笔记里的既成事实</td><td><b>每条提案必须带来源会话指针</b>（<code>note_proposals.sources</code>）⇒ 可回查原话；<b>拿不出指针的提案不入表</b>。这是「provenance 回到源」那条（提炼 ③）在本地的最小落地</td></tr>
+<tr><td>移除存量时误删 / 顺序反了</td><td>删 <code>~/.mangox/kb/</code> 整棵时连带删掉别的东西；或先删文件、后删 DB 行 ⇒ 索引指向不存在的路径、打出误导性告警</td><td><b>先 <code>ls -R</code> 核实该目录下只有那一份</b>（已实测：<code>kb/</code> 下只有 <code>projects/</code>，<code>projects/</code> 下只有 <code>PROJECTS.md</code>）再删；<b>先删 DB 行、再删文件</b>；删的是我们自己目录下的东西，<b>不进 <code>.workbuddy/archive/</code></b>（那是给"要搬走的东西"留副本的）</td></tr>
+<tr><td>陈旧 ≠ 错误被混为一谈</td><td>"20 天没变"被读成"这条不对了" ⇒ 用户做无意义的编辑，或反过来信任一份过期的笔记</td><td><b>两个维度物理分开</b>：时间戳只管陈旧、探针只管正确；界面文案不许合述（不写"这条可能已失效"这类句子）</td></tr>
+<tr><td>陈旧度说谎</td><td>mtime 被 git check-out / 复制 / 备份还原改掉 ⇒ 显示"刚更新过"而内容很旧</td><td>⚠️ <b>本版接受</b>（§03 妥协 ③）。结法方向 = 改读 git 提交时间，或引入文件内时间戳交叉校验 —— 都要新契约，另批</td></tr>
+<tr><td>frontmatter 分隔线与正文冲突</td><td>用户在笔记正文里写 <code>---</code> 分隔线，被当成 frontmatter 边界</td><td><code>PersonaPack</code> 已有这条判据的形状（<b>开头 <code>---</code> 不闭合 = 破损 ⇒ 只展示不注入</b>）。笔记侧同款：<b>解析失败不猜</b>，<code>title</code> 回落文件名，正文原样照读 —— <b>笔记正文永远不因 frontmatter 破损而消失</b>（<b>P15.2 已落地</b>：<code>splitFrontmatter</code> 与 <code>parseHead</code> 共用同一口径，冒烟有 <code>---</code> 不闭合的反例）</td></tr>
+<tr><td><b>阈值取 7 天让标记变成噪音</b></td><td>一周没更新就挂「陈旧」⇒ <b>大部分笔记长期挂着标记</b>，用户开始无视它 —— 标记不再有信息量（同"红条变噪音"那条判据）</td><td>⚠️ <b>本版按 7 天做（2026-10-12 拍板），代价明写在此</b>。可消条件：① 阈值做成可配（放 <code>Tune</code>）② 或分两档（7 天「较久」/ 21 天「陈旧」）。依据：唯一那个过期样本是 20 天，7 天让同类样本<b>提前 13 天报警</b> —— <b>宁可早报，也不漏报</b></td></tr>
+<tr><td><b>检索结果被塞进注入块前三段</b></td><td>将来有人给笔记加"自动检索"、把 top-k 放进索引段 ⇒ <b>前缀每轮都在变</b>（cache 失效），而<b>守卫 17 比的是偏移</b> ⇒ <b>门禁全绿</b></td><td><b>写死红线（§03）：每轮算出来的东西只能进易变段。</b>P15.1 已补<b>内容层</b>断言（冒烟 T-KB 内容层①②）（T9 已把"注入块不因搜索而变"做成判据）—— 结构性判据抓不住"结构没变、内容在变"</td></tr>
+<tr><td><b>摘要读取破了「不读正文」的扫描契约</b></td><td><code>KnowledgeBase.swift:86</code> 明写扫描"只读目录项、不读文件正文 ⇒ 成本与文件总大小无关、不需要缓存"。读摘要要 open 每个文件</td><td>⚠️ <b>本版接受</b>，但把代价<b>钉死在两点</b>：① <b>只读头部 512 字节</b>（不是全文）② 只对<b>已在本轮索引里的文件</b>读。<b>量级判据</b>：笔记数 × 512B 是这一区唯一的额外成本；笔记数到几百时重新评估（那时也该上缓存了）</td></tr>
+<tr><td><b>「索引行带标题」把 ondemand 条目的标题带进了 prompt</b></td><td>P15.1 给索引行加标题/摘要后，守卫 6 那条「layer=ondemand 永不进 prompt」的断言变红 —— 而<b>它从 P11.4 起就已经是靠侥幸绿的</b>：<code>syncL1Files()</code> 会把每条 ondemand 条目镜像成 L1 文件（frontmatter 里就写着 <code>title:</code>），而索引段<b>有意</b>暴露这批文件（T-KB Q13「ondemand 条目不再隐形」）；一直没红，只是因为无 key 条目的 L1 文件名是 UUID —— 一个<b>信息量为零的指针</b></td><td><b>判据按真意图重写</b>：守卫 6 改判<b>正文</b>永不进 prompt（比原判据更难满足），并另加一条反向锁「指针<u>要</u>进 prompt」把行为显式钉住。<br>⚠️ <b>P15.5 补记</b>：内置库退休后这条反向锁<b>已改判成缺口登记</b>（§04）—— 指针不再进 prompt，所以原先那句「每条 ondemand 条目的标题（约 10 字）现在每轮都在索引段里」的代价<b>跟着作废</b>；代价改由下方 P15.5 那条承接（条目重新隐形）。</td></tr>
+<tr><td><b>内容层断言① 有个残留洞</b></td><td>① 拿索引段字节去比「纯函数重算」的结果，可它复用的正是 <code>indexBlock</code> 本身 ⇒ <b>抓不到「<code>indexBlock</code> 自己变得依赖每轮输入」</b>（那时重算会跟着一起变）</td><td>⚠️ <b>有意不补</b>：补它要在夹具中途增删条目，会污染 T-KB 那一节后续 40 多条计数断言。<b>现状由 ② 兜一半</b>（连续两次组装逐字节相同 ⇒ 时间戳 / 计数器 / 随机序会红）</td></tr>
+<tr><td><b>固定根的名字与描述不进词表</b></td><td><code>noteGlobalLabel</code> / <code>noteGlobalDescription</code> 等常量住在 <code>Models/KnowledgeBase.swift</code>，而该文件在 <code>gen_strings.py</code> 的 <code>EXCLUDE_FILES</code> 里 ⇒ <b>切英文界面时它们仍是中文</b>（P11.4 时代内置 L1 库的描述也是同款缺口 —— 那批库已于 P15.5 退休，这条<b>仍留着</b>；也正是 P15.5 词表零改动的原因）</td><td>⚠️ <b>本版接受</b>（已知缺口，不是本版新引入的机制）。结法 = 把这几条搬到非排除文件（UI 侧），或给排除文件开一条白名单 —— 另批</td></tr>
+<tr><td><b>版本史的记账时机在 P15.4 变了</b></td><td><code>note_revisions</code> 从「覆盖前留旧版」改成「<b>每写下一版记一条</b>」⇒ ① 老库里那些行仍是旧语义（缺"当前版"那一条）② 外部改过的文件在下次写入前**没有任何记录**<br>⚠️ 不这么改的话，<b>"当前版是谁写的"永远查不到</b> —— 旧语义下最后写下的那一版没有任何一条记录指向它</td><td>两处都有明确结法，且都已落地：<b>① 判来源不靠"最新一条"</b>，而是拿磁盘上的 <code>sha256</code> 去版本史里<b>认领</b>那一条 —— 老库的笔记认不到 ⇒ 回落 <code>.human</code>（P15.4 之前 dream 根本不能写盘，所以<b>答的是对的</b>）；<b>② 写入路径落盘前先问 <code>noteRevisionExists</code>，没记过就补记</b>（<code>recordIfUnrecorded</code>）⇒ 外部那一版不会静默消失（P15.2 T4 那条反例守的正是它）。<b>接受的代价</b>：老笔记的版本史缺"最早那一版"（那本来就是 P15.2 之前的历史），且它们的来源一律显示"你写的"</td></tr>
+<tr><td><b>来源标记只在笔记本体的信息面上，列表行上没有</b></td><td>原型图里它是逐行的（行尾 <code>它攒的 · 20 天</code>），实现里只有点开那一篇才看得到 ⇒ <b>"一眼看得见"这条打了折</b></td><td>⚠️ <b>有意接受</b>（§03 那条注已改口径）。判据要读<b>整篇</b>的 <code>sha256</code>，而列表渲染路径<b>每次重扫</b>都要跑；取舍是「宁可少一行标记，也不让列表成本随笔记大小走」。<b>可消条件</b>：把"每篇的当前版作者"物化进缓存（<b>随写路径更新，不随读路径计算</b>）—— 那是新契约，另批</td></tr>
+<tr><td><b>内置库退休 ⇒ ondemand 条目重新隐形（P15.5）</b></td><td>P11.4 的内置 L1 库是 <code>layer=ondemand</code> 条目在索引段里<b>唯一的路标</b>（它把 L1 落盘目录当成一个库挂进来 ⇒ L1 文件出现在索引里）。P15.5 整条退休后这些条目<b>重新变成"没有路标"</b> —— 正文从来不进 prompt（守卫 6 一直如此），现在连<b>指针</b>也不进了（P15.1 那条「指针要进 prompt」的反向锁已改判成缺口登记）。<b>今天没有可观察的影响</b>：库里唯一那条 ondemand 条目（<code>任何回复以"老哥"称呼我</code>）<code>enabled = 0</code>，而索引段是「<b>空库不注入</b>」（<code>KnowledgeBase.swift:390</code> <code>guard base.enabled, !docs.isEmpty</code>）—— 它<b>从来没进过 prompt</b></td><td>⚠️ <b>本版有意接受</b>：退休它的两条实测依据（<b>破门 1</b> + <b>空转</b>，见 §03 改动面）比这条代价重。结法<b>挂到 P11.3 解冻时</b>：那批条目要重新有路标，但<b>不许照抄本次退休的形态</b> —— 把落盘目录当成一个"库"挂进来，正是它破门 1 的原因；新形态由 P11.3 定</td></tr>
+<tr><td><b>dream 的归属规则只有「文本门」（P15.8）</b></td><td>P15.8 的 ③ 能守的只有<b>"指令常量里有没有那句话"</b>（<code>dreamPrompt</code> 含「项目优先」且不再含硬编码路径）—— 它证明的是<b>指令没被改回去</b>，<b>证不了模型照不照它做</b>。而 App 侧<b>刻意不做</b>硬拦：判「这条结论是不是跨项目的」是<b>语义</b>，App 判不了，而规则本身明文给跨项目留了口子 ⇒ 硬拦会把合法情况判成错</td><td>⚠️ <b>有意接受</b>（与 P15.6 ⑨ 的指令文本门同形）。兜底不在代码而在流程：<b>每条提案都要人采纳才落盘</b>，路径就印在提案那一行上 ⇒ 归属判错的人在按下采纳之前看得见。结法方向 = 提案行上加一个「跨项目」软标记（要新增一条 UI 语义，未做）</td></tr>
+<tr><td><b>P15.8 读数里的两个非绿项</b></td><td>① <code>xcodebuild</code> 有 <b>1 条编译警告</b>：<code>Models/ExtensionModels.swift:60</code> 的 <code>builtInToolNames</code> 引用了 main-actor 隔离的 <code>PiRpcTransport.dreamToolNames</code>（<b>Swift 6 语言模式下会变成 error</b>）—— 来源是<b>批 5d</b>，P15.8 没动那个文件；而批 5d 报的是"警告 0"，两处读数不一致。② <code>KnowledgeIndexSegment.emptyBases</code> 与 <code>KnowledgeInjection.emptyKnowledgeBases</code> 这两个名字<b>不再准确</b>（P15.8 起空根<b>照进</b>索引，它们不再是"没进索引"的意思），且<b>零消费者</b>（全仓核过）</td><td>① <b>登记、未修</b>：一行 <code>nonisolated</code> 可解，但它属于批 5d 的改动面。⚠️ <b>「两处读数不一致」已由批 5f 确证</b>：换<b>全新 derivedData</b> 重编，这 1 条<b>稳定复现</b>（107 编译任务）⇒ 批 5d 的"警告 0"是<b>增量构建没重编那个文件</b>，不是警告不存在。② <b>不改名</b>：改名连带半径判据（见 §「本版不动的东西」）—— 等它有第一个消费者时一起做，注释里已写明"名字带的历史已经不对了"</td></tr>
+<tr><td><b>存量移除那条 <code>DELETE</code> 是带地雷的（P15.8b）</b></td><td><code>migrate()</code> 里那条 <code>DELETE FROM note_proposals WHERE status &lt;&gt; 'pending'</code> <b>每次启动都跑</b>。此刻它是对的（本版不产生终态行，老库那行必须清掉）。<b>地雷在将来</b>：哪一天重新引入终态行，这一行就会<b>每次启动静默吃掉刚写进去的行</b> —— 零红灯、零日志，只表现为"提案提了、列表里没有"</td><td>⚠️ <b>有意接受，但把地雷写在它旁边</b>：代码注释与 §03 批 5f 都写明「<b>将来若重新引入终态行，这一行必须一起删</b>」。并由冒烟那条<b>存量移除门禁</b>兜住"删宽了会红" —— <code>DELETE</code> 一旦连待审行一起吃掉，<code>legacyLeft.count == 1</code> 立刻红</td></tr>
+<tr><td><b><code>xcodebuild</code> 增量构建会空转（P15.8b 实测）</b></td><td>复用同一个 <code>derivedDataPath</code> 时，实测出现过<b>0 个 <code>SwiftCompile</code> 任务</b>、却照样打印 <b>BUILD SUCCEEDED</b>（源码改了也没重编）⇒ 那一轮的"绿"<b>什么都没验证</b>。批 5d 那条"警告 0"很可能就是同一种漏编（同一个文件没重编）</td><td>⚠️ <b>纪律</b>：判 <code>xcodebuild</code> 要连<b>编译任务数</b>一起看（<code>grep -c 'SwiftCompile '</code>）；数不对就换<b>全新 <code>derivedDataPath</code></b> 重跑。已写进 §04 读数块与本节</td></tr>
+</table>
+</div>
+
+<h3>边界</h3>
+<ul class="tight">
+  <li><b>本版改什么</b>：<b>批 1（P15.1）与批 2（P15.2）已施工</b>。<b>批 1</b> —— 两个固定根（<code>note:global</code> / <code>note:project:&lt;id&gt;</code>）· <code>KnowledgeBaseDoc</code> 加四字段 · 索引行带标题与陈旧度 · 区头与入口改写、旧的「挂载目录…」UI 下线 · 本地化词表随之收口（14 增 / 16 删）。<b>批 2</b> —— 人写笔记的四条路（新建 / 改标题 / 改正文 / 删除）· <code>note_revisions</code> 加表 + 每次写盘前记整篇旧文 · 乐观并发指纹 · 删除进系统「废纸篓」；<b>这是本仓库唯一会改用户磁盘内容的一段</b>（写盘一律走 <code>resolvedNoteDir</code>，由守卫 24 守）。<b>批 3（P15.3 · dream）</b> —— 一个 agent 工具壳（<code>note_proposal</code>）把结构化提案写进 <code>note_proposals</code>（<b>只写表、不碰磁盘</b>）· spool 契约（扩展逐行追加 <code>jsonl</code>，收口时 App 解析入表、用完即删）· 双闸门（挂载与 env 缺一不可）· 预置那条 dream 任务（<b>默认关</b>；<b>⚠️ 2026-10-12 追加</b>：它<b>不可删</b> —— 只能改与开关。<b>守卫在 <code>SchedulerService.deleteScheduled</code></b>（能力层），视图那一侧只是<b>不渲染</b>删除按钮（可见性层）；判据 <code>canDelete(_:)</code> 是纯函数、两处消费。种法同时从「一次性标记」改成「<b>缺了就补</b>」—— 判据 = 表里有没有，不再是"种过没"）· 笔记区的只读提案面 · 任务行的「立即运行」入口 · 冒烟守卫 26。<b>本批同样不改用户磁盘</b>（采纳属 P15.4）。<b>批 4（P15.4 · 审阅面）</b> —— <b>这是本仓第二段会改用户磁盘的路径</b>（第一段是批 2 的人写笔记）：<code>adoptProposal</code> 把提案<b>整篇原子写</b>进目标（乐观并发 + 撞名拒 + 目录不存在就地建），<code>discardProposal</code> 只改状态；并排 diff（行级 LCS，纯函数 <code>NoteDiff</code>，可造反例）· 笔记本体的「来源」行与「变更史」块 · <code>note_proposals</code> 补 <code>decided_at</code> 列 · <code>note_revisions</code> <b>记账时机前移</b>（每写下一版记一条）· <code>loadNoteProposals</code> 补真排序（待审在前）。另：§04 A 的存量移除<b>已执行（10-12 11:00）</b>，动的是用户数据目录与一行 DB。<b>P15.5（内置库退休 · 收尾批）</b> —— 把 <code>KnowledgeStore.builtinKnowledgeBases</code>（P11.4 遗留：把 <code>~/.mangox/agent/memory/</code> 与 <code>&lt;项目&gt;/.mangox/agent/</code> 两个 L1 落盘目录自动挂成知识库）<b>整条退休</b>，左列那三行「按需知识 · 全局 / &lt;项目&gt;（按需知识）」随之消失。连带面四件：① <code>allKnowledgeBases</code> 与 <code>knowledgeBaseScan()</code> 改读<b>同一张表</b>（<code>noteKnowledgeBases + knowledgeBases</code>，<code>effectiveKnowledgeBases</code> 那层"折算"整个删掉）② 它的「停用」开关<b>换主人</b>（<code>builtinDisabled</code> → <code>fixedRootDisabled</code>），折算点收成<b>一个</b>（<code>noteKnowledgeBases</code> 构造时折进 <code>enabled</code>）③ <code>deleteKnowledgeBase</code> 的「固定根不可删」从<b>守卫</b>变成<b>结构保证</b>（固定根现算、不落库 ⇒ 查不到）④ <code>builtin:</code> 前缀此后<b>没有生产者</b>（冒烟加了一条"不许回潮"）。⚠️ <code>isBuiltin</code> <b>字段本身特意保留</b> —— 它现在服务那两个笔记根，退休的是 <code>builtin:</code> <b>前缀</b>与那批库。<b>本批不新增任何改用户磁盘的路径。</b></li>
+  <li><b>P15 计划里还差什么</b>：笔记区形态（两个固定根 + 索引带<b>标题、摘要、陈旧</b>）· 人写笔记的路径 · <code>note_proposals</code> / <code>note_revisions</code> 两张新表 · dream（<b>完整形态</b>：会话 + 笔记 ⇒ 提案；承载 = 复用 <code>Scheduled</code>，触发 = <code>cron</code> + 手动）与审阅面 —— <b>这四项已全部施工</b>。⚠️ <b>剩下唯一没落地的是 <code>note_search</code> 工具（朴素子串）</b>：§03 定了要做、T9 也给了判据，但它<b>不属于任何一批</b>（批 1~4 的分工里没有它）⇒ 它仍是红的。<b>这是有意留出的，不是漏记</b>：它的判据（"产物进消息流、注入块逐字节不变"）与批 1~4 的改动面没有交集，随时可以单独起一批。</li>
+  <li><b>P15 不改什么</b>：常驻区（persona pack 三份 md 与 <code>PersonaPack</code> 类型）· 注入段序与守卫 10 / 12 / 17 · 自定义区的 <code>KnowledgeItem</code> 数据模型与编辑器 3 旋钮 · 类型命名 · <code>knowledge_bases</code> 表（<b>那一行按 §04 A 移除</b>）· 内置库机制（L1 自动挂载）—— <b>⚠️ 此条已被 P15.5 推翻：它整条退休了，不再是"不改"</b>（原文列在这里是因为设计时判它"空转不动"，施工时实测到两条更重的依据 ⇒ 改判；见 §03 改动面与 §05 风险表末两条）· 数据库<b>不 DROP 任何列</b>、不删任何表。</li>
+  <li><b>不持有谁的结论</b>：P11.3 的治理层（回灌 / 记账 / 归档建议）仍是它自己的事，本版是「没有交集」而不是"替它决定"；交付面（签名 / 公证 / 自动更新）与本版无关；flowix 的界面形态已明确否掉，只保留 round-trip 一条。</li>
+</ul>
+
+<h3>上游暴露面</h3>
+<ul class="tight">
+  <li><b>mtime 的语义由文件系统与外部工具决定</b>，不由我们决定 —— <code>git checkout</code> / <code>rsync</code> / 备份还原都会改它。这是本版唯一一处<b>把判据建立在不受我们控制的上游行为上</b>的地方，已在风险表里显式接受。</li>
+  <li><b>笔记的 frontmatter 是一套新契约。</b>先例就在隔壁：<code>PROJECTS.md</code> 搬进知识库时，原 pack 的 frontmatter（<code>summary</code> / <code>read_when</code> / <code>priority</code> / <code>layer</code> / <code>keys</code>）<b>被整段删掉</b>，理由是「换了载体后一个消费者都没有了」。⇒ 本版只引入<b>一个可真消费</b>的字段族（<code>title</code> 给索引、<code>probe</code> 留位但本版不解析），其余字段一律不引入（同 <code>shared</code> 字段被删的判据）。</li>
+  <li><b>扫描器会跟随目录内容的变化</b> —— 本版新增的写入能力意味着索引每轮都在变。注入块的前缀稳定性（守卫 12 的前提）现在<b>取决于用户与 dream 改笔记的频率</b>。这条要盯：易变段本来就是为"会变的东西"设计的，笔记索引段的位置（稳定段之后、易变段之前）不变，但<b>索引段自身的内容会变</b> —— 现有守卫没有断言过这一点，<b>P15.1 已补（冒烟 T-KB 内容层①②）</b>。</li>
+  <li><b>外部机制全部来自官方文档与公开报道，未在本机复现过</b> —— 本版没有装 Cursor / Windsurf / Letta / Zep / Mem0 中的任何一个，也没有跑过 Claude Dreams 的 API。§02 A 的依据强度按三档标注（官方文档 = 中，厂商自选基准 = 中并打折，个人经验 = 弱）。<b>这条要一直挂在明处：P15 的方案是从文档推出来的，不是从复现里推出来的。</b></li>
+</ul>
+
+<div class="foot">
+  P15 · 2026-10-12 · <b>设计定稿（五门全定 · 三处悬空已收口）· 批 1~4 + P15.5 全部已施工（本版收口）</b>。现状数字全部为 2026-10-12 本地只读实测（§02 D）—— ⚠️ 其中 ③ 自 11:00 存量移除后已不可复现。<b>三处悬空项全部定下</b>：A = 存量直接移除 · B = 区名与 prompt token 都改「笔记」 · C = 项目笔记根不进 git（App 不代改 <code>.gitignore</code>）· <b>A 已执行</b>；P15.3 的两处（触发 = <code>cron</code> + 手动带开关 · <code>cwd</code> = home）与 P15.4 的三处（来源判据 / diff 粒度 / 拍完板留终态）<b>均已按此施工</b>。<b>P15.5（内置库退休 · 收尾批）</b>：左列那三行「按需知识」的来源已整条移除（依据 = 破门 1 + 空转）、代价 = P11.4 那批 ondemand 条目重新隐形（挂 P11.3 解冻时重建路标）。⚠️ <b>唯一未落地的是 <code>note_search</code></b>（未列入任何批次，见 §05 边界）。<br>
+  样式单一来源 docs/assets/design-doc.css（由 scripts/docs/design_doc_css.py 同步）。外部十家的机制细节见 §02 A · 折叠块内按依据强度重排。
+</div>
+
+</div>
+</body>
+</html>

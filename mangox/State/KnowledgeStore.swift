@@ -7,6 +7,7 @@
 
 import Foundation
 import Combine
+import CryptoKit
 
 @MainActor
 final class KnowledgeStore: ObservableObject {
@@ -87,50 +88,83 @@ final class KnowledgeStore: ObservableObject {
 
     // MARK: - 知识库档 (P11.4): 挂载记录 + 索引
 
-    /// 用户挂载的库 (落库的)。**内置库不在这里** —— 见 `builtinKnowledgeBases`。
+    /// 用户挂载的库 (落库的)。P15.1 起**入口已下线**, 只剩历史数据。
     @Published var knowledgeBases: [KnowledgeBase] = []
 
-    /// 内置库 —— L1 落盘目录**自动挂载** (§3.4 / §8.1 Q13)。
+    // ⚠️ **内置 L1 库已退休**（2026-10-12, 见 P15 §03「内置库退休」改动面那一行）。
+    //
+    // 它曾是 `~/.mangox/agent/memory/`（跨项目）与 `<项目>/.mangox/agent/`（项目内）两个 L1
+    // 落盘目录的**自动挂载**（P11.4 §3.4 / §8.1 Q13），唯一用途 = 让 `layer = .ondemand` 条目的
+    // L1 文件对 agent 不隐形。退休的两条依据（都是**实测**，不是口味）：
+    //   ① **破门 1** —— 它和两个笔记根混在同一段列表里，界面上就是三行「按需知识 · 全局 /
+    //      xx（按需知识）」，而门 1 说这一区里**只有笔记**；
+    //   ② **空转** —— 退休时两个 L1 落点都是空目录（新建知识点一律 `.always` ⇒ 没有 ondemand
+    //      生产者；库里唯一那条 `ondemand` 条目 `enabled = 0`）⇒ 三个库恒扫到 0 篇，
+    //      而索引段本来就是「**空库不注入**」⇒ 它**从来没进过 prompt**。
+    //
+    // ⚠️ **退休的代价要记住**：ondemand 条目从"有路标"退回"隐形"。今天没有生产者（见 ②），
+    // 但 P11.3 解冻时**必须一并重建这个路标** —— 重建成什么形状由那时定（不建议照抄本次退休的
+    // 形态：把落盘目录当成一个"库"挂进来，正是它破门 1 的原因）。
+    //
+    // 它当年顺手带的那个「停用」开关**没有一起退休** —— 左列每一行（含两个笔记根）都用它。
+    // 它现在叫 `fixedRootDisabled`，见下。
+
+    /// 被用户停用的**固定根** id（**不落库** —— 它是 UI 偏好级别的东西, 与目录同生共死）。
     ///
-    /// 为什么必须自动挂: `kind=ondemand` 的条目落成 L1 文件之后, **除 `SOUL.md` 里那句手写文字
-    /// 外没有任何机制告诉 agent 它们存在**。这正是 P11.1 遗留的真真空 —— 那些条目"不进 prompt"
-    /// 是对的, 缺的是"进索引"。
+    /// ⚠️ 为什么"停用"不直接写进固定根的 `enabled`: 固定根是**现算**的（每次调用重建一个值类型）,
+    /// 没有可写的存储位。所以停用集合住在这里, 并由 `noteKnowledgeBases` **在构造时折算进 `enabled`**。
     ///
-    /// 不落库而是**现算**: 它们的身份由落盘目录决定 (项目增删、目录存亡都自动跟随),
-    /// 落库就会出现"项目删了但库还在"的幽灵行。路径同样走 `resolvedL1Dir`, **测试重定向自动生效**
-    /// (冒烟绝不扫用户家目录)。
-    var builtinKnowledgeBases: [KnowledgeBase] {
+    /// 折算点**只有一个** ⇒ 注入路径与 UI 列表读到的永远是同一份带真实生效态的表。
+    /// （P11.4 的老版本是"两张表 + 谁记得该读哪张" —— 那个形状已经被 2026-09-22 的实测判过死刑;
+    /// 现在换成"一个构造点", 同一个不变量用更少的活动件表达。）
+    @Published var fixedRootDisabled: Set<String> = []
+
+    /// 笔记根 —— P15.1 的两个固定根（全局 / 各项目）。**派生, 不落库**。
+    ///
+    /// 为什么派生而不是落库: 路径由 scope 唯一决定（门 1「目录固定成两个根 ⇒ 归属 = 位置」）,
+    /// 落库就会出现"项目删了但根还在"的幽灵行; 而描述由 App 写死 ⇒ 库里也没有可配的东西。
+    /// 路径走 `resolvedNoteDir` ⇒ **测试重定向自动生效**（冒烟绝不扫用户 `~/.mangox/note`）。
+    var noteKnowledgeBases: [KnowledgeBase] {
         var out: [KnowledgeBase] = []
         var seen: Set<String> = []
-        func add(_ id: String, _ path: String, _ desc: String) {
-            // 同一目录只挂一次 —— 与建表 `UNIQUE(path)` 同一个判据 (§3.4: 挂两次 = 索引里
-            // 同一份资料出现两遍, 纯浪费每轮预算)。可达路径: 测试重定向下两个项目若**末段同名**,
-            // `l1Dir` 会算出同一个落点 (生产形状 `p + "/.mangox/agent"` 用全路径, 不会撞)。
+        func add(_ id: String, _ path: String, _ desc: String, _ label: String) {
+            // 同一目录只挂一次：两个项目若指向同一路径（测试重定向下会发生），索引里同一份资料
+            // 会出现两遍 —— 纯浪费每轮预算。`enabled` 保留：**一个根一个开关**（门 1 未取消它）。
             guard seen.insert(path).inserted else { return }
             out.append(KnowledgeBase(id: id, path: path, description: desc,
-                                     enabled: true, isBuiltin: true))
+                                     enabled: !fixedRootDisabled.contains(id), isBuiltin: true,
+                                     label: label))
         }
-        // 跨项目 L1: `~/.mangox/agent/memory/`
-        add(Self.builtinGlobalID, resolvedL1Dir(projectPath: nil),
-            "按需知识的落盘目录 (App 管理, 正文由 agent 按需读)")
-        // 项目内 L1: `<项目>/.mangox/agent/`
+        add(KnowledgeBase.noteGlobalID, resolvedNoteDir(projectPath: nil),
+            KnowledgeBase.noteGlobalDescription, KnowledgeBase.noteGlobalLabel)
         for p in store?.projects ?? [] {
             guard let path = p.path, !path.isEmpty else { continue }
-            add(Self.builtinProjectPrefix + p.id.uuidString, resolvedL1Dir(projectPath: path),
-                "本项目按需知识的落盘目录 (App 管理)")
+            // 显示名走 `noteRootLabel`（**唯一产出点**, P15.8）—— dream 摘要段头的 `归属` 读的是
+            // 同一个函数 ⇒ 模型靠"名字相等"把会话映射回它的根。两处各写一遍**不会报错**,
+            // 只会让归属静默失效（名字对不上 ⇒ 模型回落到全局, 正是 2026-10-13 报的那个缺陷）。
+            let label = KnowledgeBase.noteRootLabel(projectTitle: p.title)
+            add(KnowledgeBase.noteProjectPrefix + p.id.uuidString,
+                resolvedNoteDir(projectPath: path),
+                KnowledgeBase.noteProjectDescription, label)
         }
         return out
     }
 
-    static let builtinGlobalID = "builtin:l1-global"
-    static let builtinProjectPrefix = "builtin:l1-project:"
+    /// **UI 与组装共用的唯一根列表**（P15.5 起"唯一"是真的唯一 —— 见下）。
+    ///
+    /// 顺序（P15.1 调整，**有意推翻** P11.4 的"用户挂载在前"）: **笔记根在前** —— 它是这一区的
+    /// 主战场（门 1），而用户挂载库在 P15.1 已下线入口、只剩历史数据, 排最后最不显眼。
+    ///
+    /// ⚠️ P15.5（2026-10-12）把 P11.4 的 `builtinKnowledgeBases` 退休了（见文件上方那段），
+    /// 于是「未折算表 / 折算后表」这一对（`allKnowledgeBases` × `effectiveKnowledgeBases`）消失 ——
+    /// **两个名字指同一件事，正是本项目反复吃亏的"两个真源"**。现在只剩这一个名字。
+    var allKnowledgeBases: [KnowledgeBase] {
+        noteKnowledgeBases + knowledgeBases
+    }
 
-    /// UI 与组装共用的**唯一库列表** (用户挂载 + 内置)。顺序: 用户的在前 (人配的比自动的更需要看见)。
-    var allKnowledgeBases: [KnowledgeBase] { knowledgeBases + builtinKnowledgeBases }
-
-    /// 单库查询 —— **带生效态**(面板选中一个库时读它)。
+    /// 单库查询（面板选中一个库时读它）。
     func knowledgeBase(id: String) -> KnowledgeBase? {
-        effectiveKnowledgeBases.first { $0.id == id }
+        allKnowledgeBases.first { $0.id == id }
     }
 
     /// 索引段 (§2.2 / §3.4)。`nil` = 没有可注入的库 (没挂 / 全停用 / 全空)。
@@ -141,8 +175,10 @@ final class KnowledgeStore: ObservableObject {
         let text: String
         /// 每库: 显示名 + 该库索引块字符数。缺席告警按它点名。
         let bases: [KnowledgeBaseCost]
-        /// 挂了、启用了, 但一个文档都没扫到的库 —— 索引里**不出现** (§3.4: 空库不注入,
-        /// 只是每轮占一行预算), 但 UI 要能提示"这个目录是空的"。
+        /// 挂了、启用了, 但一个文档都没扫到的根 —— ⚠️ **P15.8 起它们照进索引**
+        /// （只给坐标, 文件段是 `（本根暂无笔记）`), 所以**这个字段不再是"没进索引"的意思**。
+        /// 留着它是给 UI 用: "这个根还空着"是左列要标的事。名字带的历史已经不对了,
+        /// 但改名的动作留到有第二个消费者时一起做（改名半径判据, 见 §05 登记）。
         let emptyBases: [String]
         var count: Int { bases.count }
         var chars: Int { text.count }
@@ -151,29 +187,41 @@ final class KnowledgeStore: ObservableObject {
     /// **同源入口**: 每个库 + 它扫到的文档。注入文本与 UI 的索引预览都调它 ——
     /// 各扫一遍迟早会出现"预览说 12 个文件、agent 实际看到 9 个"。
     ///
-    /// - Important: 读 `effectiveKnowledgeBases` 而不是 `allKnowledgeBases`。前者把**内置库的
-    ///   停用**折算进 `enabled`（见它的注释）⇒ 注入路径与 UI 列表看到的是**同一份带真实生效态的
-    ///   列表**。读 `allKnowledgeBases` 会让「停用 memory/ 索引」这个开关**静默失效** ——
-    ///   内置库的 `enabled` 恒为 `true`, 下面那句 `guard base.enabled` 会永远放行。
+    /// - Important: 读 `allKnowledgeBases`（**唯一根列表**）。P11.4 时代这里埋过一个陷阱 ——
+    ///   内置库的 `enabled` 结构上恒为 `true`、停用态另存在 `builtinDisabled` 里，所以只有读
+    ///   "折算后"的那份才不会让 `guard base.enabled` 永远放行（否则开关**静默失效**）。
+    ///   内置库退休后，那个陷阱连同它的第二份表一起没了（P15.5）。
     ///
     /// 每次现算、不缓存: 与 §3.3「磁盘为准」同一条纪律 —— 用户在 App 外改了目录, 下轮即生效。
     func knowledgeBaseScan() -> [(base: KnowledgeBase, docs: [KnowledgeBaseDoc])] {
-        effectiveKnowledgeBases.map { ($0, KnowledgeBaseScan.docs(root: $0.path)) }
+        allKnowledgeBases.map { ($0, KnowledgeBaseScan.docs(root: $0.path)) }
     }
 
-    /// 索引段文本 (含段头)。库之间空一行; `enabled = false` 的库**整段不出现**
+    /// 索引段文本 (含段头)。库之间空一行; `enabled = false` 的根**整段不出现**
     /// (§3.4: 索引是给模型看的, 没有"灰"这个状态)。
+    ///
+    /// ⚠️ **P15.8: 空根照进段**（**有意推翻** P11.4 的「空库不注入」）。为什么:
+    /// dream 的硬约束是「`target_path` 的父目录必须是**本段列出的**某一个根」——
+    /// 空根不进段 ⇒ 它对模型**不存在** ⇒ 只剩全局一个合法落点。2026-10-13 实测: dream 把
+    /// MangoX 项目的洞见写进了全局笔记, 而三个根里只有全局有内容。
+    /// 成本 ≈90 字/空根（64000 预算的 0.3%), 换回来的是**归属坐标** —— 而归属正是 dream
+    /// 唯一的任务。判据: `indexBlock` 只在 `!enabled` 时返回 nil。
+    ///
+    /// 连带: `nil` 现在只剩**一种**含义 —— 一个可用的根都没有（全被停用）。它恰好是
+    /// `dreamPrompt` 里「没有 [笔记] 段 ⇒ 直接结束」那一支的判据, 两边必须一起改。
     func knowledgeIndexSegment() -> KnowledgeIndexSegment? {
         var parts: [String] = []
         var costs: [KnowledgeBaseCost] = []
         var empty: [String] = []
         for (base, docs) in knowledgeBaseScan() {
-            guard base.enabled else { continue }
-            // 空库不注入 (§3.4): 一条"这次是空的"对 agent 没有可行动信息, 只是每轮占预算。
-            if docs.isEmpty { empty.append(base.displayName); continue }
+            // 停用由 `indexBlock` 自己挡掉（`guard base.enabled`)—— 这里不再重复判一遍,
+            // 否则"哪个条件让一个库不进段"就有了两处真源。
             guard let block = KnowledgeBaseScan.indexBlock(for: base, docs: docs) else { continue }
             parts.append(block.text)
+            // 空根**也进 `costs`**: 它的块真的占了 `block.chars` 那么多预算, 所以整段缺席时的
+            // 点名必须算上它（少说一个字, 用户就找不到"那几行是哪儿来的"）。
             costs.append(KnowledgeBaseCost(name: base.displayName, chars: block.chars))
+            if docs.isEmpty { empty.append(base.displayName) }
         }
         guard !parts.isEmpty else { return nil }
         let text = ([KnowledgeBaseScan.segmentHeader] + parts).joined(separator: "\n\n")
@@ -227,33 +275,35 @@ final class KnowledgeStore: ObservableObject {
         return nil
     }
 
-    /// 停用内置库 —— **允许**。理由: "现在别把 memory/ 塞进 prompt"是个正当诉求
-    /// (比如它在一段会话里成了噪声源), 而库的**存在**不归用户配置、**是否生效**归用户配置。
-    /// 它仍然**不可删** —— 删了下次现算又回来, 那种"删了又出现"的按钮比没有按钮更坏。
-    func setBuiltinKnowledgeBaseEnabled(id: String, enabled: Bool) {
-        if enabled { builtinDisabled.remove(id) } else { builtinDisabled.insert(id) }
-        applyKnowledgeChange()
-    }
-
-    /// 被用户停用的内置库 id (**不落库** —— 它是 UI 偏好级别的东西, 与落盘目录同生共死)。
-    @Published var builtinDisabled: Set<String> = []
-
+    /// 删掉一个**用户挂载的**库。固定根（笔记根）不可删 —— 但这条现在是**结构保证**，不是前缀判断:
+    /// 只在 `knowledgeBases`（落库的那批）里找，而固定根是**现算、不落库**的 ⇒ 结构上就查不到。
+    ///
+    /// ⚠️ 旧写法是 `guard !id.hasPrefix("builtin:")`。P15.5 退休内置库后那个前缀**没有生产者**了，
+    /// 留着它就是一条"永远不为真"的守卫 —— 本项目对这类东西的处置是删掉（§11f 那条教训）。
     func deleteKnowledgeBase(id: String) {
-        guard !id.hasPrefix("builtin:") else { return }   // 内置库不可删 (见上)
+        guard knowledgeBases.contains(where: { $0.id == id }) else { return }
         knowledgeBases.removeAll { $0.id == id }
         try? store?.persistence?.deleteKnowledgeBase(id: id)
         applyKnowledgeChange()
     }
 
+    /// 启停一条根。**两条路按"这个 id 住在哪个集合里"分, 不按 id 前缀分** —— 与
+    /// `deleteKnowledgeBase` 同一条判据（固定根现算、用户库落库）。
+    ///
+    /// ⚠️ 固定根那条路**必须**留着: 左列每一行（含两个笔记根）都有开关, 而它们的 `enabled`
+    /// 是构造出来的、写不回去。删掉这条路 = 开关**点了没反应**（本项目最恨的那类故障:
+    /// 不报错、不变红, 只是没用）。
     func toggleKnowledgeBase(id: String) {
-        if id.hasPrefix("builtin:") {
-            setBuiltinKnowledgeBaseEnabled(id: id, enabled: builtinDisabled.contains(id))
+        if let idx = knowledgeBases.firstIndex(where: { $0.id == id }) {
+            knowledgeBases[idx].enabled.toggle()
+            knowledgeBases[idx].updatedAt = .now
+            try? store?.persistence?.upsertKnowledgeBase(knowledgeBases[idx])
+        } else if noteKnowledgeBases.contains(where: { $0.id == id }) {
+            if fixedRootDisabled.contains(id) { fixedRootDisabled.remove(id) }
+            else { fixedRootDisabled.insert(id) }
+        } else {
             return
         }
-        guard let idx = knowledgeBases.firstIndex(where: { $0.id == id }) else { return }
-        knowledgeBases[idx].enabled.toggle()
-        knowledgeBases[idx].updatedAt = .now
-        try? store?.persistence?.upsertKnowledgeBase(knowledgeBases[idx])
         applyKnowledgeChange()
     }
 
@@ -263,22 +313,6 @@ final class KnowledgeStore: ObservableObject {
         let expanded = (raw as NSString).expandingTildeInPath
         let std = (expanded as NSString).standardizingPath
         return std.count > 1 && std.hasSuffix("/") ? String(std.dropLast()) : std
-    }
-
-    /// **带真实生效态的库列表** —— 内置库里被停用的那些在这里折算成 `enabled = false`。
-    ///
-    /// 为什么必须共用这一份 (2026-09-22): 内置库的 `enabled` 结构上恒为 `true`(它的存在由落盘目录
-    /// 决定), "停用"记在 `builtinDisabled` 里。UI 若自己判一遍 `builtinDisabled.contains(id)`,
-    /// 那条判据就有**两个真源**: 注入路径读折算后的、面板读原始的 ⇒ 某天改了一处, 开关在另一处
-    /// **静默失效**(而它不会变红 —— 点了没反应是"用户没注意"级别的故障)。
-    /// 所以列表与注入路径**读同一个属性**; `allKnowledgeBases` 是"未折算"的原始表, 不再对外使用。
-    var effectiveKnowledgeBases: [KnowledgeBase] {
-        allKnowledgeBases.map { base in
-            guard base.isBuiltin, builtinDisabled.contains(base.id) else { return base }
-            var copy = base
-            copy.enabled = false
-            return copy
-        }
     }
 
     // MARK: - 组装注入块 (P11.1: 分层 + 可预测降级)
@@ -309,7 +343,9 @@ final class KnowledgeStore: ObservableObject {
         var indexChars: Int = 0
         /// 预算装不下 ⇒ **整段缺席**并在此点名每库占多少字 (Q11 方案 A)。
         var indexSkipped: [KnowledgeBaseCost] = []
-        /// 挂了、启用了但扫不到任何文档的库 (不进索引, 但 UI 要提示"目录是空的")。
+        /// 挂了、启用了但扫不到任何文档的根 —— ⚠️ P15.8 起它们**照进索引**（只给坐标),
+        /// 见 `KnowledgeIndexSegment.emptyBases`。这个字段**零消费者**（全仓核过）,
+        /// 留着是给 UI 的"这个根还空着"标记预留位置。
         var emptyKnowledgeBases: [String] = []
         /// 超预算被降级的常驻条目 (priority 升序 = 先掉的在前)。
         var degraded: [KnowledgeItem] = []
@@ -583,7 +619,8 @@ final class KnowledgeStore: ObservableObject {
         out.personaNotAtOffsetZero = !out.personaText.isEmpty
             && !(out.text?.hasPrefix(out.personaText) ?? false)
         // ⑥ 索引段无静默丢弃 (守卫 16): 每个"挂了、启用、非空"的库必须落在
-        //    ①块内(搜 `[知识库] <目录名>`) 或 ②缺席点名单 之一 —— 缺席是正当的(预算不够),
+        //    ①块内(搜 `[笔记] <目录名>`, 字面量读 `KnowledgeBaseScan.token`) 或 ②缺席点名单 之一
+        //    —— 缺席是正当的(预算不够),
         //    静默丢弃不是。这正是 `.silentlyDropped` 的同款判据, 只是对象是库。
         let skippedNames = Set(out.indexSkipped.map(\.name))
         out.indexSilentlyDropped = indexBases.filter { cost in
@@ -907,6 +944,23 @@ final class KnowledgeStore: ObservableObject {
 
     // MARK: - Memory distillation (P3.7)
 
+    /// 会话材料: 只取 text 消息（**工具卡 / 思考 / 计划卡一律不进**），前面缀上角色。
+    ///
+    /// 为什么做成纯函数而不是内联在调用点: 这是"什么叫一段会话材料"的**唯一真源** ——
+    /// 记忆提炼（P3.7）与 dream 摘要（P15.6）都要它。两处各写一遍的失效模式是
+    /// **其中一处悄悄把工具输出也编了进去**, 而那种材料喂给模型不会报任何错,
+    /// 只会让它提炼/提案出垃圾 —— 零红灯的错。
+    ///
+    /// 过滤的判据看的是 `MessageContent` 的 case, 不是字符串特征 ——
+    /// 结构上就不可能混进 `ToolCall`（P15.6 之前, dream 是让模型自己去读 jsonl,
+    /// 那里工具输出与人的话混在同一个文件里, 只能靠模型自觉跳）。
+    static func sessionMaterial(from messages: [ChatMessage]) -> [String] {
+        messages.compactMap { msg -> String? in
+            guard case .text(let s) = msg.content, !s.isEmpty else { return nil }
+            return "\(msg.role == .user ? "用户" : "助手"): \(s)"
+        }
+    }
+
     func setDistillOutcome(_ text: String, isError: Bool) {
         distillOutcome = (text, isError)
         distillOutcomeTask?.cancel()
@@ -951,10 +1005,7 @@ final class KnowledgeStore: ObservableObject {
         guard !distillRunning, !store.isStreaming else { return }
         guard let sid = store.selectedConversationId else { return }
         // 材料: 最近 12 条 text 消息 (user+assistant), 总量截断
-        var texts = store.replayMessages(for: sid).compactMap { msg -> String? in
-            guard case .text(let s) = msg.content, !s.isEmpty else { return nil }
-            return "\(msg.role == .user ? "用户" : "助手"): \(s)"
-        }
+        var texts = Self.sessionMaterial(from: store.replayMessages(for: sid))
         guard texts.count > 2 else { return }   // 太短不值得提炼
         texts = Array(texts.suffix(12))
         var material = texts.joined(separator: "\n\n")
@@ -1071,6 +1122,28 @@ final class KnowledgeStore: ObservableObject {
         return agentRoot + "/proj-" + (p as NSString).lastPathComponent
     }
 
+    /// 笔记根的**生产形状**（不看测试重定向）—— 跨项目 = `~/.mangox/note/`; 项目内 = `<项目>/.mangox/note/`。
+    ///
+    /// 与 `productionL1Dir` 拆开的**同一个理由**: 断言查政策、读写走解析 —— 混在一起守卫就变自证。
+    /// 它与 L1 是**两个平行目录**（`note/` 与 `agent/`）, 刻意不嵌套 —— 嵌套会让"哪些是笔记、
+    /// 哪些是 App 管的按需知识"变成靠路径猜。
+    static func productionNoteDir(projectPath: String?) -> String {
+        guard let p = projectPath, !p.isEmpty else { return NSHomeDirectory() + "/.mangox/note" }
+        return p + "/.mangox/note"
+    }
+
+    /// **进程级**重定向笔记根（冒烟）—— 与 `agentRootOverride` 同一个理由: 生产调用点
+    /// (`ChatStore` / `KnowledgeView`) 都不传参数, 靠"每个 helper 记得设实例 override"已经漏过一次
+    /// (2026-09-22 把夹具写进了用户真实 L1 目录)。**漏一次就是数据污染, 而且没有任何红灯。**
+    static var noteRootOverride: String?
+
+    /// 实际落点 = 生产形状 + 测试重定向。两种作用域都跟着重定向走（项目内落点也在用户项目里）。
+    static func noteDir(projectPath: String?) -> String {
+        guard let root = noteRootOverride else { return productionNoteDir(projectPath: projectPath) }
+        guard let p = projectPath, !p.isEmpty else { return root + "/global" }
+        return root + "/proj-" + (p as NSString).lastPathComponent
+    }
+
     /// 守卫 7: L1 落点**不占** `AGENTS.md` / `CLAUDE.md` / `.pi/` (P3.9 概念重命名)。
     /// 判据是"可断言的检查", 不是"我们记得别那么干" —— 冒烟直接调它。
     static func isAllowedL1Path(_ path: String) -> Bool {
@@ -1088,6 +1161,18 @@ final class KnowledgeStore: ObservableObject {
     /// 否则两种作用域的文件会撞在同一个目录里, 而它们本该分开。
     func resolvedL1Dir(projectPath: String?) -> String {
         guard let root = l1RootOverride else { return Self.l1Dir(projectPath: projectPath) }
+        guard let p = projectPath, !p.isEmpty else { return root + "/global" }
+        return root + "/proj-" + (p as NSString).lastPathComponent
+    }
+
+    /// 实例侧笔记根重定向（优先级高于静态 `KnowledgeStore.noteRootOverride`）。
+    /// 与 `l1RootOverride` 同形: 单个用例想把两种作用域分桶到不同子目录时用。
+    var noteRootOverride: String?
+
+    /// 笔记根落点（含测试重定向）。分桶规则与 `resolvedL1Dir` **逐字相同** ——
+    /// 两处若各写一套, "全局 vs 项目"的分桶迟早会在其中一边失效。
+    func resolvedNoteDir(projectPath: String?) -> String {
+        guard let root = noteRootOverride else { return Self.noteDir(projectPath: projectPath) }
         guard let p = projectPath, !p.isEmpty else { return root + "/global" }
         return root + "/proj-" + (p as NSString).lastPathComponent
     }
@@ -1207,5 +1292,357 @@ final class KnowledgeStore: ObservableObject {
         syncL1Files()
         store?.pushKnowledgeContext(currentKnowledgeBlock)
         store?.knowledgeDirty = true
+    }
+
+    // MARK: - P15.3 dream 提案（只读面）
+
+    /// dream 提交的提案快照（`note_proposals` 表）。
+    ///
+    /// 为什么是"快照 + 显式 reload"而不是每次读库: 它是**低频写、低频读**的
+    /// （一次 dream 出一批, 人点开笔记区才看）⇒ 现算完全够; 而做成计算属性会让 SwiftUI
+    /// 每次重绘都打一次库。收口处（`SchedulerService.finishDreamFireIfNeeded`）负责 reload。
+    ///
+    /// ⚠️ P15.3 **只读**: 采纳 / 丢弃两个终态属 P15.4 —— 那时才会出现"写盘"这条路径,
+    /// 而它正是 T5（dream 不改输入）在 P15.3 能**结构性成立**的原因, 不是靠纪律。
+    /// P15.4 起可写, 但**写只发生在 `adoptProposal` / `discardProposal` 两个入口**,
+    /// 且前者是"人拍了板"之后才走得到的 —— 结构性成立的边界只是往后挪了一道门, 没有拆掉。
+    @Published private(set) var noteProposals: [NoteProposal] = []
+
+    /// 从库里重读提案。**没有缓存失效逻辑** —— 因为它没有缓存（见上）。
+    func reloadProposals() {
+        noteProposals = (try? store?.persistence?.loadNoteProposals()) ?? []
+    }
+
+    // MARK: - P15.2 人写笔记（本仓库唯一会改**用户磁盘内容**的路径）
+
+    /// 编辑面要的三样东西: 正文 / 标题 / 打开时的指纹。
+    ///
+    /// `body` 的定义必须与 `saveNote` 写回的那一段**同源** —— 打开看到 A 段、保存写回 B 段,
+    /// 是那种"改一次掉一段"的 bug, 而且第二次打开才发现。
+    struct NoteDraft: Equatable {
+        /// `.md` 才有标题（frontmatter 是 markdown 的东西）; 其余格式恒为空串。
+        let title: String
+        /// `.md` = frontmatter 之后的部分; 其余格式 = 整篇。
+        let body: String
+        /// 打开时那一版的 sha256 —— 保存时带回来比对。
+        let hash: String
+        /// 打开时磁盘上的**整篇原文**（编辑面拿它算"改了没有", 也拿它当 frontmatter 的真源）。
+        let raw: String
+        /// 标题能不能改。`false` ⇒ 编辑面把标题显示成只读的文件名, 也不写任何 frontmatter。
+        let titleEditable: Bool
+    }
+
+    /// 笔记根落点 —— **写盘必须走它**。
+    ///
+    /// 走 `allKnowledgeBases` ⇒ 路径来自 `resolvedNoteDir` ⇒ 冒烟的进程级重定向自动生效（守卫 23）。
+    /// 绕过它（比如从 UI 传来的 `base.path` 直接拼）就会写进用户真实的 `~/.mangox/note/`,
+    /// 而且**没有任何红灯** —— `agentRootOverride` 那次实测就是这么漏过一回的。
+    private func noteRootPath(_ rootId: String) -> String? {
+        allKnowledgeBases.first { $0.id == rootId }?.path
+    }
+
+    /// 相对路径 → 绝对路径。**出根一律拒**（`..` / 绝对路径 / `~` / 空）。
+    ///
+    /// 这不是防御性代码: 相对路径来自 UI, 而 UI 的值来自磁盘扫描 —— 中间隔着一段用户可以手改的
+    /// 状态。「写盘前重新验一次边界」是"App 只会改笔记根里的东西"这句话唯一能兑现的方式。
+    func noteAbsPath(rootId: String, relativePath: String) -> String? {
+        guard let root = noteRootPath(rootId) else { return nil }
+        let rel = relativePath.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !rel.isEmpty, !rel.hasPrefix("/"), !rel.hasPrefix("~") else { return nil }
+        guard !rel.split(separator: "/").contains("..") else { return nil }
+        let abs = ((root + "/" + rel) as NSString).standardizingPath
+        guard abs.hasPrefix(root + "/") else { return nil }
+        return abs
+    }
+
+    /// 内容指纹 —— 整篇的 sha256 hex。与 `ModelMaterializer` 那条指纹同一种写法:
+    /// 同一件事（"这份字节是不是那一份"）不该有两种指纹。
+    static func noteHash(_ text: String) -> String {
+        SHA256.hash(data: Data(text.utf8)).map { String(format: "%02x", $0) }.joined()
+    }
+
+    /// 读一篇笔记的整篇原文（`nil` = 越界或读不到）。
+    func readNote(rootId: String, relativePath: String) -> String? {
+        guard let abs = noteAbsPath(rootId: rootId, relativePath: relativePath) else { return nil }
+        return try? String(contentsOfFile: abs, encoding: .utf8)
+    }
+
+    func noteDraft(rootId: String, relativePath: String) -> NoteDraft? {
+        guard let content = readNote(rootId: rootId, relativePath: relativePath) else { return nil }
+        let isMD = relativePath.lowercased().hasSuffix(".md")
+        return NoteDraft(
+            title: isMD ? KnowledgeBaseScan.parseHead(content, fileName: relativePath).title : "",
+            body: isMD ? KnowledgeBaseScan.splitFrontmatter(content).body : content,
+            hash: Self.noteHash(content),
+            raw: content,
+            titleEditable: isMD)
+    }
+
+    /// (标题, 正文) → 整篇。`title = nil` ⇒ 这篇不支持标题 ⇒ 不碰 frontmatter。
+    ///
+    /// **编辑面与写盘共用这一个函数** —— 各写一份的话, "按钮说没变、写下去却变了"（或反过来）
+    /// 就是那种只有手点才会发现的 bug。
+    func composeNoteEdit(current: String, title: String?, body: String) -> String {
+        guard let title else { return body }
+        return KnowledgeBaseScan.composeNote(
+            meta: KnowledgeBaseScan.splitFrontmatter(current).meta, title: title, body: body)
+    }
+
+    /// 新建一篇笔记。成功返回**根内相对路径**（调用方拿它选中新那篇）。
+    ///
+    /// **标题就是文件名**（净化后）, 新文件**不写** frontmatter `title:` —— 它与文件名相同 ⇒
+    /// 索引行按 P15.1 的判据"标题 == 文件名去扩展名 ⇒ 一格都不补"**天然零冗余**。
+    /// 用户后来把标题改成跟文件名不同, 那时才落下 `title:`（`saveNote` 负责）。
+    ///
+    /// P15.4: `body` / `origin` 是为**采纳 dream 的 insight 提案**开的 —— 那条路走的是
+    /// "标题由模型给、正文当场就有", 而 UI 的新建表单走缺省（空正文、`.human`）。
+    /// 两条路共用一个函数而不是各写一份: 撞名判定、边界校验、就地建目录这三件事
+    /// 在两边是同一件事, 分头实现迟早分头长歪。
+    func createNote(rootId: String, title: String, body: String = "",
+                    origin: NoteRevisionOrigin = .human) -> Result<String, NoteWriteRejection> {
+        let t = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !t.isEmpty else { return .failure(.emptyTitle) }
+        guard t.count <= KnowledgeBaseScan.noteTitleLimit else {
+            return .failure(.titleTooLong(limit: KnowledgeBaseScan.noteTitleLimit))
+        }
+        guard let root = noteRootPath(rootId),
+              let stem = KnowledgeBaseScan.noteFileName(from: t) else { return .failure(.emptyTitle) }
+        let rel = stem + ".md"
+        guard let abs = noteAbsPath(rootId: rootId, relativePath: rel) else {
+            return .failure(.pathEscapesRoot)
+        }
+        let fm = FileManager.default
+        // 撞名不猜 —— "覆盖还是改名"是个产品决策, 而它没有明显正确答案 ⇒ 让用户换一个。
+        if fm.fileExists(atPath: abs) { return .failure(.nameCollision(existing: rel)) }
+        // 目录不存在⇒**就地建**（门 1: 藏起来的入口 = 没有入口; 根不在时点"新建"必须能成）。
+        try? fm.createDirectory(atPath: root, withIntermediateDirectories: true)
+        guard (try? body.write(toFile: abs, atomically: true, encoding: .utf8)) != nil else {
+            return .failure(.writeFailed)
+        }
+        // 写下的这一版立刻进版本史 —— **空正文那一版也记**（"新建了但一个字没写"同样是一个
+        // 存在过的版本, 而且它让"删掉之后还能回放到刚建时"成立）。见 `recordNoteRevision`。
+        recordNoteRevision(rootId: rootId, relativePath: rel, content: body, origin: origin)
+        applyKnowledgeChange()
+        return .success(rel)
+    }
+
+    /// 保存一篇笔记。`title = nil` ⇒ 这篇不支持标题（非 `.md`）⇒ 整篇都是正文, 不碰 frontmatter。
+    ///
+    /// 顺序 = **先验后写**, 每一步失败都在落盘之前返回:
+    /// ① 边界 → ② 还在不在 → ③ 指纹（乐观并发）→ ④ 内容真的变了吗
+    /// → ⑤ 补记没记过的当前版 → ⑥ 原子写 → ⑦ 记下刚写的这一版。
+    /// ⚠️ ③ 必须排在 ④ **之前**: "外部改过"比"你没改"严重得多（一个是丢数据, 一个是白跑一趟）,
+    /// 提示也完全不同 —— 顺序反了, 外部改动会被 `next == current` 那一步静默吞掉。
+    ///
+    /// P15.4: `origin` = **本次写入者**（人 = `.human` · 采纳 dream 提案 = `.dream`）,
+    /// 记在 ⑦ 那一版上; ⑤ 补记的那一版恒记 `.human`（见 `recordIfUnrecorded` 里的推论）。
+    func saveNote(rootId: String, relativePath: String, title: String?, body: String,
+                  baseHash: String, origin: NoteRevisionOrigin = .human) -> NoteWriteRejection? {
+        guard let abs = noteAbsPath(rootId: rootId, relativePath: relativePath) else {
+            return .pathEscapesRoot
+        }
+        guard let current = try? String(contentsOfFile: abs, encoding: .utf8) else {
+            return .noteMissing
+        }
+        guard Self.noteHash(current) == baseHash else { return .baseHashMismatch }
+        let next = composeNoteEdit(current: current, title: title, body: body)
+        // ④ 内容没变 ⇒ 不写（不磨 mtime, 备份/同步工具会因此反复嘬盘）**也不记** ——
+        //    记了就成"每点一次保存就多一条历史"。
+        guard next != current else { return nil }
+        // ⑤ 补记"我们没记过的当前版"。漏了这一步, 外部改动会在**这一次**覆盖时静默消失
+        //    （P15.2 T4 那条反例守的就是它, P15.4 换了记账时机之后必须在这里补上）。
+        recordIfUnrecorded(rootId: rootId, relativePath: relativePath, content: current)
+        guard (try? next.write(toFile: abs, atomically: true, encoding: .utf8)) != nil else {
+            return .writeFailed
+        }
+        // ⑦ 写下的这一版进版本史。⚠️ 次序不可倒 —— 记在写盘**之后**, 写失败就不该留痕。
+        recordNoteRevision(rootId: rootId, relativePath: relativePath, content: next, origin: origin)
+        applyKnowledgeChange()
+        return nil
+    }
+
+    /// 删除一篇笔记。**两道退路都留**: ① 内容进 `note_revisions` ② 文件进系统「废纸篓」。
+    ///
+    /// 为什么不用 `removeItem`: 删除是本功能里**唯一不可逆**的动作, 而 `trashItem` 是 macOS
+    /// 自带的撤销通道 —— 代价为零, 换回的是"删错了还能捞回来"。回收站里那份不在笔记根里,
+    /// 下一轮扫描看不到它 ⇒ 不影响索引。
+    func deleteNote(rootId: String, relativePath: String) -> NoteWriteRejection? {
+        guard let abs = noteAbsPath(rootId: rootId, relativePath: relativePath) else {
+            return .pathEscapesRoot
+        }
+        guard let current = try? String(contentsOfFile: abs, encoding: .utf8) else {
+            return .noteMissing
+        }
+        // 留档记的 origin 是**这一版的作者**, 不是"删除者" —— 删掉的是谁写的东西, 它就归谁。
+        recordNoteRevision(rootId: rootId, relativePath: relativePath, content: current,
+                           origin: noteOrigin(rootId: rootId, relativePath: relativePath,
+                                              content: current))
+        let fm = FileManager.default
+        do {
+            if Self.noteDeleteUsesTrash {
+                var resulting: NSURL?
+                try fm.trashItem(at: URL(fileURLWithPath: abs), resultingItemURL: &resulting)
+            } else {
+                try fm.removeItem(atPath: abs)
+            }
+        } catch { return .writeFailed }
+        applyKnowledgeChange()
+        return nil
+    }
+
+    /// **生产政策**: 删除送「废纸篓」。它是只读的政策常量 —— 与下面那个可变开关拆开,
+    /// 断言的必须是**政策**, 不是"冒烟期为了不污染用户目录临时改成了什么"
+    /// （同 `productionL1Dir` / `l1Dir` 的拆法: 混在一起, 守卫就变成自证）。
+    static let productionNoteDeleteUsesTrash = true
+
+    /// 执行侧开关。**冒烟把它翻成 `false`**: 一次冒烟会往用户真实的 `~/.Trash` 里丢几十个夹具,
+    /// 那是**污染用户目录** —— 与 `agentRootOverride` / `attachmentsRootOverride` 要避免的是同一类事
+    /// （只不过那个是"写进用户的目录", 这个是"把东西丢进用户的回收站"）。
+    static var noteDeleteUsesTrash = productionNoteDeleteUsesTrash
+
+    /// 记下一个**曾在磁盘上存在过的版本**。
+    ///
+    /// ⚠️ **语义在 P15.4 变了, 这是有意的一次改写**: P15.2 是"覆盖前留旧版",
+    /// 现在是"**每写下一版就记一条**"。原因是判「当前版是谁写的」需要**当前版也在表里**,
+    /// 而旧语义下它永远不在 —— 最后写下的那一版**没有任何一条记录指向它**
+    /// （`note_revisions` 里全是"上一版"）。改完语义, 当前版 = 能被 `sha256` 命中的那一条。
+    ///
+    /// 为什么不是"照旧记旧版 + 额外补一条当前版": 那样同一份内容会被记两次
+    /// （一次作为刚写下的新版、一次作为下次的旧版）⇒ 历史表凭空翻倍, 而信息量没多。
+    /// 两种语义下**每一次成功写入都恰好产生一条记录**, 变的只是它记的是"写下的"还是"被顶掉的"。
+    ///
+    /// - Important: 只增不改不删。它的语义就是"这一版曾经存在过"。
+    private func recordNoteRevision(rootId: String, relativePath: String,
+                                    content: String, origin: NoteRevisionOrigin = .human) {
+        let rev = NoteRevision(id: UUID(), rootId: rootId, path: relativePath, content: content,
+                               sha256: Self.noteHash(content), writtenAt: .now, origin: origin)
+        try? store?.persistence?.appendNoteRevision(rev)
+    }
+
+    /// 这一版**我们记过吗**? 没记过就先补上。**恒记 `.human`**。
+    ///
+    /// 记 `.human` 不是偷懒, 是一条**结构性推论**: 写盘路径只有两条 —— 人的编辑面
+    /// 与采纳 dream 提案, 而后者**必经 App**（`adoptProposal` 一定会留下记录）。
+    /// 所以走到"没记过"这条分支上的内容, 只可能是 ① 用户在外部编辑器改的 ② P15.4 之前的老库。
+    /// 两者都该归"你写的"（§04 那条「凡不在记录里的就归『你写的』」）。
+    ///
+    /// 不补的代价: 这一版会在下一次覆盖时**静默消失**（它既不是"刚写下的", 也没赶上"被顶掉"）。
+    private func recordIfUnrecorded(rootId: String, relativePath: String, content: String) {
+        // `noteRevisionExists` **不 throws**（它自己把查询失败吞成 false）⇒ 这里不写 `try?`
+        // （写了会得到一条 "no calls to throwing functions occur within 'try' expression" 的警告）。
+        let recorded = store?.persistence?.noteRevisionExists(
+            rootId: rootId, path: relativePath, sha256: Self.noteHash(content)) ?? false
+        guard !recorded else { return }
+        recordNoteRevision(rootId: rootId, relativePath: relativePath, content: content, origin: .human)
+    }
+
+    /// **磁盘上这一版是谁写的**。判据 = 内容同一性, 不是"最新一条的 origin"。
+    ///
+    /// ⚠️ 为什么不能用"最新一条": 最后写下的那一版有可能**根本不在记录里**
+    /// （外部改过 / 老库）—— 那时"最新一条"说的是**上一次**的作者, 恰好答错。
+    /// 拿 `sha256` 去认领则不会: 认到就是精确的, 认不到才回落。
+    ///
+    /// 回落值 `.human` 与 `recordIfUnrecorded` 的推论同源（见那里）。
+    /// 纯函数（只吃 `[NoteRevision]` + 字符串, 不碰磁盘/DB）⇒ 冒烟能直接造反例。
+    static func origin(ofContent content: String, in revisions: [NoteRevision]) -> NoteRevisionOrigin {
+        let sha = noteHash(content)
+        return revisions.first { $0.sha256 == sha }?.origin ?? .human
+    }
+
+    /// 读一篇笔记的完整版本史（新 → 旧）。
+    ///
+    /// **唯一取数口** —— 判来源（`noteOrigin`）与界面画变更史（`KnowledgeView`）都走它。
+    /// `PersistenceStore.loadNoteRevisions` 才是实现, 但调用点不该各自去摸 `store?.persistence`:
+    /// 那一层是双层可选链, 摸漏一处就是"界面永远空列表、而门禁全绿"。
+    func noteRevisions(rootId: String, relativePath: String) -> [NoteRevision] {
+        (try? store?.persistence?.loadNoteRevisions(rootId: rootId, path: relativePath)) ?? []
+    }
+
+    /// `origin(ofContent:in:)` 的取数版本。给 `deleteNote` 这类**手上没有历史**的调用点用;
+    /// 界面侧已经有历史列表了, 直接调纯函数那一版, 省一次读库。
+    func noteOrigin(rootId: String, relativePath: String, content: String) -> NoteRevisionOrigin {
+        Self.origin(ofContent: content, in: noteRevisions(rootId: rootId, relativePath: relativePath))
+    }
+
+    // MARK: - P15.4 拍板（采纳 / 丢弃）
+
+    /// 采纳一条提案 = **本仓库第二段会改用户磁盘的路径**（第一段是 P15.2 的人写笔记）。
+    ///
+    /// 三个 kind 走**同一条落盘形态**: 把 `p.content` 整篇原子写进 `p.targetPath`。
+    /// 这不是偷懒 —— `content` 的契约就是"**整篇新文本, 不是 diff**"
+    /// （见 `mangox-dream.ts` 里 `note_proposal` 的工具描述与 `NoteProposalDraft.content`）,
+    /// 因为 dream 的产出粒度是「整篇重写」或「新增一篇」, 它**做不了逐行手术**（P15 §03 提炼 ⑤）。
+    /// 所以采纳没有"合并进现有正文"这种中间态 —— 要么整篇写下去, 要么不写。
+    ///
+    /// 三个 kind 的区别只剩"目标该不该已经存在":
+    /// - `insight` ⇒ 目标应当**不存在**。若它现在存在了, 说明期间有人在外部建了同名文件
+    ///   ⇒ **不覆盖**（`nameCollision`）—— "覆盖还是改名"是个产品决策, 与 `createNote` 同一口径。
+    /// - `merge` / `replace` ⇒ 目标必须存在, 且**指纹要对得上**（乐观并发, 同 `saveNote` ③）。
+    ///   对不上 = 模型读完之后磁盘又变过 ⇒ 那是拿旧判断覆盖新内容, 正是要拦的事。
+    ///
+    /// - Note: 落盘成功后顺手做两件事: ① 记下 `.dream` 那一版（**来源标记靠它认领** —— 不记,
+    ///   这篇笔记会永远被算成"你写的"）② **把提案行删掉**（P15.8/5f: 产出已经变成笔记区里
+    ///   的一篇, 提案行是冗余 ⇒ 收件箱不该留着它）。
+    @discardableResult
+    func adoptProposal(_ p: NoteProposal) -> NoteWriteRejection? {
+        guard let abs = noteAbsPath(rootId: p.rootId, relativePath: p.targetPath) else {
+            return .pathEscapesRoot
+        }
+        let fm = FileManager.default
+        let exists = fm.fileExists(atPath: abs)
+        if p.kind == .insight {
+            guard !exists else { return .nameCollision(existing: p.targetPath) }
+        } else {
+            guard exists, let current = try? String(contentsOfFile: abs, encoding: .utf8) else {
+                return .noteMissing
+            }
+            guard Self.noteHash(current) == p.baseHash else { return .baseHashMismatch }
+            // 磁盘已经是提案要的样子 ⇒ **一个字节都不写**, 但意图已达成 ⇒ 照样删行。
+            // 不删的话它会永远挂在"待审"里, 而再点一次还是什么都不做（"点了没反应"那种 bug）。
+            if current == p.content { return removeProposal(p) }
+            recordIfUnrecorded(rootId: p.rootId, relativePath: p.targetPath, content: current)
+        }
+        // 目录不存在 ⇒ 就地建（同 `createNote`: 根不在时点采纳必须能成, 不能只报个错）。
+        if p.kind == .insight, let root = noteRootPath(p.rootId) {
+            try? fm.createDirectory(atPath: root, withIntermediateDirectories: true)
+        }
+        guard (try? p.content.write(toFile: abs, atomically: true, encoding: .utf8)) != nil else {
+            return .writeFailed
+        }
+        recordNoteRevision(rootId: p.rootId, relativePath: p.targetPath,
+                           content: p.content, origin: .dream)
+        applyKnowledgeChange()
+        return removeProposal(p)
+    }
+
+    /// 丢弃一条提案 —— **只删这行草稿, 不碰磁盘**。
+    ///
+    /// 这一条正是 dream 那道阀门的另一半: 提案没被采纳, 磁盘上就一个字节都不会变（T5）。
+    ///
+    /// ⚠️ **P15.8/5f（2026-10-13 boss 推翻 P15.4）**: 原来是"落 `dismissed` 终态 + 留在列表里降档显示",
+    /// boss 的判据是 —— 拍过板的东西**没有任何后续动作**, 留在收件箱里就是噪音
+    /// （收件箱只该回答"还剩几件等我拍"）。⇒ 改为**删行**。「终态」这个概念整条取消。
+    @discardableResult
+    func discardProposal(_ p: NoteProposal) -> NoteWriteRejection? {
+        removeProposal(p)
+    }
+
+    /// 把一条提案从表里删掉 + 刷新列表。
+    ///
+    /// 抽出来是因为**两个调用点做的是同一件事**: 丢弃, 以及采纳的每一个成功出口
+    /// （正常写盘 / 磁盘已一致）。分头写迟早漏掉其中一个, 而漏掉的那个表现是
+    /// "点了没反应, 列表还挂着那条"。
+    ///
+    /// ⚠️ **只有成功才删**。被拒的（`.nameCollision` / `.baseHashMismatch` / `.noteMissing` /
+    /// `.writeFailed`）**一律留在待审** —— 那是 P15.4 那条判据的正面: 人得能重试,
+    /// 而"删掉它"等于把一次失败的采纳伪装成一次拍板。
+    private func removeProposal(_ p: NoteProposal) -> NoteWriteRejection? {
+        do {
+            try store?.persistence?.deleteNoteProposal(id: p.id)
+        } catch {
+            return .writeFailed
+        }
+        reloadProposals()
+        return nil
     }
 }

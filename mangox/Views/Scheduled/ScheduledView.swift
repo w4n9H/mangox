@@ -183,7 +183,9 @@ struct ScheduledView: View {
                             .padding(.top, 48)
                     }
                 }
-                .padding(.horizontal, 8)
+                // 与 Knowledge 面板**共用侧栏那个常量** (P16, 2026-10-12) —— 两块面板同形并排,
+                // 各写一个数字迟早会漂。面板标题那一行 (`SCHEDULED`) 两边本来就同款, 不动。
+                .padding(.horizontal, Tune.sidebarContentInset)
                 .padding(.bottom, 12)
             }
         }
@@ -195,14 +197,19 @@ struct ScheduledView: View {
         let icon = rowIcon(task)
         return HStack(spacing: 7) {
             Image(systemName: icon.name)
-                .font(.system(size: 10))
+                .font(.system(size: 12))
                 .foregroundStyle(icon.color)
-                .frame(width: 14)
+                .frame(width: 16)
             VStack(alignment: .leading, spacing: 2) {
-                Text(task.name)
-                    .font(.system(size: 12))
-                    .lineLimit(1)
-                    .foregroundStyle(selected ? CodexTheme.textPrimary : (task.completedAt != nil ? CodexTheme.textMuted : CodexTheme.textSecondary))
+                HStack(spacing: 5) {
+                    Text(task.name)
+                        .font(.system(size: 13))
+                        .lineLimit(1)
+                        .foregroundStyle(selected ? CodexTheme.textPrimary : (task.completedAt != nil ? CodexTheme.textMuted : CodexTheme.textSecondary))
+                    if let mark = SchedulerService.rowMarker(task) {
+                        markerView(mark, selected: selected)
+                    }
+                }
                 Text(statusLine(task))
                     .font(.system(size: 10))
                     .lineLimit(1)
@@ -213,6 +220,9 @@ struct ScheduledView: View {
                     .foregroundStyle(CodexTheme.textMuted)
             }
             Spacer(minLength: 2)
+            // P15.3: 「立即运行」**常显**（不做 hover-only）—— 藏起来的入口 = 没有入口,
+            // 同常驻区那个 folder 按钮。它不抢眼靠的是颜色（未 hover 时与正文同级）。
+            runNowButton(task, hovered: hovered)
             if task.completedAt == nil {   // 已触发的等待任务不显示开关 (重开 = 重新等待)
                 CodexMiniToggle(isOn: Binding(
                     get: { task.enabled },
@@ -221,13 +231,33 @@ struct ScheduledView: View {
             }
         }
         .padding(.leading, 8)
-        .padding(.trailing, 6)
+        .padding(.trailing, 8)
         .padding(.vertical, 5)
         .background(selected ? CodexTheme.selected : (hovered ? CodexTheme.hover : Color.clear))
         .clipShape(RoundedRectangle(cornerRadius: CodexTheme.radiusSm))
         .contentShape(Rectangle())
         .onHover { hoveringId = $0 ? task.id : nil }
         .onTapGesture { loadDraft(task) }
+    }
+
+    /// P15.3: 「立即运行」。
+    ///
+    /// **零新逻辑** —— `runScheduledFire` 从来不看 `enabled`（到点投递那条循环才看,
+    /// `schedulerTick` 里那句 `where task.enabled`）。所以"开关只管定时、手动随时可跑"
+    /// 是既有语义, 这个按钮只是把它露出来。
+    ///
+    /// 不在回合在途时禁用: `runScheduledFire` 自己会落一条"因冲突跳过"的时间线,
+    /// 禁用按钮反而会把那条记录藏起来（用户点了没反应, 却不知道为什么）。
+    private func runNowButton(_ task: ScheduledTask, hovered: Bool) -> some View {
+        Button(action: { store.runScheduledFire(task) }) {
+            Image(systemName: "play.fill")
+                .font(.system(size: 9))
+                .foregroundStyle(hovered ? CodexTheme.accent : CodexTheme.textMuted)
+                .frame(width: 16, height: 16)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help("立即运行 (不等定时; 关掉开关也能跑)")
     }
 
     /// P3.10 行首图标: 定时型 clock / 等待型雷达 / 已触发对勾
@@ -242,6 +272,30 @@ struct ScheduledView: View {
         return task.enabled ? ("clock.badge.fill", CodexTheme.toolDone) : ("clock.badge", CodexTheme.textMuted)
     }
 
+    /// 行内标记（P15.6c · 2026-10-13 boss 定的「不可删的要看得出来」）—— 目前只有一种。
+    ///
+    /// **取舍不在这里**: `SchedulerService.rowMarker` 判"该显不该显", 这里只负责画
+    /// （视图层只编译不执行, 判据只能落在那个纯函数上 —— 同 `canDelete` 那条）。
+    /// **两处共用这一个 helper**（列表行 · 编辑器里那张只读指令卡片）—— 同一个东西必须长得一样,
+    /// 两份实现迟早一份改了另一份没改。
+    ///
+    /// 三个刻意的选择（每个都能被问"为什么不那样"）:
+    ///   ① **中性灰, 不用 `accent`**: 这套板子里 accent 的语义是"品牌 / 可点", 把锁染成它会读成按钮。
+    ///   ② **不用 emoji 🔒**: emoji 是彩色固有色, 亮/暗主题下都不落在板子里（同"颜色是语义"那条）。
+    ///   ③ **贴在名字后面跟着走**: 不占独立槽位; `.fixedSize()` 保证名字先截、锁留住 ——
+    ///      名字是用户字段, 长到 20 字很常见（"我的整理助手 · 会话与笔记归档"）。
+    @ViewBuilder
+    private func markerView(_ mark: SchedulerService.RowMarker, selected: Bool) -> some View {
+        switch mark {
+        case .pinned:
+            Image(systemName: "lock.fill")
+                .font(.system(size: 9))
+                .foregroundStyle(selected ? CodexTheme.textSecondary : CodexTheme.textMuted)
+                .fixedSize()
+                .help("App 固定任务：不可删除；名字与档期照常可改")
+        }
+    }
+
     // MARK: - sparse agent 行 (P10.2e: 第三种触发源, 与上面两类同版式)
 
     private func sparseRow(_ agent: MailboxSentinel) -> some View {
@@ -249,12 +303,12 @@ struct ScheduledView: View {
         let hovered = hoveringId == agent.id
         return HStack(spacing: 7) {
             Image(systemName: agent.enabled ? "envelope.badge.fill" : "envelope")
-                .font(.system(size: 10))
+                .font(.system(size: 12))
                 .foregroundStyle(agent.enabled ? CodexTheme.accent : CodexTheme.textMuted)
-                .frame(width: 14)
+                .frame(width: 16)
             VStack(alignment: .leading, spacing: 2) {
                 Text(agent.name)
-                    .font(.system(size: 12))
+                    .font(.system(size: 13))
                     .lineLimit(1)
                     .foregroundStyle(selected ? CodexTheme.textPrimary : CodexTheme.textSecondary)
                 Text(sparseStatusLine(agent))
@@ -273,7 +327,7 @@ struct ScheduledView: View {
             ))
         }
         .padding(.leading, 8)
-        .padding(.trailing, 6)
+        .padding(.trailing, 8)
         .padding(.vertical, 5)
         .background(selected ? CodexTheme.selected : (hovered ? CodexTheme.hover : Color.clear))
         .clipShape(RoundedRectangle(cornerRadius: CodexTheme.radiusSm))
@@ -417,7 +471,10 @@ struct ScheduledView: View {
                 .padding(.vertical, 3)
                 .contentShape(Rectangle())
             }
-            if editingId != nil {
+            // ⚠️ P15.3 的 dream 任务**不可删**（2026-10-12 boss: "要固定死, 不能删除, 只能修改以及开关"）。
+            //    所以这里**不渲染**删除按钮 —— 不是置灰: 置灰等于承诺"以后某个条件能满足", 而这个条件
+            //    永远不会满足。判据走 `SchedulerService.canDelete`, 与域层那条守卫**同一个规则**。
+            if let t = editingTask(), SchedulerService.canDelete(t) {
                 Button {
                     showDeleteConfirm = true
                 } label: {
@@ -581,6 +638,13 @@ struct ScheduledView: View {
 
     private func editingTask() -> ScheduledTask? {
         editingId.flatMap { id in store.scheduledTasks.first { $0.id == id } }
+    }
+
+    /// 正在编辑的是不是那条 dream。判据走域层**同一条规则**（`SchedulerService.isDreamTask`），
+    /// 不在这里重写一遍 `id ==` —— 同 `canDelete` 那条注释里的理由。
+    private var draftIsDream: Bool {
+        guard let t = editingTask() else { return false }
+        return SchedulerService.isDreamTask(t)
     }
 
     // MARK: - P10.4 任务级执行配置 (模型/级别/模式; fire 只动日志会话 transport)
@@ -928,7 +992,50 @@ struct ScheduledView: View {
             .foregroundStyle(valid ? CodexTheme.textMuted : CodexTheme.toolError)
     }
 
+    /// 指令那一栏。**dream 是只读的**（P15.6b）。
+    ///
+    /// 为什么必须只读, 而不是"能改但 fire 不看": 后者会让这一栏**在说谎** —— 用户改了、
+    /// 保存了、界面还回显"已保存", 却没有任何效果。**能改的东西必须真的生效; 不生效的东西
+    /// 必须看出来不能改**（同 `canDelete` 那条"可见性层与能力层同一个规则"）。
+    @ViewBuilder
     private var promptCard: some View {
+        if draftIsDream { dreamPromptCard } else { editablePromptCard }
+    }
+
+    /// dream 的指令 —— **出厂文案**: 随版本更新, 不落库、不随本任务保存。
+    /// 只读展示 + 一句说明, 让"为什么改不了"有地方可查（否则看着像坏了）。
+    private var dreamPromptCard: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            ScrollView {
+                Text(SchedulerService.dreamPrompt)
+                    .font(CodexTheme.fontSmall)
+                    .foregroundStyle(CodexTheme.textSecondary)
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 10)
+            }
+            .frame(minHeight: 220)
+            // P15.6c: 同一个锁标记, 与列表行共用 `markerView` —— 列表行那处答"为什么这条没有删除
+            // 按钮", 这里答"为什么这栏是灰的"。两处问的不是同一件事, 所以都留。
+            HStack(spacing: 5) {
+                markerView(.pinned, selected: false)
+                Text(LK("出厂指令 · 随版本更新；本任务能改的是档期、开关与执行配置"))
+                    .font(CodexTheme.fontTiny)
+                    .foregroundStyle(CodexTheme.textMuted)
+            }
+            .padding(.horizontal, 12)
+            .padding(.bottom, 8)
+        }
+        .background(CodexTheme.bgComposer)
+        .clipShape(RoundedRectangle(cornerRadius: CodexTheme.radiusLg))
+        .overlay(
+            RoundedRectangle(cornerRadius: CodexTheme.radiusLg)
+                .stroke(CodexTheme.border.opacity(0.45), lineWidth: 1)
+        )
+    }
+
+    private var editablePromptCard: some View {
         ZStack(alignment: .topLeading) {
             TextEditor(text: $draftPrompt)
                 .font(CodexTheme.fontBody)
@@ -1144,7 +1251,9 @@ struct ScheduledView: View {
     private func loadDraft(_ task: ScheduledTask) {
         setTarget(.task(task.id))
         draftName = task.name
-        draftPrompt = task.prompt
+        // P15.6b: dream 的指令取出厂常量回填（那一栏只读）。**不读 `task.prompt`** ——
+        // 库里那份是种任务时的副本, 可能已经过期; 回填旧文案会让只读的那一栏显示错误的指令。
+        draftPrompt = SchedulerService.isDreamTask(task) ? SchedulerService.dreamPrompt : task.prompt
         draftCron = task.cron
         draftProjectId = task.projectId
         draftContinuous = task.continuous
@@ -1185,7 +1294,11 @@ struct ScheduledView: View {
         if let id = editingId,
            var existing = store.scheduledTasks.first(where: { $0.id == id }) {
             existing.name = draftName
-            existing.prompt = draftPrompt
+            // dream 的指令是**出厂常量**（P15.6b）⇒ 这一栏对它是只读的, 不把它当表单值回写。
+            // 纵深: 域层 `updateScheduled` 对 dream 一律把 prompt 归一到**当前**常量 —— 即使有别的
+            // 调用点绕过这里（批量编辑 / 导入配置）, 库里也长不出第二真源。两条各自的职责不同:
+            // 这里管"表单不提交只读字段", 那里管"库里那份恒等于常量"。
+            if !SchedulerService.isDreamTask(existing) { existing.prompt = draftPrompt }
             existing.cron = effectiveCron
             existing.projectId = draftProjectId
             existing.continuous = draftContinuous

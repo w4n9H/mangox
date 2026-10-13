@@ -283,15 +283,23 @@ struct SidebarView: View {
     }
 
     /// 删除项目二次确认 (连带其下所有会话, 不可撤销)。
+    ///
+    /// 与会话删除**同一套选项**（2026-10-13 boss 拍板"和删会话一致"）: 项目下每个会话
+    /// 留下的 transcript 是删是留由用户在这里选。**DB 行与图片附件恒删** —— 附件是消息的
+    /// 一部分, 消息行没了它就是孤儿（与会话删除同一半径, boss 同日拍板"保持恒删不动"）。
     private func confirmDeleteProject(_ group: ProjectGroup) {
         let alert = NSAlert()
         alert.messageText = String(format: L("删除项目「%@」？"), group.title)
         alert.informativeText = L("该项目下的所有会话与消息记录将一并删除, 此操作不可撤销。")
+            + "\n" + L("AI 记忆文件 = 各会话的对话上下文 (<uuid>.jsonl); 误删不可恢复。")
         alert.alertStyle = .warning
-        alert.addButton(withTitle: L("删除"))
+        alert.addButton(withTitle: L("删除项目 (保留 AI 记忆文件)"))
+        alert.addButton(withTitle: L("删除项目及其全部 AI 记忆文件"))
         alert.addButton(withTitle: L("取消"))
-        if alert.runModal() == .alertFirstButtonReturn {
-            store.deleteProject(group.id)
+        switch alert.runModal() {
+        case .alertFirstButtonReturn:  store.deleteProject(group.id, deleteTranscript: false)
+        case .alertSecondButtonReturn: store.deleteProject(group.id, deleteTranscript: true)
+        default: break
         }
     }
 

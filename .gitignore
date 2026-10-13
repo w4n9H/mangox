@@ -64,6 +64,7 @@ fastlane/test_output
 .mangocli/
 .zed/
 .workbuddy/
+.mangox/
 
 # macOS
 .DS_Store

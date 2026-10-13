@@ -93,6 +93,12 @@ protocol AgentTransport: AnyObject {
     func updatePIConfig(_ output: ModelMaterializer.Output?)
     /// P7-M4: 下发模式档位 (spawn 期 --tools / 扩展挂载矩阵; per-turn 语义, 下回合生效)。
     func updateMode(_ mode: AgentMode)
+    /// P15.3: 下发 dream 的 spool 落点 (nil = 这一回合不是 dream)。
+    ///
+    /// **per-turn 实例级**, 与 `updateMode` 同一层 —— 刻意不做成档位（那会出现在用户能选的
+    /// 档位菜单里 ⇒ 主会话也能挂上 dream 扩展）也不做成全局（那会污染别的会话）。
+    /// 它同时是 dream 的**第二道闸门**: 只有这一份 transport 知道 spool 在哪。
+    func updateDreamSpool(_ spool: String?)
     /// P10.2b: 本回合 `autoJudge` 档拦下的命令 (回执写"卡在哪"的数据来源; 空 = 无拦截)。
     /// 语义: 调用时机在回合**落定后**、下一次 `send` 前 (send 时清零)。
     var autoJudgeBlocks: [AutoJudgeBlock] { get }
@@ -210,6 +216,11 @@ extension AgentTransport {
     func updatePIConfig(_ output: ModelMaterializer.Output?) {}
     /// P7-M4: 模式档位下发 (Mock 无进程, 空实现)。
     func updateMode(_ mode: AgentMode) {}
+    /// P15.3: dream spool 下发 (Mock 无进程 ⇒ 不落盘的实现看不见它)。
+    ///
+    /// ⚠️ MockTransport **覆盖**了它并记下最后一次的值 —— 空实现会让"普通回合有没有把它清回 nil"
+    /// 变成不可断言的一件事, 而那正是 `ChatStore.beginTurn` 里那个无条件赋值要防的错。
+    func updateDreamSpool(_ spool: String?) {}
     /// P10.2a-0: 裁决档下发 (Mock 无审批桥, 空实现)。
     func updateApprovalMode(_ mode: ApprovalMode) {}
     /// P10.2b: 拦截记录 (Mock 无审批桥 → 恒空; 冒烟用 MockTransport.autoJudgeBlocks 注入)。

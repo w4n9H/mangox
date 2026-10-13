@@ -7,7 +7,7 @@
    **本文件由 scripts/l10n/gen_strings.py --write 生成, 别手改** ——
    译文改 scripts/l10n/en_values.py 的 VALUES, 再跑 --write。
 
-   条数: 623
+   条数: 673
 */
 
 " [附件: %@]" = " [Attachment: %@]";
@@ -16,8 +16,12 @@
 "%lld 个人格文件 frontmatter 破损, 未注入且已禁止新建 key: %@" = "%lld persona files have broken frontmatter — not injected, and creating keys is blocked: %@";
 "%lld 个人格文件是「按需」的, 模型不知道它们存在: %@" = "%lld persona files are “on demand” — the model does not know they exist: %@";
 "%lld 个人格文件读不出来 (权限或编码), 内容未进 prompt: %@" = "%lld persona files cannot be read (permissions or encoding) — their content is not in the prompt: %@";
+"%lld 个来源" = "%lld sources";
 "%lld 个模型因缺元数据未列出: %@" = "%lld models not listed — no metadata available: %@";
+"%lld 天前" = "%lld days ago";
+"%lld 天未更新" = "not updated for %lld days";
 "%lld 字" = "%lld chars";
+"%lld 字节" = "%lld bytes";
 "%lld 条与 persona pack 的 key 冲突, 已跳过注入: %@" = "%lld items collide with a persona pack key and were skipped: %@";
 "%lld 条常驻条目被静默丢弃: %@" = "%lld always-on items were silently dropped: %@";
 "%lld 秒" = "%llds";
@@ -34,12 +38,15 @@
 "// 空文件" = "// Empty file";
 "= 检查频率 (条件可能成立后按此间隔值守)" = " = check interval (poll at this rate once the condition may hold)";
 "AI 回复生成中…" = "Generating reply…";
+"AI 记忆文件 = 各会话的对话上下文 (<uuid>.jsonl); 误删不可恢复。" = "The AI memory file is each session's conversation context (<uuid>.jsonl); deleting it cannot be undone.";
 "AI 记忆文件 = 该会话的对话上下文 (<uuid>.jsonl); 误删不可恢复。" = "The AI memory file is this session's conversation context (<uuid>.jsonl); deleting it cannot be undone.";
 "API Key (存入 Keychain)" = "API key (stored in Keychain)";
 "Agent 引擎启动后立即退出 (退出码 %d)。" = "The agent engine exited right after starting (exit code %d).";
 "Agent 引擎启动失败。" = "The agent engine failed to start.";
 "Agent 引擎已启动但一直没有响应。" = "The agent engine started but has not responded at all.";
 "Agent 正在运行…" = "Agent is running…";
+"App 内置扩展：只在需要它的那次运行里挂载，不是常开" = "App built-in extension: mounted only for the run that needs it, not always on";
+"App 固定任务：不可删除；名字与档期照常可改" = "App-fixed task: it cannot be deleted; its name and schedule are still editable";
 "App 在后台时, 回合结束弹出系统通知; 前台使用时不弹, 点击通知跳回对应会话" = "Posts a system notification when a turn finishes while the app is in the background; no notification while you are using it. Click it to jump back to that session.";
 "Chat: 对话 · Trace: 结构化事件回放" = "Chat: conversation · Trace: structured event replay";
 "HTML 已导出 · 已在 Finder 显示" = "HTML exported · revealed in Finder";
@@ -58,7 +65,6 @@
 "Inbox「%@」: 项目目录不存在, 任务未执行" = "Inbox “%@”: the project directory does not exist, task not run";
 "Key 已存" = "Key stored";
 "Key 缺失 (物化后不可用)" = "Key missing (unusable after materialization)";
-"L1 落盘目录, 自动挂载: 不可删, 描述由 App 写死" = "The L1 working directory, mounted automatically: cannot be deleted, description is hard-coded";
 "MangoX 使用手册" = "MangoX User Guide";
 "MangoX 自动裁决拦下: %@" = "Blocked by MangoX auto-judge: %@";
 "P11 §3.2: persona 段必须是独立第一段, 不参与排序与截尾" = "P11 §3.2: the persona segment must be the first standalone segment — it takes no part in ordering or truncation";
@@ -86,9 +92,11 @@
 "prompt 与 cron 为必填" = "prompt and cron are required";
 "provider (自定义)" = "provider (custom)";
 "sort 写文件" = "sort writes a file";
+"txt / html 没有 frontmatter — 标题就是文件名" = "txt / html have no frontmatter — the filename is the title";
 "· %lld 个在途" = "· %lld in flight";
 "· 最近：" = "· Latest: ";
 "… 其余改动省略" = "… remaining changes omitted";
+"… 还有 %lld 条" = "… %lld more";
 "→ 回落 home" = "→ falls back to home";
 "⚠️ 关掉密钥闸后只剩白名单 + 服务商过滤, 建议名单内各域都已配 DMARC" = "⚠️ With the secret gate off, only the allowlist and your provider's filtering remain — make sure every allowlisted domain has DMARC configured.";
 "⚠️ 当前热键被其他 App 占用 (注册失败), 请换一个组合键" = "⚠️ Another app already owns this hotkey (registration failed); pick a different combination.";
@@ -112,7 +120,6 @@
 "上次退出时回合还在跑, 重启后无法结算" = "A turn was still running when you last quit; it cannot be settled after restart.";
 "下载落盘/上传文件" = "downloading or uploading files";
 "不弹卡, 全部放行 — 定时任务用 (无人点击, 弹卡即死锁)。" = "No prompts, everything allowed — for scheduled tasks (nobody is there to click; a prompt would deadlock).";
-"不是一个目录, 或者它已经不存在了" = "Not a directory, or it no longer exists";
 "不采纳该候选, 直接删除" = "Dismiss this candidate and delete it";
 "丢弃" = "Discard";
 "丢弃本地修改, 重读磁盘文件" = "Discard local changes and reread the file from disk";
@@ -121,6 +128,7 @@
 "串行位空闲" = "Serial slot idle";
 "为「%@」设置目录…" = "Set a directory for “%@”…";
 "为「%@」选择工作目录" = "Choose a working directory for “%@”";
+"为什么提" = "Reason";
 "事实" = "Fact";
 "二" = "Tue";
 "五" = "Fri";
@@ -136,6 +144,7 @@
 "仅项目会话可用 (在输入框上方选择项目)" = "Available in project sessions only (pick a project above the composer)";
 "今天" = "Today";
 "今天做点什么？" = "What should we do today?";
+"仍然覆盖" = "Overwrite anyway";
 "从托管区删除" = "Remove from managed area";
 "任务" = "Task";
 "任务删除后停止调度。工作日志文件始终保留; 日志会话可选删除。" = "Deleting a task stops scheduling. The work log file is always kept; the log session is optional.";
@@ -143,12 +152,14 @@
 "任务台 · %lld 个在途" = "Task bar · %lld in flight";
 "任务名称" = "Task name";
 "任务日志" = "Task log";
+"会话" = "Session";
 "会话名" = "Session name";
 "会话已被删除" = "Session deleted";
 "会话统计尚未上报 (发一轮后可得)" = "Session stats not reported yet (available after one turn)";
+"位置" = "Location";
 "低 · 每 30 分钟" = "Low · every 30 min";
+"你写的" = "You wrote it";
 "你是谁" = "Who You Are";
-"例: 2024 年各渠道的复盘文档" = "e.g. 2024 channel retrospectives";
 "侧问创建失败：快照回读未完成 (回合未成功)" = "Could not start the side chat: the snapshot could not be read back (the turn did not succeed).";
 "侧问快照创建失败：无法读取源会话记忆文件" = "Could not create the side-chat snapshot: the source session's memory file is unreadable.";
 "保存" = "Save";
@@ -174,22 +185,26 @@
 "关闭提示" = "Dismiss";
 "其他…" = "Other…";
 "具备标准模式全部能力, 并挂载全部业务扩展, 扩展注册的工具一并进入工具池。" = "Everything Standard offers, plus every business extension mounted — tools they register join the tool pool.";
+"内容没变时不会写盘, 也不会留下一条变更记录" = "Nothing is written when the content is unchanged, and no revision is recorded";
 "内置" = "Built-in";
 "内置审批扩展, 不可停用" = "Built-in approval extension, cannot be disabled";
-"内置库不可修改 — 它跟着 L1 落盘目录自动出现" = "Built-in bases cannot be edited — this one appears automatically with the L1 working directory";
+"写一篇新笔记 (存到全局笔记目录, 下一轮组装就会带上它)" = "Write a new note (stored in the global notes directory; the next assembly picks it up)";
 "写可判定的标准, 如: 官网发布 X 的正式公告页 (相关新闻不算)…" = "State a checkable criterion, e.g. the official announcement page for X goes live on the vendor site (related news does not count)…";
 "写回磁盘, 下次运行生效" = "Written to disk; takes effect on the next run";
 "写文件 (重定向)" = "writes a file (redirection)";
 "写点值得记住的东西…" = "Write down something worth remembering…";
+"写盘失败 — 检查目录权限与磁盘空间" = "Write failed — check directory permissions and free space";
 "写进白名单, 下次来信即可执行" = "Added to the allowlist; mail from them can run tasks next time";
 "写道:" = "wrote:";
 "写道：" = "wrote:";
+"出厂指令 · 随版本更新；本任务能改的是档期、开关与执行配置" = "Factory instruction · ships with the app version; what you can change for this task is its schedule, toggle and run configuration";
 "分" = "Min";
 "分 时 日 月 周" = "min hour day month weekday";
 "分钟" = "Minutes";
 "创建" = "Create";
 "创建备份目录失败: %@" = "Could not create the backup directory: %@";
 "创建这个 Inbox" = "Create this Inbox";
+"删掉这条提案; 磁盘上的笔记一个字节都不会动" = "Delete this proposal; nothing on disk will be touched";
 "删除" = "Delete";
 "删除「%@」？" = "Delete “%@”?";
 "删除任务 (保留会话与工作日志)" = "Delete task (keep session and work log)";
@@ -202,11 +217,14 @@
 "删除后不可恢复; 已注入过会话的知识块不受影响。" = "This cannot be undone; knowledge already injected into a session is unaffected.";
 "删除插件「%@」？" = "Delete plugin \"%@\"?";
 "删除条目「%@」？" = "Delete the entry “%@”?";
+"删除笔记「%@」？" = "Delete the note \"%@\"?";
 "删除该条目" = "Delete this entry";
 "删除该账号 (含 Keychain 授权码)" = "Delete this account (and its Keychain app password)";
 "删除这个 agent" = "Delete this agent";
+"删除项目 (保留 AI 记忆文件)" = "Delete project (keep the AI memory files)";
 "删除项目…" = "Delete project…";
 "删除项目「%@」？" = "Delete the project “%@”?";
+"删除项目及其全部 AI 记忆文件" = "Delete the project and all its AI memory files";
 "到点投递 prompt (cron 驱动)" = "Delivers a prompt when the time comes (cron-driven)";
 "到点投递给 Agent 的 prompt…" = "The prompt delivered to the agent when the time comes…";
 "刷新中…" = "Refreshing…";
@@ -227,6 +245,7 @@
 "发送 (Enter)" = "Send (Enter)";
 "发送失败: %@" = "Send failed: %@";
 "取消" = "Cancel";
+"变更史 · %lld 条" = "History · %lld";
 "只作用于这个 Inbox 起的会话, 不改变你当前会话的模型与档位" = "Applies only to sessions started by this Inbox; your current session's model and mode are untouched.";
 "只收 .md (大小写敏感); 若你刚要删或改名, 这条就是唯一的线索" = "Only .md is picked up (case-sensitive); if you just deleted or renamed something, this line is the only trace of it";
 "只是不再挂载, 目录与里面的文件一个都不动。" = "It is only unmounted — the directory and every file inside stay untouched.";
@@ -251,9 +270,11 @@
 "图片: %@" = "Image: %@";
 "图片已不存在 (附件文件被移动或删除)" = "The image is gone (the file was moved or deleted)";
 "在 App 外改完文件后点这里; 已开着的会话仍需重启引擎才生效" = "Click here after editing files outside the app; running sessions still need an engine restart";
+"在 Finder 中显示" = "Reveal in Finder";
 "在 Finder 打开" = "Open in Finder";
 "在这里输入该做什么…" = "Type what to do…";
 "在途: %@" = "In flight: %@";
+"增" = "New";
 "备份中…" = "Backing up…";
 "备份失败" = "Backup failed";
 "备份已在进行中" = "A backup is already running";
@@ -263,11 +284,13 @@
 "外观" = "Appearance";
 "外链图片不在应用内加载" = "Remote images are not loaded in the app";
 "多久看一次收件箱 (全局串行: 同一时刻只跑一个远程任务)" = "How often to check the inbox (global serial: only one remote task runs at a time)";
+"大小" = "Size";
 "好" = "OK";
 "好的,先记下「%@」的需求,我会在下一轮把上下文喂给模型,再回执计划。" = "Got it. Noting the \"%@\" request; I will feed the context to the model on the next turn and reply with a plan.";
 "如 家里那台 / 任务专用" = "e.g. Home box / tasks only";
 "始终允许" = "Always allow";
-"它们不进 prompt, 也进不了知识库索引 (pack 目录不在任何库的扫描路径下)。挂成知识库即可, 做法同 PROJECTS.md" = "They stay out of the prompt, and they cannot reach the knowledge index either (the pack directory is not under any base’s scan path). Mount them as a knowledge base — the same move as with PROJECTS.md";
+"它们不进 prompt, 也进不了笔记索引 (pack 目录不在任何根的扫描路径下)。把内容写成一篇笔记即可" = "They enter neither the prompt nor the notes index (the pack directory is outside every root scan path). Write the content as a note instead";
+"它攒的" = "It gathered this";
 "它没有声明 key（不锁任何名字）" = "It declares no keys (locks no names)";
 "它锁住这些 key，DB 条目里不能再用:" = "It locks these keys, which DB items can no longer use:";
 "完成" = "Done";
@@ -294,6 +317,7 @@
 "工具执行失败" = "Tool execution failed";
 "工具相位落库" = "Persist tool phases";
 "工具面与危险命令裁决 (无人值守路径没有审批 UI)" = "Tool surface and dangerous-command judgement (unattended paths have no approval UI)";
+"左边是空的 —— 这是一篇**还不存在**的笔记(增)。" = "The left side is empty — this note does not exist yet (new).";
 "已停用 · 每 %llds" = "Disabled · every %llds";
 "已停用 —— 索引里不出现这个库" = "Disabled — this base does not appear in the index";
 "已删除" = "Deleted";
@@ -304,6 +328,7 @@
 "已挂载的知识库 %lld 个没进索引: %@" = "%lld mounted knowledge bases did not make it into the index: %@";
 "已暂停" = "Paused";
 "已更新: %lld 家 / %lld 条" = "Updated: %lld providers / %lld models";
+"已经有同名笔记了" = "A note with that name already exists";
 "已绑定" = "Bound";
 "已触发 · %@" = "Triggered · %@";
 "已设置 (留空不修改)" = "Already set (leave blank to keep)";
@@ -312,6 +337,7 @@
 "常驻" = "Always on";
 "常驻硬规 %lld 条没进 prompt: %@" = "%lld always-on rules did not make it into the prompt: %@";
 "常驻超限: %lld 条未进本轮 prompt (按 priority 从低到高降级): %@" = "Over resident budget: %lld items skipped this turn's prompt (lowest priority dropped first): %@";
+"并" = "Merge";
 "并发回合上限" = "Concurrent turn limit";
 "并发已达上限 (%lld), 捕获未发送" = "Concurrency limit reached (%lld); capture not sent";
 "并发已达上限 (%lld), 请等待任务结束或在设置中调高" = "Concurrency limit reached (%lld) — wait for a task to finish or raise the limit in settings";
@@ -321,6 +347,7 @@
 "当前" = "Current";
 "当前会话 %lld 轮" = "Current session: %lld turns";
 "当前会话未绑定项目目录" = "This session has no project directory";
+"当前内容会记进变更史; 文件移到「废纸篓」, 还能捞回来。" = "The current content goes into the revision history; the file moves to the Trash, so it can still be recovered.";
 "当前模型不支持图片输入, 请在设置中改用多模态模型后再发" = "The current model does not accept images — switch to a multimodal model in settings and send again";
 "待审批" = "Needs approval";
 "待审核 · 提炼候选" = "To review · distilled candidates";
@@ -341,19 +368,19 @@
 "扩展请求了 MangoX 不处理的「%@」界面, 已按「取消」应答。" = "Extension requested a \"%@\" prompt the app does not handle; answered \"Cancel\".";
 "扫到 %lld 个文档 (md / txt / html, 深度 ≤ 3)" = "%lld documents found (md / txt / html, depth ≤ 3)";
 "把会话数据库 (含知识库) 与图片附件、会话记录完整拷贝到目标目录的 mangox-backup-<时间戳>/ 子目录, 供人工保管" = "Copies the session database (including the knowledge base), image attachments and session logs into a mangox-backup-<timestamp>/ folder in the target directory for safekeeping.";
+"把这一份整篇写进上面那条目标; 被顶掉的那一版会进变更史" = "Write this whole text into the target above; the version it replaces goes to the history";
 "拉取失败 (%@), 已回落预设清单" = "Fetch failed (%@); fell back to the built-in preset list";
 "拒绝" = "Deny";
 "拷贝到 ~/.mangox/extensions (默认停用)" = "Copied to ~/.mangox/extensions (disabled by default)";
 "持续" = "Continuous";
 "持续模式: 每次触发自动带上此前运行的执行记录 (跨天任务保连续性)" = "Continuous mode: each trigger carries the previous run's record (keeps multi-day tasks coherent)";
-"挂一个目录当资料库: App 只读, 只把描述与文件清单给 agent" = "Mount a directory as a knowledge base: the app only reads it, handing the agent the description and the file list";
-"挂载" = "Mount";
-"挂载目录…" = "Mount folder…";
-"挂载知识库" = "Mount knowledge base";
 "按下新组合键…" = "Press a new key combination…";
+"按需加载" = "Loaded on demand";
 "按频率轻检查触发条件, 条件成立才执行动作 (条件驱动)" = "Lightweight checks of the trigger condition at an interval; the action runs only once it holds (condition-driven)";
 "捕获消息落库" = "Persist captured messages";
 "捕获追加落库" = "Persist appended captures";
+"换" = "Swap";
+"换一个标题" = "pick another title";
 "换行" = "Wrap";
 "授权码" = "App password";
 "授权码 / 客户端专用密码" = "App password / client-specific password";
@@ -362,8 +389,9 @@
 "排队 %lld 条" = "%lld queued";
 "探测地址" = "Probe URL";
 "描述" = "Description";
-"描述不能是空的 — 索引里只有文件名的话, agent 拿到的是没有语义的字符串" = "The description cannot be empty — with only file names in the index the agent gets a string that means nothing";
-"描述太长 (上限 %lld 字, 它是一句话不是摘要)" = "Description is too long (limit %lld characters — it is one sentence, not a summary)";
+"提于 %@" = "Proposed %@";
+"提出时的指纹" = "Base hash";
+"提案" = "Proposal";
 "提炼" = "Distill";
 "提炼中…" = "Distilling…";
 "提炼依据: %@" = "Distilled from: %@";
@@ -372,6 +400,7 @@
 "摘掉" = "Unmount";
 "摘掉知识库「%@」？" = "Unmount knowledge base “%@”?";
 "摘掉这个库" = "Unmount this base";
+"摘要" = "Summary";
 "摘要重试中…" = "Retrying summary…";
 "收件实现未接入 (P10.2c)" = "Receiving is not wired up yet (P10.2c)";
 "收信中 · 每 %llds" = "Receiving · every %llds";
@@ -380,6 +409,7 @@
 "收起工作区" = "Collapse workspace";
 "改动会重置该账号的连接实例 (下次收信生效)" = "Saving resets this account's connection (takes effect on the next check).";
 "改动未生效 · 重启引擎" = "Changes not live · restart the engine";
+"改完要点保存 —— 自动保存会把写了一半的句子也落盘, 还会跟你在外部编辑器里的改动抢。" = "Save explicitly — autosave would persist half-written sentences and race with your edits in an external editor.";
 "改配置不影响已建线程 —— 它们吃首封快照 (项目目录也随之固定)。" = "Changing settings does not affect existing threads — they use the first message's snapshot (including the project directory).";
 "教训" = "Lesson";
 "数据库拷贝失败: %@" = "Copying the database failed: %@";
@@ -398,6 +428,7 @@
 "新建 Watch 任务" = "New Watch task";
 "新建会话" = "New session";
 "新建条目" = "New entry";
+"新建笔记" = "New note";
 "新建项目（选择目录）…" = "New project (choose a directory)…";
 "无人值守" = "Unattended";
 "无人值守 · 恒开" = "Unattended · always on";
@@ -427,6 +458,7 @@
 "更新失败, 保留原目录" = "Update failed; kept the existing catalog";
 "更新模型目录" = "Refresh model catalog";
 "更早" = "Earlier";
+"最后修改" = "Last modified";
 "最多 %lld 张" = "Up to %lld";
 "最多留 200 条" = "Keeps the latest 200";
 "最小化为任务台" = "Minimize to the task bar";
@@ -453,9 +485,15 @@
 "本次注入 (只读)" = "This turn's injection (read-only)";
 "条件触发后要执行的动作…" = "The action to run once the condition holds…";
 "来信驱动的无人值守 agent: 按间隔收信, 过鉴权四道闸后起会话执行" = "A mail-driven unattended agent: checks the inbox on an interval and starts a session once the mail passes the four gates";
+"来源" = "Origin";
+"来源 · %lld 条" = "Sources · %lld";
 "来自 %@" = "From %@";
 "来自「%@」的快照 · 含 %lld 轮上下文" = "Snapshot from “%@” · %lld turns of context";
 "查看本次注入" = "View this turn's injection";
+"标题" = "Title";
+"标题不能为空" = "The title cannot be empty";
+"标题太长 — 上限 %lld 字" = "Title too long — limit is %lld characters";
+"标题就是文件名。存到全局笔记目录, 下一轮组装就会带上它; 项目笔记去项目目录里建。" = "The title is the filename. It goes into the global notes directory and the next assembly picks it up; create project notes inside the project directory.";
 "标题（可留空）" = "Title (optional)";
 "模型" = "Model";
 "模型与思考强度 (选中即期望, 下一回合生效)" = "Model and reasoning effort (a preference; applies to the next turn)";
@@ -463,6 +501,7 @@
 "模型由 MangoX 自管, spawn 时物化到 ~/.mangox/pi-config 供 pi 消费 (不碰 ~/.pi/agent)" = "MangoX owns the model list; it is materialized into ~/.mangox/pi-config at spawn time for pi to consume (your ~/.pi/agent is untouched)";
 "模式" = "Mode";
 "模式档位: 决定 agent 可用的工具与扩展 (下回合生效)" = "Mode: decides which tools and extensions the agent gets (applies next turn)";
+"正文" = "Body";
 "此刻不在 prompt 里 —— 索引整段进或整段不进, 它超出了本轮预算" = "Not in the prompt right now — the index goes in whole or not at all, and this one exceeded the round budget";
 "此操作需要你的批准才能执行" = "This needs your approval to run";
 "每" = "Every";
@@ -496,6 +535,7 @@
 "点「常驻」区头的文件夹按钮: 目录不在时会就地建出来; 若那个位置被同名文件占着, 请先移走它" = "Click the folder button in the “Always on” header: it creates the folder if it is missing; if a file of the same name occupies that spot, move it away first";
 "点击复制 hash: %@" = "Click to copy hash: %@";
 "点击查看大图" = "Click to view full size";
+"现在" = "Now";
 "生成中…" = "Generating…";
 "用户" = "User";
 "由此侧问" = "Side chat from here";
@@ -505,18 +545,22 @@
 "目录: %lld 家 / %lld 条" = "Catalog: %lld providers / %lld models";
 "目录: %lld 家 / %lld 条, 已过期" = "Catalog: %lld providers / %lld models, stale";
 "目录为空, 点「更新模型目录」拉取" = "Catalog is empty — click Refresh model catalog";
+"目标" = "Target";
 "目标会话已不存在, 捕获未发送" = "The target session no longer exists; capture not sent";
 "直接提问，模型已了解源会话上下文" = "Ask directly — the model already knows the source session's context";
 "知识" = "Knowledge";
-"知识库" = "Knowledge base";
 "知识库/记忆: 当前会话注入条数" = "Knowledge base / memory: entries injected into this session";
 "知识库索引整段未进本轮 prompt (体积超预算): %@" = "The knowledge-base index did not fit this turn (over budget): %@";
 "硬规" = "Rule";
 "离开期间完成 %lld 轮" = "Completed %lld turns while you were away";
 "离开期间完成 1 轮" = "Completed 1 turn while you were away";
+"移进「废纸篓」(还能捞回来); 当前内容先记进变更史" = "Move to the Trash (still recoverable); the current content is recorded in the revision history first";
 "移除" = "Remove";
 "稳定段永不参与降级 — 出现这条说明组装有 bug, 请反馈" = "The stable segment never takes part in degradation — seeing this means an assembly bug; please report it";
 "立即备份" = "Back up now";
+"立即运行 (不等定时; 关掉开关也能跑)" = "Run now (ignores the schedule; works even when the toggle is off)";
+"笔记" = "Notes";
+"笔记目录" = "Notes folder";
 "等待" = "Waiting";
 "等待审批" = "Awaiting approval";
 "索引宁缺勿残 — 残缺的索引会让你以为资料只有这些; 摘掉或停用一两个库即可恢复" = "A partial index is worse than none — it would read as “these are all the materials”. Unmount or disable a base or two to restore it";
@@ -577,23 +621,25 @@
 "运行中" = "Running";
 "运行中…" = "Running…";
 "运行状态" = "Run status";
+"近 %lld 天内" = "within the last %lld days";
 "返回文件树" = "Back to file tree";
 "还原主窗口" = "Restore main window";
 "还差: %@" = "Still missing: %@";
 "还没有可用的邮箱账号" = "No usable mailbox account yet";
-"还没有常驻内容\n点右上角 + 新建条目, 或用上面两段的入口放入文件" = "Nothing always-on yet\nUse + in the top right to add an entry, or the entries in the two sections above to put files in place";
+"还没有常驻内容\n点右上角 + 新建条目, 或用常驻区与笔记区的入口放入文件" = "Nothing always-on yet\nUse + in the top right to add an entry, or use the resident and notes section entries to put files in place";
 "这一段会进每轮 prompt 的索引段, 逐字就是 agent 收到的" = "This section goes into the index of every prompt, word for word as the agent receives it";
-"这个目录已经挂过了 (%@)" = "That directory is already mounted (%@)";
-"这个目录里放的是什么资料？" = "What kind of material is in this directory?";
+"这一篇还是空的…" = "This note is still empty…";
 "这个目录里没有可读的文档" = "No readable documents in this directory";
+"这个路径不在笔记目录里" = "That path is outside the notes directory";
 "这句话会进每轮 prompt 的索引 —— agent 靠它判断要不要来查这个目录。" = "This sentence goes into the index of every prompt — the agent uses it to decide whether to look into this directory.";
+"这篇在你编辑期间被外部改过 — 你的改动没有写盘" = "This note was changed externally while you were editing — your changes were not written";
+"这篇已经不在了 — 可能在 App 外被删掉或改名了" = "This note is gone — it may have been deleted or renamed outside the app";
 "连带删除它的邮件线程映射与拒收日志; 已产生的会话保留。" = "Also deletes its thread mappings and rejection log; sessions already created are kept.";
 "连接失败: %@" = "Connection failed: %@";
 "连接正常" = "Connected";
 "连接超时" = "Connection timed out";
 "追加-" = "Append-";
 "追加-%@" = "Append-%@";
-"选一个目录当资料库 — App 只读, 不会改动里面的任何文件" = "Pick a directory as a knowledge base — the app only reads it and never touches any file inside";
 "选择" = "Choose";
 "选择或导入一个插件" = "Choose or import an extension";
 "选择收信用的邮箱账号" = "Choose the mailbox account to receive mail";
@@ -609,6 +655,9 @@
 "邮箱地址" = "Email address";
 "邮箱绑定后不可修改 (一个邮箱只服务一个 Inbox)" = "The mailbox cannot be changed after binding (one mailbox serves one Inbox)";
 "邮箱账号" = "Mailbox accounts";
+"采纳" = "Accept";
+"采纳前, 磁盘上的笔记一个字节都不会变 —— 上面那份 diff 只是「如果」。" = "Nothing on disk changes until you accept — the diff above is only a \"what if\".";
+"采纳后" = "After accepting";
 "重启 pi 进程以加载最新的启用列表" = "Restart the pi process to load the latest enable list";
 "重启后排队正文已丢失 (回合上下文不落库)" = "Queued bodies are lost after a restart (turn context is not persisted)";
 "重启引擎生效" = "Restart the engine to apply";
@@ -616,6 +665,7 @@
 "重命名" = "Rename";
 "重新生成" = "Regenerate";
 "重新读取" = "Reread";
+"重新载入（丢掉我的改动）" = "Reload (discard my changes)";
 "重试 %lld/%lld · %llds 后" = "Retry %lld/%lld · in %llds";
 "错误" = "Error";
 "长行折行显示" = "Fold long lines";

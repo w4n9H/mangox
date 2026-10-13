@@ -81,6 +81,9 @@ final class PiRpcTransport: AgentTransport {
     // 工作目录 (P3.4): store 下发 project path; cwd 变化在下次 send 时重启进程生效。
     private var desiredCwd: String?
     private var spawnedCwd: String?
+    /// P15.3: **本次 spawn 时** `dreamSpool` 是什么 —— 与 `spawnedCwd` 同一个用途:
+    /// 进程复用期间判断"期望值变了没, 变了就得重启"（扩展与 env 都只在 spawn 期定格）。
+    private var spawnedDreamSpool: String?
     /// P3.7: 知识注入块 (spawn 期 --append-system-prompt 下发; 变更需重启进程生效)。
     private var desiredKnowledge: String?
     /// P3.11: 托管扩展加载列表 (spawn 期 --extension 逐个追加; mangox-approval 固定内置)。
@@ -101,6 +104,21 @@ final class PiRpcTransport: AgentTransport {
     private var desiredMode: AgentMode = .standard
     /// P7-M3: 自管模型物化产物 (nil/空 = 不注入; spawn 期落盘 + 环境变量)。
     private var piConfig: ModelMaterializer.Output?
+
+    /// P15.3: 这一份 transport 是不是**正在跑 dream** —— 非 nil = 是, 且它就是那次运行的 spool。
+    ///
+    /// ⚠️ 刻意**不放进 `AgentMode`**: 「跑一次 dream」是**任务语义**, 不是档位语义
+    /// (`Scheduled` 承载任务, `Settings` 承载配置 —— 项目约定)。做成第五档会让它出现在
+    /// 用户能选的档位选择器里 ⇒ 主会话也能挂上 dream 扩展 ⇒ 下面那道双闸门当场失效。
+    /// 实例级还顺带保证了"只有这一次 fire 知道 spool 在哪"。
+    ///
+    /// 谁设它: `ChatStore.beginTurn` 经 `updateDreamSpool` (per-turn 下发, 与 `updateMode` 同路);
+    /// 谁清它: 同一个入口 —— **普通回合无条件写 nil**, 所以它不会粘在实例上。
+    private var dreamSpool: String?
+
+    /// 协议侧入口 (P15.3)。**刻意没有 public setter**: 一条路径进、一条路径出,
+    /// 免得又冒出一个"从别处顺手改一下"的调用点 —— 双闸门靠的就是"只有这里能改"。
+    func updateDreamSpool(_ spool: String?) { dreamSpool = spool }
 
     /// P7-M3: 接收自管模型物化产物 (ChatStore 在模型变更时推送)。
     func updatePIConfig(_ output: ModelMaterializer.Output?) {
@@ -193,12 +211,19 @@ final class PiRpcTransport: AgentTransport {
     ///      ⚠️ 它**不是** `builtin:codemode`: 内置版没有传 options 的口子, 而 "only" 这个模式
     ///      只有自建版能给 (见 ensureCodemodeExtensionFile 的注释)。
     ///   ⑤ 业务扩展 (仅完整档, 由调用方过滤后传进来)。
+    ///   ⑤ P15.3: **自建** dream 扩展 —— **仅 dream 那次 fire 的实例**（`dreamExtensionPath`
+    ///      为 nil 就不加, 同 codemode 的写法）。它是"提案提交工具"的唯一载体。
+    ///
+    /// - Note: 后两个可选段**都有默认值**, 所以既有调用点逐字节不变 —— 这不是方便,
+    ///   是 P13 那条"传 nil 时整段不变"的判据能继续成立的形式化（三老档零影响）。
     static func extensionArguments(hostedExtensionPath: String,
                                    codemodeExtensionPath: String?,
+                                   dreamExtensionPath: String? = nil,
                                    enabled: [String]) -> [String] {
         var args = ["--no-extensions", "--extension", builtinLlamaExtension,
                     "--extension", hostedExtensionPath]
         if let codemode = codemodeExtensionPath { args += ["--extension", codemode] }
+        if let dream = dreamExtensionPath { args += ["--extension", dream] }
         for path in enabled { args += ["--extension", path] }
         return args
     }
@@ -341,6 +366,209 @@ final class PiRpcTransport: AgentTransport {
         return path
     }
 
+    // MARK: - P15.3 dream 扩展与 spool
+
+    /// 环境变量名 —— **契约 token**: 逐字进子进程 env, `mangox-dream.ts` 那侧读的就是它。
+    /// 改它 = 两边一起改, 且**已经落在磁盘上的旧扩展文件会失效**（读不到变量 ⇒ 工具早退
+    /// "未开启"）。与其他契约 token 同一条判据: 不得本地化 / 改写 / 拆分。
+    static let dreamSpoolEnvKey = "MANGOX_DREAM_SPOOL"
+
+    /// spool 的**生产形状**: `~/.mangox/dream-spool/`。
+    ///
+    /// 为什么不放 `note/` 也不放 `task-memory/` —— 那两处都会被**扫描器**扫到
+    /// （`dream-spool` 既不是点开头、也不在 `excludedNames` 里）⇒ 提案落盘 → 被当成笔记进索引
+    /// → 每轮吃 prompt 预算, 而"未采纳的东西出现在注入里"正是本版最不能接受的一件事（§03）。
+    /// 放独立目录 + ingest 之后立刻删 ⇒ 常态下这个目录是空的。
+    static func productionDreamSpoolDir() -> String {
+        NSHomeDirectory() + "/.mangox/dream-spool"
+    }
+
+    /// **进程级**重定向（冒烟）—— 与 `noteRootOverride` 同一个理由: 生产调用点
+    /// (`SchedulerService`) 不传参数, 靠"每个 helper 记得设实例 override"已经漏过一次。
+    /// 这里漏一次的后果还要更重: 夹具会写进用户真实的 `~/.mangox/dream-spool/`,
+    /// 而它**不在任何笔记根里** ⇒ 既有的几个"根重定向"守卫没有一个会看见它（守卫 26 守它）。
+    static var dreamSpoolRootOverride: String?
+
+    /// 实际落点 = 生产形状 + 测试重定向。
+    static func dreamSpoolDir() -> String {
+        dreamSpoolRootOverride ?? productionDreamSpoolDir()
+    }
+
+    /// 一次 fire 一个文件。**文件名 = 任务 id** ⇒ 并发的两次 dream 不会互相覆盖
+    /// （`.jsonl` = 逐行追加的 JSON —— 逐行追加才经得起"进程中途挂了", 见 `NoteProposalSpool`）。
+    static func dreamSpoolPath(taskId: UUID) -> String {
+        dreamSpoolDir() + "/\(taskId.uuidString).jsonl"
+    }
+
+    /// P15.3: 自建 dream 扩展 —— **「提案提交工具」唯一的载体**。
+    ///
+    /// ⚠️ 为什么必须自建: pi 内置里没有"把结论写进 MangoX 的 `note_proposals` 表"这种东西,
+    /// 那是本仓自己的契约。而扩展能做的事刚好够 —— `pi.registerTool` 给模型多一个可调用的动作,
+    /// 这个动作的副作用 = 往 spool 追加一行。
+    ///
+    /// ⚠️ **这个扩展是哑的**: 读 env / 校验 JSON 形状 / 逐行追加, 三件事。
+    /// "这个路径是不是落在笔记根里"**不在它这儿判** —— 那需要把根表复制一份到 TS 里
+    /// （第二真源, 而且它拿不到 App 的 `resolvedNoteDir` 重定向）。判据全部留在
+    /// `Models/NoteProposal.swift` 的纯函数里, 那里能造反例、能进门禁。
+    ///
+    /// ⚠️ **双闸门 = 挂载 + env**: `dreamSpool != nil` 才挂这个扩展（挂载闸门）,
+    /// 且只有 dream 的 spawn 设 `MANGOX_DREAM_SPOOL`（激活闸门）。两个都要 ——
+    /// 只挂不给 env ⇒ 工具早退"未开启"; 只给 env 没挂扩展 ⇒ 模型根本看不到这个工具。
+    /// 别的会话两个都没有 ⇒ **连 spool 在哪都不知道**。
+    ///
+    /// 为什么用 `#"""` 原始字符串: TS 源码里有 `"\n"`（换行符）与 `${…}` 两种形态，
+    /// 普通 Swift 字面量会把 `\n` 变成真换行、把 `\(` 当成插值 ⇒ 写出来的扩展是坏的。
+    /// 原始字符串里反斜杠逐字保留 —— 这是唯一不会静默改坏源码的写法。
+    static let dreamExtensionSource: String = #"""
+        // Auto-deployed by MangoX (P15.3). Records dream's note proposals into a spool file.
+        //
+        // Deliberately dumb: read MANGOX_DREAM_SPOOL, check the JSON shape, append one line.
+        // Whether a target path really lives inside a note root is decided by the app when
+        // the run ends (Models/NoteProposal.swift) -- duplicating that table here would
+        // make it a second source of truth, and it could not see the app's test redirects.
+        //
+        // If MANGOX_DREAM_SPOOL is unset the tool refuses: only a dream run sets it.
+        import { appendFileSync, mkdirSync } from "node:fs";
+        import { dirname } from "node:path";
+        import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+        import { Type } from "typebox";
+
+        const SPOOL_ENV = "MANGOX_DREAM_SPOOL";
+
+        const Source = Type.Object({
+            kind: Type.Optional(Type.Union([Type.Literal("session"), Type.Literal("note")])),
+            ref: Type.String({ description: "Session id, or a note path relative to its root." }),
+            quote: Type.Optional(Type.String({ description: "The exact words this came from." })),
+        });
+
+        export default function (pi: ExtensionAPI) {
+            pi.registerTool({
+                name: "note_proposal",
+                label: "Note proposal",
+                description: [
+                    "Record ONE proposal about the user's notes. This does NOT touch any file:",
+                    "it appends a line to a spool that MangoX reads when this run ends. The user",
+                    "reviews proposals afterwards and decides what actually lands.",
+                    "",
+                    "kind:",
+                    "  insight - a conclusion from the sessions that has no note yet; target_path is a NEW file",
+                    "  merge   - two notes say the same thing; target_path is the note to keep",
+                    "  replace - a note states something that is now outdated; target_path is that note",
+                    "",
+                    "target_path must be an absolute path inside one of the note roots shown in your prompt.",
+                    "content is the FULL new text of the note, never a diff.",
+                    "merge and replace also need base_hash: the sha256 of the note as you actually read it.",
+                    "Every proposal needs at least one source. A proposal without sources is dropped.",
+                ].join("\n"),
+                parameters: Type.Object({
+                    kind: Type.Union([Type.Literal("insight"), Type.Literal("merge"), Type.Literal("replace")]),
+                    target_path: Type.String({ description: "Absolute path inside one of the note roots." }),
+                    content: Type.String({ description: "The full new text of the note (not a diff)." }),
+                    reason: Type.String({ description: "One or two sentences: why this is worth proposing." }),
+                    title: Type.Optional(Type.String({ description: "Note title. Required for insight (it becomes the filename)." })),
+                    base_hash: Type.Optional(Type.String({ description: "sha256 of the note as read. Required for merge/replace." })),
+                    sources: Type.Array(Source, { description: "At least one. Proposals without sources are dropped." }),
+                }),
+
+                async execute(_toolCallId, params, _signal, _onUpdate, _ctx) {
+                    const spool = process.env[SPOOL_ENV];
+                    if (!spool) {
+                        return {
+                            content: [{ type: "text", text: "note_proposal is not enabled in this session." }],
+                            details: undefined,
+                        };
+                    }
+                    // The app enforces these too, but only AFTER the run ends -- the model gets
+                    // no chance to fix them then. Caught here, it can retry within this turn.
+                    if (params.kind === "insight" && !(params.title || "").trim()) {
+                        return {
+                            content: [{
+                                type: "text",
+                                text: "Rejected: an insight proposal needs a title - it becomes the filename. Call note_proposal again with title set.",
+                            }],
+                            details: undefined,
+                        };
+                    }
+                    if (params.kind !== "insight" && !(params.base_hash || "").trim()) {
+                        return {
+                            content: [{
+                                type: "text",
+                                text: "Rejected: merge and replace need base_hash, the sha256 of the note you read. Read the note, then call again.",
+                            }],
+                            details: undefined,
+                        };
+                    }
+                    if (!params.sources || params.sources.length === 0) {
+                        return {
+                            content: [{
+                                type: "text",
+                                text: "Rejected: every proposal needs at least one source. Call note_proposal again with sources.",
+                            }],
+                            details: undefined,
+                        };
+                    }
+                    const line = JSON.stringify({
+                        kind: params.kind,
+                        target_path: (params.target_path || "").trim(),
+                        content: params.content,
+                        reason: params.reason || "",
+                        title: params.title || "",
+                        base_hash: params.base_hash || "",
+                        sources: params.sources.map(function (s) {
+                            return { kind: s.kind || "session", ref: s.ref, quote: s.quote || "" };
+                        }),
+                    });
+                    try {
+                        mkdirSync(dirname(spool), { recursive: true });
+                        appendFileSync(spool, line + "\n");
+                    } catch (e) {
+                        return {
+                            content: [{ type: "text", text: "Failed to record the proposal: " + String(e) }],
+                            details: undefined,
+                        };
+                    }
+                    return {
+                        content: [{
+                            type: "text",
+                            text: "Recorded " + params.kind + " for " + params.target_path + ".",
+                        }],
+                        details: undefined,
+                    };
+                },
+            });
+        }
+        """#
+
+    /// dream 扩展注册出来的工具名 —— Plugins 面板在那一行下面展开它们。
+    ///
+    /// ⚠️ **与 `dreamExtensionSource` 同源同改**: 冒烟断言「这张表里每个名字都能在上面那段
+    /// 源码里找到 `name: "<名字>"`」—— 改了源码忘了这张表会红, 反过来也红。
+    /// 这是 P15.6b 那条「同一段东西两个真源」判据的镜像。
+    ///
+    /// ⚠️ **必须 `nonisolated`**（2026-10-13 修）：本类是 `@MainActor`, 裸 `static let`
+    /// 会被判成**主线程隔离**；而消费方 `ExtensionItem.builtInToolNames` 住在**非隔离**枚举里,
+    /// 它是 `static let` ⇒ 初始化表达式在**非隔离上下文**求值 ⇒ 引用本属性就是这个告警
+    /// （Swift 6 语言模式下是 **error**）。值是不可变 `[String]`（Sendable）⇒ 用 `nonisolated`
+    /// 就够, **不需要 `unsafe`**（同 `stderrTailLimit` 那处）。
+    nonisolated static let dreamToolNames: [String] = ["note_proposal"]
+
+    /// 把 `dreamExtensionSource` 写到 `~/.mangox/extensions/mangox-dream.ts`, 返回路径。
+    ///
+    /// ⚠️ **P15.7: 调用时机一个字没改** —— 仍然只有 `dreamSpool != nil` 的那次 spawn 才调它。
+    /// 面板里那个条目由 `ChatStore.scanExtensions` **投影**出来, 与磁盘无关:
+    /// 「面板列着这一项」≠「磁盘上有这个文件」, 这是有意的 (见那边的注释)。
+    static func ensureDreamExtensionFile() -> String {
+        let dir = NSHomeDirectory() + "/.mangox/extensions"
+        let path = dir + "/mangox-dream.ts"
+        let source = Self.dreamExtensionSource
+        try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+        let existing = try? String(contentsOfFile: path, encoding: .utf8)
+        if existing != source {
+            try? source.write(toFile: path, atomically: true, encoding: .utf8)
+        }
+        return path
+    }
+
     // MARK: - AgentTransport
 
     func send(prompt: String, images: [OutgoingImage]) {
@@ -415,12 +643,19 @@ final class PiRpcTransport: AgentTransport {
         learnedBashTokens = tokens
     }
 
-    func updateExtensions(_ paths: [String]) {
-        // P13: 两个 MangoX 自管扩展都要滤掉 —— 它们由档位轴决定挂不挂,
-        // 不能被业务扩展扫掠重复挂一遍 (approval 一直如此; codemode 同理)。
-        desiredExtensions = paths.filter {
-            !$0.hasSuffix("mangox-approval.ts") && !$0.hasSuffix("mangox-codemode.ts")
+    /// P13 + P15.3: 从一批路径里挑出**业务扩展** —— MangoX 自管的三个都要滤掉, 它们由**轴**决定
+    /// 挂不挂 (approval = 恒挂, codemode = 档位轴, dream = 那一次 fire 的实例), 不能被业务扩展
+    /// 扫掠重复挂一遍。提成 static 纯函数是为了这条判据能**在门禁里变红**(实例侧只有 private 状态)。
+    static func businessExtensionPaths(_ paths: [String]) -> [String] {
+        paths.filter {
+            !$0.hasSuffix("mangox-approval.ts")
+                && !$0.hasSuffix("mangox-codemode.ts")
+                && !$0.hasSuffix("mangox-dream.ts")
         }
+    }
+
+    func updateExtensions(_ paths: [String]) {
+        desiredExtensions = Self.businessExtensionPaths(paths)
     }
 
     /// 重启 pi 使最新注入块/cwd 生效 (丢进程内对话记忆, 由 UI 显式触发)。
@@ -432,9 +667,19 @@ final class PiRpcTransport: AgentTransport {
 
     // MARK: - 会话持久化绑定 (pi --session)
 
+    /// 冒烟注入: **进程级**重定向 transcript 根目录 (在 `run()` 起手设一次)。
+    ///
+    /// ⚠️ 为什么必须是进程级（与 `ImagePipeline.attachmentsRootOverride` 同一条判据）:
+    /// 生产调用点 `removeSessionFile(for:)` **不接受路径参数**, 只吃 `sessionDirectory`
+    /// ⇒ 函数级注入管不到它。而 `NSHomeDirectory()` 实测**不吃 `HOME`**
+    /// （2026-10-13 实测: `env HOME=/tmp/fakehome` 仍返回 `/Users/moofs`）⇒ 不设这个
+    /// override, 冒烟就没有第二条路能把 transcript 挪出用户真实目录 —— 于是
+    /// 「删会话 / 删项目时 transcript 按选项删没删」这条判据**永远无法变红**（守卫 27）。
+    nonisolated(unsafe) static var sessionDirectoryOverride: String?
+
     /// pi session 文件目录 (每 UI 会话一个 .jsonl, 存在则恢复/不存在则新建)。
     static var sessionDirectory: String {
-        NSHomeDirectory() + "/.mangox/pi-sessions"
+        sessionDirectoryOverride ?? (NSHomeDirectory() + "/.mangox/pi-sessions")
     }
 
     static func sessionFilePath(for id: UUID) -> String {
@@ -551,7 +796,12 @@ final class PiRpcTransport: AgentTransport {
     /// 代价是丢掉进程内对话记忆, 仅在切换 project 时发生, 可接受。
     private func ensureProcessForCwd() {
         let target = desiredCwd ?? NSHomeDirectory()
-        if process != nil, spawnedCwd != target {
+        // P15.3: **dream 状态与 cwd 一样是 spawn 期的定格** —— 扩展挂不挂、env 设不设,
+        // 都只在 spawn 那一刻决定。而进程是**跨回合复用**的（同一个日志会话反复 fire）,
+        // 所以"这次要不要 dream"变了也必须重启, 否则会沿用上一次的扩展与 env。
+        // 这个分支不是为了第一次 fire（那次 process 本来就是 nil）—— 是为了
+        // 用户点开任务日志会话说了句话（普通回合, `dreamSpool` 被置回 nil）之后再点「立即运行」。
+        if process != nil, spawnedCwd != target || spawnedDreamSpool != dreamSpool {
             teardownProcess()
         }
         guard process == nil else { return }
@@ -576,12 +826,17 @@ final class PiRpcTransport: AgentTransport {
         // P13: 自建 codemode 扩展**只在这一档落地** —— 三老档连"挂载"这一步都没有,
         // 所以它们的扩展段逐字节不变 (是"不存在", 不是"挂了但没生效")。
         let codemodeExtPath = desiredMode.mountsCodemodeExtension ? Self.ensureCodemodeExtensionFile() : nil
+        // P15.3: dream 扩展**只在这一份实例是 dream fire 时挂** —— `dreamSpool` 由
+        // `SchedulerService` 在 fire 前设、fire 收尾时清。三老档与普通会话上它是 nil
+        // ⇒ 扩展段逐字节不变（同 codemode 那条"是'不存在', 不是'挂了但没生效'"）。
+        let dreamExtPath = dreamSpool != nil ? Self.ensureDreamExtensionFile() : nil
         var args = spec.scriptArgs + ["--mode", "rpc"]
         // P12.1b + P13: 扩展参数 (关自动发现 + 补回内置 provider + 挂托管扩展 + codemode 层)。
         // 业务扩展仅完整档挂载 (P7-M4); 系统扩展 (审批桥) 四档恒挂。
         args += Self.extensionArguments(
             hostedExtensionPath: extPath,
             codemodeExtensionPath: codemodeExtPath,
+            dreamExtensionPath: dreamExtPath,
             enabled: desiredMode.mountsBusinessExtensions ? desiredExtensions : [])
         if let fork = desiredForkSource {
             // P6.3.1: 侧问首回合 — fork 源快照 (互斥分支: 不带 --session/--no-session)。
@@ -637,6 +892,17 @@ final class PiRpcTransport: AgentTransport {
                 p.environment?["PI_CODING_AGENT_DIR"] = dir.path
             }
         }
+        // P15.3: 双闸门的第二道 —— spool 路径只经 env 下发, 且只有 dream 的 spawn 会设它。
+        //
+        // ⚠️ **必须显式给 `p.environment` 赋值, 不能写 `p.environment?[...] = x` 就算完** ——
+        // 上面那段只在"有自管模型"(`cfg.modelCount > 0`) 时才给它赋值, 其余情况它是 **nil**
+        // (意味着子进程自己继承父环境)。那时 `p.environment?[...] = x` 会**静默变成空操作**:
+        // 扩展挂上了、工具也注册了, 但读不到 env ⇒ 每次调用都回"未开启", 而门禁全绿。
+        // （这条是读上面那个分支条件得到的, 不是靠跑出来的 —— 所以它更需要守卫, 见守卫 26。）
+        if let spool = dreamSpool {
+            if p.environment == nil { p.environment = ProcessInfo.processInfo.environment }
+            p.environment?[Self.dreamSpoolEnvKey] = spool
+        }
         p.arguments = args
         p.currentDirectoryURL = URL(fileURLWithPath: cwd)   // App cwd=/ 问题的正式修复
         let inPipe = Pipe()
@@ -648,6 +914,7 @@ final class PiRpcTransport: AgentTransport {
         do { try p.run() } catch { return }
         process = p
         spawnedCwd = cwd
+        spawnedDreamSpool = dreamSpool
         self.outPipe = outPipe
         self.errPipe = errPipe
         stdinHandle = inPipe.fileHandleForWriting

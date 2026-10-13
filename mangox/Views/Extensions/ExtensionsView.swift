@@ -109,35 +109,26 @@ struct ExtensionsView: View {
 
     private func row(_ item: ExtensionItem) -> some View {
         let selected = selectedPath == item.path
-        return HStack(spacing: 7) {
-            Image(systemName: item.isBuiltIn ? "puzzlepiece.fill" : "puzzlepiece")
-                .font(.system(size: 10))
-                .foregroundStyle(item.isBuiltIn ? CodexTheme.accent : CodexTheme.textMuted)
-                .frame(width: 14)
-            VStack(alignment: .leading, spacing: 1) {
+        return VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 7) {
+                Image(systemName: item.isBuiltIn ? "puzzlepiece.fill" : "puzzlepiece")
+                    .font(.system(size: 10))
+                    .foregroundStyle(item.isBuiltIn ? CodexTheme.accent : CodexTheme.textMuted)
+                    .frame(width: 14)
                 Text(item.name)
                     .font(.system(size: 12))
                     .lineLimit(1)
                     .foregroundStyle(item.enabled
                                      ? (selected ? CodexTheme.textPrimary : CodexTheme.textSecondary)
                                      : CodexTheme.textMuted)
+                Spacer(minLength: 2)
+                trailingBadge(item)
             }
-            Spacer(minLength: 2)
-            if item.source == .managed {
-                CodexMiniToggle(isOn: Binding(
-                    get: { item.enabled },
-                    set: { _ in store.toggleExtension(item) }
-                ),
-                disabled: item.isBuiltIn)   // 内置审批扩展恒开
-                .help(LK(item.isBuiltIn ? "内置审批扩展, 不可停用" : "启停 (重启引擎生效)"))
-            } else {
-                Text(item.source.label)
-                    .font(.system(size: 9))
-                    .foregroundStyle(CodexTheme.textMuted)
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 2)
-                    .background(CodexTheme.bgPill)
-                    .clipShape(Capsule())
+            // P15.7: 这个扩展注册出来的工具 —— 缩进一行摆在它下面。
+            // 「按需挂载」的扩展**没有开关**, 所以"它到底提供什么"必须从别处读得到;
+            // 否则只能点进详情去读源码 (boss: 建议 note_proposal 在 plugins 里能找到)。
+            ForEach(item.toolNames, id: \.self) { name in
+                toolRow(name, selected: selected)
             }
         }
         .padding(.leading, 8)
@@ -147,6 +138,60 @@ struct ExtensionsView: View {
         .clipShape(RoundedRectangle(cornerRadius: CodexTheme.radiusSm))
         .contentShape(Rectangle())
         .onTapGesture { selectedPath = item.path }
+    }
+
+    /// 行右侧那一格: 托管区给启停开关, 只读区给来源胶囊。
+    ///
+    /// ⚠️ 分派判据是**挂载策略** (`isOnDemand`), **不能只看 `isBuiltIn`**:
+    ///   · 恒挂内置 (approval) → 禁用开关 + "不可停用" (**与 P3.11 一模一样, 一个字没动**)
+    ///   · 按需挂载 (dream)    → 不给开关, 挂一颗胶囊 —— 给它开关就是**说谎**
+    ///   · 普通托管            → 常规开关
+    @ViewBuilder
+    private func trailingBadge(_ item: ExtensionItem) -> some View {
+        if item.source == .managed {
+            if item.isOnDemand {
+                Text("按需加载")
+                    .font(.system(size: 9))
+                    .foregroundStyle(CodexTheme.textMuted)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(CodexTheme.bgPill)
+                    .clipShape(Capsule())
+                    .help("App 内置扩展：只在需要它的那次运行里挂载，不是常开")
+            } else {
+                CodexMiniToggle(isOn: Binding(
+                    get: { item.enabled },
+                    set: { _ in store.toggleExtension(item) }
+                ),
+                disabled: item.isBuiltIn)   // 内置审批扩展恒开
+                .help(LK(item.isBuiltIn ? "内置审批扩展, 不可停用" : "启停 (重启引擎生效)"))
+            }
+        } else {
+            Text(item.source.label)
+                .font(.system(size: 9))
+                .foregroundStyle(CodexTheme.textMuted)
+                .padding(.horizontal, 6)
+                .padding(.vertical, 2)
+                .background(CodexTheme.bgPill)
+                .clipShape(Capsule())
+        }
+    }
+
+    /// 扩展行下面那一行工具名 (P15.7)。**刻意不做成可点的行** —— 它只是个名字, 点了没有去处,
+    /// 做了交互反而像"能打开/能配置"。"按需挂载"那颗胶囊在**主行**右侧, 这里不重复挂。
+    private func toolRow(_ name: String, selected: Bool) -> some View {
+        HStack(spacing: 7) {
+            Image(systemName: "wrench.and.screwdriver")
+                .font(.system(size: 9))
+                .foregroundStyle(CodexTheme.textMuted)
+                .frame(width: 14)
+            Text(name)
+                .font(CodexFonts.monoFont(10))
+                .lineLimit(1)
+                .foregroundStyle(selected ? CodexTheme.textSecondary : CodexTheme.textTertiary)
+            Spacer(minLength: 2)
+        }
+        .padding(.leading, 11)   // 比主行图标再缩进一档 ⇒ 层级一眼看得出
     }
 
     // MARK: - 右侧详情

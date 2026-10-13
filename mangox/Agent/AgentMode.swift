@@ -68,6 +68,19 @@ enum AgentMode: String, Codable, CaseIterable, Identifiable {
     ///    (见 PiRpcTransport.ensureCodemodeExtensionFile)。
     var mountsCodemodeExtension: Bool { self == .codemode }
 
+    /// 这一档的 `--tools` 会不会**削掉扩展注册的工具**（= 内置之外、由 `pi.registerTool` 注册的那些）。
+    ///
+    /// 判据是各档 `--tools` 的语义（`a,b,c` = **只留** / `+x` = 在默认全量上**增补**）:
+    ///   - `minimal` 只留 read/bash/write/edit ⇒ 扩展注册的工具全没了;
+    ///   - `codemode` 虽然传的是 `+codemode`（增补）, 但**自建 codemode 扩展自己钉了
+    ///     `mode: "only"`**（`PiRpcTransport.ensureCodemodeExtensionFile`）⇒ 模型视野里
+    ///     只剩 codemode 一个工具。这档的"少"不来自 `--tools`, 来自扩展 —— 判据不能只看参数。
+    ///   - `standard` / `full` 不传 `--tools`（pi 默认全量）⇒ 工具在。
+    ///
+    /// ⚠️ 用途是**告警**, 不是拦截 —— 用户选了这一档就是他的决定, App 不替他改档
+    /// （同"能由产品回答的问题不要拿去问用户"那条的反面: 这是**用户的**选择, 不归产品回答）。
+    var exposesExtensionTools: Bool { self == .standard || self == .full }
+
     // settings KV 持久化 (value 列 TEXT)。
     // ⚠️ 存 **rawValue**, 不存 allCases 序号 —— 曾是"位置即存储键": 把 codemode 排到最前
     //    会让老库里的 0/1/2 **整体改义** (老用户的 full 静默变 standard, 且零红灯)。

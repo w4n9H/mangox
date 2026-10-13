@@ -366,12 +366,21 @@ final class ChatStore: ObservableObject {
         }
         // 托管区
         for f in scanDir(managedExtensionsDir) where f.hasSuffix(".ts") || f.hasSuffix(".js") {
-            let path = managedExtensionsDir + "/" + f
-            let name = (f as NSString).deletingPathExtension
-            let builtIn = name == ExtensionItem.builtInName
-            items.append(ExtensionItem(name: name, path: path, source: .managed,
-                                       enabled: builtIn || !disabledExtensionPaths.contains(path),
-                                       isBuiltIn: builtIn))
+            items.append(managedItem(name: (f as NSString).deletingPathExtension,
+                                     path: managedExtensionsDir + "/" + f))
+        }
+        // P15.7: dream **投影**成一条 —— 它的 `.ts` 只在 dream 那次 fire 才落盘 (双闸门的第一道),
+        // 平时磁盘上根本没有这个文件 ⇒ 纯扫描永远列不出它, 于是 `note_proposal` 在哪都没人找得到。
+        //
+        // ⚠️ **判重不能省**: dream 刚跑过时文件是真在磁盘上的, 上面那个循环已经收了一条,
+        //    这里再加就是两条同名项 (一个能点开源码、一个不能 —— 用户只会当成坏了)。
+        //    判据在冒烟: 磁盘上有真文件时**不许**重复, 没有时才补这一条。
+        // ⚠️ 这是**全列表唯一**「面板有、`ls` 没有」的项, 详情源码走常量 (见 `extensionSource`)。
+        if !items.contains(where: { $0.name == "mangox-dream" }) {
+            var dream = managedItem(name: "mangox-dream",
+                                    path: managedExtensionsDir + "/mangox-dream.ts")
+            dream.isSynthetic = true
+            items.append(dream)
         }
         // pi 全局自动发现区 (仅终端 pi 生效, 展示 + 可导入托管)
         let globalDir = NSHomeDirectory() + "/.pi/agent/extensions"
@@ -394,6 +403,21 @@ final class ChatStore: ObservableObject {
         let enabled = items.filter { $0.source == .managed && $0.enabled }.map(\.path)
         currentExtensionPaths = enabled
         transports.values.forEach { $0.updateExtensions(enabled) }
+    }
+
+    /// 构造一条**托管**扩展项 —— 磁盘扫描与 dream 投影走**同一个入口** (P15.7)。
+    ///
+    /// ⚠️ 为什么必须共用: 「内置的挂载策略与工具名」只能有**一处**赋值。分头写的话, dream 刚跑过
+    /// （磁盘上真有那个 `.ts`）会走扫描分支 ⇒ 面板里那一项**从"按需胶囊"变回"恒开开关"**,
+    /// 同一个东西两种说法 —— 而且换脸前后**都是绿的**, 冒烟抓不到。
+    private func managedItem(name: String, path: String) -> ExtensionItem {
+        let builtIn = ExtensionItem.builtInNames.contains(name)
+        return ExtensionItem(name: name, path: path, source: .managed,
+                             enabled: builtIn || !disabledExtensionPaths.contains(path),
+                             isBuiltIn: builtIn,
+                             toolNames: ExtensionItem.builtInToolNames[name] ?? [],
+                             isSynthetic: false,
+                             isOnDemand: ExtensionItem.builtInOnDemand.contains(name))
     }
 
     /// 启停托管扩展 (生效需重启引擎)
@@ -433,7 +457,10 @@ final class ChatStore: ObservableObject {
 
     /// 读取扩展源码 (详情预览)
     func extensionSource(_ item: ExtensionItem) -> String {
-        (try? String(contentsOfFile: item.path, encoding: .utf8)) ?? L("// 无法读取源码")
+        // P15.7: 投影项在磁盘上没有文件 —— 源码从常量取。**不是图省事**: 去读文件只会拿到
+        // "无法读取源码", 而面板要显示的正是那份**真会被写出去**的字节 (同一个真源)。
+        if item.isSynthetic { return PiRpcTransport.dreamExtensionSource }
+        return (try? String(contentsOfFile: item.path, encoding: .utf8)) ?? L("// 无法读取源码")
     }
 
     func toggleExtensionsPanel() {
@@ -487,7 +514,7 @@ final class ChatStore: ObservableObject {
             projects = (try? store.loadProjects()) ?? []
             chats = (try? store.loadChats()) ?? []
             knowledgeItems = (try? store.loadKnowledge()) ?? []
-            // P11.4: 知识库挂载记录 (用户挂的那批)。内置库不落库、由 `builtinKnowledgeBases` 现算。
+            // P11.4: 知识库挂载记录 (用户挂的那批)。固定根(两个笔记根)不落库、由笔记目录现算。
             knowledge.knowledgeBases = (try? store.loadKnowledgeBases()) ?? []
             scheduledTasks = (try? store.loadScheduled()) ?? []
             // P7-M3: custom_models 一次性迁入 models 表 (幂等), 再加载自管真源
@@ -546,6 +573,11 @@ final class ChatStore: ObservableObject {
         captureCancellable = capture.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }
         backupCancellable = backup.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }
         mailboxCancellable = mailbox.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }
+        // P15.3: 预置那条 dream 任务 (**默认关**)。放在 attach 之后是因为它要读 `scheduledTasks`
+        // (上一行 492 已经载完) 与 settings KV; 摆在 attach 外面是**刻意的** ——
+        // `attach` 是纯接线, 种数据不该藏在接线里（同"一件事只有一个地方做"那条）。
+        scheduler.seedDreamTaskIfNeeded()
+        knowledge.reloadProposals()   // P15.3: 提案列表的首屏数据 (收口处会再刷)
         scanExtensions()   // P3.11: 扫描 + 快照托管扩展列表 (池实例 spawn 期加载)
         syncWorkspaceContext()   // 文件树扫描 (P3.4); cwd 在每次 send 前按实例下发
         // P3.7: 注入块快照 (池实例 spawn 期消费)
@@ -677,27 +709,49 @@ final class ChatStore: ObservableObject {
         try? persistence?.renameSession(id: id, title: trimmed, updatedAt: .now)
     }
 
+    /// 会话在磁盘上留了什么 —— **先探后删**的前一半。
+    ///
+    /// ⚠️ **必须在删库行之前调**: 侧问的 transcript 路径存在 `sessions.session_file`、
+    /// "有没有附件"要从 `events` 解出来 —— 行一删这两样都读不到了。
+    private struct SessionDiskFootprint {
+        let explicitTranscript: String?
+        let hasAttachments: Bool
+    }
+
+    private func diskFootprint(of id: UUID) -> SessionDiskFootprint {
+        SessionDiskFootprint(
+            explicitTranscript: persistence?.loadSessionFile(id: id),
+            hasAttachments: (((try? persistence?.loadMessages(sessionId: id)) ?? [])
+                .flatMap { $0.attachments ?? [] }.isEmpty) == false)
+    }
+
+    /// 后一半: 真去 unlink。**半径只有这一处定义**（删会话 / 删项目共用 —— 同一个动作不该有两种半径）。
+    ///
+    /// - **图片附件恒删**（2026-10-13 boss 拍板）: 消息行一没它就是孤儿, 谁也引用不到。
+    ///   刻意**不给它开关**: 二次确认里那句"保留 AI 记忆文件"说的是 transcript, 不是附件。
+    /// - **transcript 按 `deleteTranscript`**: 它是 agent 的对话记忆, 误删不可恢复 ⇒
+    ///   留给用户在二次确认里选（P15.8b 之后仍然如此）。
+    private func removeSessionFiles(_ id: UUID, _ fp: SessionDiskFootprint, deleteTranscript: Bool) {
+        if deleteTranscript {
+            if let explicit = fp.explicitTranscript {
+                PiRpcTransport.removeSessionFile(atPath: explicit)   // fork 产物 (文件名不可派生)
+            } else {
+                PiRpcTransport.removeSessionFile(for: id)            // pi 持久 transcript (派生路径)
+            }
+        }
+        if fp.hasAttachments {
+            ImagePipeline.removeSessionAttachments(sessionID: id)
+        }
+    }
+
     /// 删除会话；删的是当前会话则顺延选中第一个, 全空则回到空态。
-    /// 删除会话; deleteTranscript = 连带删除 pi 持久 transcript (<uuid>.jsonl)。
+    /// deleteTranscript = 连带删除 pi 持久 transcript (<uuid>.jsonl)。
     /// 默认保留: 文件是 agent 的对话记忆, 误删不可恢复 (UI 二次确认里让用户选)。
     func deleteConversation(_ id: UUID, deleteTranscript: Bool = false) {
         evictTransport(id)   // P4.0.2: 逐出池实例 (终止在途 pi + 清回合状态), 无论是否当前选中
-        // P6.3.1: 侧问会话的 transcript 是 fork 产物 (路径显式存库) — 必须在删行前读出
-        let explicitFile = persistence?.loadSessionFile(id: id)
-        // P7-M6: 附件目录同理先读后删 (路径在删 messages 行前从 events 收集)
-        let hasAttachments = (((try? persistence?.loadMessages(sessionId: id)) ?? [])
-            .flatMap { $0.attachments ?? [] }.isEmpty) == false
-        try? persistence?.deleteSession(id: id) // 连带清 events
-        if deleteTranscript {
-            if let explicit = explicitFile {
-                PiRpcTransport.removeSessionFile(atPath: explicit)   // fork 产物 (文件名不可派生)
-            } else {
-                PiRpcTransport.removeSessionFile(for: id)   // pi 持久 transcript (派生路径)
-            }
-        }
-        if hasAttachments {
-            ImagePipeline.removeSessionAttachments(sessionID: id)
-        }
+        let fp = diskFootprint(of: id)                  // ① 先探 (必须在删行前)
+        try? persistence?.deleteSession(id: id)         // ② 删行 (连带清 events)
+        removeSessionFiles(id, fp, deleteTranscript: deleteTranscript)   // ③ 再删文件
         for g in projects.indices {
             projects[g].items.removeAll { $0.id == id }
         }
@@ -1018,11 +1072,27 @@ final class ChatStore: ObservableObject {
     }
 
     /// 删除项目 (侧栏 "..." → 二次确认后调用): 连带其下所有会话与消息。
-    func deleteProject(_ id: UUID) {
+    ///
+    /// **半径与删会话一致**（2026-10-13 boss: "删项目, 要连带项目下的所有会话都要删除, 所以 db, 或者文件, 也要删除"）:
+    /// 行恒删 · 附件恒删 · transcript 按 `deleteTranscript`（由二次确认的两个按钮决定）。
+    /// 走的是与 `deleteConversation` **同一对** `diskFootprint` / `removeSessionFiles`,
+    /// 而不是在这里再抄一遍清理 —— 抄一遍就又有两个半径, 而"两种半径"正是这次要修的缺陷本身。
+    ///
+    /// ⚠️ 刻意**不逐会话调 `deleteConversation`**: 那个函数每删一个会话就重选一次,
+    /// 一个 10 会话的项目会让侧栏选中项跳 10 次。这里逐会话只清内存态与文件,
+    /// 选中项在末尾**统一**处理一次（与改动前同一语义）。
+    func deleteProject(_ id: UUID, deleteTranscript: Bool = false) {
         guard let g = projects.firstIndex(where: { $0.id == id }) else { return }
         let removed = projects.remove(at: g)
-        try? persistence?.deleteProject(id: id)
+        // ① 先探全部会话 (必须在删行前; 逐会话读一次库, 项目删除是低频动作, N 小)
+        let footprints = removed.items.map { ($0.id, diskFootprint(of: $0.id)) }
+        // ② 逐出实例 + 删行 (persistence.deleteProject 连带清其下 sessions / events)
         removed.items.forEach { evictTransport($0.id) }   // P4.0.2: 其下会话实例全部逐出
+        try? persistence?.deleteProject(id: id)
+        // ③ 再删文件
+        for (sid, fp) in footprints {
+            removeSessionFiles(sid, fp, deleteTranscript: deleteTranscript)
+        }
         if selectedProjectId == id { selectedProjectId = nil }
         // 当前会话在被删项目下 → 回欢迎空态
         if let sid = selectedConversationId,
@@ -1415,7 +1485,8 @@ final class ChatStore: ObservableObject {
                    cwd: String?, unattended: Bool, images: [OutgoingImage] = [],
                    modeOverride: AgentMode? = nil,
                    approvalOverride: ApprovalMode? = nil,   // P10.2a-0: 邮箱哨兵 = .autoJudge
-                   modelOverride: (provider: String, modelId: String, thinking: String?)? = nil) {
+                   modelOverride: (provider: String, modelId: String, thinking: String?)? = nil,
+                   dreamSpool: String? = nil) {   // P15.3: 仅 dream fire 非 nil
         let t = transportFor(sid)
         if ephemeral {
             t.updateSessionBinding(nil)   // nil = --no-session (fire 轮次, P3.9 拍板)
@@ -1429,6 +1500,10 @@ final class ChatStore: ObservableObject {
             }
         }
         t.updateWorkingDirectory(cwd)
+        // P15.3: dream spool 是**实例级 per-turn** 的 —— 与 `modeOverride` 同一层,
+        // **不是**档位也不是全局。⚠️ 这是**无条件赋值**（不是 `if let`）: 普通回合要把它清回 nil,
+        // 否则任务日志会话里手动说一句话之后, 那份 transport 会一直挂着 dream 扩展与 env。
+        t.updateDreamSpool(dreamSpool)
         // 无人值守 fire 关审批 (弹卡 = 任务死锁); 其余跟随全局开关。
         // P10.2a-0: approvalOverride 优先 —— 邮箱哨兵走 .autoJudge (白名单放行 + 危险命令拒且不阻塞),
         // 它是 per-turn 下发, 会被全局 askApproval 开关覆盖, 故每回合 send 前重设。
@@ -1525,6 +1600,9 @@ final class ChatStore: ObservableObject {
         approvalBlocked.remove(sid)   // P8-T26: 手动停 → 在途审批一并死掉
         if injectedTurnSid == sid { injectedTurnSid = nil }
         finishWaitingFireIfNeeded(sid: sid)
+        // P15.3: dream 的收口挂在**与等待型同一个位置** —— 两者都是"这次 fire 到此为止"的落点。
+        // 手动停（本处）也要收: 「跑不完不算失败」, 已经产出的提案照样进表。
+        scheduler.finishDreamFireIfNeeded(sid: sid)
         mailbox.noteTurnFinished(sid: sid, blocks: transportFor(sid).autoJudgeBlocks)
     }
 
@@ -1619,8 +1697,13 @@ final class ChatStore: ObservableObject {
     /// 左列「自定义」区 (2026-09-22 起按**来源**分区, 不再是按层分区):
     /// 已审核 + 生效作用域的 DB 条目, **含被关掉的**(可见 ≠ 会被注入, 见 `KnowledgeStore.customKnowledge`)。
     var customKnowledge: [KnowledgeItem] { knowledge.customKnowledge }
-    /// 左列「知识库」区: 带**真实生效态**的库列表(内置库的停用已折算进 `enabled`)。
-    var effectiveKnowledgeBases: [KnowledgeBase] { knowledge.effectiveKnowledgeBases }
+    /// P15.3 起是 dream 提案的**只读快照**; P15.4 起可拍板 —— 但写入口只有
+    /// `knowledge.adoptProposal` / `discardProposal` 两个（View 直接调 `store.knowledge.*`,
+    /// 与 `saveNote` / `createNote` 同一条路, 不在这里再包一层转发）。
+    var noteProposals: [NoteProposal] { knowledge.noteProposals }
+    /// 笔记区的**唯一根列表**（笔记根在前、历史挂载库在后）。
+    /// ⚠️ P15.5 起它不再有"折算后"这个说法 —— P11.4 的内置 L1 库已退休，两表合一。
+    var allKnowledgeBases: [KnowledgeBase] { knowledge.allKnowledgeBases }
     func knowledgeBase(id: String) -> KnowledgeBase? { knowledge.knowledgeBase(id: id) }
     /// 挂载 / 改描述 / 启停 / 摘库 —— 返回 nil = 成功; 非 nil = 拒绝原因(**数据**, 文案在 View 侧拼)。
     @discardableResult
@@ -1767,6 +1850,11 @@ final class ChatStore: ObservableObject {
     /// 到点投递 (P3.9): 全链路在 SchedulerService, ChatStore 转发 (冒烟直访入口)。
     func runScheduledFire(_ task: ScheduledTask, at now: Date = Date()) {
         scheduler.runScheduledFire(task, at: now)
+    }
+
+    /// P15.3: dream 的 spool 落点 (冒烟直访; 视图侧不用它 —— 谁跑 dream 由任务 id 认)。
+    static func dreamSpoolPath(taskId: UUID) -> String {
+        PiRpcTransport.dreamSpoolPath(taskId: taskId)
     }
 
     /// 交接文件路径 (ScheduledView 经 facade 访问)。
@@ -1976,6 +2064,7 @@ extension ChatStore: AgentTransportDelegate {
             liveTurns[sid] = nil   // 产出已落库, 镜像即弃 (库为准)
             if injectedTurnSid == sid { injectedTurnSid = nil }
             finishWaitingFireIfNeeded(sid: sid)
+            scheduler.finishDreamFireIfNeeded(sid: sid)   // P15.3: 正常落定的那条路
             // P10.2a/b: 释放远程回合串行位 + 结算回执 (blocks = 本回合 autoJudge 拦下的命令;
             // 事件归并没有 transport 参数, 用 sid 反查池实例 —— 与 stopTurn 同一写法)
             mailbox.noteTurnFinished(sid: sid, blocks: transportFor(sid).autoJudgeBlocks)

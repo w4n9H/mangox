@@ -128,6 +128,57 @@ final class PersistenceStore {
         // 同一目录挂两次 = 索引里同一份资料出现两遍, 纯浪费每轮预算。**DB 层也挡一道**
         // (纵深防御: store 层已先拦, 但手改 DB / 将来的导入器不走 UI)。
         try db.run("CREATE UNIQUE INDEX IF NOT EXISTS idx_kb_path ON knowledge_bases(path)")
+        // P15.2: 笔记的**旧版**（「不删旧知识」在笔记区的落地）。
+        // 写入路径是这张表**唯一的产地** ⇒ 它跟写入能力同批（P15.2）加; 消费它画"变更史"的
+        // 界面在 P15.4。**只加表, 不动任何现有表**（P11 判据: DB 列只增不删）。
+        try db.run("""
+        CREATE TABLE IF NOT EXISTS note_revisions (
+            id         TEXT PRIMARY KEY,
+            root_id    TEXT NOT NULL,               -- 笔记根 id (note:global / note:project:<pid>)
+            path       TEXT NOT NULL,               -- 根内相对路径
+            content    TEXT NOT NULL,               -- 被覆盖/删除前的**整篇原文**
+            sha256     TEXT NOT NULL,               -- 那一版的指纹
+            written_at REAL NOT NULL,
+            origin     TEXT NOT NULL                -- NoteRevisionOrigin.rawValue (小写落库)
+        )
+        """)
+        try db.run("CREATE INDEX IF NOT EXISTS idx_note_revisions ON note_revisions(root_id, path, written_at)")
+        // P15.3: dream 的**提案**。`sources` 是一列 JSON 文本 (条数不定、永远整块读写)。
+        // ⚠️ 提案**不落 `_proposals/` 目录**: 扫描器只挡 `hasPrefix(".")` 与 `excludedNames`
+        // 那三个名字, 下划线两头都不占 ⇒ 落盘的提案会被当成笔记扫进索引、每轮吃 prompt 预算。
+        // 落表还顺带解决另外两件: 提案是**带状态的对象**(文件系统不表达状态), 以及
+        // "输入永不被改写"这条不变量 (靠 `base_hash` 比对比靠"文件没被写"更容易断言)。
+        // **只加表, 不动任何现有表**（P11 判据: DB 列只增不删）。
+        try db.run("""
+        CREATE TABLE IF NOT EXISTS note_proposals (
+            id          TEXT PRIMARY KEY,
+            root_id     TEXT NOT NULL,              -- 笔记根 id (note:global / note:project:<pid>)
+            kind        TEXT NOT NULL,              -- NoteProposalKind.rawValue (insight / merge / replace)
+            target_path TEXT NOT NULL,              -- 根内相对路径 (与 note_revisions.path 同形)
+            base_hash   TEXT NOT NULL,              -- 提出时的指纹; insight 恒空串
+            title       TEXT NOT NULL,              -- 可空串
+            content     TEXT NOT NULL,              -- 整篇新内容 (不是 diff)
+            reason      TEXT NOT NULL,              -- 可空串: 为什么提这一条
+            sources     TEXT NOT NULL,              -- [ProposalSource] 的 JSON (非空; 拿不出指针的不入表)
+            created_at  REAL NOT NULL,
+            status      TEXT NOT NULL,              -- NoteProposalStatus.rawValue (小写落库)
+            session_id  TEXT NOT NULL,              -- 产生它的那次 dream 的日志会话 id
+            decided_at  REAL                        -- P15.4 遗留列: P15.8/5f 起无写入者 (恒 NULL), 保留 = 列只增不删
+        )
+        """)
+        // 列表按「待审优先、新的在前」读 ⇒ 索引给到这三列; P15.4 的终态写也是按 (status) 过滤。
+        try db.run("CREATE INDEX IF NOT EXISTS idx_note_proposals ON note_proposals(status, created_at DESC)")
+        // P15.4 补列（老库升上来时 `CREATE TABLE IF NOT EXISTS` 不会动它 ⇒ 必须显式 ALTER）。
+        // ⚠️ P15.8/5f 起**没有任何读取者**（拍过板的行直接删掉, 不再记"拍板时刻"）——
+        // 但 `INSERT` 仍然点得到这一列, 删掉 ALTER 会让老库在写入时**报没有这一列**。
+        // ⇒ 列与非空形状都保留（DB 判据: 列只增不删）。
+        addColumnIfMissing("note_proposals", "decided_at", "REAL")
+        // P15.8/5f **存量移除**: 本版起提案表 = 「待审队列」, 拍过板的行直接删掉（不再写终态）。
+        // 老库里那两条终态行若留着, 会变成**读得出来但看不见**的垃圾 ——
+        // `NoteProposalStatus` 已收敛成只有 `pending`, `guard let status` 会把它们静默丢掉。
+        // ⇒ 明确删掉, 不让它静默。
+        // ⚠️ 将来若重新引入终态行, **这一条必须一起删** —— 否则它每次启动都会静默吃掉新写入的行。
+        try db.run("DELETE FROM note_proposals WHERE status <> 'pending'")
         try db.run("CREATE INDEX IF NOT EXISTS idx_events_session ON events(session_id, seq)")
         // P5.1: 自定义模型 (菜单自主 — 与 pi 目录条目的展示名解耦)
         try db.run("""
@@ -789,6 +840,118 @@ final class PersistenceStore {
 
     func deleteKnowledgeBase(id: String) throws {
         try db.run("DELETE FROM knowledge_bases WHERE id = ?", [.text(id)])
+    }
+
+    // MARK: - Note revisions (P15.2 笔记旧版)
+
+    /// 记下一个旧版本。**只增不改不删** —— 它的语义就是"这一版曾经存在过"。
+    func appendNoteRevision(_ r: NoteRevision) throws {
+        try db.run("""
+            INSERT INTO note_revisions (id, root_id, path, content, sha256, written_at, origin)
+            VALUES (?,?,?,?,?,?,?)
+            """, [.text(r.id.uuidString), .text(r.rootId), .text(r.path), .text(r.content),
+                  .text(r.sha256), .real(r.writtenAt.timeIntervalSince1970),
+                  .text(r.origin.rawValue)])
+    }
+
+    /// 某一篇的历史（新 → 旧）。
+    ///
+    /// P15.2 的消费者是**冒烟**（验"旧版真的留下了, 而且内容就是覆盖前那一份"）;
+    /// P15.4 的"变更史"界面读同一个函数 —— 不另开一条查询路径。
+    func loadNoteRevisions(rootId: String, path: String) throws -> [NoteRevision] {
+        try db.query("""
+            SELECT id, root_id, path, content, sha256, written_at, origin
+            FROM note_revisions WHERE root_id = ? AND path = ?
+            ORDER BY written_at DESC
+            """, [.text(rootId), .text(path)]).compactMap { row in
+            guard let id = UUID(uuidString: text(row, "id")),
+                  let origin = NoteRevisionOrigin(rawValue: text(row, "origin")) else { return nil }
+            return NoteRevision(id: id, rootId: text(row, "root_id"), path: text(row, "path"),
+                                content: text(row, "content"), sha256: text(row, "sha256"),
+                                writtenAt: Date(timeIntervalSince1970: double(row, "written_at")),
+                                origin: origin)
+        }
+    }
+
+    /// 这一版**记过没有**？—— 只回答是否, 不把历史正文拖回来。
+    ///
+    /// P15.4 的写入路径在落盘前问它: **没记过 ⇒ 先补记**。补的是什么?
+    /// 就是"上一次写入没有被我们记下的那一版" —— 它只有两个来源: ① P15.4 之前的老库
+    /// ② 用户在外部编辑器改过（dream 的写入必经 App, 走不到这条路上）。
+    /// 不补记, 这两版会在下一次覆盖时**静默消失**; 补了, 版本史才真正连续。
+    ///
+    /// - Note: 走 `SHA256` 而不是"最新一条的时间戳" —— 判据是**内容同一性**, 不是时间顺序
+    ///   （同 `saveNote` 的乐观并发那条: 同一件事不该有两种指纹）。
+    func noteRevisionExists(rootId: String, path: String, sha256: String) -> Bool {
+        let rows = (try? db.query("""
+            SELECT 1 FROM note_revisions WHERE root_id = ? AND path = ? AND sha256 = ? LIMIT 1
+            """, [.text(rootId), .text(path), .text(sha256)])) ?? []
+        return !rows.isEmpty
+    }
+
+    // MARK: - Note proposals (P15.3 dream 提案)
+
+    /// 落一条提案。**只增** —— 提案一旦产出就不再变。
+    ///
+    /// ⚠️ **P15.8/5f 起本表是「待审队列」**: 拍过板的行（采纳 / 丢弃）会被**删掉**
+    /// （`KnowledgeStore.removeProposal`）, 不再改写状态 ⇒ 这里恒写 `pending`。
+    /// 两条终态写入路径连同 `setNoteProposalStatus` 已一并删除（生产者没了, API 就不留）。
+    ///
+    /// - Important: `sources` 编不出来时**直接抛**, 不写空串 —— 一个没有来源的提案
+    ///   正是 §05 那条风险（"把没说过的话总结成事实"）唯一的结法所要挡的东西,
+    ///   让它以降级形态进表等于把闸门拆了。
+    func appendNoteProposal(_ p: NoteProposal) throws {
+        // `sources` 是 `[ProposalSource]`（全 String 字段）⇒ 这个 `guard` 实际上从不触发。
+        // 但**不能写成 `?? "[]"`** —— 那会让"没有来源的提案"在编码失败时悄悄成立,
+        // 而它正是 §05 那条风险唯一的结法所要挡的东西（宁可整条不写, 不可降级写入）。
+        guard let sourcesJSON = encodeJSON(p.sources) else {
+            throw DatabaseError.bind("note_proposals.sources")
+        }
+        try db.run("""
+            INSERT INTO note_proposals
+                (id, root_id, kind, target_path, base_hash, title, content, reason,
+                 sources, created_at, status, session_id, decided_at)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+            """, [.text(p.id.uuidString), .text(p.rootId), .text(p.kind.rawValue),
+                  .text(p.targetPath), .text(p.baseHash), .text(p.title), .text(p.content),
+                  .text(p.reason), .text(sourcesJSON),
+                  .real(p.createdAt.timeIntervalSince1970), .text(p.status.rawValue),
+                  .text(p.sessionId),
+                  // `decided_at` 列必须留着（DB 列只增不删）⇒ 恒落 NULL。
+                  // P15.8/5f 起没有任何写入者: 拍过板的行直接删掉, 不再记"拍板时刻"。
+                  .null])
+    }
+
+    /// 读提案。**表里恒只有 `pending`**（拍过板的行已删）⇒ 不需要状态过滤,
+    /// 排序也就只剩"新的在前"（P15.4 那个 `CASE WHEN status = 'pending'` 随终态一起去掉）。
+    func loadNoteProposals() throws -> [NoteProposal] {
+        return try db.query("""
+            SELECT id, root_id, kind, target_path, base_hash, title, content, reason,
+                   sources, created_at, status, session_id
+            FROM note_proposals
+            ORDER BY created_at DESC
+            """).compactMap { row in
+            guard let id = UUID(uuidString: text(row, "id")),
+                  let kind = NoteProposalKind(rawValue: text(row, "kind")),
+                  let status = NoteProposalStatus(rawValue: text(row, "status")),
+                  let sources = decodeJSON([ProposalSource].self, text(row, "sources")) else { return nil }
+            return NoteProposal(
+                id: id, rootId: text(row, "root_id"), kind: kind,
+                targetPath: text(row, "target_path"), baseHash: text(row, "base_hash"),
+                title: text(row, "title"), content: text(row, "content"),
+                reason: text(row, "reason"), sources: sources,
+                createdAt: Date(timeIntervalSince1970: double(row, "created_at")),
+                status: status, sessionId: text(row, "session_id"))
+        }
+    }
+
+    /// 删一条提案 —— 拍过板（采纳 / 丢弃）之后走这里。
+    ///
+    /// ⚠️ 删的**只是这一行提案**（一份"我想建议你改这里"的草稿）: 磁盘上的笔记、
+    /// `note_revisions` 里的版本史都**不受影响** —— 采纳已经把内容写进笔记了,
+    /// 丢弃本来就一个字节没写过。
+    func deleteNoteProposal(id: UUID) throws {
+        try db.run("DELETE FROM note_proposals WHERE id = ?", [.text(id.uuidString)])
     }
 
     // (P5.1 的 custom_models 读写 API 已于 2026-09-23 删除 —— 生产路径已无写入者。

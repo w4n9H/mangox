@@ -24,6 +24,7 @@ VALUES = {
     '// 图片 (%@) 读取失败或超过 40 MB': '// Image (%@) could not be read, or exceeds 40 MB',
     '= 检查频率 (条件可能成立后按此间隔值守)': ' = check interval (poll at this rate once the condition may hold)',
     'AI 回复生成中…': 'Generating reply…',
+    'AI 记忆文件 = 各会话的对话上下文 (<uuid>.jsonl); 误删不可恢复。': "The AI memory file is each session's conversation context (<uuid>.jsonl); deleting it cannot be undone.",
     'AI 记忆文件 = 该会话的对话上下文 (<uuid>.jsonl); 误删不可恢复。': "The AI memory file is this session's conversation context (<uuid>.jsonl); deleting it cannot be undone.",
     'API Key (存入 Keychain)': 'API key (stored in Keychain)',
     'Agent 正在运行…': 'Agent is running…',
@@ -172,8 +173,10 @@ VALUES = {
     '删除该条目': 'Delete this entry',
     '删除该账号 (含 Keychain 授权码)': 'Delete this account (and its Keychain app password)',
     '删除这个 agent': 'Delete this agent',
+    '删除项目 (保留 AI 记忆文件)': 'Delete project (keep the AI memory files)',
     '删除项目…': 'Delete project…',
     '删除项目「%@」？': 'Delete the project “%@”?',
+    '删除项目及其全部 AI 记忆文件': 'Delete the project and all its AI memory files',
     '到点投递 prompt (cron 驱动)': 'Delivers a prompt when the time comes (cron-driven)',
     '到点投递给 Agent 的 prompt…': 'The prompt delivered to the agent when the time comes…',
     '刷新文件树与 git 状态': 'Refresh the file tree and git status',
@@ -594,27 +597,13 @@ VALUES = {
     # 左列分区轴从"层"换成"来源"后新增的三区标题。层降为**行内标记**, 且只在
     # "按需"(非缺省)时出现 —— 常驻是这两个区的常态, 每行都标一遍就是噪声。
     '常驻': 'Always on',
-    '知识库': 'Knowledge base',
     # ---- 2026-09-22: P11.4b 知识库区 (挂载 / 描述必填 / 摘库) ----
-    '挂载知识库': 'Mount knowledge base',
-    '挂一个目录当资料库: App 只读, 只把描述与文件清单给 agent': 'Mount a directory as a knowledge base: the app only reads it, handing the agent the description and the file list',
-    '挂载': 'Mount',
-    '挂载目录…': 'Mount folder…',
-    '选一个目录当资料库 — App 只读, 不会改动里面的任何文件': 'Pick a directory as a knowledge base — the app only reads it and never touches any file inside',
-    '这个目录里放的是什么资料？': 'What kind of material is in this directory?',
-    '例: 2024 年各渠道的复盘文档': 'e.g. 2024 channel retrospectives',
     '这句话会进每轮 prompt 的索引 —— agent 靠它判断要不要来查这个目录。': 'This sentence goes into the index of every prompt — the agent uses it to decide whether to look into this directory.',
     '描述': 'Description',
-    '描述不能是空的 — 索引里只有文件名的话, agent 拿到的是没有语义的字符串': 'The description cannot be empty — with only file names in the index the agent gets a string that means nothing',
-    '描述太长 (上限 %lld 字, 它是一句话不是摘要)': 'Description is too long (limit %lld characters — it is one sentence, not a summary)',
-    '这个目录已经挂过了 (%@)': 'That directory is already mounted (%@)',
-    '不是一个目录, 或者它已经不存在了': 'Not a directory, or it no longer exists',
     '扫到 %lld 个文档 (md / txt / html, 深度 ≤ 3)': '%lld documents found (md / txt / html, depth ≤ 3)',
     '这个目录里没有可读的文档': 'No readable documents in this directory',
     '已停用 —— 索引里不出现这个库': 'Disabled — this base does not appear in the index',
     '内置': 'Built-in',
-    'L1 落盘目录, 自动挂载: 不可删, 描述由 App 写死': 'The L1 working directory, mounted automatically: cannot be deleted, description is hard-coded',
-    '内置库不可修改 — 它跟着 L1 落盘目录自动出现': 'Built-in bases cannot be edited — this one appears automatically with the L1 working directory',
     '摘掉这个库': 'Unmount this base',
     '摘掉知识库「%@」？': 'Unmount knowledge base “%@”?',
     '摘掉': 'Unmount',
@@ -630,7 +619,6 @@ VALUES = {
     # ---- 2026-09-22: P11.4b pack 里 ondemand 文件的点名告警 (§3.2) ----
     # 措辞不许写成"不注入": 那听着正常。病在于它同时进不了索引 ⇒ 对模型隐形。
     '%lld 个人格文件是「按需」的, 模型不知道它们存在: %@': '%lld persona files are “on demand” — the model does not know they exist: %@',
-    '它们不进 prompt, 也进不了知识库索引 (pack 目录不在任何库的扫描路径下)。挂成知识库即可, 做法同 PROJECTS.md': 'They stay out of the prompt, and they cannot reach the knowledge index either (the pack directory is not under any base’s scan path). Mount them as a knowledge base — the same move as with PROJECTS.md',
     # ---- 2026-09-23: persona 段为空 / pack 文件读不出来 (§3.2) ----
     # 措辞不许写成"目录是空的": 那听着像个中性状态。真相是**人格本体一个字都没进 prompt**,
     # 所以两条主句都落在"本轮 prompt 里没有「我」"上 —— 那是这件事的实际后果。
@@ -640,7 +628,6 @@ VALUES = {
     '只收 .md (大小写敏感); 若你刚要删或改名, 这条就是唯一的线索': 'Only .md is picked up (case-sensitive); if you just deleted or renamed something, this line is the only trace of it',
     '%lld 个人格文件读不出来 (权限或编码), 内容未进 prompt: %@': '%lld persona files cannot be read (permissions or encoding) — their content is not in the prompt: %@',
     '文件还在磁盘上 — 用文本编辑器另存为 UTF-8 即可': 'The files are still on disk — re-save them as UTF-8 in a text editor',
-    '还没有常驻内容\\n点右上角 + 新建条目, 或用上面两段的入口放入文件': 'Nothing always-on yet\\nUse + in the top right to add an entry, or the entries in the two sections above to put files in place',
     # ---- 2026-09-23: 行文案 = 文件名 + 出厂固定表（boss: "直接固定化就行"）----
     # 这三条是**出厂文案本身**，不是说明；英文侧刻意与文档里的官方口径对齐
     # （SOUL = persona/tone/boundaries → "Who I Am"）。顺序无所谓，表在 PersonaRowText 里。
@@ -695,4 +682,103 @@ VALUES = {
     # P13-d: 候选 = /models ∪ 未列出的种子。补丁行的行上标记(与 image/think 并列), 让来源不模糊。
     # ⚠️ 纯字符串 key —— 别加 title:/非字符串参数, 本地化不透明。
     '本地': 'Local',
+    # ---- P15.1 笔记区 (2026-10-12: 两个固定根 + 索引行「标题 / 摘要 / 陈旧」) ----
+    '%lld 天前': '%lld days ago',
+    '%lld 天未更新': 'not updated for %lld days',
+    '%lld 字节': '%lld bytes',
+    '位置': 'Location',
+    '大小': 'Size',
+    '它们不进 prompt, 也进不了笔记索引 (pack 目录不在任何根的扫描路径下)。把内容写成一篇笔记即可': 'They enter neither the prompt nor the notes index (the pack directory is outside every root scan path). Write the content as a note instead',
+    '摘要': 'Summary',
+    '新建笔记': 'New note',
+    '最后修改': 'Last modified',
+    '笔记': 'Notes',
+    '近 %lld 天内': 'within the last %lld days',
+    '还没有常驻内容\\n点右上角 + 新建条目, 或用常驻区与笔记区的入口放入文件': 'Nothing always-on yet\\nUse + in the top right to add an entry, or use the resident and notes section entries to put files in place',
+    # ---- P15.2 人写笔记 (2026-10-12: 可写编辑面 + 乐观并发 + 删除) ----
+    # ⚠️ 「写入被拒」的文案不在这里 —— 那些 case 住在 Models/KnowledgeBase.swift,
+    #    而该文件在 gen_strings.py 的 EXCLUDE_FILES 里 ⇒ 文案由 View 侧拼(见 noteRejectText)。
+    'txt / html 没有 frontmatter — 标题就是文件名': 'txt / html have no frontmatter — the filename is the title',
+    '仍然覆盖': 'Overwrite anyway',
+    '内容没变时不会写盘, 也不会留下一条变更记录': 'Nothing is written when the content is unchanged, and no revision is recorded',
+    '写一篇新笔记 (存到全局笔记目录, 下一轮组装就会带上它)': 'Write a new note (stored in the global notes directory; the next assembly picks it up)',
+    '写盘失败 — 检查目录权限与磁盘空间': 'Write failed — check directory permissions and free space',
+    '删除笔记「%@」？': 'Delete the note "%@"?',
+    '在 Finder 中显示': 'Reveal in Finder',
+    '已经有同名笔记了': 'A note with that name already exists',
+    '当前内容会记进变更史; 文件移到「废纸篓」, 还能捞回来。': 'The current content goes into the revision history; the file moves to the Trash, so it can still be recovered.',
+    '换一个标题': 'pick another title',
+    '改完要点保存 —— 自动保存会把写了一半的句子也落盘, 还会跟你在外部编辑器里的改动抢。': 'Save explicitly — autosave would persist half-written sentences and race with your edits in an external editor.',
+    '标题': 'Title',
+    '标题不能为空': 'The title cannot be empty',
+    '标题太长 — 上限 %lld 字': 'Title too long — limit is %lld characters',
+    '标题就是文件名。存到全局笔记目录, 下一轮组装就会带上它; 项目笔记去项目目录里建。': 'The title is the filename. It goes into the global notes directory and the next assembly picks it up; create project notes inside the project directory.',
+    '正文': 'Body',
+    '移进「废纸篓」(还能捞回来); 当前内容先记进变更史': 'Move to the Trash (still recoverable); the current content is recorded in the revision history first',
+    '笔记目录': 'Notes folder',
+    '这一篇还是空的…': 'This note is still empty…',
+    '这个路径不在笔记目录里': 'That path is outside the notes directory',
+    '这篇在你编辑期间被外部改过 — 你的改动没有写盘': 'This note was changed externally while you were editing — your changes were not written',
+    '这篇已经不在了 — 可能在 App 外被删掉或改名了': 'This note is gone — it may have been deleted or renamed outside the app',
+    '重新载入（丢掉我的改动）': 'Reload (discard my changes)',
+
+    # ── P15.3 (dream 提案面 / 任务页「立即运行」) ──────────────────────────────
+    #    词表按**批次追加**（不保证全量码点序）: 这一块是 P15.3 的批, 跟上面 P11 / P15.2 的批并列。
+    #    三类动作标记（增/并/换）是 10pt 小字 + 窄列的行内标记 ⇒ 英文取最短可用词; 对应的
+    #    `frame(width: 14)` 已放宽为 `minWidth`（中文占位不变, 英文自然加宽而不被压住）。
+    '%lld 个来源': '%lld sources',
+    '为什么提': 'Reason',
+    '会话': 'Session',
+    '增': 'New',
+    '并': 'Merge',
+    '换': 'Swap',
+    '提出时的指纹': 'Base hash',
+    '提案': 'Proposal',
+    '来源 · %lld 条': 'Sources · %lld',
+    '目标': 'Target',
+    '立即运行 (不等定时; 关掉开关也能跑)': 'Run now (ignores the schedule; works even when the toggle is off)',
+
+    # ── P15.4 (审阅面: 版本史 / 来源 / 采纳 / 丢弃 / 并排 diff) ────────────────
+    #    ⚠️ 同一批里**删掉**了三条 P15.2/P15.3 的旧文案: `… 还有 %lld 行` 与 `新内容`
+    #    （被并排 diff 取代的单栏预览）· `这一批只看不拍 …`（P15.3 的免责声明, 现在有按钮了）。
+    #    清词表不是洁癖: 孤儿词条会让 `--check` 长期报"已废弃", 而一条总在响的告警
+    #    等于没有告警（同"门的判据本身可以是错的"那条）。
+    #
+    #    「你写的 / 它攒的」是**来源标记**的两态。为什么不是"人 / AI": 界面说的是"这篇笔记
+    #    是谁攒出来的", 而 dream 的角色就是替你攒 —— 措辞要兑现这一点, 否则用户会以为它自己写了。
+    #    `现在 / 采纳后` 是并排 diff 的两栏表头（窄列小字 ⇒ 取最短可用词）。
+    '… 还有 %lld 条': '… %lld more',
+    '你写的': 'You wrote it',
+    '变更史 · %lld 条': 'History · %lld',
+    '删掉这条提案; 磁盘上的笔记一个字节都不会动': 'Delete this proposal; nothing on disk will be touched',
+    '它攒的': 'It gathered this',
+    '左边是空的 —— 这是一篇**还不存在**的笔记(增)。': 'The left side is empty — this note does not exist yet (new).',
+    '把这一份整篇写进上面那条目标; 被顶掉的那一版会进变更史': 'Write this whole text into the target above; the version it replaces goes to the history',
+    '提于 %@': 'Proposed %@',
+    '来源': 'Origin',
+    '现在': 'Now',
+    '采纳': 'Accept',
+    '采纳前, 磁盘上的笔记一个字节都不会变 —— 上面那份 diff 只是「如果」。': 'Nothing on disk changes until you accept — the diff above is only a "what if".',
+    '采纳后': 'After accepting',
+
+    # ── P15.6b (2026-10-13: dream 的指令取出厂常量 ⇒ 编辑器那一栏只读) ─────────
+    #    这一栏的**正文本身**是 `SchedulerService.dreamPrompt`（代码常量, 不进词表 —— 它是
+    #    给模型看的指令, 不是 UI 文案; 且它里面含 `[笔记]` 这类**契约 token**, 本地化会破门）。
+    #    这里只有**说明那句**: 告诉用户"为什么改不了", 否则这一栏看着像坏了。
+    '出厂指令 · 随版本更新；本任务能改的是档期、开关与执行配置': 'Factory instruction · ships with the app version; what you can change for this task is its schedule, toggle and run configuration',
+
+    # ── P15.6c (2026-10-13: dream 行的锁标记) ─────────────────────────────────
+    #    这是**悬停提示**, 不是行内文字 —— 行内只有一个 SF Symbol（`lock.fill`）。
+    #    文案必须把"锁的是什么"说全: dream **能改名 / 能改档期 / 能开关**, 只有**删除**与
+    #    **指令正文**是锁的 ⇒ 一个笼统的"不可改"会让标记**比事实说得多**
+    #    （同 P15.6b "这一栏在说谎"那条, 只是方向反过来）。
+    'App 固定任务：不可删除；名字与档期照常可改': 'App-fixed task: it cannot be deleted; its name and schedule are still editable',
+
+    # ── P15.7 (2026-10-13: dream 进 Plugins 面板 = 投影项 + 展开它注册的工具) ───
+    #    `note_proposal` 这个**工具名不进词表** —— 它是**契约 token**（逐字进 pi 的
+    #    `registerTool` 与模型看到的 tool schema），本地化会让面板与真实注册名对不上。
+    #    面板里那一行因此是逐字显示的（同 `generatedContentPanelTitle` 那类理由）。
+    #    这里两条都是**说明**: 解释"这一项为什么没有开关、为什么它不常开"。
+    '按需加载': 'Loaded on demand',
+    'App 内置扩展：只在需要它的那次运行里挂载，不是常开': 'App built-in extension: mounted only for the run that needs it, not always on',
 }

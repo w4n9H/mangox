@@ -22,6 +22,10 @@ final class SchedulerService: ObservableObject {
     // P3.10: 等待型任务 fire 的回合追踪 (P4.0.2 会话化: 日志会话 sid -> 任务 id)
     private var fireTurnTask: [UUID: UUID] = [:]   // 在途 fire: 日志会话 -> 任务 id
     private var fireDoneHit: Set<UUID> = []        // 本轮日志会话已命中 done 标记
+    // P15.3: 在途的 dream fire —— 日志会话 -> 这次运行的 spool 文件。
+    // 与 `fireTurnTask` 分开: 那个只在**等待型**任务上有值（`condition` 非空）, 而 dream 是普通
+    // cron 任务 ⇒ 复用那个字典会让 dream 的收口被"等待型"的判据顺手漏掉。
+    private var dreamFires: [UUID: String] = [:]
 
     private weak var store: ChatStore?
     func attach(_ store: ChatStore) { self.store = store }
@@ -38,13 +42,29 @@ final class SchedulerService: ObservableObject {
 
     func updateScheduled(_ t: ScheduledTask) {
         guard let idx = scheduledTasks.firstIndex(where: { $0.id == t.id }) else { return }
+        var t = t
+        // P15.6b: dream 的指令是**出厂常量** ⇒ 不接受调用方带来的 prompt, 一律归一成常量。
+        // 守卫同样放在**域层**而不是视图（与 `deleteScheduled` 同一条理由）: 视图侧"那一栏只读"
+        // 只是可见性, 而 `updateScheduled` 是**公开写路径** —— 将来的批量编辑 / 导入配置都会绕过视图。
+        //
+        // 归一化**不吞掉任何用户输入**: dream 的指令本来就改不了（P15.6b 拍板 "指令取常量, 不可改"）。
+        // 它顺手治好"存量旧行"—— 老库里那份复制粘贴的旧文案, 下一次编辑就对齐到当前常量。真正
+        // 兜底的不变式在 fire 侧: `buildScheduledPrompt` **根本不读** `t.prompt`（见 `dreamFirePrompt`）
+        // —— 所以即使一行都不编辑, 旧文案也**永远没有效果**; 这里只是别让库里继续留着假副本。
+        if Self.isDreamTask(t) { t.prompt = Self.dreamPrompt }
         scheduledTasks[idx] = t
         try? store?.persistence?.upsertScheduled(t)
     }
 
     /// 删除任务; deleteSessions = 连带删除日志会话 (开放问题 12: 默认保留, 用户可选删)。
+    ///
+    /// ⚠️ **dream 不可删**（2026-10-12 boss: "要固定死, 不能删除, 只能修改以及开关"）。守卫放在
+    /// **这里**而不是视图: 视图那边"不渲染删除按钮"只是**可见性**, 这里才是**能力**。只要还剩一条
+    /// 能删它的路径, 用户就永远丢了这条任务 —— 它是 App 自己种下的（`seedDreamTaskIfNeeded` 会让
+    /// 它长回来, 但那是"补救", 不是"允许删"）。
     func deleteScheduled(id: UUID, deleteSessions: Bool = false) {
-        let sessionIds = scheduledTasks.first { $0.id == id }?.logSessionId.map { [$0] } ?? []
+        guard let task = scheduledTasks.first(where: { $0.id == id }), Self.canDelete(task) else { return }
+        let sessionIds = task.logSessionId.map { [$0] } ?? []
         scheduledTasks.removeAll { $0.id == id }
         try? store?.persistence?.deleteScheduled(id: id)
         if deleteSessions {
@@ -56,6 +76,334 @@ final class SchedulerService: ObservableObject {
         guard let idx = scheduledTasks.firstIndex(where: { $0.id == id }) else { return }
         scheduledTasks[idx].enabled.toggle()
         try? store?.persistence?.upsertScheduled(scheduledTasks[idx])
+    }
+
+    // MARK: - P15.3 dream（预置任务）
+
+    /// 预置那条 dream 任务的**稳定 id** —— 任务的身份靠它, **不靠名字**。
+    ///
+    /// 为什么不认 `name == "dream"`: 用户随时能把名字改掉, 改完这条任务对 App 就"消失"了
+    /// （于是同一个人会有两份 dream, 而两份的 `note_proposals` 混在一起）。名字是标签, id 是身份
+    /// —— 同「持久化键不许是容器里的位置」那条判据。
+    static let dreamTaskID = UUID(uuidString: "2E7B4C1A-9F3D-4A6E-8B5C-1D0F7A3E9C42")!
+
+    /// ⚠️ **没有"种过没"的一次性标记了**（2026-10-12 boss 拍板）。原先有一个 `dream_task_seeded`,
+    /// 它的判据是"种过没、不是表里有没有" —— 理由是"否则会把用户删掉它读成从没种过, 每次启动都长回来"。
+    /// 那条理由的前提（**用户能删掉它**）已被同一条拍板推翻：dream **不可删**（见 `deleteScheduled`）。
+    /// ⇒ 现在的判据就是"**表里有没有**"：缺了就补。这才是"固定死"（否则它一旦因老库/将来某 bug 不在,
+    /// 就永远不回来了）。代价明写：**已经删过它的老库, 下次启动这条会回来** —— 那正是本意的反面。
+    /// （老库里若还留着 `dream_task_seeded` 那一行 setting, 是无害的死配置, 不清理。）
+
+    /// 默认档期 = 每周日 03:00（5 字段 cron: 分 时 日 月 周, 0 = 周日）。
+    static let dreamDefaultCron = "0 3 * * 0"
+
+    /// dream 的指令文本 —— **恒中文**: 它逐字进 prompt（本文件在 `gen_strings.py` 的
+    /// `EXCLUDE_FILES` 里, 在这里写 `L()` 的 key 永远进不了词表; 而同文件里既有
+    /// `buildScheduledPrompt` 就是这么写的）。
+    ///
+    /// 为什么把硬约束写这么重: dream 拿到的是**完整工具集**（它能 read 会话、能 read 笔记,
+    /// 也能 write/bash）。判据不能靠"它不会乱来", 得靠它明确知道**这次不写盘**, 以及
+    /// App 侧真的没有一条从提案到磁盘的代码路径。
+    ///
+    /// ⚠️ **P15.6 重写过一次, 教训在"输入"那一段**: 初版让模型自己 `bash` 读
+    /// `~/.mangox/pi-sessions/*.jsonl`（只读最近三周）。那条指令有三个病, 报出来时
+    /// boss 的原话是"你就是随手一写, 但是细节全都忽略了":
+    ///   ① **没有上界** —— 一个 jsonl 几十 KB, 而其中绝大多数字节是工具输出;
+    ///   ② 会话与文件的对应关系说不清 —— 文件名才是会话 id, 而文件第一行那个 `id`
+    ///      是 pi 内部的会话号, 两个不是一回事; 目录里还混着快照与 fork 产物;
+    ///   ③ 于是"读多少、跳哪些行"全靠模型自觉。
+    /// 现在摘要由 App 侧算好（`sessionDigest`）随本消息末尾一起给, **prompt 里不再出现
+    /// 任何磁盘路径** —— 想加回去的话先读上面三条。
+    /// 另: `note_proposal` 是**扩展工具**（`mangox-dream.ts`, 见 `PiRpcTransport`）,
+    /// 只在 standard / full 档可见 ⇒ 最后一条硬约束必须告诉模型"找不到它"是什么意思。
+    ///
+    /// ⚠️ **P15.8 收掉了这处唯一的"磁盘路径例外"**: 原来「没有 [笔记] 段 ⇒ 目标写到
+    /// `\(productionNoteDir(projectPath: nil))/<新文件名>.md`」是全文唯一出现具体路径的地方,
+    /// 而且它指的是**全局根** —— 于是它成了一个问题不是答案的锚点（2026-10-13 实测: dream 把
+    /// MangoX 项目的洞见写进了全局笔记）。现在 `[笔记]` 段**只在所有根都被停用时**才缺席,
+    /// 所以那一支的正确反应是"没有落点, 直接结束"。
+    /// 归属规则本身（项目优先 / 全局是例外）也写在这里 —— 见下面那两条硬约束。
+    static let dreamPrompt = """
+    你是 MangoX 的 dream —— 一次**只读**的整理。本次任务里你不写任何文件。
+
+    输入:
+      ① 最近会话摘录 —— 见本消息**末尾**的【最近会话摘录】段。App 已经摘好: 只含人与助手的
+         正文, 工具输出不在内。每段标题里那串 UUID 就是**会话 id**
+      ② 现有笔记 —— 见系统提示里的 [笔记] 段。那里是**地图不是正文**:
+         每个根一行「路径: <绝对根>」, 其下是若干根内相对路径; 要正文用 read 把两者拼起来取。
+         某个根下面写着「（本根暂无笔记）」= 那个根还没有内容, 但它**已经是合法落点**, 可以直接写
+
+    产出: 用 note_proposal 工具提交提案（字段口径以该工具自己的描述为准）:
+      insight —— 会话里反复出现、但还没有成篇的结论（目标是一个**还不存在**的新文件）
+      merge   —— 两篇笔记在讲同一件事, 建议并成一篇（目标是留下的那一篇）
+      replace —— 笔记里的某个值已过期, 用新值替换（目标就是那一篇）
+
+    硬约束:
+      · 提案只是提交给人看的, 他采纳了才会落盘 —— 你不需要也不应该写任何文件
+      · 每条提案必须有 sources: 会话来源的 ref 填段头那串会话 id, 笔记来源填根内相对路径
+      · target_path 必须是**绝对路径**, 且父目录是 [笔记] 段里列出的某一个根。
+        标着「（本根暂无笔记）」的根**同样是合法落点** —— 它只是还空着, 不是不能写
+      · **归属: 项目优先, 全局是例外。** 默认写到**来源会话所属项目**的那一个根:
+        摘要段头的 `归属` 就是那个根的名字, 去 [笔记] 段里按名字找到它的路径。
+        只有这两种情况才写全局笔记:
+          ① 来源会话的 `归属` 本来就写着「全局笔记」（它不属于任何项目）
+          ② 这条结论**明确跨项目** —— 换个项目、换个人也照样成立
+        拿不准不是跨项目的理由: 拿不准就写项目根。
+      · merge / replace 必须带 base_hash = 你 read 到的那篇笔记全文的 sha256
+        （insight 的目标还不存在, 任何指纹都是错的, 别填）
+      · **找不到 note_proposal 这个工具** ⇒ 本次档位削掉了扩展工具, 直接结束并说明原因,
+        不要改用写文件的方式模拟 —— App 侧没有从文件到提案的解析路径
+      · 没有【最近会话摘录】段 ⇒ 最近没有会话, 没料可提, 直接结束
+      · 没有 [笔记] 段 ⇒ **所有笔记根都被停用了**, 没有可写的落点: 直接结束并说明原因
+      · 想不出值得提的就一条都不提 —— 那是正常结果, 不是失败
+      · 本次跑不完也不算失败: 出几条算几条
+    """
+
+    /// dream 的 fire 指令 = **出厂常量** + （有的话）本次摘要（P15.6b）。
+    ///
+    /// ⚠️ **刻意不接收 `task`** —— 参数里没有它, 就**不可能**读错 `task.prompt`。
+    ///
+    /// 为什么必须这样（2026-10-13 boss 实测报的）: `task.prompt` 是**种任务时复制进 DB 的一份
+    /// 副本**。我改了 `dreamPrompt` 常量, 而库里那一行纹丝不动（`seedDreamTaskIfNeeded` 的判据
+    /// 只有"表里有没有", 没有"在不在当期"）⇒ 打开 Schedule 看到的还是旧指令, **fire 时拿到的是
+    /// 旧指令 + 新摘要**（旧指令让它 `bash` 读 jsonl, 摘要又说不用读磁盘 —— 自相矛盾）。
+    /// 这是"**能从常量推导的产品文案不许落库当用户字段**"那条判据的实例: 落了就是第二真源,
+    /// 且过期时**零红灯**（同一族的还有「持久化键不许是容器里的位置」）。
+    ///
+    /// 抽成 internal static 还为了让冒烟能造一条"存量旧行"来断言它 —— 今天之前, 这条路径
+    /// **一条判据都没有**（夹具里的 dream 任务都是新种的, 永远走不到"存量"）。
+    static func dreamFirePrompt(digest: String) -> String {
+        digest.isEmpty ? dreamPrompt : dreamPrompt + "\n\n" + digest
+    }
+
+    /// 这一条任务是不是 dream。判据只看 id（见 `dreamTaskID`）。
+    static func isDreamTask(_ task: ScheduledTask) -> Bool { task.id == dreamTaskID }
+
+    /// 这条任务**允许被删吗**。**规则只写在这里**, 两处消费:
+    /// ① `deleteScheduled` 的守卫（能力层, 真正拦住删除）
+    /// ② 视图决定「删除」按钮渲不渲染（可见性层）。
+    ///
+    /// 为什么做成 `static` 纯函数: 视图层**只编译不执行** ⇒ 冒烟抓不到"按钮还在不在", 所以
+    /// 可见性必须有一个能被单独断言（且能变红）的形状。改渲染条件时改它, 别在视图里内联 `isDreamTask`。
+    static func canDelete(_ task: ScheduledTask) -> Bool { !isDreamTask(task) }
+
+    /// 行内标记的**取舍**（P15.6c）—— 视图只负责画, 不负责判。
+    ///
+    /// 为什么要有它（而不是让视图直接写 `if !canDelete(task)`）: **视图层只编译不执行**, 冒烟抓不到
+    /// "标记渲没渲"（与 `canDelete` 上面那条理由逐字相同）。把取舍挪进纯函数, 才有一条能变红的门
+    /// —— 否则这个改动**一条判据都加不了**, 只能靠肉眼看图。
+    ///
+    /// 做成 enum 而不是 `Bool`: 第二个标记（"等待型 / 已停用"之类）到时候有地方放, 不必在视图里
+    /// 再散一次 `if`。目前只有一种。
+    enum RowMarker {
+        case pinned
+    }
+
+    /// 这条任务该显哪个行内标记。**判据只走 `canDelete`**（同一个规则, 不在这里重写一遍 `isDreamTask`
+    /// —— 两份判据迟早对同一个任务给出不同答案）。
+    ///
+    /// ⚠️ 标记的**含义必须小于等于事实**: dream **能改名、能改档期、能开关**, 只有"删除"与"指令正文"
+    /// 是锁的 ⇒ 它不许被读成"整条动不了"。所以 tooltip 里那句话必须说全（见视图那侧）。
+    /// **标记比事实说得多 = 另一种形式的"这一栏在说谎"**（同 P15.6b 那条判据）。
+    static func rowMarker(_ task: ScheduledTask) -> RowMarker? {
+        canDelete(task) ? nil : .pinned
+    }
+
+    /// 预置一条 dream 任务, **默认关着**（2026-10-12 boss 拍板）。
+    ///
+    /// 默认关的理由是它的**代价**而不是它的风险: 一次 dream 要读会话 + 全部笔记, 是这批里最贵的
+    /// 一次调用, 不该在用户没点头时自己烧 token。而"关着"并不等于"不能用" ——
+    /// 开关只管 `cron` 那一路, 手动入口从来不看 `enabled`（见 `runScheduledFire` 的注释）。
+    ///
+    /// **缺了就补**（判据 = 表里有没有, 见 `dreamTaskID` 上面那段）：所以它不只是"首次启动种一次",
+    /// 而是"每次启动都确认它在"。补出来的一律是**出厂态**（默认关 / 默认档期）—— 用户改过的东西本来
+    /// 就在那一行里, 行没了就没有可保留的东西。
+    func seedDreamTaskIfNeeded() {
+        guard let p = store?.persistence else { return }
+        // 身份判据只走 `isDreamTask`（同一个规则, 不在这里重写一遍 `id ==`）。
+        guard !scheduledTasks.contains(where: { Self.isDreamTask($0) }) else { return }
+        // `projectId` 留空 ⇒ fire 时 `cwd = nil` ⇒ 回落 home。**全局笔记跟着人走**,
+        // 而 dream 读的会话目录也在 home 下 ⇒ 按 home 跑是它该在的地方（零新配置）。
+        let t = ScheduledTask(id: Self.dreamTaskID, name: "dream",
+                              prompt: Self.dreamPrompt, cron: Self.dreamDefaultCron,
+                              projectId: nil, enabled: false, continuous: false)
+        scheduledTasks.append(t)
+        try? p.upsertScheduled(t)
+    }
+
+    // MARK: - P15.6 dream 的输入摘要
+
+    /// dream 摘要的一条输入 —— 一个会话的身份 + 它的消息。
+    ///
+    /// 为什么不直接用 `ConversationItem`: 它身上没有消息, 而 `unreadCount` / `sideOf`
+    /// 这些字段与摘要无关。摘要函数只该看见它需要的东西 —— **看不见的字段不会悄悄参与计算**。
+    struct DreamDigestInput {
+        let id: UUID
+        let title: String
+        let updatedAt: Date
+        let messages: [ChatMessage]
+        /// 这个会话**该往哪个笔记根写** —— 就是 `[笔记]` 段里那个根的显示名 (P15.8)。
+        ///
+        /// 刻意是**已经解析好的标签**, 不是 `projectId`: 摘要函数不该知道"哪个项目有根"
+        /// （那是 `noteKnowledgeBases` 的事), 它只负责把这一格印在段头上。解析在调用点完成,
+        /// 且从 `noteKnowledgeBases` 的**启用态**派生 ⇒ 结构上不可能指向一个段里不存在的根。
+        let noteRootLabel: String
+    }
+
+    /// 把若干会话编成一段**有界**材料, 给 dream 当唯一输入（P15.6）。
+    ///
+    /// 为什么需要它: P15.3 的 dream 让模型自己 `bash` 读 `~/.mangox/pi-sessions/*.jsonl`。
+    /// 那条路治不好 —— 没有上界（一个 jsonl 几十 KB, 且大部分是工具输出）、数据源是第三方
+    /// 文件格式（形状不由本仓定义）、于是"读多少、跳什么"全靠模型自觉。
+    /// 这里把三件事一次性收回 Swift: **过滤**（`KnowledgeStore.sessionMaterial` 只认 text,
+    /// 与记忆提炼同源）、**预算**（窗口 / 会话数 / 两级字符上限）、**点名**（丢掉的要说出来
+    /// —— 折省略, 不静默截断, P15 老判据）。
+    ///
+    /// 段头 = `会话 id · 标题 · 日期 · 归属 <笔记根名>`。四格里 **`归属` 是唯一给"这条该归到哪儿"
+    /// 用的**（P15.8）, 其余三格服务的是"这两件事隔了多久 / 是谁说的"。
+    ///
+    /// 纯函数: 冒烟喂造数据就能造反例, 不需要真库 / 真磁盘 / 真模型。
+    /// - Parameter excludeIds: **本来就不该出现在摘要里**的会话（任务日志会话 / 侧问会话）。
+    ///   注意它们仍计入末尾的点名 —— `sessions` 是"交进来的全部", 点名是"没列出来的全部"。
+    /// - Parameter priorOmitted: **没交给本函数的**会话数（调用点为了省掉库读只交了个短名单,
+    ///   见 `dreamShortlist`）。必须如实计入点名 —— 否则"省下的读"会变成"少说的数"。
+    static func sessionDigest(_ sessions: [DreamDigestInput],
+                              excludeIds: Set<UUID> = [],
+                              priorOmitted: Int = 0,
+                              now: Date = Date()) -> String {
+        let windowStart = now.addingTimeInterval(-Double(Tune.dreamDigestWindowDays) * 86_400)
+        let candidates = sessions
+            .filter { !excludeIds.contains($0.id) && $0.updatedAt >= windowStart }
+            .sorted { $0.updatedAt > $1.updatedAt }        // 新的在前 ⇒ 下面从**尾部**丢最旧的
+        guard !candidates.isEmpty else { return "" }
+
+        var entries: [String] = []
+        for s in candidates.prefix(Tune.dreamDigestMaxSessions) {
+            let lines = KnowledgeStore.sessionMaterial(from: s.messages)
+            guard !lines.isEmpty else { continue }   // 整场只有工具输出的会话: 没有可提炼的东西
+            var body = lines.joined(separator: "\n")
+            if body.count > Tune.dreamDigestMaxCharsPerSession {
+                body = "…(更早的已省略)\n" + String(body.suffix(Tune.dreamDigestMaxCharsPerSession))
+            }
+            // 段头 **4 格**: 会话 id · 标题 · 日期 · **归属**(P15.8)。
+            //
+            // 归属必须在**段头**, 不能挪到段尾或别处: dream 每读到一段会话材料, 手边就得同时有
+            // "这条该归到哪儿"的答案。分开写要它自己做一次跨段联想 —— 而归属判断正是它唯一的任务。
+            // `归属` 后面那串与 `[笔记]` 段里根的第一行**逐字同源**（都出自 `noteRootLabel`)。
+            entries.append("## \(s.id.uuidString) · \(s.title) · \(Self.digestDay(s.updatedAt))"
+                           + " · 归属 \(s.noteRootLabel)\n\(body)")
+        }
+        guard !entries.isEmpty else { return "" }
+
+        // 整段超预算 ⇒ 从最旧的会话继续丢, 并计入点名。**循环里重算**而不是先算好:
+        // 段头/段尾的数字自身也占字符, 丢一个会话会让它们少一位 —— 用近似值会写出超限的段。
+        var kept = entries
+        var omitted = priorOmitted + sessions.count - kept.count
+        while kept.count > 1, assemble(kept, omitted: omitted).count > Tune.dreamDigestTotalChars {
+            kept.removeLast()
+            omitted += 1
+        }
+        return assemble(kept, omitted: omitted)
+    }
+
+    /// 摘要的组装 —— 段头 + 会话段 + （有的话）点名行。抽出来是因为上面的循环要反复算长度。
+    private static func assemble(_ kept: [String], omitted: Int) -> String {
+        var parts = ["【最近会话摘录 · \(kept.count) 个会话, 窗口 \(Tune.dreamDigestWindowDays) 天】"]
+        parts.append(contentsOf: kept)
+        if omitted > 0 { parts.append("（另有 \(omitted) 个会话未列出: 更早的 / 超出预算的 / 没有正文的）") }
+        return parts.joined(separator: "\n")
+    }
+
+    /// 摘要段头里的日期。**刻意用绝对日期而不是"3 天前"**: 后者会随 dream 哪天跑而变,
+    /// 而模型要判的是"这两件事隔了多久" —— 相对时间在这里是噪声。
+    private static let digestDayFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "M/d"
+        return f
+    }()
+
+    static func digestDay(_ d: Date) -> String { digestDayFormatter.string(from: d) }
+
+    /// dream 的**候选短名单** —— 只读它算摘要, 不是读全部会话（2026-10-13 实测后加）。
+    ///
+    /// **为什么可以只读一部分而不丢内容**（是证明, 不是"大概够用"）:
+    /// `sessionDigest` 最终只会保留「窗口内 · 未被排除 · 按 `updatedAt` 倒序前 `MaxSessions` 个」。
+    /// 设它在全体里的位次**超出** `MaxSessions + |excludeIds|`。那么排在它前面的会话就多于
+    /// `MaxSessions + |excludeIds|` 个, 其中最多 `|excludeIds|` 个是被排除的
+    /// ⇒ 至少有 `MaxSessions + 1` 个"未被排除且窗口内"的会话排在它前面,
+    /// 与它"在那个子集里排得进前 `MaxSessions`"矛盾。**故界成立。**
+    ///
+    /// 为什么非要这个界: `buildDreamDigest` 是**逐会话全量重放**（`loadMessages` 会把整个事件流
+    /// 解码成 `ChatMessage`）, 而实测约 **64% 的字节解码完就被 `sessionMaterial` 丢掉**
+    /// （`tool` 卡与 `think` 块 —— 见 §11i 的实测表）。读的量原本等于**全库 events**, 与 12000 字符的
+    /// 摘要预算完全脱钩; 有了这个界, 读的量只与 `MaxSessions` 有关。
+    ///
+    /// 纯函数 ⇒ 冒烟拿它和"读全体"比**逐字相等**来守这条不变量（把界改成
+    /// `prefix(Tune.dreamDigestMaxSessions)` ⇒ 那条立刻红, 因为被排除的会话会占掉名额）。
+    static func dreamShortlist(_ items: [ConversationItem], excludeCount: Int) -> [ConversationItem] {
+        let n = Tune.dreamDigestMaxSessions + max(0, excludeCount)
+        return Array(items.sorted { $0.updatedAt > $1.updatedAt }.prefix(n))
+    }
+
+    /// 取料 → 编摘要。**这里只做"取", 所有判据在 `sessionDigest` 里**（纯函数, 可造反例）。
+    ///
+    /// 排除两类会话: ① **任务日志会话**（含 dream 自己的）—— 那是"任务运行记录", 不是人机对话,
+    /// 编进去 dream 会把自己的历次运行当成人说过的话来提炼（自我循环）;
+    /// ② **侧问会话**（fork）—— 内容已经在源会话的上下文里, 再编一遍只是白占预算。
+    ///
+    /// 不做"先按窗口筛一遍再读消息"的优化: 预算的判据只该有一处（`sessionDigest`）,
+    /// 在调用点再抄一遍窗口条件, 迟早会有一边被改掉而**静默少读会话**。
+    /// 这里省掉的读靠的是 `dreamShortlist` 那个**与窗口策略无关**的界（只按 `updatedAt` 排,
+    /// 所以窗口怎么改都不会让它失效）, 并且把省掉的数量交给 `priorOmitted` 如实点名。
+    private func buildDreamDigest() -> String {
+        guard let store else { return "" }
+        let all = store.allConversations
+        var exclude = Set(scheduledTasks.compactMap(\.logSessionId))
+        for c in all where c.sideOf != nil { exclude.insert(c.id) }
+        let pass = Self.dreamShortlist(all, excludeCount: exclude.count)
+        // P15.8: 会话 → 归属根名。**从 `noteKnowledgeBases` 的启用态派生**, 不另写一套规则 ——
+        // 于是"项目没有 path"与"项目根被用户停用"这两种会话自动回落到全局标签,
+        // 而它们本来就没有可写的项目根（那个根压根不在 `[笔记]` 段里）。
+        let labels = Self.sessionRootLabels(store: store)
+        let inputs = pass.map { c in
+            DreamDigestInput(id: c.id, title: c.title, updatedAt: c.updatedAt,
+                             messages: store.replayMessages(for: c.id),
+                             noteRootLabel: labels[c.id] ?? KnowledgeBase.noteGlobalLabel)
+        }
+        return Self.sessionDigest(inputs, excludeIds: exclude,
+                                  priorOmitted: all.count - pass.count)
+    }
+
+    /// 会话 id → 那条会话**该往哪个笔记根写**（根名）。P15.8。
+    ///
+    /// 两个"必须同源"的点, 各自对应一次可复现的坏结局:
+    /// ① **名字取自 `noteKnowledgeBases` 里那个根自己的 `displayName`** —— 模型拿段头的
+    ///    `归属 <名字>` 去 `[笔记]` 段里找同名根。两处各拼一遍名字 ⇒ 名字对不上 ⇒ 模型找不到根
+    ///    ⇒ 回落全局, **而这一路零红灯**（与 2026-10-13 报的缺陷同一个结局）。
+    /// ② **只认 `enabled` 的根** —— 被停用的根不在段里, 把会话指向它就是指向一个不存在的落点。
+    ///
+    /// 没命中的一律由调用点回落 `noteGlobalLabel`。三种落空都**不是**错误:
+    /// 平铺会话（本就没有项目）、项目没有 path（没有落点, `noteKnowledgeBases` 也不列它）、
+    /// 项目根被停用（用户明确不要）。
+    ///
+    /// 纯函数（只读 `store`, 不碰磁盘）⇒ 冒烟能拿它造反例, 不需要真模型。
+    static func sessionRootLabels(store: ChatStore) -> [UUID: String] {
+        var byProject: [UUID: String] = [:]
+        for base in store.knowledge.noteKnowledgeBases where base.enabled {
+            guard base.id.hasPrefix(KnowledgeBase.noteProjectPrefix),
+                  let pid = UUID(uuidString: String(
+                      base.id.dropFirst(KnowledgeBase.noteProjectPrefix.count)))
+            else { continue }
+            byProject[pid] = base.displayName
+        }
+        var out: [UUID: String] = [:]
+        // 归属 = 位置: 会话属于哪个项目, 就归哪个项目的根。**只走 `ProjectGroup.items`** ——
+        // 平铺 `chats` 不属于任何项目, 天然不在这张表里。
+        for p in store.projects {
+            guard let label = byProject[p.id] else { continue }
+            for item in p.items { out[item.id] = label }
+        }
+        return out
     }
 
     // MARK: - 调度 + fire (P3.9)
@@ -136,12 +484,32 @@ final class SchedulerService: ObservableObject {
         // P10.4: 任务级执行配置 — 只动日志会话 transport (modeOverride/modelOverride 实例级),
         // 全局期望零污染 (主会话档位/模型不受后台任务影响)
         let cfg = task.config
+        // P10.4: 任务级档位 —— nil = 跟随全局（这里要算出**生效值**, 下面那条告警才准）。
+        let fireMode = cfg.flatMap { AgentMode(rawValue: $0.agentMode) } ?? store.agentMode
+        // ── P15.3: dream 的三件前置 ─────────────────────────────────────────────
+        // ① 清掉上一次残留的 spool。**它会残留只有一个原因**: 那次 fire 的收口根本没跑到
+        //    （进程崩了 / App 被强退）⇒ 那批提案没有可归因的日志会话。留着它更糟 ——
+        //    下一次 fire 收口时会把两批混成一锅, 而"这批复核一下"就指不清是哪一次了。
+        // ② 档位告警。**只告警不拦截**: 把 dream 配成哪一档是用户的选择（同 P13 不替他改档）。
+        // ③ 记下这次的 spool —— 收口时靠 logId 反查（`finishDreamFireIfNeeded`）。
+        var fireSpool: String?
+        if Self.isDreamTask(task) {
+            let spool = PiRpcTransport.dreamSpoolPath(taskId: task.id)
+            try? FileManager.default.removeItem(atPath: spool)
+            if !fireMode.exposesExtensionTools {
+                appendTimeline("── dream: 当前档位 \(fireMode.displayName) 会削掉扩展工具, "
+                               + "这次调不到 note_proposal（换 standard / full 档可解）──", to: logId)
+            }
+            dreamFires[logId] = spool
+            fireSpool = spool
+        }
         store.beginTurn(sid: logId, prompt: prompt, ephemeral: true,
                         cwd: cwd, unattended: true,
                         modeOverride: cfg.flatMap { AgentMode(rawValue: $0.agentMode) },
                         modelOverride: cfg.map {
                             (provider: $0.provider, modelId: $0.modelId, thinking: $0.thinkingLevel)
-                        })
+                        },
+                        dreamSpool: fireSpool)
         // P10.3 联动: 日志会话行带上任务配置 (点开会话即恢复其执行配置)
         if let cfg { store.persistence?.saveSessionConfig(id: logId, config: cfg) }
         if let c = task.condition, !c.isEmpty {
@@ -163,9 +531,16 @@ final class SchedulerService: ObservableObject {
               store?.allConversations.contains(where: { $0.id == logId }) == true else { return }
         let fmt = DateFormatter()
         fmt.dateFormat = "HH:mm"
-        let note = ChatMessage(role: .user,
-                               content: .text("── \(fmt.string(from: now)) 因冲突跳过 (\(reason)) ──"))
-        try? store?.persistence?.appendMessageEvent(sessionId: logId, note)
+        appendTimeline("── \(fmt.string(from: now)) 因冲突跳过 (\(reason)) ──", to: logId)
+    }
+
+    /// 往日志会话追加一条时间线记录 —— **只落库、不动 UI**。
+    ///
+    /// 为什么不动 UI: 跳过与告警都发生在"别的回合可能正在进行"的时候, 往 `store.messages` 里塞
+    /// 会打断当前会话。用户点开那个日志会话时, 他看到的顺序就是当时的顺序（`seq` 定的）。
+    private func appendTimeline(_ text: String, to logId: UUID) {
+        try? store?.persistence?.appendMessageEvent(
+            sessionId: logId, ChatMessage(role: .user, content: .text(text)))
     }
 
     // MARK: - 交接文件 (P3.9)
@@ -230,9 +605,20 @@ final class SchedulerService: ObservableObject {
     /// 持续模式 prompt 组装 (P3.9): 交接文件全文 (长期记忆) + 近期运行摘录 (短期上下文)
     /// + 本次指令 + 写回指令。文件丢失时从日志会话 (run-log) 静默重建。
     /// 等待型 (condition 非空) 走等待协议; 普通 prompt 原样返回。
-    private func buildScheduledPrompt(_ task: ScheduledTask) -> String {
+    /// P9.1b 惯例: **internal** —— 冒烟要断言"存量旧行不影响 dream"（那个失效模式在别处零红灯）。
+    func buildScheduledPrompt(_ task: ScheduledTask) -> String {
         if let c = task.condition, !c.isEmpty {
             return buildWaitingPrompt(task, condition: c)
+        }
+        // P15.6: dream 的输入 = **App 侧算好的有界摘要**, 挂在指令之后一起发出去。
+        // 刻意不写进 `task.prompt`: 那一段是用户在编辑器里看见、会去改的东西, 而摘要是
+        // **每次 fire 现算的**派生数据 —— 混进去会让"任务指令"这一栏每次都不一样。
+        // 摘要在指令**之后**: 指令是"怎么干", 摘要是"料", 先立规矩再给料。
+        // 摘要为空（最近没有会话）⇒ 只有指令: prompt 里那条"没有摘录段就直接结束"的硬约束
+        // 负责让它体面收场, 不需要在这里造一个空段。
+        // P15.6b: 指令正文取 `dreamFirePrompt`（= **常量**）, **不是** `task.prompt`。
+        if Self.isDreamTask(task) {
+            return Self.dreamFirePrompt(digest: buildDreamDigest())
         }
         guard task.continuous else { return task.prompt }
         var sections: [String] = []
@@ -313,6 +699,64 @@ final class SchedulerService: ObservableObject {
         scheduledTasks[idx].enabled = false
         scheduledTasks[idx].completedAt = Date()
         try? store?.persistence?.upsertScheduled(scheduledTasks[idx])
+    }
+
+    // MARK: - P15.3 dream 收口（spool → note_proposals）
+
+    /// 一次 dream fire 结束时调 —— 把 spool 收进 `note_proposals`, 然后删掉 spool。
+    ///
+    /// ⚠️ 与 `finishWaitingFireIfNeeded` **分开**而不是并进去: 那个管的是"等待型任务命中 done
+    /// ⇒ 自动停用", 判据是 `fireTurnTask`; 这个管的是"一批提案的收口", 判据是 `dreamFires`。
+    /// 合成一个函数会让两条互不相干的判据共用一次 `return`（谁先命中就把另一条吞掉）。
+    ///
+    /// 两条路都要收: **落定**（`agentSettled`）与**手动停**（`stopTurn`）——「跑不完不算失败」。
+    func finishDreamFireIfNeeded(sid: UUID) {
+        guard let spool = dreamFires.removeValue(forKey: sid) else { return }
+        guard let store, let p = store.persistence else { return }
+        // 顺序 = 读 → 解析 → 落表 → 删。**删在最后**: 落表失败时 spool 还在,
+        // 而它在下次 fire 开头会被清掉（那时这批也真的没别的出路了）。
+        guard let text = try? String(contentsOfFile: spool, encoding: .utf8) else { return }
+        let roots = store.knowledge.allKnowledgeBases.map { (id: $0.id, path: $0.path) }
+        let parsed = NoteProposalSpool.parse(text, roots: roots)
+        var kept = 0
+        for d in parsed.items {
+            let proposal = NoteProposal(
+                id: UUID(), rootId: d.rootId, kind: d.kind, targetPath: d.targetPath,
+                baseHash: d.baseHash, title: d.title, content: d.content, reason: d.reason,
+                sources: d.sources, createdAt: .now, status: .pending, sessionId: sid.uuidString)
+            if (try? p.appendNoteProposal(proposal)) != nil { kept += 1 }
+        }
+        store.knowledge.reloadProposals()
+        // ⚠️ 这话必须说 —— 尤其是被拒的那几条。spool 马上就删了, 现在不写,
+        //    用户只会看到"这次怎么才出两条", 而不知道另外三条死在了路上。
+        appendTimeline(Self.dreamSummary(kept: kept, rejects: parsed.rejects), to: sid)
+        try? FileManager.default.removeItem(atPath: spool)
+    }
+
+    /// 收口那句话。**恒中文**（本文件在 `EXCLUDE_FILES` 里, 且它与 `recordFireSkip` 同性质:
+    /// 是一行**日志时间线**, 不是界面文案）。
+    static func dreamSummary(kept: Int, rejects: [SpoolRejection]) -> String {
+        let s = "── dream 收口: \(kept) 条提案待审 ──"
+        guard !rejects.isEmpty else { return s }
+        let detail = rejects.prefix(5).map { "第 \($0.line) 行 \(rejectText($0.reason))" }
+            .joined(separator: "; ")
+        return s + "\n      被拒 \(rejects.count) 条（\(detail)）"
+    }
+
+    /// 拒收原因的人话。**只服务上面那行日志** —— 提案列表里不会出现它（被拒的不进表）。
+    private static func rejectText(_ r: ProposalRejection) -> String {
+        switch r {
+        case .notJSON: "不是合法 JSON"
+        case .notAnObject: "不是 JSON 对象"
+        case .kindUnknown(let k): "不认识的 kind（\(k)）"
+        case .missingField(let f): "缺字段 \(f)"
+        case .emptyContent: "内容为空"
+        case .emptySources: "没有来源"
+        case .sourceKindUnknown(let k): "不认识的来源类型（\(k)）"
+        case .baseHashRequired: "merge / replace 缺 base_hash"
+        case .targetNotAbsolute: "target_path 不是绝对路径"
+        case .unknownRoot: "target_path 不在任何笔记根下"
+        }
     }
 
     // MARK: - 侧栏徽标 (P3.10)

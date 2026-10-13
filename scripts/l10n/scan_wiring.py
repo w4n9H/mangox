@@ -316,6 +316,46 @@ def load_allow():
     return out
 
 
+def _is_triple_delim(text, at):
+    r"""`text[at:at+3]` 是三引号**定界符**, 而不是普通文本里恰好挨着的三个引号。
+
+    两条必要条件 (都是 Swift 语法本身的要求, 只为把"注释里提了一句三引号长什么样"排除):
+      后置 —— 之后到行尾只有空白; 原始字符串的闭合写作三引号 + 一个 `#`, 先把 `#` 吃掉;
+      前置 —— 往前跳过空白后必须是**行首**, 或 `=` / `(` / `,` / `[`
+              (原始字符串的那个 `#` 再往前看一格)。
+    最早这里是**裸 find 三连引号**, 于是注释里那句话被当成了真定界符: 配对数变奇数,
+    最后一个找不到伙伴 —— 下面那句 `end = len(text) if end < 0` 便把它**一路延到文件末尾**,
+    后面所有行都被判成"在字符串字面量里"。实测踩过 (2026-10-12): 13 处**正常接了 `L()`**
+    的文案被报成 EMBEDDED, 而给出的修法建议还是"去登记豁免" —— 又一次「判据错了比没有
+    判据更坏」。
+    """
+    j = at + 3
+    if j < len(text) and text[j] == '#':
+        j += 1
+    while j < len(text) and text[j] in ' \t\r':
+        j += 1
+    if not (j >= len(text) or text[j] == '\n'):
+        return False
+    k = at - 1
+    while k >= 0 and text[k] in ' \t\r':
+        k -= 1
+    if k < 0 or text[k] == '\n':
+        return True                      # 独占一行 —— 闭合定界符的常态
+    if text[k] == '#':                   # `#"""` 的那个 `#`, 再往前看一格
+        k -= 1
+        while k >= 0 and text[k] in ' \t\r':
+            k -= 1
+    return k < 0 or text[k] in '=(,['
+
+
+def _find_delim(text, from_at):
+    """下一个**真定界符**的位置 (跳过注释 / 普通文本里的三连引号); 没有则 -1。"""
+    at = text.find('"""', from_at)
+    while 0 <= at and not _is_triple_delim(text, at):
+        at = text.find('"""', at + 1)
+    return at
+
+
 def embedded_ranges(text):
     """多行字符串字面量 (`\"\"\"…\"\"\"`) 的字符区间。
 
@@ -327,10 +367,10 @@ def embedded_ranges(text):
     ranges = []
     i = 0
     while True:
-        start = text.find('"""', i)
+        start = _find_delim(text, i)
         if start < 0:
             break
-        end = text.find('"""', start + 3)
+        end = _find_delim(text, start + 3)
         end = len(text) if end < 0 else end + 3
         ranges.append((start, end))
         i = end

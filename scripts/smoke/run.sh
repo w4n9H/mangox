@@ -2,6 +2,17 @@
 # MangoX 冒烟门禁: 编译全量源码 (排除 @main 入口) + 运行 ChatStore 语义冒烟。
 # 用法: scripts/smoke/run.sh
 # 通过条件: 编译零错误 && 冒烟输出 "ALL PASS" (退出码 0)。
+#
+# ⚠️ 标准跑法 (2026-10-13 boss 定的纪律; 展开在 MEMORY-details「门禁诊断细则」):
+#   本脚本只往 stdout 打, **不落盘也不给条数** ⇒ 调用方要一次拿全, 别跑完才发现没抓条数、
+#   再跑一遍 (那次实测白跑了三趟)。标准式:
+#     bash scripts/smoke/run.sh > /tmp/smoke.log 2>&1; echo "RC=$?"
+#     grep -c '^PASS' /tmp/smoke.log; grep -c '^FAIL' /tmp/smoke.log; grep '^FAIL' /tmp/smoke.log
+#     grep -c 'warning:' /tmp/smoke.log; grep 'warning:' /tmp/smoke.log; tail -3 /tmp/smoke.log
+#   ⚠️ `warning:` 那一对**不是可选的**: swiftc 的编译告警只出现在**日志头部** (编译在
+#   运行之前), 而 `^PASS`/`^FAIL`/`tail` 全在尾部 ⇒ 只抓尾就漏掉编译告警。
+#   **一轮门禁只跑两次**: 正例 (上面这一跑就把读数吃全) + 反例 (改坏 → 确认红的恰好是你动的
+#   那几处); **反例还原后即结束**, 不再跑正例 —— 正例刚刚才跑过。
 set -euo pipefail
 
 cd "$(dirname "$0")/../.."

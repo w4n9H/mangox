@@ -43,6 +43,17 @@ final class MockTransport: AgentTransport {
         lastMode = mode
     }
 
+    /// P15.3 smoke 断言用: 最近一次 dream spool 下发。
+    /// **记录"被清回 nil"同样重要** —— 普通回合必须把它清掉, 否则那份 transport 会一直
+    /// 挂着 dream 扩展（而 `lastDreamSpool` 停在旧值上正是那个 bug 的形状）。
+    private(set) var lastDreamSpool: String?
+    private(set) var dreamSpoolUpdates: Int = 0
+
+    func updateDreamSpool(_ spool: String?) {
+        lastDreamSpool = spool
+        dreamSpoolUpdates += 1
+    }
+
     func updateSessionBinding(_ sessionId: UUID?) {
         guard boundSessionId != sessionId else { return }
         boundSessionId = sessionId
