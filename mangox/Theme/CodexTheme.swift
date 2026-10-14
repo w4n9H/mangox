@@ -162,6 +162,9 @@ enum CodexTheme {
     static let fontMonoXs   = CodexFonts.monoFont(11)
     static let fontButton   = Font.system(size: 13).weight(.medium)
     static let fontLabel    = Font.system(size: 11).weight(.medium)
+    /// P16 §03 改动六: 回合作者小标 —— 比 `fontLabel` 再小一档。
+    /// boss 2026-10-14：「回合小标字体不要太大了」⇒ 11pt 跟正文(13)贴得太近, 压到 10。
+    static let fontAuthor   = Font.system(size: 10, weight: .medium)
 
     // MARK: - Animation
     static let animFast: Animation   = .easeInOut(duration: 0.15)
@@ -313,6 +316,13 @@ enum Tune {
     //    曾一律给 24 ⇒ 回合内那段连续输出被一起拉松。判据见下「排版节奏」。
     static let chatMessageSpacing: CGFloat = 24    // **回合之间**间距 (用户 ↔ 助手)
     static let chatBlockSpacing: CGFloat   = 10    // **回合内部**块距 (同 role 连续的块)
+
+    /// P16 §03 改动六 · 2026-10-14 boss 拍板: 每**回合首行**一枚作者小标, 用来区分"谁说的"。
+    /// ⚠️ 与 `chatBlockSpacing` 是**两件事** —— 小标只出现在回合首条（不是每条消息），
+    ///    且**第一条消息也要有**；而补间距用的 `isTurnStart` 首条为 false（顶部已有 chatVPadding）。
+    /// ⚠️ `You` / `MangoX` 是**角色标签, 原样保留英文**（与 Chat / Trace / USER / ASSISTANT 同族）。
+    /// ⚠️ **字号不在这里** —— 它住字体段 `CodexTheme.fontAuthor`（字号属于字体系统, 不是布局参数）。
+    static let authorLabelSpacing: CGFloat  = 5    // 小标与它下面那个块的间距
     static let welcomeTopPadding: CGFloat  = 160   // 空态欢迎页距顶
     /// 派生: 消息列 frame 宽 = 内容 + 2×水平内边距。
     static var chatColumnWidth: CGFloat { chatContentWidth + chatHPadding * 2 }

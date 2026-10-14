@@ -161,18 +161,25 @@ struct ChatView: View {
     /// `LazyVStack` 只有一档 spacing, 所以把差值补到**回合首条**的 `.padding(.top)` 上。
     private struct MessageRow: Identifiable {
         let message: ChatMessage
+        /// 补间距用 —— **首条为 false**（会话顶部已有 `chatVPadding`, 再加一次就是双倍顶白）。
         let isTurnStart: Bool
+        /// 画作者小标用 —— **首条也为 true**（第一段也是"某个人说的", 不能因为它顶在最上面就没作者）。
+        let isAuthorHead: Bool
         var id: UUID { message.id }
     }
 
     /// 回合边界 = **role 变化处**。同一回合的连续输出(思考 / 工具行 / 正文)各是一条独立
     /// message、role 都是 .assistant ⇒ 「同 role 连续」正好等价于「属于同一回合」。
+    /// ⚠️ 上面两个标记在这个判据上**只差第一条**（`prev == nil`）—— 故意不合并:
+    ///    间距与作者是两件事, 合并会让第一条消息凭空多顶 14pt。
     private var messageRows: [MessageRow] {
         var out: [MessageRow] = []
         out.reserveCapacity(store.messages.count)
         var prev: MessageRole?
         for m in store.messages {
-            out.append(MessageRow(message: m, isTurnStart: prev != nil && prev != m.role))
+            out.append(MessageRow(message: m,
+                                  isTurnStart: prev != nil && prev != m.role,
+                                  isAuthorHead: prev != m.role))
             prev = m.role
         }
         return out
@@ -181,10 +188,21 @@ struct ChatView: View {
     private var messageBlocks: some View {
         LazyVStack(alignment: .leading, spacing: Tune.chatBlockSpacing) {
             ForEach(messageRows) { row in
-                MessageBlockView(message: row.message, store: store)
-                    .padding(.top, row.isTurnStart ? Tune.chatMessageSpacing - Tune.chatBlockSpacing : 0)
-                    .id(row.message.id)
-                    .transition(.opacity.combined(with: .move(edge: .bottom)))
+                VStack(alignment: .leading, spacing: Tune.authorLabelSpacing) {
+                    // P16 §03 改动六 · 2026-10-14 boss 拍板: 回合**首行**的作者锚点。
+                    // 参考图的解法正是「每回合一枚小标 + 用户消息一个整栏浅灰块」—— 少了小标,
+                    // 长用户消息下"谁说的"只能靠位置猜（参考图的那条规则在长消息下会失效）。
+                    if row.isAuthorHead {
+                        Text(row.message.role == .user ? "You" : "MangoX")
+                            .font(CodexTheme.fontAuthor)
+                            .tracking(0.3)
+                            .foregroundStyle(CodexTheme.textTertiary)
+                    }
+                    MessageBlockView(message: row.message, store: store)
+                }
+                .padding(.top, row.isTurnStart ? Tune.chatMessageSpacing - Tune.chatBlockSpacing : 0)
+                .id(row.message.id)
+                .transition(.opacity.combined(with: .move(edge: .bottom)))
             }
 
             if store.isStreaming {
@@ -537,7 +555,8 @@ struct MessageBlockView: View {
     /// （`bgCard`）⇒ 一整页只剩「纸」和「块」两种材质。
     /// ⚠️ 代价明写：短消息（三个字）时看着「空」。本版接受 —— 短消息在 MangoX 的使用里是少数。
     /// ⚠️ 附件从「块外独立一行」挪进块**内顶部**，跟随左对齐（见 `attachmentRow`）。
-    /// ⚠️ 文档 §03 那条「回合首行 11pt 小标 You / MangoX」**仍是待拍板**，本版没做。
+    /// ⚠️ 作者小标（回合首行 `You` / `MangoX`）**不住在这里** —— 它画在 `messageBlocks` 的回合
+    /// 首行，因为那是「**回合**」的概念；用户消息只是恰好常常是回合首行（P16 §03 改动六）。
     private func userBubble(_ s: String, attachments atts: [Attachment]) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             if !atts.isEmpty {
