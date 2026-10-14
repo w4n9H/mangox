@@ -37,30 +37,41 @@ enum CodexTheme {
 
     // MARK: - Surfaces (light: white/gray · dark: 深灰地板 —— 见 Dark 节的"为什么不是纯黑")
 
-    static let bgBase     = adaptive(light: 0xFFFFFF, dark: Dark.bgBase) // app background · 窗口底 (最外层)
-    static let bgSidebar  = adaptive(light: 0xF6F6F7, dark: Dark.bgSidebar) // nav/left column
-    static let bgRight    = adaptive(light: 0xF6F6F7, dark: Dark.bgSidebar) // workspace
+    // ⚠️ P16（2026-10-14）：亮色面族整批退一档 —— **页面底离开纯白**。
+    //    判据是参考图实测：它的页面底是 #F8F8F8，我们原来给的是 #FFFFFF。
+    //    ⚠️ 这不是配色偏好，是「卡片跳不跳」的问题：纸从纯白退到 #F8F8F8 之后，卡与纸的灰阶差
+    //    由 Δ12 收到 Δ7 ⇒ 整页从「每一张卡都在跳」变成「靠形状分组」（参考图的口径）。
+    //    ⚠️ 代价明写：纸一退，**所有文字对比度齐降 3~7%**（textTertiary 从页 4.55 / 卡 4.10 掉到
+    //    4.28 / 4.03，双双跌破 AA 4.5）⇒ Text 节那两条压深是**配套**，不是顺手美化，两处必须一起动。
+    //    ⚠️ `bgInput` / `bgComposer` **有意不动**：输入井在新纸上反而「凹」得出来，碰它等于把
+    //    输入卡的层级也一起改了（那是另一件事，见 P16 §04）。
+    //    ✔ 守卫：`scripts/diag/palette_probe.py` 的亮色算例（地板 4.5 / 3.0，**两条破线已收**）
+    //      + 冒烟 T-COLOR 的暗色段（面链单调性 / 板块色图形地板）。
+    static let bgBase     = adaptive(light: 0xF8F8F8, dark: Dark.bgBase) // app background · 窗口底 (最外层)
+    static let bgSidebar  = adaptive(light: 0xF1F1F1, dark: Dark.bgSidebar) // nav/left column
+    static let bgRight    = adaptive(light: 0xF1F1F1, dark: Dark.bgSidebar) // workspace
 
     /// **页面底** —— 主区面板的"纸边": 顶栏 / 各面板最外圈。
     /// ⚠️ 大段正文**不坐这一层** —— 那正是 2026-09-21 boss「黑色主题看着眼睛很累」的根因,
     /// 正文请用 `contentPanel`。
     /// ⚠️ P10.8c: **聊天页内部不再用它**（输入区/状态栏已收回 `contentPanel`）——
     /// 面板内部只允许一种底色, 否则相邻两个面之间会出现"无边界元素的硬边"。
-    static let bgChat     = adaptive(light: 0xFFFFFF, dark: Dark.bgChat)
+    static let bgChat     = adaptive(light: 0xF8F8F8, dark: Dark.bgChat)
 
     /// **内容面** (P10.8b 新增) —— 主区里 **正文真正坐着的那一层**: 消息列 / 轨迹列表 / 引用块。
     ///
     /// 为什么不直接抬 `bgChat`: 它还兼着"顶栏底 / 各面板最外圈", 抬它会把顶栏一起抬平,
     /// 层次反而糊掉 —— 内容面是**局部**的, 页面底是**全局**的。
-    /// 亮色取值与 `bgChat` 同为纯白: 亮色模式本来就是"白纸 + 灰卡", 不需要第二层 (改它 = 无谓的亮色回归)。
+    /// ⚠️ P16: 亮色**不再是纯白**（0xFFFFFF→0xF8F8F8）。旧注的「与 bgChat 同为纯白 / 不需要第二层」
+    /// 已作废 —— 「白纸 + 灰卡」里的**纸本来就是灰的**（参考图实测 #F8F8F8），纯白是我们自己的偏离。
     /// P10.8c: 底档 (输入区 + 状态栏) 也归这一层 —— **聊天页从顶到底只有一种底色**。
-    static let contentPanel = adaptive(light: 0xFFFFFF, dark: Dark.contentPanel)
+    static let contentPanel = adaptive(light: 0xF8F8F8, dark: Dark.contentPanel)
 
     /// 输入井 (搜索框/字段面) / 卡面 / 卡内次级面 / 胶囊。
     static let bgInput    = adaptive(light: 0xF1F1F3, dark: Dark.bgInput)
-    static let bgCard     = adaptive(light: 0xF3F3F5, dark: Dark.bgCard) // tool card / code block / table
-    static let bgElevated = adaptive(light: 0xEDEDEF, dark: Dark.bgElevated) // 卡内次级面 (表头·按钮·工具条) · 设置卡面
-    static let bgPill     = adaptive(light: 0xE7E7EA, dark: Dark.bgPill) // composer 上方的胶囊控件（明显浅灰）
+    static let bgCard     = adaptive(light: 0xF1F1F1, dark: Dark.bgCard) // tool card / code block / table
+    static let bgElevated = adaptive(light: 0xE9E9E9, dark: Dark.bgElevated) // 卡内次级面 (表头·按钮·工具条) · 设置卡面
+    static let bgPill     = adaptive(light: 0xE4E4E4, dark: Dark.bgPill) // composer 上方的胶囊控件（明显浅灰）
     /// 输入卡面 —— 暗色下比**它所在的两种面都暗一档**(正文面 contentPanel / 页面底 bgChat),
     /// 所以既能在聊天页当"凹槽", 又能当其他页面上的字段底 (旧注释说的"必须比 bgChat 亮"已过时)。
     static let bgComposer = adaptive(light: 0xFFFFFF, dark: Dark.bgInput)
@@ -80,19 +91,21 @@ enum CodexTheme {
 
     // MARK: - Borders
     static let border     = adaptive(light: 0xE3E3E7, dark: Dark.border)
-    static let divider    = adaptive(light: 0xECECEF, dark: Dark.divider)
+    /// ⚠️ P16: 旧值 #ECECEF 落在新的 #F8F8F8 纸上只剩 1.06:1（等于没有）。
+    /// 这条是「**换纸必须连带换分隔线**」的实证：分隔线是靠**与纸的差**工作的，纸一动它就得动。
+    static let divider    = adaptive(light: 0xE4E4E7, dark: Dark.divider)
     static let guide      = adaptive(light: 0xDCDCE2, dark: Dark.guide) // 侧栏层级引导线 (比 divider 实, 比 border 软)
 
     // MARK: - Accent
     static let accent       = adaptive(light: 0xDD5742, dark: 0xDD5742) // warm orange-red (brand primary)
     static let accentSoft   = accent.opacity(0.18)
-    static let thinking     = adaptive(light: 0xB07A12, dark: 0xE0A030) // amber/orange left bar
-    static let toolRunning  = adaptive(light: 0xB07A12, dark: 0xE0A030) // amber when running
-    static let toolDone     = adaptive(light: 0x1A7F37, dark: 0x3FB950) // green when done
-    static let toolError    = adaptive(light: 0xD1242F, dark: 0xE5484D) // red
+    static let thinking     = adaptive(light: 0xB07A12, dark: Dark.thinking) // amber/orange left bar
+    static let toolRunning  = adaptive(light: 0xB07A12, dark: Dark.toolRunning) // amber when running
+    static let toolDone     = adaptive(light: 0x1A7F37, dark: Dark.toolDone) // green when done
+    static let toolError    = adaptive(light: 0xD1242F, dark: Dark.toolError) // red
     static let toolQueued   = adaptive(light: 0x6B6B78, dark: Dark.toolQueued) // gray-blue for queued
-    static let info         = adaptive(light: 0x0969DA, dark: 0x7DA3F0)
-    static let blocked      = adaptive(light: 0xB07A12, dark: 0xE0A030) // amber awaiting-approval (P8-T26)
+    static let info         = adaptive(light: 0x0969DA, dark: Dark.info)
+    static let blocked      = adaptive(light: 0xB07A12, dark: Dark.blocked) // amber awaiting-approval (P8-T26)
 
     // MARK: - 思考强度轨 (2026-09-24 boss 拍板: 蓝→紫→洋红, **亮暗共用一套**)
     // 判据 = 这段色**从色相环的冷端跨到暖端** (227°→306°), 两种底色都托得住; 实测最紧 2.8:1
@@ -113,8 +126,13 @@ enum CodexTheme {
     // MARK: - Text
     static let textPrimary   = adaptive(light: 0x24292F, dark: Dark.textPrimary) // 柔和近黑 (0x1F2328 太硬)
     static let textSecondary = adaptive(light: 0x57606A, dark: Dark.textSecondary)
-    static let textTertiary  = adaptive(light: 0x6E7781, dark: Dark.textTertiary)
-    static let textMuted     = adaptive(light: 0x9CA3AB, dark: Dark.textMuted)
+    /// ⚠️ P16 配套：换纸之后 textTertiary 从页 4.55 / 卡 4.10 掉到 **4.28 / 4.03**（双破 AA 4.5）
+    /// ⇒ 压到 #666E78 修回 4.86 / 4.57。与 textMuted 一起构成「换纸的代价」，不是可选项。
+    static let textTertiary  = adaptive(light: 0x666E78, dark: Dark.textTertiary)
+    /// ⚠️ P16 配套：它虽然排在「装饰」那一档，实际是**图标**（信息载体）用的色 ——
+    /// 旧值在卡上只有 2.30:1，连「UI 组件 3:1」都不到（**今天就已经破线**）。
+    /// 压到 #848C94 后：卡上 3.02 / 页上 3.21。
+    static let textMuted     = adaptive(light: 0x848C94, dark: Dark.textMuted)
     static let textMono      = adaptive(light: 0x24292F, dark: Dark.textMono)
 
     // MARK: - Status
@@ -219,6 +237,18 @@ enum CodexTheme {
         static let textMuted: UInt32     = 0x6C6C77
         static let textMono: UInt32      = 0xB6B6C0
         static let toolQueued: UInt32    = 0x8A8A95
+        // 板块色（P16 收进来）—— 在此之前它们的暗色侧**直接写在 `adaptive(dark: 0x…)` 里**，
+        // 于是 `enum Dark` 不是暗色的唯一真源，**算例与冒烟都看不见它们**
+        // （`palette_probe.py` 旧版只解析这个 enum ⇒ 板块色一个都没进守卫）。
+        // 收进来之后：暗色值只有一个地方可改，守卫也终于拿得到。
+        // ⚠️ 三个名字同值是有意的 —— `thinking`/`toolRunning`/`blocked` 语义不同，
+        //    将来谁想单独动其中一个，不该先拆别名。
+        static let info: UInt32       = 0x7DA3F0
+        static let thinking: UInt32   = 0xE0A030
+        static let toolRunning: UInt32 = 0xE0A030
+        static let toolDone: UInt32   = 0x3FB950
+        static let toolError: UInt32  = 0xE5484D
+        static let blocked: UInt32    = 0xE0A030
         // 交互态叠加 alpha（暗色加白）。也放这里 —— 冒烟要断言"选中比悬停实"。
         static let hoverAlpha: Double    = 0.06
         static let selectedAlpha: Double = 0.10
@@ -271,10 +301,13 @@ enum Tune {
     static let miniWindowEmptyHeight: CGFloat = 116  // 空态高 (安全区 + 顶行 + 一句轻提示)
 
     // 中间列 · 消息
-    static let chatContentWidth: CGFloat   = 800   // 消息/输入卡内容宽 (唯一源头)
+    // ⚠️ P16: 800 → 680。参考图的内容列只占可视宽 53.6%，我们原来占 67.6% ⇒ 正文行长过宽。
+    //    取 680 而不是参考图换算出来的 634：给代码块与宽表留余量（取舍记在 P16 §04 待拍板 6）。
+    //    ⚠️ 它是**唯一源头** —— composer 宽由 `composerMaxWidth` 派生，改这一处两列一起变。
+    static let chatContentWidth: CGFloat   = 680   // 消息/输入卡内容宽 (唯一源头)
     static let chatHPadding: CGFloat       = 48    // 消息列左右内边距
     static let chatVPadding: CGFloat       = 18    // 消息列上下内边距 (24→18 紧凑)
-    static let chatMessageSpacing: CGFloat = 10    // 消息块间距 (14→10 紧凑)
+    static let chatMessageSpacing: CGFloat = 24    // 消息块间距 (P16: 10→24。**必须 > mdBlockSpacing**)
     static let welcomeTopPadding: CGFloat  = 160   // 空态欢迎页距顶
     /// 派生: 消息列 frame 宽 = 内容 + 2×水平内边距。
     static var chatColumnWidth: CGFloat { chatContentWidth + chatHPadding * 2 }
@@ -302,8 +335,14 @@ enum Tune {
     static var composerMaxWidth: CGFloat { chatContentWidth + composerHPadding * 2 }
 
     // Markdown 正文 (13px 正文下的精致化参数)
-    static let mdBlockSpacing: CGFloat  = 9      // 块间距 (12→9)
-    static let mdLineSpacing: CGFloat   = 2      // 行间距 (13px 正文 ≈1.3 倍行高)
+    //
+    // ⚠️ P16：「排版节奏」是**一条链，不是一个参数** —— 三者必须**严格递增**：
+    //        行间隙 mdLineSpacing < 段间隙 mdBlockSpacing < 消息间隙 chatMessageSpacing
+    //        （6 < 16 < 24）。只动块距会让它**超过**消息距（16 > 10）⇒ 消息之间比消息内部还紧，
+    //        两条消息被读成一条。**这条是出图时才看出来的** —— 纸面上两个数各看各的都对。
+    //    ✔ 守卫 = 冒烟 T-COLOR 段的单调性断言（断三个数的**大小关系**，不是三个数本身）。
+    static let mdBlockSpacing: CGFloat  = 16     // 段间距 (P16: 9→16)
+    static let mdLineSpacing: CGFloat   = 6      // 行间距 (P16: 2→6; 13px 正文 ≈1.65 倍行高)
     static let mdHeadingSizes: [CGFloat] = [17, 15, 14, 13, 13, 12.5]  // h1-h6 (随正文 -1)
     static let mdListIndentStep: CGFloat = 16    // 每级列表缩进
     static let mdTableCellHPadding: CGFloat = 10
@@ -386,6 +425,13 @@ enum Tune {
     static let dreamDigestMaxSessions: Int         = 8      // 最多编进几个（按更新时间倒序取新）
     static let dreamDigestMaxCharsPerSession: Int  = 2000   // 单会话上限（超了留尾部并标注）
     static let dreamDigestTotalChars: Int          = 12000  // 整段上限（超了从最旧的会话开始丢）
+
+    // 工具行 (P16): 展开区的固定高 —— **两个数有意不同**。
+    // 判据: 输出区是"跑完命令的结果", 看一眼就够; diff 是"块对照", 要看到足够多行才读得出改动。
+    // ⚠️ 都是**上界**不是定高 —— 短内容按自身高度收, 只有超了才滚 ⇒ 高度与内容长度**脱钩**。
+    // ⚠️ 输出区这个数**同时是行为开关**: 没有它, 工具输出会随内容无限长 (P16 立项的起因)。
+    static let toolOutputMaxHeight: CGFloat = 180   // 工具输出区 (固定高滚动区)
+    static let toolDiffMaxHeight: CGFloat   = 260   // 审批卡 diff 预览 (原硬编码在 DiffPreviewView)
 }
 
 // MARK: - ★ 文案区 (Copy)

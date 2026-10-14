@@ -20,7 +20,7 @@ private struct ChatViewportHeightKey: PreferenceKey {
 struct ChatView: View {
     @ObservedObject var store: ChatStore
     @State private var viewportHeight: CGFloat = 0
-    @State private var nearBottom = true   // 初始视为在底部 (defaultScrollAnchor 锚底)
+    @State private var nearBottom = true   // 初始视为在底部 (初屏定位 = scrollContent 的 onAppear)
     /// 自动滚动同帧合并标记: 流式期同帧多个 chunk 只调度一次滚动 (防 "update multiple times per frame")。
     @State private var scrollScheduled = false
 
@@ -119,9 +119,17 @@ struct ChatView: View {
         .coordinateSpace(name: "chatScroll")
         .onPreferenceChange(ChatViewportHeightKey.self) { handleViewportHeight($0) }
         .onPreferenceChange(ChatContentBottomKey.self) { handleContentBottom($0) }
-        .defaultScrollAnchor(.bottom)   // 默认锚底: 打开会话即看最新内容 (否则停在最老一条)
+        // ⚠️ 这里**不能**用锚底 (`defaultScrollAnchor(.bottom)`) —— 它会在**内容尺寸变化时重新
+        //    锚底**: 展开任意一行, 整列都跳一下, 体感"点了 A 打开了 B"(与 TrajectoryView:153
+        //    同一个坑, 那次只修了 Trace, 漏了这里)。改 onAppear 定位; 流式跟随由下面
+        //    onChange(of: store.messages) 管。
+        .onAppear {
+            DispatchQueue.main.async {
+                proxy.scrollTo(store.messages.last?.id ?? UUID(), anchor: .bottom)
+            }
+        }
         .onChange(of: store.selectedConversationId) { _, _ in
-            // 换会话: replay 内容整批替换, 兜底滚到最新 (首帧锚点之外的双保险)
+            // 换会话: replay 内容整批替换, 兜底滚到最新 (首帧 onAppear 之外的双保险)
             DispatchQueue.main.async {
                 withAnimation(nil) {
                     proxy.scrollTo(store.messages.last?.id ?? UUID(), anchor: .bottom)
@@ -319,13 +327,21 @@ struct MessageBlockView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 3) {
-            if let atts = message.attachments, !atts.isEmpty {
+            // ⚠️ P16 §03 改动三：用户消息的附件挪进了整栏块**内**（见 `userBubble`）——
+            //    这里只留给非用户消息（助手消息理论上不带附件，但这条通用路径保持原样）。
+            if message.role != .user, let atts = message.attachments, !atts.isEmpty {
                 attachmentRow(atts)
             }
             content
             if let raw = rawText {
                 footerToolbar(raw: raw)
-                    .opacity(hovering ? 1 : 0.5)
+                    // 0.5 → 0 (2026-10-14 review): 常驻半亮的按钮从第二条消息起就成第二层噪点,
+                    // 与正文抢注意力。改 hover 才现。
+                    // ⚠️ `opacity(0)` **不摘除命中测试** ⇒ 必须同时关 hitTest, 否则成了
+                    //    "看不见但能点到" —— 在消息下方那片空白里点一下就会复制/重新生成。
+                    //    用 `opacity` 而非 `.hidden()` / 条件渲染: 18pt 高度照留, hover 时不跳。
+                    .opacity(hovering ? 1 : 0)
+                    .allowsHitTesting(hovering)
                     .animation(.easeInOut(duration: 0.15), value: hovering)
                     .frame(maxWidth: .infinity,
                            alignment: message.role == .user ? .trailing : .leading)
@@ -341,13 +357,14 @@ struct MessageBlockView: View {
 
     private func attachmentRow(_ atts: [Attachment]) -> some View {
         HStack(spacing: 6) {
-            Spacer()   // 用户消息靠右
             ForEach(atts) { att in
                 thumbnail(att)
                     .onTapGesture { previewAttachment = att }
             }
+            // P16 §03 改动三：前导 `Spacer()` 改成**后置** —— 附件跟随左对齐，不再被推到右缘。
+            // 原来的 `.padding(.bottom, 2)` 一并去掉：块内那个间距由容器的 `spacing: 10` 管。
+            Spacer(minLength: 0)
         }
-        .padding(.bottom, 2)
     }
 
     /// 88×66 圆角缩略 (scaledToFill 裁切; 点击开大图)。
@@ -406,7 +423,7 @@ struct MessageBlockView: View {
         switch message.content {
         case .text(let s):
             if message.role == .user {
-                userBubble(s)
+                userBubble(s, attachments: message.attachments ?? [])
             } else {
                 MarkdownView(text: s, isStreaming: message.isStreaming,
                              basePath: store.activeProjectPath)
@@ -415,6 +432,7 @@ struct MessageBlockView: View {
             ThinkingCardView(text: s, id: message.id, isStreaming: message.isStreaming)
         case .tool(let tool):
             ToolCallCardView(tool: tool,
+                             decision: store.toolDecisions[tool.id],
                              onApprove: { store.approveTool(tool.id) },
                              onDeny: { store.denyTool(tool.id) },
                              onAlwaysAllow: { store.alwaysAllowTool(tool.id) })
@@ -428,7 +446,7 @@ struct MessageBlockView: View {
         return s
     }
 
-    // MARK: - 消息底部工具条 (常驻淡显, hover 变清晰; 挂在文档流里不抖)
+    // MARK: - 消息底部工具条 (hover 才现; 高度常驻在文档流里, 所以不抖)
 
     private func footerToolbar(raw: String) -> some View {
         HStack(spacing: 10) {
@@ -440,13 +458,18 @@ struct MessageBlockView: View {
             }
 
             if message.role == .assistant {
-                // 记忆自动提炼 (人工触发): 整段会话 → 候选 → 知识面板待审核
-                footerButton(store.distillRunning ? "hourglass" : "wand.and.stars",
-                             LK(store.distillRunning ? "提炼中…" : "提炼本会话 → 待审核记忆"),
-                             label: LK(store.distillRunning ? "提炼中…" : "提炼"),
-                             disabled: store.distillRunning) {
-                    store.distillMemoryFromCurrentSession()
-                }
+                // ⚠️ 临时撤下 (boss 2026-10-14 要求) —— **功能全留着**, 只是不再有显示入口:
+                //    · KnowledgeStore.distillMemoryFromCurrentSession()  ← 保留
+                //    · ChatStore 的 distillRunning / distillOutcome 转发   ← 保留
+                //    · ChatBottomBar 的提炼结果 banner                    ← 保留
+                //    ⇒ 该方法因此**当前无视图调用点**(可正常编译, Swift 不报未引用方法)。
+                //    恢复 = 去掉这一块的注释即可; 未删是为了"暂时"二字 —— 删掉就没有回程票了。
+                // footerButton(store.distillRunning ? "hourglass" : "wand.and.stars",
+                //              LK(store.distillRunning ? "提炼中…" : "提炼本会话 → 待审核记忆"),
+                //              label: LK(store.distillRunning ? "提炼中…" : "提炼"),
+                //              disabled: store.distillRunning) {
+                //     store.distillMemoryFromCurrentSession()
+                // }
                 if !message.isStreaming {
                     footerButton("arrow.clockwise", "重新生成", label: "重新生成") { store.regenerate() }
                 }
@@ -483,19 +506,31 @@ struct MessageBlockView: View {
         NSPasteboard.general.setString(s, forType: .string)
     }
 
-    // MARK: - Bubbles
+    // MARK: - 用户消息块
 
-    private func userBubble(_ s: String) -> some View {
-        HStack {
-            Spacer()
+    /// 用户消息：**左对齐整栏块**（P16 §03 改动三）—— 原先是「右对齐尾部气泡」。
+    ///
+    /// ⚠️ 为什么不是「保留气泡、只改成左对齐」：气泡的判据是「短消息」，圆角 + 内边距在长文本下
+    /// 会把整栏切成一块块；整栏块在任意长度下边界都稳定，且它与代码块、工具行**共用同一个底**
+    /// （`bgCard`）⇒ 一整页只剩「纸」和「块」两种材质。
+    /// ⚠️ 代价明写：短消息（三个字）时看着「空」。本版接受 —— 短消息在 MangoX 的使用里是少数。
+    /// ⚠️ 附件从「块外独立一行」挪进块**内顶部**，跟随左对齐（见 `attachmentRow`）。
+    /// ⚠️ 文档 §03 那条「回合首行 11pt 小标 You / MangoX」**仍是待拍板**，本版没做。
+    private func userBubble(_ s: String, attachments atts: [Attachment]) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            if !atts.isEmpty {
+                attachmentRow(atts)
+            }
             Text(s)
                 .font(CodexTheme.fontBody)
                 .foregroundStyle(CodexTheme.textPrimary)
-                .padding(.horizontal, 11)
-                .padding(.vertical, 7)
-                .background(CodexTheme.bgElevated)
-                .clipShape(RoundedRectangle(cornerRadius: CodexTheme.radius))
-                .textSelection(.enabled)   // 用户气泡正文同样可选中复制
+                .fixedSize(horizontal: false, vertical: true)
+                .textSelection(.enabled)   // 用户消息正文同样可选中复制
         }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 11)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(CodexTheme.bgCard)
+        .clipShape(RoundedRectangle(cornerRadius: CodexTheme.radiusLg))
     }
 }

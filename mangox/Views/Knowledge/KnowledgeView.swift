@@ -552,7 +552,7 @@ struct KnowledgeView: View {
                             .padding(.top, 24)
                     }
                 }
-                // 容器内缩**共用侧栏那个常量** (P16, 2026-10-12) —— 两块面板常常同屏并排,
+                // 容器内缩**共用侧栏那个常量** (2026-10-12) —— 两块面板常常同屏并排,
                 // 表格线就是眼睛的锚点; 各写一个数字迟早会漂。这一层管的是"整块离窗口边多远"。
                 .padding(.horizontal, Tune.sidebarContentInset)
                 .padding(.bottom, 12)
@@ -638,7 +638,7 @@ struct KnowledgeView: View {
     /// 根的小标题。行内开关 = **这个根进不进索引**（与条目那个开关同形: 关掉 ≠ 删掉）。
     /// 描述不在这里铺开（它常常是两行）—— 挂到 tooltip 上, 点一下在右侧看全。
     ///
-    /// 字号 11 semibold → **13 medium**（2026-10-12, 与侧栏 P16 对齐的连带面）: 组标题与它的子行
+    /// 字号 11 semibold → **13 medium**（2026-10-12, 与侧栏对齐的连带面）: 组标题与它的子行
     /// 是**同字号、不同字重**（侧栏 Project / session 就是这条），否则子行 13 会**比组标题还响**。
     /// 颜色仍走 textSecondary（停用降 textMuted）—— 那一档是"这个根进不进索引"的语义, 别顺手统一。
     ///
@@ -854,7 +854,7 @@ struct KnowledgeView: View {
         return HStack(spacing: 7) {
             // 窄列标记: 中文是单字(10pt 宽 ≈10), 英文是 New / Merge / Swap 这类词 —— 用 `minWidth`
             // 让框跟着内容走: 中文居中落在 16pt 框里, 英文加宽而不溢出压住标题。
-            // 16 与其余行的图标占位**同宽** —— 否则各段的标题起跑线不在一条竖线上 (P16 对齐)。
+            // 16 与其余行的图标占位**同宽** —— 否则各段的标题起跑线不在一条竖线上 (侧栏对齐)。
             Text(proposalKindLabel(p.kind))
                 .font(.system(size: 10, weight: .semibold))
                 .foregroundStyle(proposalKindColor(p.kind))
@@ -1101,7 +1101,7 @@ struct KnowledgeView: View {
                             : (item.source == .session ? "bookmark.fill" : "doc.text"))
                 .font(.system(size: 12))
                 // 三档都是**语义**（待审 accent / 会话沉淀 thinking / 其余中性），不是缺省色，
-                // 所以这行只跟字号与占位宽度（P16 对齐），颜色一个不动。
+                // 所以这行只跟字号与占位宽度（侧栏对齐），颜色一个不动。
                 .foregroundStyle(isPending ? CodexTheme.accent
                                  : (item.source == .session ? CodexTheme.thinking : CodexTheme.textMuted))
                 .frame(width: 16)
@@ -1154,7 +1154,7 @@ struct KnowledgeView: View {
     /// 而它其实只是这一段的元信息。挂在区头就不再有"它是不是一条数据"的歧义, 也少一行。
     private func sectionHeader<V: View>(_ title: String, count: Int, tint: Color,
                                         @ViewBuilder accessory: () -> V) -> some View {
-        // 度量对齐侧栏 P16 的区头 (2026-10-12)：12 regular + tracking 0.3 是"大而轻的货架标签"，
+        // 度量对齐侧栏的区头 (2026-10-12)：12 regular + tracking 0.3 是"大而轻的货架标签"，
         // 10 semibold 会把它读成次级按钮。内缩 10 / 上间距 14 与侧栏**同一个数**，不是巧合。
         // ⚠️ `tint` 是**语义**不是度量：「常驻 · N」保留 accent（那一段是"始终进 prompt"的断言），
         //    其余三区走灰。对齐的是字号与间距，不是颜色 —— 别顺手把它也统一了。

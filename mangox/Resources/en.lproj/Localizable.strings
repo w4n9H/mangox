@@ -311,7 +311,6 @@
 "尚未请求通知授权, 打开开关后首次完成时会请求" = "Notification permission has not been requested yet; the first completed turn after you enable this will ask.";
 "尚未配置邮箱。点下方「添加邮箱」开始 —— 建议用一个专用个人邮箱, 不要用企业邮箱。" = "No mailbox configured yet. Start with “Add mailbox” below — a dedicated personal mailbox is recommended, not a work one.";
 "展开侧栏" = "Expand sidebar";
-"展开全部" = "Expand all";
 "工作区中查找" = "Find in workspace";
 "工作日志" = "Work log";
 "工具执行失败" = "Tool execution failed";
@@ -320,6 +319,8 @@
 "左边是空的 —— 这是一篇**还不存在**的笔记(增)。" = "The left side is empty — this note does not exist yet (new).";
 "已停用 · 每 %llds" = "Disabled · every %llds";
 "已停用 —— 索引里不出现这个库" = "Disabled — this base does not appear in the index";
+"已允许" = "Allowed";
+"已允许（始终）" = "Allowed (always)";
 "已删除" = "Deleted";
 "已删除会话" = "Deleted session";
 "已删除的会话" = "Deleted session";
@@ -404,7 +405,6 @@
 "摘要重试中…" = "Retrying summary…";
 "收件实现未接入 (P10.2c)" = "Receiving is not wired up yet (P10.2c)";
 "收信中 · 每 %llds" = "Receiving · every %llds";
-"收起" = "Collapse";
 "收起侧栏" = "Collapse sidebar";
 "收起工作区" = "Collapse workspace";
 "改动会重置该账号的连接实例 (下次收信生效)" = "Saving resets this account's connection (takes effect on the next check).";

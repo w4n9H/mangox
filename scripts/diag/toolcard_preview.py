@@ -11,7 +11,7 @@ r"""工具卡出图 —— 把"三拍改完长什么样"变成 PNG, 不靠想象
    (`.read`) 与新落点 (`.other` + 真名占 title + 首参退 command) **同一批数据各渲一遍**,
    是真渲染、不是示意图。
 2. **输出区的三态会不会互相打架** —— 纯文本 (长/短) / 文本+图 / 纯图。判"纯图卡的
-   `hasLongOutput` 不出现箭头"和"纯图卡不空转"只能看。
+   `ToolOutputBox` 真的把长输出关进了 180pt"和"纯图卡不空转"只能看。
 3. **内置工具没被 `.other` 误伤** —— 归类色带一横排看过去, read 组是不是还是 info 蓝、
    edit/write 是不是还是完成绿。
 
@@ -58,6 +58,20 @@ import Foundation
 import SwiftUI
 
 let OUT = "/tmp/mangox-toolcard-preview"
+
+// MARK: - 忠实复制: 卡片够得着的私有/重依赖类型
+
+/// `AgentTransport.swift:10-13` 的**忠实复制**。
+///
+/// P16 给卡片加了 `decision: PermissionDecision?` ⇒ 探针必须能让这个类型解析。为什么不直接
+/// 把 `AgentTransport.swift` 加进 SOURCES: 那个文件牵出 `AgentMode` / `ApprovalMode` /
+/// `AutoJudgeBlock` / `ModelMaterializer.Output` 一整串协议类型, 拖进来要把半个 Agent 层
+/// 都编一遍 —— 为了一个三 case 的 enum 不值当。**只复制形状, 不放行为**（它没有行为）。
+enum PermissionDecision {
+    case allow
+    case deny
+    case alwaysAllow
+}
 
 // MARK: - 造测试图
 
@@ -192,17 +206,10 @@ func kindChip(_ label: String, _ color: Color) -> some View {
 let chart = "\(OUT)/chart.png"
 let shot  = "\(OUT)/shot.png"
 
-// bash 的一长段输出 —— 长到必须出展开箭头。
-let bashOut = """
-channel     dau        wow
-华为        128,430    +5.4%
-小米         96,214    -2.1%
-OPPO         8,430    +1.2%
-vivo        71,558    +0.4%
-荣耀         44,912    +3.8%
-realme      19,305    -0.7%
-一加          6,118    +0.1%
-"""
+// bash 的一长段输出 —— **40 行**，足以把 `ToolOutputBox` 顶到 180pt 上限。
+// ⚠️ P16 之前这里是 8 行 + "必须出展开箭头"；那条断言连同 `hasLongOutput` 一起删了，
+//    8 行封不了顶，留着会让"封顶 + 内部滚动"变成一句谎话。
+let bashOut = (1...40).map { "row \($0)  channel=dau  value=\($0*137)" }.joined(separator: "\n")
 
 MainActor.assumeIsolated {
     try? FileManager.default.createDirectory(atPath: OUT, withIntermediateDirectories: true)
@@ -230,7 +237,7 @@ MainActor.assumeIsolated {
         }
 
         caption("⚠️ 颜色错在**轨迹页**, 不在卡片",
-                "卡片标签色 = `railColor` = f(相态) ⇒ 上面两组同为 done, 颜色本来就一样。轨迹页 chip 吃 `kind.defaultColor`, 那里才变色")
+                "P16 起卡片标签色**恒冷蓝**（`kindColor`, 与相态脱钩）⇒ 上面两组同色。轨迹页 chip 仍吃 `kind.defaultColor`, 那里才随类别变色")
         HStack(spacing: 10) {
             kindChip(ToolKind.read.label, ToolKind.read.defaultColor)
             kindChip(ToolKind.other.label, ToolKind.other.defaultColor)
@@ -245,38 +252,41 @@ MainActor.assumeIsolated {
                ToolCall(kind: .delegate, title: "code-reviewer", command: "task=审一遍传输层", phase: .done))
     }, width: 620)
 
-    // ── B. 输出区三态 ────────────────────────────────────────────────────────
+    // ── B. 输出区 ────────────────────────────────────────────────────────────
+    // ⚠️ 六张**必须落在"会自动展开"的两个相态上**（待审批 / 出错）—— P16 起 `done` 不自动
+    //    展开（常态 5 个工具只占 15% 高度, 那是另一件事）。样本若还用 `.done`, 输出区
+    //    **根本不会出现**, 这一整张图就白出了。
     render("output-three", VStack(alignment: .leading, spacing: 18) {
-        caption("① 纯文本 · 长", "有展开箭头 (折叠态只露 2 行); 复制键复制全部, 不受折叠影响")
-        sample("bash  ·  done 6.5s", ToolCall(
+        caption("① 长输出 · 40 行", "输出区**封顶 180pt 并内部滚动** —— 高度与内容长度脱钩（40 行与 400 行实测同高 233pt）")
+        sample("bash  ·  待审批 · 40 行输出", ToolCall(
             kind: .bash, title: "mysql",
             command: "-h 10.251.72.10 -D basic_warehouse", details: [ToolDetail("输出", bashOut)],
-            phase: .done, durationMs: 6533))
+            phase: .awaitingApproval))
 
-        caption("② 纯文本 · 短", "没有箭头 —— 一行放得下就不给假控件")
-        sample("grep  ·  done 128ms", ToolCall(
+        caption("② 短输出 · 1 行", "盒子只占一行高 —— `maxHeight` 是**上界**不是定高")
+        sample("grep  ·  待审批 · 1 行输出", ToolCall(
             kind: .grep, title: "kindFor", command: "mangox/Agent/PiRpcTransport.swift",
             details: [ToolDetail("输出", "PiRpcTransport.swift:412:    private func kindFor(_ name: String)")],
-            phase: .done, durationMs: 128))
+            phase: .awaitingApproval))
 
-        caption("③ 纯图 (典型: read 一张截图)", "无箭头、无文本行, 只出缩略条 —— 复制键把路径写进剪贴板, 不空转")
-        sample("read  ·  done 214ms",
+        caption("③ 纯图 (典型: read 一张截图)", "无文本行, 只出缩略条 —— 复制键把路径写进剪贴板, 不空转")
+        sample("read  ·  待审批 · 纯图",
                ToolCall(kind: .read, title: "/tmp/mangox-toolcard-preview/shot.png",
-                        details: [], phase: .done, durationMs: 214, imagePaths: [shot]))
+                        details: [], phase: .awaitingApproval, imagePaths: [shot]))
 
         caption("④ 文本 + 图", "文本行在上、缩略条在下; 图与正文图片块共用同一套路径解析 / 大图上限")
-        sample("bash  ·  done 4.1s", ToolCall(
+        sample("bash  ·  待审批 · 文本+图", ToolCall(
             kind: .bash, title: "python3 plot.py", command: "--channel all",
             details: [ToolDetail("输出", "wrote /tmp/mangox-toolcard-preview/chart.png")],
-            phase: .done, durationMs: 4120, imagePaths: [chart, shot]))
+            phase: .awaitingApproval, imagePaths: [chart, shot]))
 
         caption("⑤ 读不到的文件", "照实显示文件名 —— 不静默留白 (留白会被当成渲染 bug)")
-        sample("read  ·  done 12ms",
+        sample("read  ·  待审批 · 图读不到",
                ToolCall(kind: .read, title: "/tmp/mangox-toolcard-preview/nope.png",
-                        details: [], phase: .done, durationMs: 12,
+                        details: [], phase: .awaitingApproval,
                         imagePaths: ["/tmp/mangox-toolcard-preview/nope.png"]))
 
-        caption("⑥ 失败卡", "失败也是 `AgentToolResult` 同一形状 ⇒ details 里本来就有**真错误文本**")
+        caption("⑥ 失败行 · 自动展开", "失败**不许自己缩回**; 同一形状的 `AgentToolResult` ⇒ details 里本来就有真错误文本")
         sample("bash  ·  error", ToolCall(
             kind: .bash, title: "mysql",
             command: "-h 10.251.72.10 -D basic_warehouse",
@@ -325,9 +335,12 @@ MainActor.assumeIsolated {
     print("")
     print("判据:")
     print("  kind-compare   旧组三张读作 read; 新组读作 other 且标题是真名、command 是首参。")
-    print("                 卡片标签色两组同为 done 的素色 (相态决定) —— 颜色差只在那排轨迹页 chip。")
-    print("  output-three   ①⑥ 有箭头 ②③④⑤ 无箭头; ③ 只有缩略条没有文本行; ⑤ 显示文件名不空白")
-    print("  phase-and-kind 色带里 bash=accent / read 组=info / edit·write=完成绿 / other=素色")
+    print("                 卡片标签色两组同为**冷蓝** (P16: kindColor 恒 info, 与相态脱钩)。")
+    print("  output-three   六张全在展开态 ⇒ 每张都该看到「输出」+ bgCard 输出区 (+ 三键 / 错误行)。")
+    print("                 ① 40 行 ⇒ 封顶 180 且内部滚动; ② 1 行 ⇒ 盒子只有一行高;")
+    print("                 ③ 只有缩略条没有文本行; ⑤ 显示文件名不空白。")
+    print("  phase-and-kind 箭头随相态: queued/running/done 收起、error 自动展开;")
+    print("                 竖条 queued/running/done 冷蓝、error 红; 右侧 badge 各自读得出来。")
     print("")
     print("⚠️ 限制: `running` 的转圈 (`ProgressView` 这类动画件) 在离屏渲染里画不出来 ——")
     print("   那不是 App 的病。缩略条本身走 `NSHostingView`, 画得出来 (见文末)。")

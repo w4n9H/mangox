@@ -23,9 +23,52 @@ struct CodeBlockView: View {
         _wrapped = State(initialValue: initialWrap)
     }
 
+    /// 头部工具条（语言点 + 折行 + 复制）的悬停态 —— P16 §03 改动四。
+    ///
+    /// ⚠️ 默认态是**整条不存在**，不是"变淡"、也不是"透明占位" —— 占位正是这一版要解决的问题：
+    /// 它给每条代码块加一整行高度，而一屏里常有三四块（淡一点仍然是三四行）。
+    /// 功能一个不少，只改了显隐时机。
+    /// ⚠️ 代价明写：指针进块时块高 +~25pt，**下方内容会重排一次**。这是"去掉占位"的必然代价 ——
+    /// 用 `opacity(0)` 保住占位就没有这个代价，但那正是本版不要的那个方案。
+    /// 形态稳定：增长**只向上**（头部在代码上方）⇒ 从下缘进块时下缘不动，进出都不会抖。
+    @State private var hovering: Bool = false
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            // Header: language + wrap toggle + copy action
+            // 头部进 hover 层 —— 默认安静，动作留给指针进来。
+            if hovering {
+                header
+            }
+
+            if wrapped {
+                codeText
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(12)
+            } else {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    codeText
+                        .padding(12)
+                }
+            }
+        }
+        .background(CodexTheme.bgCard)
+        .clipShape(RoundedRectangle(cornerRadius: CodexTheme.radius))
+        .overlay(
+            RoundedRectangle(cornerRadius: CodexTheme.radius)
+                .stroke(CodexTheme.border, lineWidth: 1)
+        )
+        // ⚠️ 与"消息尾四件"（改动五）同款机制，但**没有** `.allowsHitTesting` —— 那条是给
+        //    `opacity(0)` 配的（透明但会吃点击）。这里默认态根本不在视图树里，无命中可言。
+        .onHover { hovering = $0 }
+        .animation(CodexTheme.animFast, value: hovering)
+    }
+
+    // MARK: - 头部工具条 (hover 才现; 见 `hovering` 的注释)
+
+    /// 语言点 + 语言名 + 折行开关 + 复制。**四件一个不少** —— 折行是长命令的唯一出口
+    /// （见 `codeText` 上那段注释），复制是高频动作，删掉它们等于拿功能换观感。
+    private var header: some View {
+        VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 6) {
                 Circle()
                     .fill(CodexTheme.accent.opacity(0.75))
@@ -58,24 +101,7 @@ struct CodeBlockView: View {
             Rectangle()
                 .fill(CodexTheme.divider)
                 .frame(height: 1)
-
-            if wrapped {
-                codeText
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(12)
-            } else {
-                ScrollView(.horizontal, showsIndicators: false) {
-                    codeText
-                        .padding(12)
-                }
-            }
         }
-        .background(CodexTheme.bgCard)
-        .clipShape(RoundedRectangle(cornerRadius: CodexTheme.radius))
-        .overlay(
-            RoundedRectangle(cornerRadius: CodexTheme.radius)
-                .stroke(CodexTheme.border, lineWidth: 1)
-        )
     }
 
     // MARK: - 折行开关

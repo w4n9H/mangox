@@ -1883,6 +1883,17 @@ final class ChatStore: ObservableObject {
     /// Commands the user chose to always allow (persisted only for this run).
     @Published var alwaysAllowedToolIds: Set<UUID> = []
 
+    /// 审批决策的**本地痕迹**（P16，瞬态、**不落库**）。
+    ///
+    /// ⚠️ 为什么需要它：`routeToolDecision` 只做两件事 —— 转发 transport + 清
+    /// `approvalBlocked`。**`phase` 原地不动**（要等 agent 回事件才流转）⇒ 用户点完「允许」
+    /// 之后，卡片上那行会继续写「待审批」，而三个按钮已经消失 —— 自相矛盾。
+    /// 有了这一笔，行右立刻兑现成「已允许 / 已拒绝 / 已允许（始终）」。
+    ///
+    /// ⚠️ 有意**不写进 `ToolCall`**：那个模型是 Codable、会进 DB，碰它就撞「DB 列只增不删」
+    /// （已发版 tag ⇒ 旧版打开新库即崩）；何况这是纯 UI 瞬态，本来就不该落库。
+    @Published var toolDecisions: [UUID: PermissionDecision] = [:]
+
     func approveTool(_ toolId: UUID) {
         routeToolDecision(toolId, .allow)
     }
@@ -1912,6 +1923,8 @@ final class ChatStore: ObservableObject {
         guard let sid = selectedConversationId else { return }
         transportFor(sid).respondToPermission(toolId: toolId, decision: decision)
         approvalBlocked.remove(sid)   // P8-T26: 审批已响应, phase 流转即清
+        // P16: 记一笔本地痕迹 —— phase 要等 agent 回事件才动, 卡片得先自己兑现"已决策"。
+        toolDecisions[toolId] = decision
     }
 
     private func currentToolCard(_ toolId: UUID) -> ToolCall? {

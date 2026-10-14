@@ -183,7 +183,7 @@ struct ScheduledView: View {
                             .padding(.top, 48)
                     }
                 }
-                // 与 Knowledge 面板**共用侧栏那个常量** (P16, 2026-10-12) —— 两块面板同形并排,
+                // 与 Knowledge 面板**共用侧栏那个常量** (2026-10-12) —— 两块面板同形并排,
                 // 各写一个数字迟早会漂。面板标题那一行 (`SCHEDULED`) 两边本来就同款, 不动。
                 .padding(.horizontal, Tune.sidebarContentInset)
                 .padding(.bottom, 12)

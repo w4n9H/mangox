@@ -3499,6 +3499,37 @@ struct SmokeMain {
         check(monotonic,
               "T-COLOR 暗色面层级亮度严格单调递增 (bgBase < bgSidebar < bgChat < bgInput < contentPanel < bgCard < bgElevated < bgPill)")
 
+        // ---- P16 工具行: 板块色 ----
+        // **一个色可能同时承担两种角色, 判据线不同** —— WCAG 1.4.11 非文字 (图形) 3.0
+        // vs AA 正文 (文字) 4.5。所以"它值多少"与"拿它干什么"必须分开说:
+        // 暗色 toolError 3.98 够当竖条 (图形), 不够当 kind 标签的文字 ⇒ kind 文字恒冷蓝,
+        // 破例红**只画图形**。亮色那边反过来 (thinking 3.72 只够当图形) ——
+        // 两个主题的"受害者"不同, 所以这条守卫两个主题各来一份 (亮色侧由
+        // `scripts/diag/palette_probe.py` 的亮色算例守, 它已经没有上限那半边了)。
+        let graphicFloor = 3.0
+        let textFloor = 4.5
+        let plateColors: [(String, UInt32)] = [
+            ("info", CodexTheme.Dark.info), ("thinking", CodexTheme.Dark.thinking),
+            ("toolRunning", CodexTheme.Dark.toolRunning), ("toolDone", CodexTheme.Dark.toolDone),
+            ("toolError", CodexTheme.Dark.toolError), ("toolQueued", CodexTheme.Dark.toolQueued),
+            ("blocked", CodexTheme.Dark.blocked),
+        ]
+        for (name, hex) in plateColors {
+            let c = CodexTheme.WCAG.contrast(hex, darkPanel)
+            check(c >= graphicFloor,
+                  "T-COLOR 暗色板块色 \(name) 达图形元素下限 3.0 (竖条/图标; 实测 \(String(format: "%.2f", c)):1)")
+        }
+        // kind 标签**当文字**用的色 —— 这个名单就是政策: 往里加色 = 声明"它要当文字读" ⇒ 必须过 4.5。
+        // ⚠️ 真源 = `ToolCallCardView.kindColor` (P16 起恒冷蓝, 与相态脱钩)。
+        for (name, hex) in [("info", CodexTheme.Dark.info)] {
+            let c = CodexTheme.WCAG.contrast(hex, darkPanel)
+            check(c >= textFloor,
+                  "T-COLOR 暗色 kind 标签当文字用达 AA 4.5 (\(name); 实测 \(String(format: "%.2f", c)):1)")
+        }
+        // ⚠️ 这里**故意不守** "内嵌面 = bgCard": 面链那一条已经蕴含 contentPanel < bgCard,
+        //    再写一遍是**自证**; 而"视图到底用了哪个 token"是**源码事实**, token 值没变 ⇒
+        //    数值守卫永远看不见。那条改由 `scripts/smoke/run.sh` 直接扫源文件 (政策与解析拆开)。
+
         // 交互态: **选中必须比悬停实** —— 两者都用半透明叠加, 顺手写反了编译期零信号,
         // 症状是"当前项在哪读不出来" (2026-09-21 顺手加这条)。
         check(CodexTheme.Dark.selectedAlpha > CodexTheme.Dark.hoverAlpha,

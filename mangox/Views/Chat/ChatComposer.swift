@@ -135,7 +135,19 @@ struct ChatComposer: View {
             RoundedRectangle(cornerRadius: CodexTheme.radiusComposer)
                 .stroke(CodexTheme.border, lineWidth: 1)
         )
-        .shadow(color: .black.opacity(0.05), radius: 5, x: 0, y: 2)  // Codex 式柔和投影, 卡片在白底上不再隐形
+        // 投影 0.05/5 → 0.12/7 (2026-10-14 review, 带实测读数):
+        //   亮色: `bgComposer` **就等于正文面** (`contentPanel`, 两个都是 #FFFFFF) ⇒ 上面那句
+        //     "输入卡凹下"在亮色**没有面值可依**, 能读出"这是一张卡"的只剩这条投影。
+        //     离屏渲染实测 (ImageRenderer 2x, 描边外最深处): 旧 = #F8F8F8 (灰度差 **7/255**,
+        //     1x 下看不见) → 新 = #EEEEEE (**16/255**, 2.3 倍), 晕开到 ~7pt。
+        //   暗色: 实测**怎么调都一样** —— 卡面 #1F1F27 本来就在正文面 #23232C **下面**一档,
+        //     "凹下"由面值表达, 黑投影压无可压 (0.05/5→0.12/7 的剖面只差 38→37→36 共 1~2 级)。
+        //     ⇒ **不必按主题分叉** (试过：那要另开一个动态色 token, 收益为零)。
+        // ⚠️ 这条结论的前提是"暗色卡面比正文面暗"。哪天暗色 `bgComposer` 抬到比正文面亮,
+        //    投影就成了唯一表达 ⇒ 那时要重新量, 别照抄这句。
+        // 不碰另两条路: 描边已是实色 `border` (#E3E3E7, P14 对齐参考图的实测值),
+        // 面值 `bgComposer` 有 9 个消费点 (Scheduled / Knowledge / Extensions 都在用)。
+        .shadow(color: .black.opacity(0.12), radius: 7, x: 0, y: 2)
         .onDrop(of: [UTType.image], isTargeted: nil) { providers in
             // P7-M6b 拖拽入口: 图片落卡 → 附件通道 (文本文件拖拽不接, @语义仍走文本)
             guard !providers.isEmpty else { return false }

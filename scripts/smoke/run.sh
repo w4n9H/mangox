@@ -42,6 +42,36 @@ SDK="$(DEVELOPER_DIR="$DEV" xcrun --sdk macosx --show-sdk-path)"
 ARCH="$(uname -m)"
 case "$ARCH" in arm64|x86_64) ;; *) echo "错误: 不支持的宿主架构 $ARCH" >&2; exit 1 ;; esac
 
+# ---- 颜色 / 源码判据 (P16) ----
+# 快检放编译**前面**: 它红了没必要再花几十秒编一遍。这两条都**不在** smokeMain 里,
+# 理由各自写在下面 (一条是"独立第二实现", 一条是"源码事实" —— 数值守卫看不见后者)。
+PY="${PYTHON:-python3}"
+command -v "$PY" >/dev/null 2>&1 || { echo "错误: 找不到 $PY (亮/暗色算例需要它)" >&2; exit 1; }
+
+# ① 亮 / 暗两块板的算例 —— 与 smokeMain 的 T-COLOR 段**同源同界**的独立第二实现:
+#    两份实现必须逐位吻合, 否则"冒烟绿了"这件事本身就不可证伪。
+#    ⚠️ 它同时覆盖**亮色** —— smokeMain 的 T-COLOR 只看 `enum Dark`, 亮色侧一条数值门禁都没有。
+"$PY" scripts/diag/palette_probe.py || { echo "FAIL - 亮/暗色算例破了 (见上)" >&2; exit 1; }
+
+# ② 内嵌面底色的**源码事实** —— 数值守卫看不见"视图用了哪个 token"(值本身没变)。
+#    P10.8b: 聊天流里的内嵌面 (工具输出区 / diff 预览) 必须比正文面**亮一档**;
+#    用 bgBase/bgChat/bgInput 就是"在正文面上挖黑洞"(暗色实测 3.01× 亮度差, 久读累眼)。
+if grep -nE 'background\(CodexTheme\.(bgBase|bgChat|bgInput)\)' \
+        mangox/Views/Chat/ToolCallCardView.swift; then
+    echo "FAIL - 工具行的内嵌面底色退回了低于正文面的一档 (P16: 内嵌面只许 bgCard)" >&2
+    exit 1
+fi
+
+# ③ 列表类视图的初屏定位**不许**用锚底 —— `.defaultScrollAnchor(.bottom)` 会在**内容尺寸变化时
+#    重新锚底**: 展开任意一行整列就跳, 体感"点了 A 打开了 B"。同一个坑 2026 年先修在 TrajectoryView
+#    (注释见 TrajectoryView.swift:153), ChatView 漏了, 2026-10-14 boss 实机撞上 ⇒ 补修 + 立门。
+#    它编译得过、值也没变 ⇒ 数值守卫与编译告警都看不见, 只能扫**源码事实**。
+#    ⚠️ 只认**行首的修饰符调用** —— 解释这个坑的注释里必然出现该词, 不排除会误伤。
+if grep -rn '^[[:space:]]*\.defaultScrollAnchor(' mangox/Views/ ; then
+    echo "FAIL - 锚底回来了 (展开一行整列就跳, 点 A 开 B); 初屏定位请用 onAppear + scrollTo" >&2
+    exit 1
+fi
+
 SRC=$(find mangox -name "*.swift" ! -name "mangoxApp.swift" | sort)
 
 DEVELOPER_DIR="$DEV" xcrun swiftc \
