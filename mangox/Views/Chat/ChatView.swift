@@ -157,11 +157,33 @@ struct ChatView: View {
     /// 消息块列 (空态分流在 scrollContent)。
     /// P10.6a: LazyVStack — 原 VStack 会为全部消息实例化 MessageBlockView (每条内含
     /// MarkdownView 的块解析 + 文本布局), 长会话首帧同步主线程构建数千视图。
+    /// P16 修正 (0.1.18 的回归): 块间距是**两件事** —— 回合内(同 role 连续)该紧, 回合之间该松。
+    /// `LazyVStack` 只有一档 spacing, 所以把差值补到**回合首条**的 `.padding(.top)` 上。
+    private struct MessageRow: Identifiable {
+        let message: ChatMessage
+        let isTurnStart: Bool
+        var id: UUID { message.id }
+    }
+
+    /// 回合边界 = **role 变化处**。同一回合的连续输出(思考 / 工具行 / 正文)各是一条独立
+    /// message、role 都是 .assistant ⇒ 「同 role 连续」正好等价于「属于同一回合」。
+    private var messageRows: [MessageRow] {
+        var out: [MessageRow] = []
+        out.reserveCapacity(store.messages.count)
+        var prev: MessageRole?
+        for m in store.messages {
+            out.append(MessageRow(message: m, isTurnStart: prev != nil && prev != m.role))
+            prev = m.role
+        }
+        return out
+    }
+
     private var messageBlocks: some View {
-        LazyVStack(alignment: .leading, spacing: Tune.chatMessageSpacing) {
-            ForEach(store.messages) { msg in
-                MessageBlockView(message: msg, store: store)
-                    .id(msg.id)
+        LazyVStack(alignment: .leading, spacing: Tune.chatBlockSpacing) {
+            ForEach(messageRows) { row in
+                MessageBlockView(message: row.message, store: store)
+                    .padding(.top, row.isTurnStart ? Tune.chatMessageSpacing - Tune.chatBlockSpacing : 0)
+                    .id(row.message.id)
                     .transition(.opacity.combined(with: .move(edge: .bottom)))
             }
 

@@ -3535,6 +3535,20 @@ struct SmokeMain {
         check(CodexTheme.Dark.selectedAlpha > CodexTheme.Dark.hoverAlpha,
               "T-COLOR 选中态比悬停态实 (selectedAlpha \(CodexTheme.Dark.selectedAlpha) > hoverAlpha \(CodexTheme.Dark.hoverAlpha))")
 
+        // 排版节奏 (2026-10-14): **两条各自单调的链**, 不是一条三档链。
+        // ⚠️ 原先打算写 "mdLineSpacing < mdBlockSpacing < chatMessageSpacing", 但拆出
+        //    `chatBlockSpacing`(回合内块距, 10) 之后 —— 段间隙(16) 会**大于**回合内块距(10),
+        //    一条链根本写不出来。根因是这两个**跨层**: 一个是"同一条正文里的两段", 一个是
+        //    "两件事之间", 没有必然的大小关系。硬拼成一条 = 写一个假的顺序给后人踩。
+        //    ⇒ 各维各守一条, 只断**大小关系**不断具体值 (以后调参不必改判据)。
+        // ⚠️ 门守不住"两个语义挤进一个常量"(0.1.18 的回归就是那个形状, 靠肉眼才发现),
+        //    但能守住"拆开之后又写反" —— 同一维里写反是**编译期零信号**的。
+        //    ⚠️ 此前 `Tune` 里那句注释声称这里"有单调性断言", 实际并没有 (文档 §04 标着未做)。
+        check(Tune.mdLineSpacing < Tune.mdBlockSpacing,
+              "T-COLOR 节奏链·markdown: 行间隙 \(Tune.mdLineSpacing) < 段间隙 \(Tune.mdBlockSpacing)")
+        check(Tune.chatBlockSpacing < Tune.chatMessageSpacing,
+              "T-COLOR 节奏链·消息层: 回合内块距 \(Tune.chatBlockSpacing) < 回合之间 \(Tune.chatMessageSpacing)")
+
         // ===== T-KNOW (P11.1): 分层组装 / 可预测降级 / key 保留集合 / 老库升级 =====
         // 独立 store + 独立 mock (项目约定: 新段不复用顶层 store 的 delegate 归属)。
         // persona pack 一律指向临时目录 —— 冒烟**绝不读用户家目录的 ~/.mangox/agent**

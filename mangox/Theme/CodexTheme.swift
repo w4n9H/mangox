@@ -307,7 +307,12 @@ enum Tune {
     static let chatContentWidth: CGFloat   = 680   // 消息/输入卡内容宽 (唯一源头)
     static let chatHPadding: CGFloat       = 48    // 消息列左右内边距
     static let chatVPadding: CGFloat       = 18    // 消息列上下内边距 (24→18 紧凑)
-    static let chatMessageSpacing: CGFloat = 24    // 消息块间距 (P16: 10→24。**必须 > mdBlockSpacing**)
+    // ⚠️ P16 修正 (0.1.18 的回归): 这两件是**两件事**, 不能用一个数管 ——
+    //    · 回合**之间**(用户 ↔ 助手) 该松: 一眼看出换了人说话
+    //    · 回合**内部**(思考 / 工具行 / 正文, 各是一条**独立 message**) 该紧: 读起来是连续的一整段
+    //    曾一律给 24 ⇒ 回合内那段连续输出被一起拉松。判据见下「排版节奏」。
+    static let chatMessageSpacing: CGFloat = 24    // **回合之间**间距 (用户 ↔ 助手)
+    static let chatBlockSpacing: CGFloat   = 10    // **回合内部**块距 (同 role 连续的块)
     static let welcomeTopPadding: CGFloat  = 160   // 空态欢迎页距顶
     /// 派生: 消息列 frame 宽 = 内容 + 2×水平内边距。
     static var chatColumnWidth: CGFloat { chatContentWidth + chatHPadding * 2 }
@@ -336,11 +341,15 @@ enum Tune {
 
     // Markdown 正文 (13px 正文下的精致化参数)
     //
-    // ⚠️ P16：「排版节奏」是**一条链，不是一个参数** —— 三者必须**严格递增**：
-    //        行间隙 mdLineSpacing < 段间隙 mdBlockSpacing < 消息间隙 chatMessageSpacing
-    //        （6 < 16 < 24）。只动块距会让它**超过**消息距（16 > 10）⇒ 消息之间比消息内部还紧，
-    //        两条消息被读成一条。**这条是出图时才看出来的** —— 纸面上两个数各看各的都对。
-    //    ✔ 守卫 = 冒烟 T-COLOR 段的单调性断言（断三个数的**大小关系**，不是三个数本身）。
+    // ⚠️ P16：「排版节奏」不是一个参数，而是**两条各自单调的链**（各管一维，别硬拼成一条）：
+    //        · markdown 内部：行间隙 mdLineSpacing < 段间隙 mdBlockSpacing         （6 < 16）
+    //        · 消息层：     回合内块距 chatBlockSpacing < 回合之间 chatMessageSpacing（10 < 24）
+    //        ⚠️ 跨层的那两个（段间距 16 / 回合内块距 10）**没有必然的大小关系** —— 一个是
+    //           "同一条正文里的两段"，一个是"两件事之间"。硬排成一条链会写出一个假的顺序，
+    //           而且以后调任何一头都会撞到它。
+    //        ⚠️ 同一维里写反的后果：段间隙 > 消息间隙 ⇒ 消息之间比消息内部还紧，两条消息被
+    //           读成一条；回合内块距 > 回合之间 ⇒ 换人说话看不出来。两边都只能靠出图看出来。
+    //    ✔ 守卫 = 冒烟 T-COLOR 段的两条单调性断言（断**大小关系**，不断具体值）。
     static let mdBlockSpacing: CGFloat  = 16     // 段间距 (P16: 9→16)
     static let mdLineSpacing: CGFloat   = 6      // 行间距 (P16: 2→6; 13px 正文 ≈1.65 倍行高)
     static let mdHeadingSizes: [CGFloat] = [17, 15, 14, 13, 13, 12.5]  // h1-h6 (随正文 -1)
