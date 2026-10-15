@@ -168,6 +168,7 @@ struct ScheduledView: View {
 
             ScrollView {
                 VStack(spacing: 1) {
+                    if !store.missedFires.isEmpty { missedSection }
                     ForEach(listEntries) { entry in
                         switch entry {
                         case .task(let task):     row(task)
@@ -189,6 +190,78 @@ struct ScheduledView: View {
                 .padding(.bottom, 12)
             }
         }
+    }
+
+    /// P17 · 运行可靠性: 睡眠 / 长挂起期间的漏跑清单。**只在有漏跑时出现** —— 没有它时一个像素都不占。
+    ///
+    /// 口径 = 「该跑却没跑」（`SchedulerService.missedSummary`）。所以**不止睡眠**: 因并发满 /
+    /// 该任务回合在途而被 `recordFireSkip` 跳过的也算 —— 它们同样是"这次没跑", 而且用户点开那个
+    /// 日志会话能看到跳过原因。**项目已删的不算**（那不是漏跑, 是配置坏了, 有别的提示位）。
+    private var missedSection: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Text(String(format: L("漏跑 %lld 个任务"), store.missedFires.count))
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(CodexTheme.accent)
+                .padding(.bottom, 2)
+            Text(L("补跑只跑最近一次; 忽略 = 认下这批, 不再提示"))
+                .font(.system(size: 10))
+                .foregroundStyle(CodexTheme.textMuted)
+                .padding(.bottom, 6)
+            ForEach(store.missedFires) { m in missedRow(m) }
+        }
+        .padding(8)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(RoundedRectangle(cornerRadius: CodexTheme.radiusSm).fill(CodexTheme.bgCard))
+        .overlay(RoundedRectangle(cornerRadius: CodexTheme.radiusSm)
+            .stroke(CodexTheme.accent.opacity(0.45), lineWidth: 0.5))
+        .padding(.bottom, 6)
+    }
+
+    /// 漏跑单条: 任务名 + 档期/次数/最近 + 两个动作。
+    private func missedRow(_ m: SchedulerService.MissedFire) -> some View {
+        HStack(spacing: 7) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(missedTaskName(m.taskId))
+                    .font(.system(size: 12))
+                    .lineLimit(1)
+                    .foregroundStyle(CodexTheme.textPrimary)
+                Text(missedDetail(m))
+                    .font(.system(size: 10))
+                    .lineLimit(1)
+                    .foregroundStyle(CodexTheme.textSecondary)
+            }
+            Spacer(minLength: 2)
+            Button(action: { store.catchUpMissedFire(m.taskId) }) {
+                Text(L("补跑"))
+                    .font(.system(size: 10))
+                    .foregroundStyle(CodexTheme.accent)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help("立刻补跑最近一次 (不等定时)")
+            Button(action: { store.ignoreMissedFire(m.taskId) }) {
+                Text(L("忽略"))
+                    .font(.system(size: 10))
+                    .foregroundStyle(CodexTheme.textMuted)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help("认下这批漏跑, 不再提示")
+        }
+        .padding(.vertical, 4)
+    }
+
+    /// 副标题: 「每天 03:00 · 漏 2 次 · 最近 1d」。
+    private func missedDetail(_ m: SchedulerService.MissedFire) -> String {
+        guard let t = store.scheduledTasks.first(where: { $0.id == m.taskId }) else { return "" }
+        return [CronExpr.describe(t.cron),
+                String(format: L("漏 %lld 次"), m.count),
+                String(format: L("最近 %@"), m.last.relativeTag)].joined(separator: " · ")
+    }
+
+    /// 任务名 —— 任务可能刚被删掉, 回落一个中性词而不是让整块清单崩掉。
+    private func missedTaskName(_ id: UUID) -> String {
+        store.scheduledTasks.first { $0.id == id }?.name ?? L("已删除的任务")
     }
 
     private func row(_ task: ScheduledTask) -> some View {

@@ -437,13 +437,33 @@ enum Tune {
     static let scheduleHistoryCharLimit: Int = 4000    // 持续模式注入的近期摘录截取上限
     static let scheduleLogEditorMinHeight: CGFloat = 160 // 编辑器"工作日志"区块最小高
 
-    // P15.6: dream 的会话摘要预算 —— 这四个数取代了"让模型自己去 bash 读 pi-sessions"（那条路没有上界）。
-    // 各自管一段，缺一个就漏一段：窗口管"多旧的不看"，会话数管"看几个"，两级字符上限管"看多细"。
-    // 量级对齐 `distillMaterialCharLimit`（12000）—— 同一个"会话材料"家族，别差一个数量级。
-    static let dreamDigestWindowDays: Int          = 21     // 只看最近三周的会话
-    static let dreamDigestMaxSessions: Int         = 8      // 最多编进几个（按更新时间倒序取新）
-    static let dreamDigestMaxCharsPerSession: Int  = 2000   // 单会话上限（超了留尾部并标注）
-    static let dreamDigestTotalChars: Int          = 12000  // 整段上限（超了从最旧的会话开始丢）
+    // P15.6 立了"dream 的会话摘要预算"这组数（取代"让模型自己去 bash 读 pi-sessions"—— 那条路没有上界）。
+    // **P17 按 256k 上下文重拼**，三处有意改动：
+    //   ① 窗口 `21 天 → 36 小时`：dream 从周更改成日更（`dreamDefaultCron`）之后，"三周的量"与
+    //      "一天的量"根本不是一回事了。取 36 而不是 24 是因为日更两次之间总有抖动，
+    //      多出来的 12 小时造成的**重复读是可以接受的代价**（丢失不行）。
+    //   ② **会话数上限整条取消**：范围改由窗口决定。原来那个 `MaxSessions` 是配套"三周窗口"的，
+    //      窗口一收，它就从"保护"变成了"无谓地砍掉当天的会话"。
+    //   ③ 两级字符上限按 256k 分账（见下），单会话的裁法也从 `suffix` 改成**按回合整对丢**。
+    //
+    // ⚠️ 单位是**字符**（判据 `content.length`），与 `knowledgeTotalCharLimit` 同一本账。
+    //    中文约 1 字符 ≈ 0.5~1 token ⇒ 按字符算偏保守，而这份保守正好留给模型输出的位置。
+    static let dreamDigestWindowHours: Int         = 36      // 只看最近 36 小时（还有水位兜底，见 dreamDigestSince）
+    static let dreamDigestMaxCharsPerSession: Int  = 40000   // 单会话上限（超了按**回合整对丢**）
+    static let dreamDigestTotalChars: Int          = 100000  // 整段上限（超了从最旧的会话开始丢）
+
+    // P17: dream 的**笔记侧**两个预算 —— 目录 + 正文两层。
+    // 目录复用现有的 `indexBlock` 形状（一行一篇），正文是 P17 新开的（省掉模型自己 read 的往返）。
+    // ⚠️ 这两段**只在 dream 的 fire 时拼进 prompt**，与常驻的 `[笔记]` 段
+    //    （`knowledgeTotalCharLimit = 64000`）**完全分账** —— 把常驻段一起抬，多花钱的是
+    //    每一轮普通对话，而 dream 一个月才跑 30 次。
+    static let dreamNoteIndexChars: Int            = 20000   // 目录（兜底：2~3 个根实际远不到）
+    static let dreamNoteBodyChars: Int             = 120000  // 正文（超了从最旧的丢 + 点名）
+
+    // P17 · 运行可靠性: 漏跑清单的回溯上限。
+    // 它兜的是「任务从没跑过 / 新建后一直没跑」这一档 —— 窗口不能从 `createdAt` 无限往前拉。
+    // 7 天 = 10080 分钟 ⇒ 单任务最坏一万次 cron 匹配（微秒级, 且先在分钟位上筛一道）。
+    static let missedFiresLookbackDays: Int        = 7
 
     // 工具行 (P16): 展开区的固定高 —— **两个数有意不同**。
     // 判据: 输出区是"跑完命令的结果", 看一眼就够; diff 是"块对照", 要看到足够多行才读得出改动。

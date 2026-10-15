@@ -208,7 +208,7 @@ final class KnowledgeStore: ObservableObject {
     /// 唯一的任务。判据: `indexBlock` 只在 `!enabled` 时返回 nil。
     ///
     /// 连带: `nil` 现在只剩**一种**含义 —— 一个可用的根都没有（全被停用）。它恰好是
-    /// `dreamPrompt` 里「没有 [笔记] 段 ⇒ 直接结束」那一支的判据, 两边必须一起改。
+    /// `dreamPrompt` 里「没有【笔记目录】段 ⇒ 直接结束」那一支的判据, 两边必须一起改。
     func knowledgeIndexSegment() -> KnowledgeIndexSegment? {
         var parts: [String] = []
         var costs: [KnowledgeBaseCost] = []
@@ -957,8 +957,102 @@ final class KnowledgeStore: ObservableObject {
     static func sessionMaterial(from messages: [ChatMessage]) -> [String] {
         messages.compactMap { msg -> String? in
             guard case .text(let s) = msg.content, !s.isEmpty else { return nil }
-            return "\(msg.role == .user ? "用户" : "助手"): \(s)"
+            return "\(materialLabel(for: msg.role)): \(s)"
         }
+    }
+
+    /// 材料里的**作者标记** —— 三种角色各有各的字。
+    ///
+    /// ⚠️ **别写成二值** `role == .user ? "用户" : "助手"`（P17 之前就是那样）：
+    /// `MessageRole` 有**三**个 case（`MessageModels.swift:7-9`），二值等于把第三类
+    /// **静默并进「助手」** —— dream 会据此把「系统的话」当成「模型自己的话」去提炼，**零红灯**。
+    /// boss 2026-10-15 定的口径：**「system 就是 system，别划到助手」**。
+    ///
+    /// ⚠️ 这一支**当前走不到，但将来会**：全仓没有 `.system` 的生产者（构造 `ChatMessage`
+    /// 的 9 处全传 `.user` / `.assistant`），本机库 `events` 也是 `system = 0`。加它是因为
+    /// pi 的 system / developer 事件一旦被映射进来、或某个 hook 往会话里插一条系统提示，
+    /// 那时这里是**唯一**能拦住「静默误标」的地方。
+    ///
+    /// 用**穷举 `switch`** 而不是 `default` —— 将来给 `MessageRole` 加第四个 case 时这里
+    /// **编译不过**，而不是悄悄把它算成某一类（同 `proposalKindLabel` / `proposalKindColor`
+    /// 那两个穷举 switch 的判据）。
+    ///
+    /// ⚠️ 这三个词是**进 prompt 的契约 token**，恒中文、不进词表（同 `KnowledgeKind.tag`）。
+    static func materialLabel(for role: MessageRole) -> String {
+        switch role {
+        case .user: return "用户"
+        case .assistant: return "助手"
+        case .system: return "系统"
+        }
+    }
+
+    /// 把会话材料**按回合切开** —— 一条 `用户:` 行 + 它之后到下一个 `用户:` 之前的所有行 = 一个回合。
+    ///
+    /// ⚠️ `助手:` 与 `系统:` 行都跟着**它们前面那个回合**走（判据只认 `用户: ` 开头的行）；
+    /// 若 `系统:` 出现在**最前面**，它会自成一段（`turns.isEmpty` 那一支）。
+    /// 当前库里不会出现这种情况 —— 四场会话的 `seq=1` 全是 `.user`（system prompt 由 pi 侧
+    /// 每轮动态拼，不进会话记录）。
+    ///
+    /// 为什么需要它（P17）: dream 的单会话裁剪原来是 `String.suffix(budget)`, 那个切法有两个病 ——
+    /// ① 一场正常会话必超预算 ⇒ **开头的用户提问整段消失**; ② 切点落在字符串中间, 留下的第一行
+    /// 从**半句话**说起。喂进去的是"没有提问的回答", 模型会把那些回答当成凭空冒出的结论。
+    ///
+    /// 判据读的是行的**前缀** `用户: ` —— 那不是"认字符串特征", 而是认 `sessionMaterial` 自己的
+    /// 输出格式（前缀由它定义, 这里是同一份材料的**下游**）。
+    static func materialTurns(_ lines: [String]) -> [[String]] {
+        var turns: [[String]] = []
+        for line in lines {
+            if line.hasPrefix("用户: ") || turns.isEmpty {
+                turns.append([line])
+            } else {
+                turns[turns.count - 1].append(line)
+            }
+        }
+        return turns
+    }
+
+    /// 按回合裁剪: 超预算时**从最旧的回合整对丢**, 并在开头标注丢了几个。
+    ///
+    /// 与 `suffix` 的方向一致（都是"留最新的"）, 但保证每一段都是**完整的**「用户: … / 助手: …」。
+    /// 循环里重算长度而不是先扣一个估数: 标注那行自己的位数会随丢掉的个数变
+    /// （同 `sessionDigest` 里那个"段头也占字符"的判据）。
+    ///
+    /// 至少留**最后一个回合**（`kept.count > 1`）—— 单回合本身就超预算时宁可超一点,
+    /// 也不能交出一段空材料（那会让"这场会话有料"变成"这场会话没有可提炼的东西"）。
+    static func trimMaterialByTurns(_ lines: [String], budget: Int) -> String {
+        let all = materialTurns(lines)
+        let total = all.count
+        var kept = all
+        func render() -> String {
+            let dropped = total - kept.count
+            let head = dropped > 0 ? "…(更早的 \(dropped) 个回合已省略)\n" : ""
+            return head + kept.map { $0.joined(separator: "\n") }.joined(separator: "\n")
+        }
+        while kept.count > 1, render().count > budget { kept.removeFirst() }
+        return render()
+    }
+
+    /// dream 的**笔记正文段** —— 目录之外的"内容本身"（P17）。
+    ///
+    /// 为什么值得单开一段（而不是让模型自己 `read`）: 目录只有一行一篇, 模型拿它去判"这两篇讲的
+    /// 是不是同一件事"必须先 read 一遍 —— 每条提案之前都要往返一次。把正文直接给它, 省掉的是
+    /// **几十次 read 的往返**, 而 dream 一个月才跑 30 次 ⇒ 这点预算换得起。
+    ///
+    /// ⚠️ **常驻的 `[笔记]` 段一个字都不动**: 它每轮对话都在（与 `knowledgeTotalCharLimit` 同一本账）,
+    /// 为 dream 放开预算时若连它一起抬, 多花钱的是**每一轮普通对话**。这一段的唯一消费者是
+    /// `SchedulerService.buildDreamNotes`。
+    ///
+    /// 超预算 ⇒ 从**最旧的**（mtime）丢并在段尾点名 —— 退回到"地图 + 自己 read", 而不是悄悄丢一半。
+    func noteBodySegment() -> KnowledgeBaseScan.NoteBodySegment {
+        var inputs: [KnowledgeBaseScan.NoteBodyInput] = []
+        for (base, docs) in knowledgeBaseScan() where base.enabled {
+            for d in docs {
+                guard let text = readNote(rootId: base.id, relativePath: d.relativePath) else { continue }
+                inputs.append(.init(label: base.displayName, path: d.relativePath,
+                                    modifiedAt: d.modifiedAt, content: text))
+            }
+        }
+        return KnowledgeBaseScan.noteBodyBlock(inputs, budget: Tune.dreamNoteBodyChars)
     }
 
     func setDistillOutcome(_ text: String, isError: Bool) {
@@ -1474,9 +1568,13 @@ final class KnowledgeStore: ObservableObject {
             return .noteMissing
         }
         // 留档记的 origin 是**这一版的作者**, 不是"删除者" —— 删掉的是谁写的东西, 它就归谁。
+        // `sources` 同源: 删掉的是**dream 凭什么写下的那一版**, 那份理由也就跟着那一版走。
+        // 两者都靠 `sha256` 从历史里**反解**（正文自己不知道自己从哪来）, 所以这里取一次历史、
+        // 让两个纯函数各认领一次 —— 分头取库迟早会读到两份不一样的历史。
+        let history = noteRevisions(rootId: rootId, relativePath: relativePath)
         recordNoteRevision(rootId: rootId, relativePath: relativePath, content: current,
-                           origin: noteOrigin(rootId: rootId, relativePath: relativePath,
-                                              content: current))
+                           origin: Self.origin(ofContent: current, in: history),
+                           sources: Self.sources(ofContent: current, in: history))
         let fm = FileManager.default
         do {
             if Self.noteDeleteUsesTrash {
@@ -1512,10 +1610,14 @@ final class KnowledgeStore: ObservableObject {
     /// 两种语义下**每一次成功写入都恰好产生一条记录**, 变的只是它记的是"写下的"还是"被顶掉的"。
     ///
     /// - Important: 只增不改不删。它的语义就是"这一版曾经存在过"。
+    /// - Parameter sources: **这一版从哪来**（P17）。只有 `adoptProposal` 会传非空 ——
+    ///   另外两个调用点（人写 / 补记外部改动）给的就是「没有来源」, 那是事实, 不是省事的默认值。
     private func recordNoteRevision(rootId: String, relativePath: String,
-                                    content: String, origin: NoteRevisionOrigin = .human) {
+                                    content: String, origin: NoteRevisionOrigin = .human,
+                                    sources: [ProposalSource] = []) {
         let rev = NoteRevision(id: UUID(), rootId: rootId, path: relativePath, content: content,
-                               sha256: Self.noteHash(content), writtenAt: .now, origin: origin)
+                               sha256: Self.noteHash(content), writtenAt: .now, origin: origin,
+                               sources: sources)
         try? store?.persistence?.appendNoteRevision(rev)
     }
 
@@ -1549,19 +1651,25 @@ final class KnowledgeStore: ObservableObject {
         return revisions.first { $0.sha256 == sha }?.origin ?? .human
     }
 
+    /// `origin(ofContent:in:)` 的**兄弟** —— 这一版从哪来（P17）。
+    ///
+    /// 判据与它**逐字同源**（内容同一性, 不是「最新一条」）: 最后一版有可能根本不在记录里,
+    /// 那时「最新一条」说的是**上一版**的来源, 恰好答错。
+    ///
+    /// 回落 `[]` = 没有来源记录。那不是「缺」而是「空」—— 人写的版本本来就没有指针,
+    /// 而「空」比「编一个出来」诚实（同提案那边「拿不出指针的不入表」的口径）。
+    static func sources(ofContent content: String, in revisions: [NoteRevision]) -> [ProposalSource] {
+        let sha = noteHash(content)
+        return revisions.first { $0.sha256 == sha }?.sources ?? []
+    }
+
     /// 读一篇笔记的完整版本史（新 → 旧）。
     ///
-    /// **唯一取数口** —— 判来源（`noteOrigin`）与界面画变更史（`KnowledgeView`）都走它。
+    /// **唯一取数口** —— 判来源（`origin(ofContent:in:)` 的调用点）与界面画变更史都走它。
     /// `PersistenceStore.loadNoteRevisions` 才是实现, 但调用点不该各自去摸 `store?.persistence`:
     /// 那一层是双层可选链, 摸漏一处就是"界面永远空列表、而门禁全绿"。
     func noteRevisions(rootId: String, relativePath: String) -> [NoteRevision] {
         (try? store?.persistence?.loadNoteRevisions(rootId: rootId, path: relativePath)) ?? []
-    }
-
-    /// `origin(ofContent:in:)` 的取数版本。给 `deleteNote` 这类**手上没有历史**的调用点用;
-    /// 界面侧已经有历史列表了, 直接调纯函数那一版, 省一次读库。
-    func noteOrigin(rootId: String, relativePath: String, content: String) -> NoteRevisionOrigin {
-        Self.origin(ofContent: content, in: noteRevisions(rootId: rootId, relativePath: relativePath))
     }
 
     // MARK: - P15.4 拍板（采纳 / 丢弃）
@@ -1577,7 +1685,7 @@ final class KnowledgeStore: ObservableObject {
     /// 三个 kind 的区别只剩"目标该不该已经存在":
     /// - `insight` ⇒ 目标应当**不存在**。若它现在存在了, 说明期间有人在外部建了同名文件
     ///   ⇒ **不覆盖**（`nameCollision`）—— "覆盖还是改名"是个产品决策, 与 `createNote` 同一口径。
-    /// - `merge` / `replace` ⇒ 目标必须存在, 且**指纹要对得上**（乐观并发, 同 `saveNote` ③）。
+    /// - `merge` / `replace` / `delete` ⇒ 目标必须存在, 且**指纹要对得上**（乐观并发, 同 `saveNote` ③）。
     ///   对不上 = 模型读完之后磁盘又变过 ⇒ 那是拿旧判断覆盖新内容, 正是要拦的事。
     ///
     /// - Note: 落盘成功后顺手做两件事: ① 记下 `.dream` 那一版（**来源标记靠它认领** —— 不记,
@@ -1590,6 +1698,19 @@ final class KnowledgeStore: ObservableObject {
         }
         let fm = FileManager.default
         let exists = fm.fileExists(atPath: abs)
+        // `delete` 的产出不是"写一份新内容", 而是"把这一篇移进废纸篓" ⇒ 它有自己的出口。
+        // 两道闸门与 merge / replace **完全同款**（目标存在 + 指纹对得上）—— 删掉一个已经变过的
+        // 东西正是要拦的事; 于是它紧挨着那个 else 放, 让"这两支比的是同一件事"看得见。
+        if p.kind == .delete {
+            guard exists, let current = try? String(contentsOfFile: abs, encoding: .utf8) else {
+                return .noteMissing
+            }
+            guard Self.noteHash(current) == p.baseHash else { return .baseHashMismatch }
+            // 留旧版 + 送废纸篓都在 `deleteNote` 里（那是本功能唯一不可逆动作的唯一出口）。
+            // ⚠️ 它自己会 `applyKnowledgeChange()`, 所以这里直接返回, 不走下面那条公共尾部。
+            if let err = deleteNote(rootId: p.rootId, relativePath: p.targetPath) { return err }
+            return removeProposal(p)
+        }
         if p.kind == .insight {
             guard !exists else { return .nameCollision(existing: p.targetPath) }
         } else {
@@ -1609,8 +1730,11 @@ final class KnowledgeStore: ObservableObject {
         guard (try? p.content.write(toFile: abs, atomically: true, encoding: .utf8)) != nil else {
             return .writeFailed
         }
+        // `sources: p.sources` —— **全仓唯一**带着来源指针落盘的一处。它补的正是 P15.8/5f
+        // 「拍过板就删行」留下的那个缺口: 提案行（连同它的 `sources` 列）马上就要被删掉,
+        // 来源得**活在版本史里**才查得到。
         recordNoteRevision(rootId: p.rootId, relativePath: p.targetPath,
-                           content: p.content, origin: .dream)
+                           content: p.content, origin: .dream, sources: p.sources)
         applyKnowledgeChange()
         return removeProposal(p)
     }

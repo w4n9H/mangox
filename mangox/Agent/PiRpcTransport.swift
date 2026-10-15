@@ -428,7 +428,8 @@ final class PiRpcTransport: AgentTransport {
         // make it a second source of truth, and it could not see the app's test redirects.
         //
         // If MANGOX_DREAM_SPOOL is unset the tool refuses: only a dream run sets it.
-        import { appendFileSync, mkdirSync } from "node:fs";
+        import { appendFileSync, mkdirSync, readFileSync } from "node:fs";
+        import { createHash } from "node:crypto";
         import { dirname } from "node:path";
         import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
         import { Type } from "typebox";
@@ -440,6 +441,24 @@ final class PiRpcTransport: AgentTransport {
             ref: Type.String({ description: "Session id, or a note path relative to its root." }),
             quote: Type.Optional(Type.String({ description: "The exact words this came from." })),
         });
+
+        // 目标文件的指纹。**App 只认这一个口径**: SHA-256 of the UTF-8 bytes, lowercase hex
+        // (同 KnowledgeStore.noteHash —— 一条判据在两种语言里各实现一次, 口径必须逐字节一致)。
+        //
+        // 为什么在这里算、不问模型: 模型**算不出** sha256 —— read 工具只回正文, [笔记] 段
+        // 也只有路径与摘要, 它没有任何途径拿到这个值。上一版让它自己填 ⇒ merge / replace 的
+        // 采纳必然撞指纹不符, 而报错说的是"内容被改过" —— 把原因指到了磁盘上, 归因是错的。
+        // 在这里算还顺带解决时点: 记的是"写下这一行那一刻"的指纹, 正是乐观并发要比的那一版。
+        //
+        // 读不到 (目标不存在 / 没权限) ⇒ 空串 ⇒ App 侧按"缺指纹"拒。那是对的: merge /
+        // replace 的目标必须存在, 读不到就是不存在。
+        function noteHash(path) {
+            try {
+                return createHash("sha256").update(readFileSync(path)).digest("hex");
+            } catch (e) {
+                return "";
+            }
+        }
 
         export default function (pi: ExtensionAPI) {
             pi.registerTool({
@@ -454,19 +473,20 @@ final class PiRpcTransport: AgentTransport {
                     "  insight - a conclusion from the sessions that has no note yet; target_path is a NEW file",
                     "  merge   - two notes say the same thing; target_path is the note to keep",
                     "  replace - a note states something that is now outdated; target_path is that note",
+                    "  delete  - a note is no longer useful at all; target_path is that note and it gets trashed",
                     "",
                     "target_path must be an absolute path inside one of the note roots shown in your prompt.",
-                    "content is the FULL new text of the note, never a diff.",
-                    "merge and replace also need base_hash: the sha256 of the note as you actually read it.",
+                    "content is the FULL new text of the note, never a diff. Do not send content for delete.",
+                    "base_hash is filled in by the app from the file on disk - do not set it yourself.",
                     "Every proposal needs at least one source. A proposal without sources is dropped.",
                 ].join("\n"),
                 parameters: Type.Object({
-                    kind: Type.Union([Type.Literal("insight"), Type.Literal("merge"), Type.Literal("replace")]),
+                    kind: Type.Union([Type.Literal("insight"), Type.Literal("merge"), Type.Literal("replace"), Type.Literal("delete")]),
                     target_path: Type.String({ description: "Absolute path inside one of the note roots." }),
-                    content: Type.String({ description: "The full new text of the note (not a diff)." }),
+                    content: Type.Optional(Type.String({ description: "The full new text (not a diff). Omit it for delete." })),
                     reason: Type.String({ description: "One or two sentences: why this is worth proposing." }),
                     title: Type.Optional(Type.String({ description: "Note title. Required for insight (it becomes the filename)." })),
-                    base_hash: Type.Optional(Type.String({ description: "sha256 of the note as read. Required for merge/replace." })),
+                    base_hash: Type.Optional(Type.String({ description: "Ignored - the app computes this from the file on disk." })),
                     sources: Type.Array(Source, { description: "At least one. Proposals without sources are dropped." }),
                 }),
 
@@ -489,15 +509,6 @@ final class PiRpcTransport: AgentTransport {
                             details: undefined,
                         };
                     }
-                    if (params.kind !== "insight" && !(params.base_hash || "").trim()) {
-                        return {
-                            content: [{
-                                type: "text",
-                                text: "Rejected: merge and replace need base_hash, the sha256 of the note you read. Read the note, then call again.",
-                            }],
-                            details: undefined,
-                        };
-                    }
                     if (!params.sources || params.sources.length === 0) {
                         return {
                             content: [{
@@ -507,13 +518,15 @@ final class PiRpcTransport: AgentTransport {
                             details: undefined,
                         };
                     }
+                    const target = (params.target_path || "").trim();
+                    const baseHash = params.kind === "insight" ? "" : noteHash(target);
                     const line = JSON.stringify({
                         kind: params.kind,
-                        target_path: (params.target_path || "").trim(),
-                        content: params.content,
+                        target_path: target,
+                        content: params.content || "",
                         reason: params.reason || "",
                         title: params.title || "",
-                        base_hash: params.base_hash || "",
+                        base_hash: baseHash,
                         sources: params.sources.map(function (s) {
                             return { kind: s.kind || "session", ref: s.ref, quote: s.quote || "" };
                         }),
@@ -530,7 +543,10 @@ final class PiRpcTransport: AgentTransport {
                     return {
                         content: [{
                             type: "text",
-                            text: "Recorded " + params.kind + " for " + params.target_path + ".",
+                            text: "Recorded " + params.kind + " for " + params.target_path + "."
+                            + (params.kind !== "insight" && !baseHash
+                                ? " (warning: that file could not be read, so the app will reject this one)"
+                                : ""),
                         }],
                         details: undefined,
                     };

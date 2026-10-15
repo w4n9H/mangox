@@ -781,4 +781,24 @@ VALUES = {
     #    这里两条都是**说明**: 解释"这一项为什么没有开关、为什么它不常开"。
     '按需加载': 'Loaded on demand',
     'App 内置扩展：只在需要它的那次运行里挂载，不是常开': 'App built-in extension: mounted only for the run that needs it, not always on',
+
+    # ── P17 (2026-10-15: dream 的第四类动作 `delete`) ─────────────────────────
+    #    前三类的行内标记是单字 New / Merge / Swap ⇒ 第四个也选一个短词。
+    #    `Drop`（4 字母, 与 `Swap` 同长）—— 换成 `Delete` 会把标记列的 `minWidth: 16`
+    #    撑开, 四行的标题起跑线就不再是一条竖线了。
+    '删': 'Drop',
+    '删掉这篇': 'Drop this note',
+    '右边是空的 —— 采纳后这篇进系统废纸篓, 还能在那里捞回来。': 'The right side is empty — accepting moves this note to the system Trash, where you can still recover it.',
+    '把这一篇移进系统废纸篓; 旧内容会先进变更史': 'Move this note to the system Trash; its old content is recorded in the change history first',
+
+    # ── P17 · 运行可靠性: 睡眠/挂起漏跑清单 ──
+    '已删除的任务': 'Deleted task',
+    '忽略': 'Ignore',
+    '最近 %@': 'Last %@',
+    '漏 %lld 次': '%lld missed',
+    '漏跑 %lld 个任务': '%lld tasks missed',
+    '立刻补跑最近一次 (不等定时)': 'Run the most recent missed one now (without waiting)',
+    '补跑': 'Catch up',
+    '补跑只跑最近一次; 忽略 = 认下这批, 不再提示': 'Catch up runs only the most recent one; Ignore accepts this batch and stops asking',
+    '认下这批漏跑, 不再提示': 'Accept these misses and stop asking',
 }

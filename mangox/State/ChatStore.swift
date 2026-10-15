@@ -597,6 +597,7 @@ final class ChatStore: ObservableObject {
                 self?.flushPersistence()
                 self?.capabilityProbe?.shutdown()
                 self?.transports.values.forEach { $0.shutdown() }
+                self?.scheduler.stopScheduler()   // P17: 停 tick + 交还防 App Nap 的断言
             }
         }
         // P6.3.2: 回到前台 → 结算选中会话的离开摘要 (切走期间落定的回合)
@@ -1851,6 +1852,13 @@ final class ChatStore: ObservableObject {
     func runScheduledFire(_ task: ScheduledTask, at now: Date = Date()) {
         scheduler.runScheduledFire(task, at: now)
     }
+
+    /// P17: 漏跑清单 (视图经 facade 读; 冒烟直访 SchedulerService)。
+    var missedFires: [SchedulerService.MissedFire] { scheduler.missedFires }
+
+    /// P17: 补跑最近一次 / 认账忽略 (视图经 facade 调)。
+    func catchUpMissedFire(_ taskId: UUID) { scheduler.catchUpMissedFire(taskId) }
+    func ignoreMissedFire(_ taskId: UUID) { scheduler.ignoreMissedFire(taskId) }
 
     /// P15.3: dream 的 spool 落点 (冒烟直访; 视图侧不用它 —— 谁跑 dream 由任务 id 认)。
     static func dreamSpoolPath(taskId: UUID) -> String {

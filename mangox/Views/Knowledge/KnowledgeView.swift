@@ -815,22 +815,30 @@ struct KnowledgeView: View {
         case .insight: L("增")
         case .merge: L("并")
         case .replace: L("换")
+        case .delete: L("删")
         }
     }
 
-    /// 三种动作的配色——同时充当"这个标记到底在说什么"的唯一图例:
-    /// 增 = 长出新东西(green) · 并 = 把两样合成一样(blue) · 换 = 旧值过期, 提醒你看一眼(amber)。
+    /// 四种动作的配色——同时充当"这个标记到底在说什么"的唯一图例:
+    /// 增 = 长出新东西(green) · 并 = 把两样合成一样(blue) · 换 = 旧值过期, 提醒你看一眼(amber) ·
+    /// 删 = 整条作废(red: 这一条谈的是**丢掉东西**, 不是一次普通修改)。
     private func proposalKindColor(_ kind: NoteProposalKind) -> Color {
         switch kind {
         case .insight: CodexTheme.toolDone
         case .merge: CodexTheme.info
         case .replace: CodexTheme.thinking
+        case .delete: CodexTheme.toolError
         }
     }
 
     /// 提案行的一句话: 有 `title` 就用它, 否则拿正文第一行(去掉 markdown 的 `#` 与缩进)。
-    /// **不发明占位** —— 内容为空、没有来源的提案在解析阶段就被拒了, 走不到这里。
+    /// **不发明占位** —— 拿不出话的提案在解析阶段就被拒了, 走不到这里。
+    ///
+    /// ⚠️ `delete` 是唯一的例外: **它既没有 `title` 也没有 `content`**（产出不是文字, 是"进废纸篓"）
+    /// ⇒ 它的一句话就是**要被删掉的那一篇**（根内相对路径）。留空才是真的在说谎 ——
+    /// 一行只写着「删」却不说是删哪篇, 人没法拍板。
     private func proposalHeadline(_ p: NoteProposal) -> String {
+        if p.kind == .delete { return p.targetPath }
         if !p.title.isEmpty { return p.title }
         var line = p.content.split(separator: "\n", omittingEmptySubsequences: true)
             .first.map(String.init) ?? ""
@@ -930,9 +938,13 @@ struct KnowledgeView: View {
                 // ⚠️ **不弹二次确认**（与删除相反）: 采纳是**可逆**的 —— 被顶掉的那一版
                 //    进了版本史, 写下去的也能再改回来。为可逆动作加一道确认, 只会训练用户
                 //    闭眼点"确定"（而删除那道确认的份量正是靠"它不可逆"撑起来的）。
-                Button(L("采纳")) { adoptProposal(p) }
+                // delete 上写「采纳」是**说不清的**: 它要采纳的是"把这篇删掉"。
+                // 按钮仍是同一个动作、同一个出口, 只把动词换成它真正会做的事。
+                Button(p.kind == .delete ? L("删掉这篇") : L("采纳")) { adoptProposal(p) }
                     .buttonStyle(CodexActionButtonStyle(kind: .primary))
-                    .help(L("把这一份整篇写进上面那条目标; 被顶掉的那一版会进变更史"))
+                    .help(p.kind == .delete
+                          ? L("把这一篇移进系统废纸篓; 旧内容会先进变更史")
+                          : L("把这一份整篇写进上面那条目标; 被顶掉的那一版会进变更史"))
                 // P15.8/5f: 丢弃 = **把这条提案删掉**（不再落终态留在列表里）。
                 Button(L("丢弃")) { discardProposal(p) }
                     .buttonStyle(CodexActionButtonStyle(kind: .danger))
@@ -981,6 +993,11 @@ struct KnowledgeView: View {
             .clipShape(RoundedRectangle(cornerRadius: CodexTheme.radiusSm))
             if p.kind == .insight {
                 Text(L("左边是空的 —— 这是一篇**还不存在**的笔记(增)。"))
+                    .font(CodexTheme.fontTiny)
+                    .foregroundStyle(CodexTheme.textMuted)
+            }
+            if p.kind == .delete {
+                Text(L("右边是空的 —— 采纳后这篇进系统废纸篓, 还能在那里捞回来。"))
                     .font(CodexTheme.fontTiny)
                     .foregroundStyle(CodexTheme.textMuted)
             }

@@ -5136,6 +5136,55 @@ struct SmokeMain {
                     && pRev?.rootId == rootId && pRev?.sha256 == "abc",
                   "P15.2: `note_revisions` 落库 → 读回**往返一致** (\(NoteRevisionOrigin.allCases.map(\.rawValue)) 是落库字符串)")
 
+            // —— P17: `sources` 列 —— 「这一版从哪来」在**提案行被删掉之后**还查得到 ——
+            //   四层: ① 落库往返 ② 不带 sources 的版本读回**空**（不是 nil、不是丢行）
+            //         ③ 反解认领靠 sha256 ④ 端到端: 采纳 dream 提案 ⇒ 版本史里那一版带来源。
+            let srcMark = "p17-sources.md"
+            let srcList = [ProposalSource(kind: .session, ref: "sess-42", quote: "你说过这句"),
+                           ProposalSource(kind: .note, ref: "old.md", quote: "")]
+            try? noteStore2.persistence?.appendNoteRevision(
+                NoteRevision(id: UUID(), rootId: rootId, path: srcMark, content: "带来源的一版",
+                             sha256: KnowledgeStore.noteHash("带来源的一版"), writtenAt: Date(),
+                             origin: .dream, sources: srcList))
+            check(revs(srcMark).first?.sources == srcList,
+                  "P17 sources: 落库 → 读回**逐字段一致**（形状与 `note_proposals.sources` 同源; "
+                  + "实测 \(revs(srcMark).first?.sources ?? [])）")
+            try? noteStore2.persistence?.appendNoteRevision(
+                NoteRevision(id: UUID(), rootId: rootId, path: srcMark, content: "人写的一版",
+                             sha256: KnowledgeStore.noteHash("人写的一版"), writtenAt: Date(),
+                             origin: .human))
+            check(revs(srcMark).first?.sources.isEmpty == true,
+                  "P17 sources **反例面**: 人写的版本读回**空列表** —— 诚实的「没有来源」, "
+                  + "不是 nil、也不是**整行丢掉**（丢行会让变更史凭空少一版, 而少了哪一版界面上看不见）")
+            let srcRev = revs(srcMark)
+            check(KnowledgeStore.sources(ofContent: "带来源的一版", in: srcRev) == srcList
+                    && KnowledgeStore.sources(ofContent: "人写的一版", in: srcRev).isEmpty
+                    && KnowledgeStore.sources(ofContent: "从没写过的内容", in: srcRev).isEmpty,
+                  "P17 sources 反解: 认领靠 **sha256 内容同一性**（与 `origin(ofContent:in:)` 逐字同源）"
+                  + "—— 不在记录里的内容回落空列表, 不猜")
+
+            // 端到端: 采纳 dream 提案 ⇒ 落进版本史的那一版**带着提案自己的 sources**。
+            // ⚠️ 这条是 `sources: p.sources` 那一行的门: 漏传则来源在删行的**那一瞬间**蒸发。
+            let propRel = "p17-from-prop.md"
+            let propSrc = [ProposalSource(kind: .session, ref: "sess-77", quote: "原话")]
+            let prop = NoteProposal(id: UUID(), rootId: rootId, kind: .insight, targetPath: propRel,
+                                    baseHash: "", title: "t", content: "从提案来的内容\n",
+                                    reason: "r", sources: propSrc, createdAt: Date(),
+                                    status: .pending, sessionId: "sess-77")
+            try? noteStore2.persistence?.appendNoteProposal(prop)
+            let propErr = kn.adoptProposal(prop)
+            check(propErr == nil,
+                  "P17 sources 前置: 采纳 insight 提案成功（实测 \(String(describing: propErr))）")
+            let propRev = revs(propRel).first { $0.content == "从提案来的内容\n" }
+            check(propRev?.sources == propSrc && propRev?.origin == .dream,
+                  "P17 sources **端到端**: 采纳后那一版在版本史里**带着提案的来源** —— "
+                  + "来源指针在提案行被删掉之后**还活着**（实测 origin=\(String(describing: propRev?.origin)) "
+                  + "sources=\(propRev?.sources ?? [])）")
+            let propLeft = (try? noteStore2.persistence?.loadNoteProposals()) ?? []
+            check(propLeft.first { $0.id == prop.id } == nil,
+                  "P17 sources 端到端: 提案行**照样删掉**（P15.8/5f）—— 于是版本史成了来源的**唯一**"
+                  + "存续处, 这正是要加这一列的理由")
+
             // ===== P15.4 (2026-10-13): 审阅面 —— 版本史 / 来源 / 采纳 / 丢弃 / 并排 diff =====
             // 本批是**本仓第二段会改用户磁盘的代码路径**（第一段是 P15.2 的人写笔记）。
             // 每个"能写盘"的地方都配一条反例 —— 因为"没写盘"与"写错了"在返回码上长得一样。
@@ -5300,6 +5349,56 @@ struct SmokeMain {
                 check(boxed.contains { $0.id == clashP.id } && boxed.contains { $0.id == staleP.id },
                       "P15.8 收件箱 **反例面**: 采纳**失败**的两条（撞名 / 指纹不符）**仍在待审** —— "
                       + "「没拍过板」与「拍过板」是两件事, 删的只能是后者（删错了人就没法重试）")
+
+                // —— ⑦ delete: 采纳 = 移进废纸篓（P17 · dream 的第四类动作） ——
+                //  复用上面同一个夹具（kn / noteStore2 / nput / nread / revs）。
+                //  `noteDeleteUsesTrash` 在此处已是 false（:190）⇒ 走 removeItem, 不往真实回收站丢东西。
+                let delPath = "p17-delete.md"
+                nput(delPath, "这篇已经没用了\n")
+                let delP = NoteProposal(id: UUID(), rootId: rootId, kind: .delete, targetPath: delPath,
+                                        baseHash: KnowledgeStore.noteHash("这篇已经没用了\n"),
+                                        title: "", content: "", reason: "整条被推翻了",
+                                        sources: [ProposalSource(kind: .note, ref: delPath, quote: "旧结论")],
+                                        createdAt: Date(), status: .pending, sessionId: "sess-9")
+                try? noteStore2.persistence?.appendNoteProposal(delP)
+                let deleterr = kn.adoptProposal(delP)
+                check(deleterr == nil
+                        && !FileManager.default.fileExists(atPath: nroot + "/" + delPath),
+                      "P17 delete: 采纳 ⇒ 文件**真的没了**（实测 err=\(deleterr.map(String.init(describing:)) ?? "nil")"
+                      + " exists=\(FileManager.default.fileExists(atPath: nroot + "/" + delPath))）")
+                check(revs(delPath).contains { $0.content == "这篇已经没用了\n" },
+                      "P17 delete: 删之前**先把这一版记进变更史** —— 少了这一步, 一次删除就是一次静默的数据销毁")
+                check(((try? noteStore2.persistence?.loadNoteProposals()) ?? [])
+                        .first { $0.id == delP.id } == nil,
+                      "P17 delete: 提案行照样删掉（拍过板的东西不留 —— 与采纳其余三类同一个出口）")
+
+                // 反例 ①: 指纹不符 ⇒ 拒, 文件必须还在（与 merge / replace 同一道闸门）
+                let delPath2 = "p17-delete-stale.md"
+                nput(delPath2, "dream 读到的那一版\n")
+                let delStaleP = NoteProposal(id: UUID(), rootId: rootId, kind: .delete, targetPath: delPath2,
+                                             baseHash: KnowledgeStore.noteHash("另一版\n"),
+                                             title: "", content: "", reason: "指纹已过期",
+                                             sources: [ProposalSource(kind: .note, ref: delPath2, quote: "q")],
+                                             createdAt: Date(), status: .pending, sessionId: "sess-9")
+                try? noteStore2.persistence?.appendNoteProposal(delStaleP)
+                check(kn.adoptProposal(delStaleP) == .baseHashMismatch
+                        && FileManager.default.fileExists(atPath: nroot + "/" + delPath2),
+                      "P17 delete **反例**: 指纹不符 ⇒ `.baseHashMismatch`, **文件还在** —— "
+                      + "删掉一个已经变过的东西正是要拦的事")
+                check(((try? noteStore2.persistence?.loadNoteProposals()) ?? [])
+                        .first { $0.id == delStaleP.id }?.status == .pending,
+                      "P17 delete **反例**: 被拒的删除提案**留在待审**（删错了人就没法重试）")
+
+                // 反例 ②: 目标不存在 ⇒ `.noteMissing`, 而不是「删成功了」
+                let delGoneP = NoteProposal(id: UUID(), rootId: rootId, kind: .delete,
+                                            targetPath: "p17-never-existed.md",
+                                            baseHash: "whatever", title: "", content: "",
+                                            reason: "目标不在了",
+                                            sources: [ProposalSource(kind: .note, ref: "x.md", quote: "q")],
+                                            createdAt: Date(), status: .pending, sessionId: "sess-9")
+                try? noteStore2.persistence?.appendNoteProposal(delGoneP)
+                check(kn.adoptProposal(delGoneP) == .noteMissing,
+                      "P17 delete **反例**: 目标不存在 ⇒ `.noteMissing`（不是「删成功了」—— 没得删不等于删掉了）")
             }
         }
 
@@ -5386,6 +5485,30 @@ struct SmokeMain {
             let dmNestedLine = #"{"kind":"insight","target_path":"/Users/x/.mangox/note/proj-x/a.md","content":"x","sources":[{"ref":"s"}]}"#
             check(NoteProposalSpool.parse(dmNestedLine, roots: dmNested).items.first?.rootId == "note:project:p2",
                   "P15.3 解析: 嵌套根取**最长匹配**（实测 \(NoteProposalSpool.parse(dmNestedLine, roots: dmNested).items.first?.rootId ?? "nil"))")
+
+            // —— delete（P17 第四类动作）: 不要 `content`, 但要指纹 ——
+            let dmDel = #"{"kind":"delete","target_path":"/Users/x/.mangox/note/a.md","base_hash":"h9","reason":"整条没用了","sources":[{"kind":"note","ref":"a.md"}]}"#
+            let dmDelParsed = NoteProposalSpool.parse(dmDel, roots: dmRoots)
+            check(dmDelParsed.items.count == 1 && dmDelParsed.rejects.isEmpty
+                    && dmDelParsed.items[0].kind == .delete
+                    && dmDelParsed.items[0].content.isEmpty
+                    && dmDelParsed.items[0].baseHash == "h9",
+                  "P17 解析: `delete` **没有 content 也能入表**（它的产出是「文件进废纸篓」, 不是一段新文字）")
+            check(NoteProposalKind.allCases.count == 4 && NoteProposalKind.delete.rawValue == "delete",
+                  "P17 契约 token: 四类动作, 且 `delete` 的 rawValue 就是落库 / 落 spool 的那个词"
+                  + "（实测 \(NoteProposalKind.allCases.map(\.rawValue).joined(separator: "/")))")
+            check(!NoteProposalDraft(rootId: KnowledgeBase.noteGlobalID, kind: .delete,
+                                     targetPath: "a.md", baseHash: "h", title: "", content: "",
+                                     reason: "", sources: []).createsNewNote,
+                  "P17 解析: `delete` **不是「新建一篇」**（`createsNewNote` 只对 insight 为真）")
+            // 反例 ①: 空 content 的例外**只对 delete 开** —— insight 少 content 依旧被拒
+            let dmInsNoContent = #"{"kind":"insight","target_path":"/Users/x/.mangox/note/b.md","title":"t","sources":[{"ref":"s"}]}"#
+            check(NoteProposalSpool.parse(dmInsNoContent, roots: dmRoots).rejects.first?.reason == .emptyContent,
+                  "P17 解析 **反例**: 空 content 的例外**只对 delete 开** —— insight 少 content 依旧被拒")
+            // 反例 ②: delete 少了指纹 ⇒ 拒（没有指纹的删除就是盲删）
+            let dmDelNoHash = #"{"kind":"delete","target_path":"/Users/x/.mangox/note/a.md","reason":"x","sources":[{"ref":"s"}]}"#
+            check(NoteProposalSpool.parse(dmDelNoHash, roots: dmRoots).rejects.first?.reason == .baseHashRequired,
+                  "P17 解析 **反例**: `delete` 缺 `base_hash` 被拒 —— 删的是不是它读到的那一版, 是这个动作唯一的判据")
 
             // —— ② 表层: 落库 → 读回往返 ——
             let dmTable = ChatStore(transport: MockTransport(), dbPath: kbDir + "/dream-tbl.db",
@@ -5664,19 +5787,21 @@ struct SmokeMain {
             let dmConvo = [dmMsg(.user, "把左侧栏的样式对齐一下"),
                            dmMsg(.assistant, "看懂了", .bash),          // ← 工具卡 (title 与下行同字)
                            dmMsg(.assistant, "缩进改成 34"), dmMsg(.user, "再加条引导线")]
+            // P17: 窗口起点（36 小时前）—— 本段所有 `since:` 都用它（`sessionDigest` 不再自己算窗口）。
+            let dmWin = dmNow.addingTimeInterval(-Double(Tune.dreamDigestWindowHours) * 3600)
 
             // ① 只取 text —— 工具卡不进材料。**结构保证**, 不是靠模型自觉
-            let dmOne = SchedulerService.sessionDigest([dmSes("侧栏样式", 1, dmConvo)], now: dmNow)
+            let dmOne = SchedulerService.sessionDigest([dmSes("侧栏样式", 1, dmConvo)], since: dmWin)
             check(dmOne.contains("缩进改成 34") && !dmOne.contains("看懂了"),
                   "P15.6 摘要: 只取 text 消息 —— 工具卡不进材料 (实测 [\(dmOne.replacingOccurrences(of: "\n", with: " / "))])")
             check(dmOne.contains("用户: 把左侧栏的样式对齐一下") && dmOne.contains("助手: 缩进改成 34"),
                   "P15.6 摘要: 正文带角色前缀 (与记忆提炼 `sessionMaterial` 同源)")
-            check(dmOne.contains("窗口 \(Tune.dreamDigestWindowDays) 天"),
-                  "P15.6 摘要: 段头声明窗口 (模型要判\"这几件事隔了多久\")")
+            check(dmOne.contains("窗口 \(Tune.dreamDigestWindowHours) 小时"),
+                  "P17 摘要: 段头声明窗口 (模型要判\"这几件事隔了多久\"; P17 起单位从\"天\"变\"小时\")")
 
             // ② 会话 id 印在段头 ⇒ sources[].ref 照抄, 模型不必知道任何路径
             let dmID = UUID()
-            let dmTwo = SchedulerService.sessionDigest([dmSes("有 id", 1, dmConvo, id: dmID)], now: dmNow)
+            let dmTwo = SchedulerService.sessionDigest([dmSes("有 id", 1, dmConvo, id: dmID)], since: dmWin)
             check(dmTwo.contains(dmID.uuidString),
                   "P15.6 摘要: 会话 id 印在段头 (\"会话和文件的对应关系\"从模型面前消失)")
             check(!dmTwo.contains("pi-sessions") && !dmTwo.contains(".jsonl"),
@@ -5687,8 +5812,8 @@ struct SmokeMain {
             let dmKeep = UUID()
             let dmThree = SchedulerService.sessionDigest(
                 [dmSes("日志会话", 1, dmConvo, id: dmExcluded),
-                 dmSes("真会话", 2, dmConvo, id: dmKeep)],
-                excludeIds: [dmExcluded], now: dmNow)
+                 dmSes("真会话", 0.5, dmConvo, id: dmKeep)],
+                since: dmWin, excludeIds: [dmExcluded])
             check(dmThree.contains(dmKeep.uuidString) && !dmThree.contains(dmExcluded.uuidString),
                   "P15.6 摘要: 被排除的会话 (日志 / 侧问) 不列出、也不占预算")
             check(dmThree.contains("另有 1 个会话未列出"),
@@ -5696,45 +5821,74 @@ struct SmokeMain {
 
             // ④ 窗口: 窗口外丢掉并点名
             let dmFour = SchedulerService.sessionDigest(
-                [dmSes("新", 1, dmConvo), dmSes("旧", Double(Tune.dreamDigestWindowDays) + 5, dmConvo)],
-                now: dmNow)
+                [dmSes("新", 1, dmConvo), dmSes("旧", 3, dmConvo)],   // 3 天 = 72h > 36h ⇒ 窗口外
+                since: dmWin)
             check(dmFour.contains("· 新 ·") && !dmFour.contains("· 旧 ·"),
                   "P15.6 摘要: 窗口外的会话不进 (实测 [\(dmFour.replacingOccurrences(of: "\n", with: " / "))])")
             check(dmFour.contains("另有 1 个会话未列出"),
                   "P15.6 摘要: 窗口外丢掉要**点名** (折省略, 不静默截断)")
 
-            // ⑤ 会话数上限: 只留最新的 N 个, 其余点名
-            let dmMany = (0..<(Tune.dreamDigestMaxSessions + 3)).map {
-                dmSes("会话\($0)", Double($0) + 1, dmConvo)
-            }
-            let dmFive = SchedulerService.sessionDigest(dmMany, now: dmNow)
-            check(dmFive.contains("\(Tune.dreamDigestMaxSessions) 个会话") && dmFive.contains("另有 3 个会话未列出"),
-                  "P15.6 摘要: 会话数上限生效 + 其余点名 (实测表头 [\(dmFive.prefix(28))…])")
-            check(dmFive.contains("· 会话0 ·") && !dmFive.contains("· 会话9 ·"),
-                  "P15.6 摘要: 留的是**最新**的几个 (updatedAt 倒序, 从尾部丢最旧的)")
+            // ⑤ P17: **会话数上限整条取消** —— 编进几个由窗口决定。造 11 场**都在窗口内**的会话,
+            //    断言一场都不砍（旧实现 `prefix(Tune.dreamDigestMaxSessions)` 那个常量已删 ⇒
+            //    这条断言本身就是那次改动的门）。
+            let dmMany = (0..<11).map { dmSes("会话\($0)", (Double($0) + 1) / 24.0, dmConvo) }
+            let dmFive = SchedulerService.sessionDigest(dmMany, since: dmWin)
+            check(dmFive.contains("11 个会话") && !dmFive.contains("另有"),
+                  "P17 摘要: 窗口内的会话**一场都不砍**（旧代码只留 8 场 ⇒ 立刻红; "
+                  + "实测表头 [\(dmFive.prefix(28))…])")
+            check(dmFive.contains("· 会话0 ·") && dmFive.contains("· 会话10 ·"),
+                  "P17 摘要: 11 场（含最旧的那场）全在 —— 范围现在只由窗口划定, 不由个数划定")
 
-            // ⑥ 单会话超长: 留尾部 + 标注
-            let dmLong = [dmMsg(.user, "长" + String(repeating: "x", count: Tune.dreamDigestMaxCharsPerSession + 500))]
-            let dmSix = SchedulerService.sessionDigest([dmSes("长会话", 1, dmLong)], now: dmNow)
-            check(dmSix.contains("…(更早的已省略)"),
-                  "P15.6 摘要: 单会话超长留尾部并**标注** (不静默截断)")
-
-            // ⑦ 整段超预算: 从最旧的继续丢, 且仍不超
-            let dmFat = (0..<Tune.dreamDigestMaxSessions).map { _ in
-                dmSes("肥会话", 1, [dmMsg(.user, String(repeating: "y", count: 1900))])
+            // ⑥ P17: 单会话超长 ⇒ **按回合整对丢**（原来 `suffix` 切字符串: 开头的用户提问整段
+            //    消失, 留下的第一行从半句话说起）。造 3 个回合, 每个 = 1 条 user + 1 条长 assistant。
+            let dmTurnMsgs = (1...3).flatMap { n -> [ChatMessage] in
+                [dmMsg(.user, "问\(n)"), dmMsg(.assistant, String(repeating: "答", count: 20000))]
             }
-            let dmSeven = SchedulerService.sessionDigest(dmFat, now: dmNow)
-            check(dmSeven.count <= Tune.dreamDigestTotalChars,
-                  "P15.6 摘要: 整段不超总预算 (实测 \(dmSeven.count) ≤ \(Tune.dreamDigestTotalChars))")
+            let dmSix = SchedulerService.sessionDigest([dmSes("长会话", 1, dmTurnMsgs)], since: dmWin)
+            check(dmSix.contains("用户: 问3") && !dmSix.contains("用户: 问1"),
+                  "P17 裁回合: 超预算丢的是**整个最旧的回合**（3 个回合 6 万字符 ⇒ 只剩最后一个）")
+            check(dmSix.components(separatedBy: "\n").first { $0.hasPrefix("用户: ") } == "用户: 问3",
+                  "P17 裁回合: 留下的第一行是**完整的用户提问**")
+            // 反例面: 退回旧的 `suffix` 写法 ⇒ 第一行**不是**完整提问（那正是要修的病）
+            let dmRawJoined = KnowledgeStore.sessionMaterial(from: dmTurnMsgs).joined(separator: "\n")
+            check(!String(dmRawJoined.suffix(Tune.dreamDigestMaxCharsPerSession)).hasPrefix("用户: "),
+                  "P17 裁回合 **反例**: 旧写法 `suffix` 留下的第一行不是用户提问 —— "
+                  + "这条能红, 说明上面那条判据不是空转")
+            // ⚠️ **实测发现**: 上面那两条对 `suffix` 其实**不敏感** —— 裁尾部时「用户: 问3」照样
+            //    留着、「用户: 问1」照样没了, 两条都过得去。真正区分新旧的是**切点落在哪** ⇒
+            //    直接钉住"第一行是完整的一行"（`suffix` 的第一行必然是 assistant 行的尾部片段）。
+            // ⚠️ 要跳过**结构行**才拿得到正文首行 —— 已知三类前缀（将来加结构行就往这儿补）:
+            //    `【` 段头 · `·` 条目头 · `##` 条目内的会话 id 标题。
+            //    前两版分别栽在「直接取 .first 拿到段头」和「漏了 `##`」上。
+            let dmSixBody = dmSix.components(separatedBy: "\n").filter {
+                !$0.isEmpty && !$0.hasPrefix("【") && !$0.hasPrefix("·") && !$0.hasPrefix("##")
+            }
+            // ⚠️ 还要**跳过省略标注那行**再取首行 —— 否则"带标注的 `suffix`"会被放过:
+            //    旧写法是 `"…(更早的已省略)\n" + suffix(...)`, 它的首行恰好也是 `…(`, 与正例同形。
+            //    真正的区分点在**标注之后**: 正例给完整的 `用户: …`, 而 `suffix` 给 assistant 行的
+            //    尾部片段。⇒ 带标注 / 不带标注两种 `suffix` 都在这条上红。
+            let dmSixHead = dmSixBody.first { !$0.hasPrefix("…(") } ?? ""
+            check(dmSixHead.hasPrefix("用户: "),
+                  "P17 裁回合: 省略标注之后的第一个正文行是**完整的用户提问** —— 绝不会是半句话 "
+                  + "（实测 [\(dmSixHead.prefix(24))])")
+
+            // ⑦ 整段超预算: 从最旧的继续丢, 且仍不超。**P17 的总预算大了 8 倍**（12000 → 100000）,
+            //    所以料也跟着造大 —— 8 场 × 30000 字符 = 24 万 ⇒ 必然触发兜底。
+            let dmFat = (0..<8).map { _ in
+                dmSes("肥会话", 1, [dmMsg(.user, String(repeating: "y", count: 30000))])
+            }
+            let dmSeven = SchedulerService.sessionDigest(dmFat, since: dmWin)
             check(dmSeven.contains("另有"),
-                  "P15.6 摘要: 总量兜底丢掉的那部分也点名")
+                  "P17 摘要: 总量兜底丢掉的那部分也点名 (实测 \(dmSeven.count) 字符)")
+            check(dmSeven.count <= Tune.dreamDigestTotalChars,
+                  "P17 摘要: 整段不超总预算 (实测 \(dmSeven.count) ≤ \(Tune.dreamDigestTotalChars))")
 
             // ⑧ 空态: 一条都编不出 ⇒ 空串 (buildScheduledPrompt 不会拼出一个空段)
-            check(SchedulerService.sessionDigest([], now: dmNow).isEmpty,
-                  "P15.6 摘要: 没有会话 ⇒ 空串")
+            check(SchedulerService.sessionDigest([], since: dmWin).isEmpty,
+                  "P17 摘要: 没有会话 ⇒ 空串")
             check(SchedulerService.sessionDigest([dmSes("全工具", 1, [dmMsg(.assistant, "o", .bash)])],
-                                                 now: dmNow).isEmpty,
-                  "P15.6 摘要: 整场只有工具输出的会话 ⇒ 空串 (没有可提炼的东西)")
+                                                 since: dmWin).isEmpty,
+                  "P17 摘要: 整场只有工具输出的会话 ⇒ 空串 (没有可提炼的东西)")
 
             // ⑨ 指令文本自身的回归门 —— 想加回去的人先读 `dreamPrompt` 上面那段注释
             check(!SchedulerService.dreamPrompt.contains("pi-sessions")
@@ -5744,12 +5898,16 @@ struct SmokeMain {
                   "P15.6 指令: 仍点名 note_proposal (扩展工具, 只在 standard/full 档可见)")
 
             // ⑩ **短名单无损性**（性质判据, 不是形状判据）：只读短名单 + priorOmitted 的结果
-            //    必须与"读全体"**逐字相同**。这条守的是 `dreamShortlist` 那个"界"的证明 ——
-            //    界一旦取小了（例如只取 MaxSessions 个, 没给被排除的会话留名额）,
-            //    读得少的那次就会**少保留几个会话**, 而那种丢失在别的判据里看不见。
+            //    必须与"读全体"**逐字相同**。这条守的是 `dreamShortlist` 那个"界"——
+            //    P17 把它从"前 MaxSessions 个"换成"窗口内"（旧界的证明随上限取消而失效,
+            //    见那个函数的注释）。界一旦取小了, 读得少的那次就会**少保留几个会话**,
+            //    而那种丢失在别的判据里看不见。
+            //    ⚠️ 池子按 **2 小时一档** 造: 40 档 = 80 小时 ⇒ 前 18 个在 36 小时窗口内、
+            //    其余在窗口外。用原来的 600 秒一档的话全在窗口里, `dmShort.count < dmPool.count`
+            //    就不成立（这条会以"短名单没缩小"变红 —— 那不是判据坏了, 是料没造对）。
             let dmPool = (0..<40).map {
                 ConversationItem(id: UUID(), title: "会话\($0)",
-                                 updatedAt: dmNow.addingTimeInterval(-Double($0 + 1) * 600))
+                                 updatedAt: dmNow.addingTimeInterval(-Double($0 + 1) * 7_200))
             }
             var dmExcl = Set<UUID>()
             for c in dmPool where (Int(c.title.dropFirst(2)) ?? -1) % 7 == 0 { dmExcl.insert(c.id) }
@@ -5758,19 +5916,92 @@ struct SmokeMain {
                     id: $0.id, title: $0.title, updatedAt: $0.updatedAt, messages: dmConvo,
                     noteRootLabel: KnowledgeBase.noteGlobalLabel) }
             }
-            let dmFull = SchedulerService.sessionDigest(dmInputs(dmPool), excludeIds: dmExcl, now: dmNow)
-            let dmShort = SchedulerService.dreamShortlist(dmPool, excludeCount: dmExcl.count)
+            let dmFull = SchedulerService.sessionDigest(dmInputs(dmPool), since: dmWin, excludeIds: dmExcl)
+            let dmShort = SchedulerService.dreamShortlist(dmPool, since: dmWin)
             let dmShortDigest = SchedulerService.sessionDigest(
-                dmInputs(dmShort), excludeIds: dmExcl,
-                priorOmitted: dmPool.count - dmShort.count, now: dmNow)
+                dmInputs(dmShort), since: dmWin, excludeIds: dmExcl,
+                priorOmitted: dmPool.count - dmShort.count)
             check(dmShort.count < dmPool.count && dmFull == dmShortDigest,
-                  "P15.6 摘要: 短名单**无损** —— 只读 \(dmShort.count)/\(dmPool.count) 个会话, 结果与读全体**逐字相同**（界改成 prefix(MaxSessions) ⇒ 立刻红）")
+                  "P17 摘要: 短名单**无损** —— 只读 \(dmShort.count)/\(dmPool.count) 个会话（其余在窗口外）, "
+                  + "结果与读全体**逐字相同**（界改成\"按 updatedAt 取前 N 个\" ⇒ 窗口外的会占掉名额 ⇒ 立刻红）")
 
             // ⑪ 省掉的读不许变成少说的数
             let dmPrior = SchedulerService.sessionDigest([dmSes("唯一", 1, dmConvo)],
-                                                         priorOmitted: 7, now: dmNow)
+                                                         since: dmWin, priorOmitted: 7)
             check(dmPrior.contains("另有 7 个会话未列出"),
-                  "P15.6 摘要: 没进短名单的会话照样点名 (实测 [\(dmPrior.replacingOccurrences(of: "\n", with: " / "))])")
+                  "P17 摘要: 没进短名单的会话照样点名 (实测 [\(dmPrior.replacingOccurrences(of: "\n", with: " / "))])")
+
+            // ⑫ P17: 窗口起点 = max(now - 36h, 上次 fire 真跑起来的那一刻) —— **漏跑不丢料**
+            check(SchedulerService.dreamDigestSince(now: dmNow, lastRunAt: nil) == dmWin,
+                  "P17 水位: 没有 lastRunAt（新库 / 从没跑过）⇒ 就是 36 小时")
+            let dm50h = dmNow.addingTimeInterval(-50 * 3600)
+            check(SchedulerService.dreamDigestSince(now: dmNow, lastRunAt: dm50h) == dm50h,
+                  "P17 水位: 上次跑在 50 小时前（漏跑了一天）⇒ 窗口**自动拉长**到那一次 —— "
+                  + "固定 36h 的毛病正是\"漏跑一天 ⇒ 那天的料永久掉出窗口\"")
+            let dm1h = dmNow.addingTimeInterval(-3600)
+            check(SchedulerService.dreamDigestSince(now: dmNow, lastRunAt: dm1h) == dmWin,
+                  "P17 水位 **反例面**: 上次刚跑过（1 小时前）⇒ 仍是 36 小时, **不会**缩到 1 小时 "
+                  + "（取 min(floor, last): 重复读可以接受, 丢失不行）")
+
+            // ⑬ P17: 分回合 —— 切点只落在回合边界上
+            let dmTurns = KnowledgeStore.materialTurns(
+                ["用户: a", "助手: b", "助手: c", "用户: d", "助手: e"])
+            check(dmTurns.count == 2 && dmTurns[0].count == 3 && dmTurns[1].count == 2,
+                  "P17 回合切分: 一条 user 行 + 其后到下一个 user 之前的行 = 一个回合 "
+                  + "(实测 \(dmTurns.map(\.count)))")
+            check(KnowledgeStore.materialTurns(["助手: 孤零零"]).count == 1
+                    && KnowledgeStore.trimMaterialByTurns(["助手: 孤零零"], budget: 1) == "助手: 孤零零",
+                  "P17 回合切分: 开场就是助手行（不该发生, 但要有确定行为）⇒ 仍算一个回合; "
+                  + "且**至少留最后一个回合**（宁可超一点也不交空材料）")
+
+            // ⑮ P17: 材料里的**作者标记** —— 三值各有各的字（boss 10-15 定: 「system 就是 system」）
+            check(KnowledgeStore.materialLabel(for: .user) == "用户"
+                    && KnowledgeStore.materialLabel(for: .assistant) == "助手"
+                    && KnowledgeStore.materialLabel(for: .system) == "系统",
+                  "P17 作者标记: 三种角色各有各的字 —— 二值写法 `role == .user ? 用户 : 助手` 会把第三类"
+                  + "**静默并进助手**（实测 \([MessageRole.user, .assistant, .system].map { KnowledgeStore.materialLabel(for: $0) }.joined(separator: "/"))）")
+            check(KnowledgeStore.sessionMaterial(from: [
+                    ChatMessage(role: .system, content: .text("你是一个只读的整理者")),
+                    ChatMessage(role: .user, content: .text("帮我看看")),
+                    ChatMessage(role: .assistant, content: .text("看好了"))])
+                    == ["系统: 你是一个只读的整理者", "用户: 帮我看看", "助手: 看好了"],
+                  "P17 作者标记: 落到材料里的三行**前缀各不相同**（system 不再被算成助手）")
+            check(KnowledgeStore.materialTurns(
+                    ["系统: 你是只读的整理者", "用户: a", "助手: b"])
+                    == [["系统: 你是只读的整理者"], ["用户: a", "助手: b"]],
+                  "P17 回合切分: 开头的 `系统: ` 行**自成一段**（不并进任何人）—— "
+                  + "当前库里的会话第一条其实是 `.user`（四场 `seq=1` 全是 user）, 但行为要有定义")
+
+            // ⑭ P17: 笔记正文段 —— 预算 / 点名 / 形状（纯函数层, 不碰磁盘）
+            let dmBody = (0..<5).map {
+                KnowledgeBaseScan.NoteBodyInput(
+                    label: "全局笔记", path: "n\($0).md",
+                    modifiedAt: dmNow.addingTimeInterval(-Double($0) * 3600),
+                    content: String(repeating: "正", count: 300))
+            }
+            let dmBodyFull = KnowledgeBaseScan.noteBodyBlock(dmBody, budget: 100_000)
+            check(dmBodyFull.shown == 5 && dmBodyFull.omitted.isEmpty,
+                  "P17 正文段: 预算够 ⇒ 5 篇全进、不点名")
+            check(dmBodyFull.text.contains("【笔记正文 · 5 篇】")
+                    && dmBodyFull.text.contains("## 全局笔记 / n0.md"),
+                  "P17 正文段: 段头 + `## <根名> / <相对路径>` 的形状 "
+                  + "(实测 [\(dmBodyFull.text.prefix(40))…])")
+            let dmBodyTight = KnowledgeBaseScan.noteBodyBlock(dmBody, budget: 700)
+            check(dmBodyTight.shown < 5 && !dmBodyTight.omitted.isEmpty
+                    && dmBodyTight.text.contains("篇正文未列出"),
+                  "P17 正文段: 超预算 ⇒ **从最旧的丢 + 点名**（留新的: 陈旧那批才是更可能被改/删的）"
+                  + " (实测留 \(dmBodyTight.shown)/5, 丢 \(dmBodyTight.omitted.count))")
+            check(dmBodyTight.text.count <= 700,
+                  "P17 正文段: 兜底之后**真的**不超预算 (实测 \(dmBodyTight.text.count) ≤ 700) —— "
+                  + "点名行自身也占字符, 少了那圈兜底就会刚好越线")
+            // ⚠️ 上面那条只判「丢了东西、也点名了」—— 丢**最新**的那批同样能过。
+            //    契约是「留新的、丢旧的」⇒ 必须直接钉住**谁被留下了**（把排序反过来就红）。
+            check(dmBodyTight.text.contains("## 全局笔记 / n0.md")
+                    && !dmBodyTight.text.contains("## 全局笔记 / n4.md"),
+                  "P17 正文段: 留下的是**最新的那批**（n0 在、n4 不在 —— 排序反过来立刻红; "
+                  + "实测留 \(dmBodyTight.shown)/5）")
+            check(KnowledgeBaseScan.noteBodyBlock([], budget: 1000) == .empty,
+                  "P17 正文段: 没有笔记 ⇒ `.empty`（调用点据此不拼这一节）")
         }
 
         // ===== P15.6b (2026-10-13): dream 的指令 = **出厂常量**, 不落库当用户字段 =====
@@ -5916,6 +6147,27 @@ struct SmokeMain {
                   "P15.7 同源: `dreamToolNames` 每个名字都能在源码里找到 `name: \"…\"`"
                   + "（改了源码忘改表 ⇒ 红; 实测 \(PiRpcTransport.dreamToolNames))")
 
+            // ②b P17 前置修复 (2026-10-15): 指纹由**扩展**算, 不问模型。
+            //
+            // 为什么这里只能断言"源码形态"而不是"真跑一次": 那段 TS 是**扩展**, 只在那次
+            // fire 里由 pi 加载 —— 本段不起子进程（冒烟没有这个先例, 也不该为一条判据引入）。
+            // 所以能抓的是**它确实这么写了**, 抓不到"pi 真的调用了它"。这一格的价值在于:
+            // 谁把这三样删掉/换成别的算法, **立刻红**（而不是等到某天采纳被拒才发现）。
+            let extSrc = PiRpcTransport.dreamExtensionSource
+            check(extSrc.contains("createHash(\"sha256\")")
+                  && extSrc.contains("readFileSync(path)")
+                  && extSrc.contains(".digest(\"hex\")"),
+                  "P17 指纹: 扩展自己算 sha256 —— 三条缺一不可: 算法 createHash(\"sha256\") / "
+                  + "**输入是文件字节** readFileSync(path) / 输出小写 hex digest(\"hex\")")
+            check(!extSrc.contains("params.base_hash || \"\""),
+                  "P17 指纹 反例: **不再**把模型给的值落进 spool（退回 `params.base_hash || \"\"` "
+                  + "⇒ 立刻红。那正是让 merge / replace 的采纳 100% 失败的写法）")
+            check(!extSrc.contains("also need base_hash"),
+                  "P17 文案: 工具描述**不再**要求模型填 base_hash（这句会进模型 prompt 的字节）")
+            check(SchedulerService.dreamPrompt.contains("不要填 base_hash"),
+                  "P17 文案同源: fire 指令那侧也改了 —— 两处是**同一件事的两种说法**,"
+                  + " 只改一处 ⇒ 另一半还在要模型算一个它算不出的值（这条就是抓那个的）")
+
             // ③ 磁盘上**没有**这个文件时, 列表里**要有**这一条（这就是"找得到")。
             let peDir = fixtureDir("ext-proj")
             let pe = ChatStore(transport: MockTransport(), dbPath: peDir + "/p.db",
@@ -5934,6 +6186,13 @@ struct SmokeMain {
             let peSrc = peDreams.first.map { pe.extensionSource($0) } ?? ""
             check(peSrc.contains("note_proposal") && !peSrc.contains("无法读取源码"),
                   "P15.7 预览: 投影项的源码来自**常量**（去掉那个分支 ⇒ 这里拿到\"无法读取源码\")")
+
+            // ⑥ P17: 第四类动作 `delete` 必须**真的在扩展源码里** —— 模型看不到的词, 它提不出来。
+            let dmSrc = PiRpcTransport.dreamExtensionSource
+            check(dmSrc.contains("Type.Literal(\"delete\")"),
+                  "P17 扩展: `delete` 进了 kind 的 enum —— 契约 token 是**两边一起改**的, 少一边模型就提不出删除")
+            check(dmSrc.contains("Omit it for delete"),
+                  "P17 扩展: content 对 delete 变可选 —— 还是必填的话, 模型只能为一次删除编一段正文出来")
 
             // ⑤ 反例（本段最值钱的一格）: 磁盘上**有**真文件时**不许**重复投影。
             //    dream 刚跑过就是这个状态 —— 不去重的话面板会出现两条同名项, 一条能看源码一条不能。
@@ -6047,7 +6306,7 @@ struct SmokeMain {
                     id: drConv.id, title: drConv.title, updatedAt: drNow,
                     messages: [ChatMessage(role: .user, content: .text("随便说点什么"))],
                     noteRootLabel: drLabels[drConv.id] ?? KnowledgeBase.noteGlobalLabel)],
-                now: drNow)
+                since: drNow.addingTimeInterval(-3600))
             check(drDigest.contains("· 归属 \(drLabel)"),
                   "P15.8 ②: 段头印出归属 (实测 \(drDigest.prefix(72)))")
 
@@ -6649,6 +6908,179 @@ struct SmokeMain {
             check(p16Store.showKnowledgePanel && p16Store.showSettingsPanel && p16Store.panelsExclusive,
                   "P14 互斥: 设置窗与主区面板**可以并存** (它不参与互斥, 见 ChatStore:1709)")
             p16Store.showSettingsPanel = false
+        }
+
+        // ═══ P17 · 运行可靠性: 防 App Nap 断言 + 漏跑清单 ═══
+        //
+        // 分两节, 守的是**两件不同的事**:
+        //   ① 防 App Nap 的断言 —— 加上了没有 / 是不是只有一条 / **选的是哪一档**;
+        //   ② 漏跑清单 —— 窗口四个边界(floor / createdAt / lastRunAt / ack)对不对。
+        //
+        // ⚠️ **冒烟证不了 App Nap 真的被压住**（那个没法在测试进程里复现: 要一个不可见窗口 +
+        //    真的进 napping 状态）。这里能守的只有"代码在"与"选项还在防降频那一档"这两条 ——
+        //    ⚠️ **守不了**"选项有没有被换成**会禁睡眠**的那一档"（那条守卫 2026-10-15 移除,
+        //    见 ① 末尾的注）。真机验收靠 `pmset -g assertions` 里出现那条 reason —— 这是
+        //    **已知的门禁缺口**, 不假装它被盖住了(同 P15 §02 那条"门的绿盖不到模型填得对不对")。
+        //
+        // 反例（各自单独跑, 实测）:
+        //   ⓐ 删掉 `startScheduler` 里那两行 `beginActivity` ⇒ **3 红**(持有点 / 幂等 / 交还);
+        //   ⓑ 去掉 `if napAssertion == nil` 幂等判断 ⇒ **1 红**(只有"不堆断言"那一格);
+        //   ⓒ ~~选项换成 `.userInitiated`（含 IdleSystemSleepDisabled, 会让 Mac 永不休眠）⇒ 1 红~~
+        //      —— 守住它的那条断言 **2026-10-15 已移除**（boss 担心 CI 编不过; 见下面那段注）。
+        //      这条反例**已失效**, 留着只为记账: 现在换成 `.userInitiated` 是**零红灯**的;
+        //   ⓓ `missedWindowStart` 拿掉 `createdAt` ⇒ **1 红** —— 只有"出生兜底"那一格。我原以为
+        //      上限那条也会跟着红, 实测**不会**: `floor` 本来就更晚, 少了它起点不动;
+        //   ⓔ `missedWindowStart` 拿掉 `floor` ⇒ **1 红**(出生 30 天前那格从 7 变成 31 —— 是 31
+        //      不是 30: `createdAt` 在那天 00:00, 窗口里那天 03:00 也算一个)。
+        do {
+            // —— ① 防 App Nap 的断言 ——
+            let napDir = fixtureDir("p17nap")
+            let napStore = ChatStore(transport: MockTransport(), dbPath: napDir + "/p17nap.db",
+                                     managedExtensionsDir: napDir + "/ext")
+            napStore.mailbox.stopScheduler()
+            // `ChatStore` 初始化里就调了 `startScheduler`(589 行) ⇒ 此刻本来就该持有一条。
+            check(napStore.scheduler.napAssertion != nil,
+                  "P17 nap: ChatStore 一起来就持有防降频断言（startScheduler 那条路）")
+            napStore.scheduler.stopScheduler()
+            check(napStore.scheduler.napAssertion == nil,
+                  "P17 nap: stopScheduler **交还**断言（不停 ⇒ 重复构造 store 会越堆越多）")
+
+            napStore.scheduler.startScheduler()
+            let napFirst = napStore.scheduler.napAssertion
+            check(napFirst != nil, "P17 nap: startScheduler 之后持有一条断言")
+            napStore.scheduler.startScheduler()          // 幂等
+            // ⚠️ 判据带上 `napFirst != nil`: 只比 `===` 的话, 整段断言被删掉时
+            //    (`napFirst` 与 `napAssertion` 双双为 nil) 会 `nil === nil` 判**绿** —— 假绿。
+            check(napFirst != nil && napStore.scheduler.napAssertion === napFirst,
+                  "P17 nap: 重复 start **不堆断言**（还是同一条对象 ⇒ 幂等; 去掉 `if napAssertion == nil` 这里立刻红）")
+            napStore.scheduler.stopScheduler()
+            check(napStore.scheduler.napAssertion == nil, "P17 nap: 再 stop 又交还")
+
+            // ⚠️⛔ 这里原来有一格"选项**不含** `IdleSystemSleepDisabled`"的断言, **2026-10-15 已按
+            //    boss 拍板移除**。它守的是"断言有没有偷偷变成**会禁用系统睡眠**的那一档"
+            //    （`.userInitiated` 名字看着无害, 定义里却含 `IdleSystemSleepDisabled` ⇒ 会让
+            //    Mac 永不休眠, 笔记本拔电还醒着烧电）。移除理由: 它是**全仓唯一**用代码引用那个
+            //    符号的地方（生产代码只在 `SchedulerService.swift:119` 的注释里提它）, boss
+            //    担心 GitHub CI 那条 `scripts/smoke/run.sh` 在别的 SDK 上编不过。
+            //
+            //    ⛔ **留下的缺口 —— 别以为被下面那条盖住了**: `contains(.userInitiatedAllowing…)`
+            //    **守不了**这件事, 两个常量的位是**交叠**的:
+            //      UserInitiated                      = 0x00FFFFFF | (1<<20)  = 0x00FFFFFF
+            //      UserInitiatedAllowingIdleSystemSleep = 0x00FFFFFF & ~(1<<20) = 0x00EFFFFF
+            //    而 `OptionSet.contains` 判的是"**位有交集**" ⇒ 真换成 `.userInitiated`, 它**照样绿**。
+            //    ⇒「选项有没有被改成会禁睡眠的那一档」现在**没有自动判据**, 只能靠 review 看
+            //    `SchedulerService.swift:119` 那段注释与常量本身。
+            //    要补回同一道守卫、又不碰任何 SDK 符号, 一行就够:
+            //      napSuppressionOptions.rawValue & (1 << 20) == 0
+            //    （`1 << 20` 就是 `NSActivityIdleSystemSleepDisabled` 那一位; 纯 UInt64 运算,
+            //    与符号的可用性 / 弃用标注完全无关）。**待 boss 定, 当前未加。**
+            check(SchedulerService.napSuppressionOptions.contains(.userInitiatedAllowingIdleSystemSleep),
+                  "P17 nap: 且确实是 userInitiated 那一档（不是被悄悄降成 .background）")
+            check(SchedulerService.napSuppressionReason == "MangoX scheduled tasks",
+                  "P17 nap: reason 是恒英文常量（它进 pmset / 活动监视器, 不该被 L10n 改）")
+
+            // —— ② 漏跑清单: 纯函数四边界 ——
+            // 固定锚点「今天 12:00」⇒ 判据不随跑的时刻漂。
+            let mfCal = Calendar.current
+            let mfDay = mfCal.startOfDay(for: Date())
+            func mfAt(_ daysAgo: Int, _ hour: Int) -> Date {
+                let d = mfCal.date(byAdding: .day, value: -daysAgo, to: mfDay)!
+                return mfCal.date(byAdding: .hour, value: hour, to: d)!
+            }
+            let mfNow   = mfAt(0, 12)          // 今天 12:00
+            let mfFloor = mfNow.addingTimeInterval(-7 * 86400)
+
+            func mfTask(cron: String, lastRunAt: Date?, createdAt: Date,
+                        enabled: Bool = true, projectId: UUID? = nil) -> ScheduledTask {
+                var t = ScheduledTask(id: UUID(), name: "mf", prompt: "x", cron: cron,
+                                      projectId: projectId)
+                t.lastRunAt = lastRunAt
+                t.createdAt = createdAt
+                t.enabled = enabled
+                return t
+            }
+            let mfOld = mfAt(10, 0)            // 出生在 10 天前（够老, 不干扰 lastRunAt 的判据）
+
+            // ⓐ 正例: 每天 03:00, 上次真跑在 3 天前的 03:00 ⇒ 该跑没跑的是后三天
+            let mfA = SchedulerService.missedSummary(
+                for: mfTask(cron: "0 3 * * *", lastRunAt: mfAt(3, 3), createdAt: mfOld),
+                now: mfNow, floor: mfFloor, ackAt: nil)
+            check(mfA?.count == 3,
+                  "P17 漏跑: 每天 03:00 + 上次跑在 3 天前 ⇒ **恰好 3 次**（实测 \(mfA?.count ?? -1)）")
+            check(mfA?.last == mfAt(0, 3),
+                  "P17 漏跑: 最近一次 = **今天 03:00**（补跑要跑的就是它; 清单只留这一条时刻）")
+
+            // ⓑ `createdAt` 兜底: 新建任务从没跑过 ⇒ 只从出生那刻算起。
+            //    没有这一格, 一个 5 分钟前建的任务会报出 7 天内每一个 03:00 ⇒ 纯误报。
+            let mfB = SchedulerService.missedSummary(
+                for: mfTask(cron: "0 3 * * *", lastRunAt: nil, createdAt: mfAt(0, 6)),
+                now: mfNow, floor: mfFloor, ackAt: nil)
+            check(mfB == nil,
+                  "P17 漏跑: 今天 06:00 建、从没跑过 ⇒ **零漏跑**（03:00 在它出生之前; 拿掉 createdAt 这里立刻红）")
+
+            // ⓒ `ackAt` 兜底: 昨天 12:00 认过账 ⇒ 只剩今天那一次。
+            //    这正是「忽略」按钮要的效果。
+            let mfC = SchedulerService.missedSummary(
+                for: mfTask(cron: "0 3 * * *", lastRunAt: mfAt(3, 3), createdAt: mfOld),
+                now: mfNow, floor: mfFloor, ackAt: mfAt(1, 12))
+            check(mfC?.count == 1,
+                  "P17 漏跑: 昨天 12 点认过账 ⇒ 只剩今天一次（实测 \(mfC?.count ?? -1)）")
+
+            // ⓓ 反向: 停用的 / cron 非法的 ⇒ 一律不进清单（与调度器跳过它们同一个判据）
+            check(SchedulerService.missedSummary(
+                    for: mfTask(cron: "0 3 * * *", lastRunAt: mfAt(3, 3), createdAt: mfOld, enabled: false),
+                    now: mfNow, floor: mfFloor, ackAt: nil) == nil,
+                  "P17 漏跑: **停用的**任务不进清单")
+            check(SchedulerService.missedSummary(
+                    for: mfTask(cron: "不是 cron", lastRunAt: mfAt(3, 3), createdAt: mfOld),
+                    now: mfNow, floor: mfFloor, ackAt: nil) == nil,
+                  "P17 漏跑: **cron 非法**不进清单")
+
+            // ⓔ 回溯上限: 出生在 30 天前且从没跑过 ⇒ 被 floor 截到最近 7 天, 不能一路回到 30 天前
+            let mfE = SchedulerService.missedSummary(
+                for: mfTask(cron: "0 3 * * *", lastRunAt: nil, createdAt: mfAt(30, 0)),
+                now: mfNow, floor: mfFloor, ackAt: nil)
+            check(mfE?.count == 7,
+                  "P17 漏跑: 出生在 30 天前 ⇒ 被上限截到 **7 次**（实测 \(mfE?.count ?? -1); 拿掉 floor 这里会变成 31 —— 不是 30: createdAt 在那天 00:00, 窗口里那天 03:00 也算一个)")
+
+            // —— ③ 集成: 清单 → 忽略 → **落库** ——
+            // 拉锯点在最后一格: 只断言"忽略后清单空了"是**假绿** —— 内存里清掉也能过。
+            // 必须**重建一个 store** 才证明 ack 真的写进了 settings KV。
+            let mfId = UUID()
+            var mfReal = ScheduledTask(id: mfId, name: "落库用例", prompt: "x",
+                                       cron: "0 3 * * *", projectId: nil)
+            mfReal.lastRunAt = mfAt(3, 3)
+            mfReal.createdAt = mfOld
+            napStore.scheduler.scheduledTasks = [mfReal]
+            try? napStore.persistence?.upsertScheduled(mfReal)
+            napStore.scheduler.refreshMissedFires(now: mfNow)
+            check(napStore.missedFires.count == 1 && napStore.missedFires.first?.taskId == mfId,
+                  "P17 漏跑: refresh 之后清单里就是它（实测 \(napStore.missedFires.count) 条）")
+
+            // 项目已删的**不算漏跑** —— 它每次到点都被 `recordFireSkip` 跳过, 而那里不写
+            // `lastRunAt` ⇒ 不排除的话它会永远赖在清单里。
+            var mfOrphan = ScheduledTask(id: UUID(), name: "孤儿", prompt: "x",
+                                         cron: "0 3 * * *", projectId: UUID())
+            mfOrphan.lastRunAt = mfAt(3, 3)
+            mfOrphan.createdAt = mfOld
+            napStore.scheduler.scheduledTasks.append(mfOrphan)
+            napStore.scheduler.refreshMissedFires(now: mfNow)
+            check(!napStore.missedFires.contains { $0.taskId == mfOrphan.id },
+                  "P17 漏跑: **项目已删**的任务不进清单（那是配置坏了, 不是漏跑）")
+            napStore.scheduler.scheduledTasks.removeAll { $0.id == mfOrphan.id }
+
+            napStore.scheduler.ignoreMissedFire(mfId)
+            check(napStore.missedFires.isEmpty,
+                  "P17 漏跑: 忽略之后清单立刻空")
+
+            let napStore2 = ChatStore(transport: MockTransport(), dbPath: napDir + "/p17nap.db",
+                                      managedExtensionsDir: napDir + "/ext")
+            napStore2.mailbox.stopScheduler()
+            napStore2.scheduler.refreshMissedFires(now: mfNow)
+            check(napStore2.missedFires.isEmpty,
+                  "P17 漏跑: 忽略**落了库** —— 重建 store 后它不再提示（只在内存里清 ⇒ 这里立刻红）")
+            napStore.scheduler.stopScheduler()
+            napStore2.scheduler.stopScheduler()
         }
 
         report()    }

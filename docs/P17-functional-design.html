@@ -1,0 +1,720 @@
+<!DOCTYPE html>
+<html lang="zh-Hans">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>P17 — 让 dream 看得够、看得准</title>
+<!-- @style:begin · generated from docs/assets/design-doc.css — 请勿手改 -->
+<style>
+/* ============================================================================
+   design-doc.css —— MangoX 对齐文档统一样式
+   ----------------------------------------------------------------------------
+   ⚠️ 这是**唯一手改的样式源**。任何 docs/*.html 都不得自己写样式。
+      各文档里的 style 块由 scripts/docs/design_doc_css.py 从本文件生成：
+          python3 scripts/docs/design_doc_css.py --apply    # 同步
+          python3 scripts/docs/design_doc_css.py --check    # 不同步就退码 1
+      改完样式必须重跑 --apply，否则文档里的副本是旧的。
+
+   为什么不用外链：预览面板只服务单个文件（同级路径返回 403），
+   外链样式在面板里会静默失效 ⇒ 必须内联。单一来源靠脚本保证，不靠链接。
+
+   主题：跟随系统（prefers-color-scheme），两套色板都在 :root 里。
+   字号：正文 14px；标题 30 / 19 / 14；说明 12~13px。**不要小于 11px。**
+
+   —— 类名清单（骨架 = .wrap + 章节 h2，其余按需） ——
+   骨架   .wrap .eyebrow h1(.small) .metaline .tag h2(.n .en) h3
+   文本   .lead p code pre(.c .k) .foot ul.tight .kv .cite
+   强调块 .call(.lbl)  变体：.call.ok / .call.warn / .call.bad
+          .tldr > .tl(> .tln)
+   状态   .chip  变体：.c-ok .c-bad .c-warn .c-info .c-acc .c-mute
+   卡片   .grid(.g2 .g3) > .v(> .face > span)
+   对照   .flow > .lyr(.name .code .st)  + .arrowdown
+   条形   .bars > .bar(.on) > .track > .fill / .bv   + .barnote
+   表格   .tbl / .tw  > table > th/td(.num .sub)
+   待办   .todos > .todo(.blocked) > .tn / .tbody > .tt .td   + .cite
+   折叠   details.fold > summary
+   ============================================================================ */
+
+:root{
+  --bg:#fbfbf9; --card:#ffffff; --soft:#f4f4f0;
+  --fg:#1b1b19; --mute:#6a6a64; --faint:#9c9c95;
+  --line:#e5e4df; --line2:#d2d1cb;
+  --ok:#0f6e56; --okbg:#e3f5ee; --okbd:#9fe1cb;
+  --bad:#a32d2d; --badbg:#fcebeb; --badbd:#f7c1c1;
+  --warn:#82500b; --warnbg:#faeeda; --warnbd:#fac775;
+  --info:#185fa5; --infobg:#e8f1fb; --infobd:#b5d4f4;
+  --acc:#4a41b0; --accbg:#eeedfe; --accbd:#cecbf6;
+  --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
+}
+@media (prefers-color-scheme:dark){
+  :root{
+    --bg:#141417; --card:#1d1d21; --soft:#232328;
+    --fg:#ececea; --mute:#a2a29b; --faint:#74746e;
+    --line:#2e2e33; --line2:#414148;
+    --ok:#8adcbc; --okbg:#0e2f27; --okbd:#1d6e57;
+    --bad:#f4a4a4; --badbg:#361818; --badbd:#8f3b3b;
+    --warn:#f2c47f; --warnbg:#332610; --warnbd:#8a5f19;
+    --info:#9bc9f2; --infobg:#132539; --infobd:#255f94;
+    --acc:#b6b1f4; --accbg:#231f3e; --accbd:#4a41b0;
+  }
+}
+
+*{box-sizing:border-box}
+html{-webkit-text-size-adjust:100%}
+body{
+  margin:0;background:var(--bg);color:var(--fg);
+  font:14px/1.65 -apple-system,BlinkMacSystemFont,"PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;
+}
+.wrap{max-width:1060px;margin:0 auto;padding:44px 28px 72px}
+
+/* ---------- 页头 ---------- */
+.eyebrow{font:500 12px/1 var(--mono);letter-spacing:.08em;text-transform:uppercase;color:var(--faint)}
+h1{font-size:30px;line-height:1.25;font-weight:600;margin:12px 0 10px;letter-spacing:-.01em}
+h1 small{display:block;font-size:15px;font-weight:400;color:var(--mute);margin-top:8px;letter-spacing:0}
+.metaline{display:flex;flex-wrap:wrap;gap:8px;margin-top:18px}
+.tag{font:12px/1 var(--mono);padding:6px 10px;border:1px solid var(--line2);border-radius:999px;color:var(--mute);background:var(--card)}
+.tag b{color:var(--fg);font-weight:500}
+
+/* ---------- 章节 ---------- */
+h2{font-size:19px;font-weight:600;margin:52px 0 4px;padding-bottom:10px;border-bottom:1px solid var(--line);letter-spacing:-.01em}
+h2 .n{font:500 12px/1 var(--mono);color:var(--faint);margin-right:10px;vertical-align:2px}
+h2 .en{font:400 11px/1 var(--mono);color:var(--faint);letter-spacing:.06em;margin-left:10px;vertical-align:2px}
+h3{font-size:14px;font-weight:600;margin:28px 0 10px;color:var(--fg)}
+
+/* ---------- 文本 ---------- */
+p{margin:12px 0}
+.lead{color:var(--mute);font-size:13px;margin:8px 0 0}
+code{font:12.5px/1.5 var(--mono);background:var(--soft);padding:2px 5px;border-radius:5px;color:var(--fg)}
+pre{font:12.5px/1.7 var(--mono);background:var(--soft);border:1px solid var(--line);border-left:3px solid var(--accbd);
+    padding:14px 16px;border-radius:10px;overflow-x:auto;margin:12px 0;color:var(--fg)}
+pre .c{color:var(--faint)}
+pre .k{color:var(--acc)}
+.foot{color:var(--faint);font-size:12px;margin-top:44px;padding-top:18px;border-top:1px solid var(--line);font-family:var(--mono)}
+ul.tight{margin:12px 0;padding-left:20px}
+ul.tight li{margin:7px 0;font-size:13.5px}
+ul.tight li b{font-weight:600}
+.kv{display:grid;grid-template-columns:96px 1fr;gap:6px 14px;font-size:13px;margin:14px 0}
+.kv dt{color:var(--faint);font-family:var(--mono);font-size:11.5px;padding-top:2px}
+.kv dd{margin:0}
+.cite{font:11.5px/1.5 var(--mono);color:var(--faint);white-space:nowrap}
+hr{border:none;border-top:1px solid var(--line);margin:40px 0}
+
+/* ---------- 强调块 ---------- */
+.call{border:1px solid var(--accbd);background:var(--accbg);border-radius:12px;padding:16px 18px;margin:20px 0}
+.call .lbl{font:500 11px/1 var(--mono);letter-spacing:.08em;text-transform:uppercase;color:var(--acc);margin-bottom:8px}
+.call p{margin:0;font-size:14px}
+.call+.call{margin-top:10px}
+.call.ok{border-color:var(--okbd);background:var(--okbg)}   .call.ok .lbl{color:var(--ok)}
+.call.warn{border-color:var(--warnbd);background:var(--warnbg)} .call.warn .lbl{color:var(--warn)}
+.call.bad{border-color:var(--badbd);background:var(--badbg)}   .call.bad .lbl{color:var(--bad)}
+
+.tldr{display:flex;flex-direction:column;gap:1px;background:var(--line);border:1px solid var(--line);border-radius:12px;overflow:hidden;margin:10px 0 0}
+.tldr .tl{display:flex;gap:12px;align-items:flex-start;background:var(--card);padding:12px 16px;font-size:13.5px}
+.tldr .tl .tln{flex:none;color:var(--acc);font:500 13px/1.6 var(--mono)}
+.tldr .tl b{font-weight:600}
+
+/* ---------- 状态 chip ---------- */
+.chip{display:inline-block;font-size:11.5px;font-weight:500;padding:4px 9px;border-radius:999px;border:1px solid;white-space:nowrap}
+.c-ok{color:var(--ok);background:var(--okbg);border-color:var(--okbd)}
+.c-bad{color:var(--bad);background:var(--badbg);border-color:var(--badbd)}
+.c-warn{color:var(--warn);background:var(--warnbg);border-color:var(--warnbd)}
+.c-info{color:var(--info);background:var(--infobg);border-color:var(--infobd)}
+.c-acc{color:var(--acc);background:var(--accbg);border-color:var(--accbd)}
+.c-mute{color:var(--mute);background:var(--soft);border-color:var(--line2)}
+
+/* ---------- 卡片 ---------- */
+.grid{display:grid;gap:10px;margin:18px 0}
+.g2{grid-template-columns:repeat(2,1fr)}
+.g3{grid-template-columns:repeat(3,1fr)}
+.v{display:flex;align-items:center;gap:12px;background:var(--card);border:1px solid var(--line);border-radius:10px;padding:12px 14px}
+.v.top{align-items:flex-start}
+.v .face{flex:1;font-size:13px;min-width:0}
+.v .face>span{display:block;font-size:11.5px;color:var(--faint);margin-top:2px;font-family:var(--mono)}
+
+/* ---------- 对照（层 / 开关 / 流程） ---------- */
+.flow{display:flex;flex-direction:column;gap:8px;margin:18px 0}
+.lyr{display:flex;align-items:center;gap:14px;background:var(--card);border:1px solid var(--line);border-radius:10px;padding:13px 16px}
+.lyr .name{flex:none;width:112px;font-size:13px;font-weight:600}
+.lyr .code{flex:1;font-family:var(--mono);font-size:12px;color:var(--mute);min-width:0}
+.lyr .st{flex:none}
+.lyr.off{border-style:dashed}
+.arrowdown{text-align:center;color:var(--faint);font-size:15px;line-height:1;margin:-2px 0}
+
+/* ---------- 条形对比 ---------- */
+.bars{margin:18px 0;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:18px 20px}
+.bar{display:grid;grid-template-columns:150px 1fr 76px;align-items:center;gap:12px;margin-bottom:10px}
+.bar:last-child{margin-bottom:0}
+.bar .bn{font:12px/1.4 var(--mono);color:var(--mute)}
+.bar .track{height:26px;background:var(--soft);border-radius:6px;overflow:hidden}
+.bar .fill{height:100%;border-radius:6px;background:var(--line2);transition:width .6s ease}
+.bar.on .fill{background:var(--okbd);border:1px solid var(--ok)}
+.bar .bv{font:12px/1 var(--mono);color:var(--mute);text-align:right}
+.bar.on .bv{color:var(--ok);font-weight:500}
+.barnote{font-size:12px;color:var(--faint);margin-top:12px;padding-top:12px;border-top:1px solid var(--line)}
+
+/* ---------- 表格 ---------- */
+table{width:100%;border-collapse:collapse;margin:16px 0;font-size:13px}
+th{text-align:left;font-weight:500;color:var(--mute);font-size:11.5px;text-transform:uppercase;letter-spacing:.05em;
+   padding:10px 12px;border-bottom:1px solid var(--line2);white-space:nowrap}
+td{padding:11px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+tr:last-child td{border-bottom:none}
+tbody tr:hover{background:var(--soft)}
+td.mono,th.mono{font-family:var(--mono);font-size:12px}
+td .sub{display:block;color:var(--faint);font-size:12px;margin-top:3px;font-family:var(--mono)}
+.num{text-align:right;font-family:var(--mono);font-size:12px}
+.tbl{border:1px solid var(--line);border-radius:12px;overflow:hidden;background:var(--card)}
+.tbl table{margin:0}
+.tw{overflow-x:auto;border:1px solid var(--line);border-radius:12px;background:var(--card)}
+.tw table{margin:0;min-width:640px}
+/* 定义式表格：首列窄、键名不折行（契约 / 术语 / 字段表） */
+table.def th:first-child{width:150px}
+table.def th{white-space:nowrap}
+
+/* ---------- 待办与跟进 ---------- */
+.todos{margin:18px 0}
+.todo{display:flex;gap:14px;align-items:flex-start;background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px 16px;margin-bottom:8px}
+.todo .tn{flex:none;width:26px;height:22px;border-radius:6px;background:var(--soft);border:1px solid var(--line2);
+  font:500 12px/20px var(--mono);text-align:center;color:var(--mute);margin-top:1px}
+.todo .tbody{flex:1;min-width:0}
+.todo .tt{font-size:13.5px;font-weight:600}
+.todo .td{font-size:12.5px;color:var(--mute);margin-top:4px}
+.todo .td b{color:var(--fg);font-weight:500}
+.todo.blocked{border-color:var(--warnbd);background:var(--warnbg)}
+.todo.done{border-color:var(--okbd);background:var(--okbg)}
+.todo.done .tt{color:var(--ok)}
+
+/* ---------- 折叠 ---------- */
+details.fold{margin:16px 0}
+details.fold>summary{cursor:pointer;list-style:none;display:inline-flex;align-items:center;gap:8px;
+  font:12px/1 var(--mono);color:var(--info);background:var(--infobg);border:1px solid var(--infobd);
+  border-radius:999px;padding:7px 13px;user-select:none}
+details.fold>summary::-webkit-details-marker{display:none}
+details.fold>summary::before{content:"▸";font-size:10px;translate:0 1px}
+details.fold[open]>summary::before{content:"▾"}
+details.fold>summary:hover{border-color:var(--info)}
+details.fold[open]>summary{margin-bottom:4px}
+
+/* ---------- UI 原型 (mock) ----------
+   给「新页面长什么样」用的积木。**只在设计文档里用**, 不是产品样式。
+   为什么必须放这儿: lint ① 要求所有 class 都能在共享 CSS 里找到定义。 */
+.mocks{display:flex;flex-direction:column;gap:20px;margin:18px 0}
+.mock{background:var(--card);border:1px solid var(--line2);border-radius:12px;overflow:hidden}
+.mock .cap{font:500 11px/1 var(--mono);letter-spacing:.07em;text-transform:uppercase;color:var(--faint);
+  padding:9px 14px;border-bottom:1px solid var(--line);background:var(--soft)}
+.mock .win{display:flex;min-height:112px}
+.mock .pane{flex:1;padding:12px 14px;min-width:0}
+.mock .pane.side{flex:none;width:154px;border-right:1px solid var(--line);background:var(--soft)}
+.mock .tbar{display:flex;align-items:center;gap:6px;padding:9px 12px;border-bottom:1px solid var(--line)}
+.mock .dot{width:9px;height:9px;border-radius:50%;background:var(--line2);flex:none}
+.mock .ttl{font-size:12px;font-weight:500;color:var(--mute);margin-left:6px}
+.mock .row{display:flex;align-items:center;gap:8px;padding:6px 9px;border-radius:7px;font-size:12.5px}
+.mock .row.on{background:var(--accbg);color:var(--acc)}
+.mock .row .lab{flex:1;min-width:0}
+.mock .row .k{flex:none;color:var(--faint);font:11.5px/1.5 var(--mono)}
+.mock .row.on .k{color:var(--acc)}
+.mock .sep{height:1px;background:var(--line);margin:6px 0}
+.mock .mi{display:flex;gap:28px;justify-content:space-between;padding:5px 10px;border-radius:5px;font-size:12.5px}
+.mock .mi.hl{background:var(--accbg);color:var(--acc)}
+.mock .mi .k{color:var(--faint);font:11.5px/1.5 var(--mono)}
+.mock .mi.hl .k{color:var(--acc)}
+.mock .pill{display:inline-block;font:11px/1 var(--mono);padding:4px 8px;border-radius:999px;
+  border:1px solid var(--line2);background:var(--soft);color:var(--mute)}
+.mock .thumb{display:block;width:100%;height:74px;border:1px solid var(--line);border-radius:8px;
+  background:repeating-linear-gradient(45deg,var(--soft),var(--soft) 7px,transparent 7px,transparent 14px)}
+.mock .note{font-size:12px;color:var(--faint);padding:9px 14px;border-top:1px solid var(--line);background:var(--soft)}
+.mock .note b{color:var(--fg);font-weight:500}
+
+/* ---------- 窄屏 ---------- */
+@media (max-width:760px){
+  .g3,.g2{grid-template-columns:1fr}
+  .bar{grid-template-columns:1fr;gap:4px}
+  .bar .bv{text-align:left}
+  .lyr{flex-wrap:wrap;gap:8px}
+  .lyr .name{width:auto}
+}
+</style>
+<!-- @style:end -->
+</head>
+<body>
+<div class="wrap">
+
+<div class="eyebrow">P17 &nbsp;·&nbsp; 状态 <b>提案（未动工）</b>&nbsp;·&nbsp; 前身 <b>P15</b>&nbsp;·&nbsp; 单一来源 <b>本文件</b>&nbsp;·&nbsp; 2026-10-15</div>
+<h1>让 dream 看得够、看得准 —— 输入重拼与 delete
+  <small>dream 是 P15 造出来的：一次只读的整理，出厂档期<b>每周日 03:00</b>、且默认关着，产出「增 / 并 / 换」三类提案交人拍板。但它每次装给模型的上下文只有 <b>17,234 字符</b>，其中笔记侧<b>只有一份目录</b>（路径 · 标题 · 60 字摘要 · 陈旧天数），而它要回答的是"哪篇该改、哪篇该删"。这一版把输入重拼到 <b>256k 预算</b>，把它改成<b>每天跑</b>，把"删除"做成第四类提案，并且<b>先修掉一条让 merge / replace 从来没成功过的断链</b>。</small>
+</h1>
+
+<div class="metaline">
+  <span class="tag">前身 <b>P15（越用越懂你 · dream 出自这一版）</b></span>
+  <span class="tag">状态 <b>提案 · 未动工</b></span>
+  <span class="tag">输入 <b>17,234 → 241,234 字符</b></span>
+  <span class="tag">前置修复 <b>base_hash 断链</b></span>
+  <span class="tag">2026-10-15</span>
+</div>
+
+<h2><span class="n">00</span>结论先行<span class="en">VERDICT</span></h2>
+
+<div class="call">
+  <div class="lbl">一句话</div>
+  <p>dream 装给模型的上下文<b>和它要做的判断对不上</b>：会话侧 12,000 字符上限、笔记侧只有一份目录，而它要回答的是"哪篇笔记该改、哪篇该删"。这一版把输入重拼到 <b>256k 预算</b>（会话全量 + 笔记目录 + <b>笔记正文</b>），把"删除"做成第四类提案。<b>但动工前必须先修一条断链</b> —— 见下 ①。</p>
+  <p>另：本版一并落实了<b>运行可靠性</b> —— 防 App Nap 降频（把被系统推迟的定时器拉回来）+ 睡眠期间的漏跑清单（补不补由人拍板）。它与 dream 无关，是独立的一节：<b>见 §06</b>。</p>
+</div>
+
+<div class="tldr">
+  <div class="tl"><span class="tln">①</span><div><b>先修断链：merge / replace 的采纳从来没成功过。</b>指令要求 <code>base_hash = 你 read 到的那篇笔记全文的 sha256</code>（<code>SchedulerService.swift:152</code>），但 pi 的 read 工具<b>只返回正文</b>（<code>dist/core/tools/read.d.ts</code>：详情类型只有 <code>truncation</code>，<code>read.js</code> 里 <code>sha|hash|md5</code> 零命中），<code>[笔记]</code> 索引段的行也没有任何指纹（<code>KnowledgeBase.swift:435-441</code>）—— <b>模型没有任何途径拿到这个值</b>。而客户端校验只查它<b>非空</b>（<code>PiRpcTransport.swift:492</code>）⇒ 编一个字符串就过闸、入库、一路走到人点采纳，撞上 <code>KnowledgeStore.swift:1599</code> 的比对 ⇒ <code>.baseHashMismatch</code>。<b>修法：让扩展自己算</b> —— 它跑在 node 里，一步 <code>createHash</code>，而且记的是"写下这条提案那一刻"的指纹，比模型的 read 更准。</div></div>
+  <div class="tl"><span class="tln">②</span><div><b>输入重拼不是"调大数字"，是三个语义变化。</b>① 从「<b>先截断再拼</b>」改成「<b>全文优先、预算兜底</b>」；② 会话侧取消「最多 8 个」，改由<b>窗口</b>决定看几个；③ 笔记侧<b>新增正文段</b>（目录保留）。只改数字的话，省钱逻辑仍然会先把内容切碎。</div></div>
+  <div class="tl"><span class="tln">③</span><div><b>会话摘录按回合整对丢，不切字符串。</b>现在的单会话裁剪是 <code>body.suffix(2000)</code>（<code>SchedulerService.swift:285-287</code>）—— 一场正常会话必超 2000 ⇒ <b>开头的用户提问整段消失</b>，且切点落在半句话中间。喂进去的是"没有提问的回答"，模型会把那些回答当成凭空冒出的结论。</div></div>
+  <div class="tl"><span class="tln">④</span><div><b>笔记的来源指针在采纳那一刻就没了。</b><code>note_proposals.sources</code> 记着"这条结论来自哪几个会话"，但 P15.8/5f「拍过板就删行」⇒ 采纳即删行；而落地的 <code>note_revisions</code> 六列<b>没有 sources</b>（<code>PersistenceStore.swift:135-144</code>）。⇒ 判断"这篇的依据现在还成立吗"<b>没有依据</b>。会话本身还在库里，丢的是<b>链接</b>，事后补不回来。</div></div>
+  <div class="tl"><span class="tln">⑤</span><div><b>重复可以接受，丢失不行。</b>窗口取 36 小时，但<b>下限是"上次 fire 至今"</b>：<code>scheduled_tasks.last_run_at</code> 是现成的（<code>PersistenceStore.swift:77</code>），每次 fire <b>起来时</b>写（<code>SchedulerService.swift:519</code>）、被跳过的 fire <b>不写</b>（<code>:529</code>）⇒ 漏跑一天料不会掉出窗口。<b>零新列、零新状态</b>，一个 <code>max</code> 的钱。</div></div>
+</div>
+
+<h3>状态矩阵</h3>
+<div class="grid g3">
+  <div class="v"><div class="face">前置修复 <code>base_hash</code> 交给扩展算<span>强 · 不修则 merge / replace 永远落不了盘</span></div><span class="chip c-bad">必须先行</span></div>
+  <div class="v"><div class="face">会话窗口 <code>21 天 → 36 小时</code><span>强 · 日更 + 水位防漏</span></div><span class="chip c-acc">提案</span></div>
+  <div class="v"><div class="face">会话裁剪 <code>切字符串 → 整对丢</code><span>强 · 保住"提问 + 回答"的配对</span></div><span class="chip c-acc">提案</span></div>
+  <div class="v"><div class="face">笔记侧 <code>目录 → 目录 + 正文</code><span>强 · 省掉模型自己 read 的往返</span></div><span class="chip c-acc">提案</span></div>
+  <div class="v"><div class="face">会话预算 <code>12,000 → 100,000</code><span>强 · 全文优先，超了从最旧丢</span></div><span class="chip c-acc">提案</span></div>
+  <div class="v"><div class="face">来源指针 <code>无 → note_revisions 加列</code><span>强 · delete / merge 的判断依据</span></div><span class="chip c-acc">提案</span></div>
+  <div class="v"><div class="face">第四类提案 <code>delete</code><span>强 · 走已有的"留旧版 + 废纸篓"</span></div><span class="chip c-acc">提案</span></div>
+  <div class="v"><div class="face">出厂档期 <code>周日 → 每天</code><span>中 · 常量也得改，否则新库种出来还是周更</span></div><span class="chip c-warn">一并改</span></div>
+  <div class="v"><div class="face">常驻 <code>[笔记]</code> 段<span>强 · <b>一个字都不动</b>（它每轮对话都在，不是 dream 专属）</span></div><span class="chip c-ok">不动</span></div>
+</div>
+
+<h2><span class="n">01</span>需求说明<span class="en">REQUIREMENT</span></h2>
+
+<div class="tldr">
+  <div class="tl"><span class="tln">R1</span><div><b>dream 的判断依据不足。</b>它现在的任务是"对照会话与笔记，提出增 / 改 / 删"。而它拿到的会话是<b>被截断过的</b>（单会话只留尾部 2000 字符）、笔记是<b>只有目录</b>的 —— 两边的信息量都撑不起"这篇该不该删"这个判断。</div></div>
+  <div class="tl"><span class="tln">R2</span><div><b>采纳路径是断的。</b>见 ①。这是 P15.4 的遗留缺陷，本版<b>必须先修</b>，否则 delete 会长在同一条断链上。</div></div>
+  <div class="tl"><span class="tln">R3</span><div><b>少一类动作。</b>P15 的提案只有增 / 并 / 换三种。笔记会"整个不再成立"（结论被推翻、两篇重复已并走、当初的临时记录过期），那时它该被<b>删掉而不是改写</b>。P15 红线的「零先例自动删知识」禁的是<b>自动删</b> —— 只出提案、必经人拍板 ⇒ 合规。</div></div>
+</div>
+
+<h2><span class="n">02</span>现状与实测<span class="en">CURRENT STATE</span></h2>
+
+<h3>A · 现在一次 dream 装进去的（常量现算）</h3>
+
+<div class="tbl">
+<table class="def">
+  <thead><tr><th>段</th><th>上限</th><th>出处 / 口径</th></tr></thead>
+  <tbody>
+    <tr><td>【最近会话摘录】</td><td class="num">12,000 字符</td><td>窗口 <b>21 天</b> · 最多 <b>8 个</b>会话 · 单会话 <b>2000</b>（<code>CodexTheme.swift:443-446</code>）</td></tr>
+    <tr><td><code>[笔记]</code> 段</td><td class="num">2,000 / 根</td><td>两根 ⇒ 4,000。行 = <code>相对路径 · 标题 · 摘要 · N 天未更新</code>（<code>KnowledgeBase.swift:184-185,435-441</code>）</td></tr>
+    <tr><td>dream 指令常量</td><td class="num">1,234 字符</td><td><code>dreamPrompt</code>，33 行 / 690 汉字（实测）</td></tr>
+    <tr><td><b>合计</b></td><td class="num"><b>17,234</b></td><td>—— <span class="sub">其中笔记侧只有一份目录</span></td></tr>
+    <tr><td>参照：注入块总预算</td><td class="num">64,000</td><td><code>knowledgeTotalCharLimit</code> —— <b>这是常驻的，不是 dream 的</b></td></tr>
+  </tbody>
+</table>
+</div>
+
+<div class="bars">
+  <div class="bar"><span class="bn">现在</span><div class="track"><div class="fill" style="width:7%"></div></div><span class="bv">17,234</span></div>
+  <div class="bar on"><span class="bn">本版拼法</span><div class="track"><div class="fill" style="width:94%"></div></div><span class="bv">241,234</span></div>
+  <div class="barnote">上限 <b>256,000 字符</b>（按 256k 上下文折成字符口径；中文约 1 字符 ≈ 0.5~1 token ⇒ 偏保守的一侧）。余下 ~15,000 留给系统提示与模型输出。分账：会话 <b>100,000</b> · 笔记正文 <b>120,000</b> · 笔记目录 <b>20,000</b> · 指令 <b>1,234</b>。</div>
+</div>
+
+<h3>B · 三个结构性缺口</h3>
+
+<p class="lead">"装得少"是表象，准确的说是<b>装的东西和要做的判断对不上</b>。</p>
+
+<div class="grid g3">
+  <div class="v top"><div class="face">笔记正文没有预算<span>索引段只是地图，正文要模型自己 <code>read</code>（<code>dreamPrompt:133</code> 明写"要正文用 read"）—— 而 read 进来多少<b>不受任何预算约束</b>。会话侧有三级预算管着，笔记侧一个都没有。</span></div><span class="chip c-warn">缺口</span></div>
+  <div class="v top"><div class="face">来源指针采纳即丢<span><code>note_proposals.sources</code> 记着来源，但采纳即删行；<code>note_revisions</code> 没有 sources 列 ⇒ 笔记落地后不知道它从哪来。</span></div><span class="chip c-bad">缺口</span></div>
+  <div class="v top"><div class="face">窗口 &lt; 笔记寿命<span>笔记可以活得比 21 天窗口长得多，超过窗口的那些<b>来源会话根本不在输入里</b> ⇒ 只能凭笔记现在的样子猜。</span></div><span class="chip c-warn">缺口</span></div>
+</div>
+
+<h3>C · 断链：<code>base_hash</code> 的三条来路都是死的</h3>
+
+<div class="call bad">
+  <div class="lbl">这就是"采纳永远失败"的根因</div>
+  <p>指令要求模型填一个它<b>算不出来</b>的值，而唯一的校验只查"非空"，于是错误被推迟到人点采纳那一刻才爆 —— <b>并且报错归因是错的</b>：界面说"内容被改过"（<code>KnowledgeView.swift:2225</code>），真相是模型编了一个哈希。</p>
+</div>
+
+<div class="flow">
+  <div class="lyr"><span class="name">read 工具</span><span class="code">返回正文 / 图片块，详情只有 truncation —— 无哈希</span><span class="st"><span class="chip c-bad">不提供</span></span></div>
+  <div class="lyr"><span class="name">[笔记] 索引段</span><span class="code">路径 · 标题 · 60 字摘要 · 陈旧天数 —— 无指纹</span><span class="st"><span class="chip c-bad">不提供</span></span></div>
+  <div class="lyr off"><span class="name">bash shasum</span><span class="code">理论可行，但要模型自己想到；指令里从没提过这件事</span><span class="st"><span class="chip c-warn">靠自觉</span></span></div>
+  <div class="arrowdown">↓</div>
+  <div class="lyr"><span class="name">采纳闸门</span><span class="code">noteHash(磁盘) == p.baseHash —— 必然不等</span><span class="st"><span class="chip c-bad">必然拒</span></span></div>
+</div>
+
+<p class="lead">佐证：本机库 <code>note_proposals</code> 表 <b>0 行</b> —— 这条路径<b>从没被真人走完过</b>。冒烟里的哈希全是测试自己算的（<code>smokeMain.swift:5257,5275</code> 直接写 <code>KnowledgeStore.noteHash(...)</code>），所以门禁的绿<b>盖不到"模型填得对不对"这一层</b>。</p>
+
+<h2><span class="n">03</span>路径与方案<span class="en">APPROACH</span></h2>
+
+<h3>改动一 · 会话摘录：36 小时窗口 + 水位 + 回合结构</h3>
+
+<div class="tbl">
+<table class="def">
+  <thead><tr><th>项</th><th>现在</th><th>改成</th></tr></thead>
+  <tbody>
+    <tr><td>窗口</td><td class="mono">dreamDigestWindowDays = 21</td><td class="mono">dreamDigestWindowHours = 36</td></tr>
+    <tr><td>窗口起点</td><td class="mono">now - 21 天</td><td class="mono">max(now - 36h, lastRunAt)</td></tr>
+    <tr><td>会话数</td><td class="mono">dreamDigestMaxSessions = 8</td><td>取消 —— 由窗口决定</td></tr>
+    <tr><td>单会话裁剪</td><td class="mono">body.suffix(2000)</td><td>按回合整对丢</td></tr>
+    <tr><td>单会话上限</td><td class="mono">dreamDigestMaxCharsPerSession = 2,000</td><td class="mono">40,000</td></tr>
+    <tr><td>总量</td><td class="mono">dreamDigestTotalChars = 12,000</td><td class="mono">100,000</td></tr>
+  </tbody>
+</table>
+</div>
+
+<p><b>为什么窗口取 36 小时而不是 24：</b>日更的两次 fire 之间总有抖动，卡死 24h 会让"昨天下午到今早"的会话反复掉在缝里。多出来的 12 小时造成的<b>重叠（重复读）是可以接受的代价</b>。</p>
+
+<p><b>但重复不等于丢失</b>：固定窗口的固有毛病是"漏跑一天 ⇒ 那天的料永久掉出窗口"。取 <code>max(36h, lastRunAt)</code> 就同时解决：正常每天都跑 = 36h；漏一天 = 窗口自动拉长到"上次 fire 至今"，料还在。被跳过的 fire <b>不写</b> <code>lastRunAt</code> ⇒ 窗口自动延长，正是想要的。</p>
+
+<p><b>回合结构：</b>一条 user 消息 + 它之后到下一个 user 之前的消息 = 一个回合。超预算时<b>从最旧的回合整对丢</b>，留下的每一段都是完整的「用户: … / 助手: …」。现在的 <code>suffix</code> 会把开头的提问全切掉，还会从半句话说起。</p>
+
+<h3>改动二 · 笔记侧：目录 + 正文两层</h3>
+
+<div class="flow">
+  <div class="lyr"><span class="name">目录（全量）</span><span class="code">保留现有 indexBlock 形状 —— 一眼看全，用于"两篇讲同一件事"这类判断</span><span class="st"><span class="chip c-info">预算 20,000</span></span></div>
+  <div class="arrowdown">＋</div>
+  <div class="lyr"><span class="name">正文（按预算）</span><span class="code">新增。省掉模型自己 read 的往返，也解掉"正文没有预算"这个缺口</span><span class="st"><span class="chip c-acc">预算 120,000</span></span></div>
+  <div class="arrowdown">↓ 超预算时</div>
+  <div class="lyr off"><span class="name">优雅退化</span><span class="code">从最旧的丢正文、点名"丢了 N 篇，目录还在" —— 退回到"地图 + 自己 read"，而不是悄悄丢一半</span><span class="st"><span class="chip c-warn">退到目录</span></span></div>
+</div>
+
+<p class="lead">⚠️ <b>常驻的 <code>[笔记]</code> 段一个字都不动。</b>它每轮对话都在（与 <code>knowledgeTotalCharLimit = 64,000</code> 同一本账）；为 dream 放开预算时若连它一起抬，多花钱的是<b>每一轮普通对话</b>，而 dream 一个月才跑 30 次。dream 用<b>自己的一份</b>，只在 fire 时拼进 prompt。</p>
+
+<h3>改动三 · 预算分账与实测量级</h3>
+
+<p>一组实测/折算数（本机库：<code>sessions</code> 4 条、<code>events</code> 74 条、payload 共 72,276 字节 ⇒ <b>一场会话约 1.1 万字符</b>量级）：</p>
+
+<div class="tbl">
+<table>
+  <thead><tr><th>段</th><th>预算</th><th>近期实际占用</th><th>会不会长</th></tr></thead>
+  <tbody>
+    <tr><td>最近会话摘录</td><td class="num">100,000</td><td class="num">33,000</td><td>不累积（36h 窗口截住）</td></tr>
+    <tr><td>笔记目录</td><td class="num">20,000</td><td class="num">小</td><td>累积但便宜（一行一篇）</td></tr>
+    <tr><td>笔记正文</td><td class="num">120,000</td><td class="num">15,000 ~ 30,000</td><td><b>累积</b> —— 每天约 +500~1000 字符</td></tr>
+    <tr><td>指令常量</td><td class="num">1,234</td><td class="num">1,234</td><td>不变</td></tr>
+    <tr><td><b>合计</b></td><td class="num"><b>241,234</b></td><td class="num"><b>约 60,000</b></td><td>——</td></tr>
+  </tbody>
+</table>
+</div>
+
+<div class="call warn">
+  <div class="lbl">唯一会撞上限的是笔记正文</div>
+  <p>按每天 +500~1000 字符累积：3 个月约 5~9 万、6 个月约 10~18 万、<b>12 个月约 18~36 万 ⇒ 大约 11 个月触及 256k</b>。所以"超了从最旧的丢 + 点名"这条兜底<b>不是异常分支，它会在一年后成为常态</b> —— 这也是改动二里"优雅退化"必须存在的原因。</p>
+</div>
+
+<h3>改动四 · <code>base_hash</code> 交给扩展算（前置修复）</h3>
+
+<div class="tbl">
+<table>
+  <thead><tr><th>位置</th><th>改什么</th></tr></thead>
+  <tbody>
+    <tr><td class="mono">mangox-dream.ts · note_proposal.execute</td><td>import <code>node:crypto</code>；有 <code>target_path</code> 就自己读该文件算 sha256，<b>覆盖</b>模型给的值；读不到 ⇒ 不填（等于"目标不存在"）</td></tr>
+    <tr><td class="mono">dreamPrompt:152</td><td>那句"必须带 base_hash"改成"不用你填"</td></tr>
+    <tr><td class="mono">PiRpcTransport.swift:469,492,496</td><td>三处描述与校验改写。⚠️ 现在那句 <code>Read the note, then call again</code> 是<b>错的建议</b>（读了也拿不到），必须删</td></tr>
+    <tr><td class="mono">NoteProposal.swift:225</td><td><b>不用改</b> —— <code>baseHashRequired</code> 保留，语义从"模型漏填"变成"扩展读不到文件"</td></tr>
+  </tbody>
+</table>
+</div>
+
+<ul class="tight">
+  <li><b>为什么这是减法</b>：模型少填一个必填字段、少一个出错的地方。指纹是<b>事实不是判断</b> —— 扩展依旧不做策略（根白名单仍然只在 App 侧，<code>PiRpcTransport.swift:426-428</code> 明写不许造第二真源）。</li>
+  <li><b>为什么扩展算得更准</b>：它记的是"<b>写下这条提案那一刻</b>"的指纹 —— 正是乐观并发要的那一版。模型 read 在前、写提案在后，两者在同一个 turn 内。</li>
+  <li><b>算法口径</b>：Swift 侧 <code>noteHash = SHA256.hash(data: Data(text.utf8))</code> 小写 hex（<code>KnowledgeStore.swift:1360</code>），node 侧 <code>createHash("sha256").update(buf)</code> 逐字节等价。</li>
+</ul>
+
+<h3>改动五 · 来源指针落列</h3>
+
+<p><code>note_revisions</code> 加一列 <code>sources TEXT</code>（JSON，形状与 <code>note_proposals.sources</code> 相同）。<b>列只增不删</b>是本仓已立法的判据（P11），加列不破它；老库那几十行留空 —— 空值诚实地表示"这篇没有来源记录"。</p>
+
+<ul class="tight">
+  <li><b>为什么不写进 frontmatter</b>：那是改用户文件、把元数据混进正文，还会进索引快照。</li>
+  <li><b>它只在"采纳 dream 提案"这条路径上有值</b>，人写的笔记没有 —— 那是对的（它本来就没有来源），与「凡不在记录里的就归『你写的』」同一条判据。</li>
+  <li><b>它是 delete 和 merge 的判断依据</b>：没有它，"这篇的依据现在还不成立"永远只能靠猜。</li>
+</ul>
+
+<h3>改动六 · 第四类提案 <code>delete</code></h3>
+
+<p>契约 token 从三个字变四个字，全链路一起改：</p>
+
+<div class="flow">
+  <div class="lyr"><span class="name">1 · 扩展侧</span><span class="code">mangox-dream.ts 的 kind 字面量 + 工具描述（这段字节进模型 prompt）</span><span class="st"><span class="chip c-acc">改</span></span></div>
+  <div class="lyr"><span class="name">2 · 模型层</span><span class="code">NoteProposal.Kind 加 case delete（rawValue 落库 ⇒ 与 1 必须同批）</span><span class="st"><span class="chip c-acc">改</span></span></div>
+  <div class="lyr"><span class="name">3 · 解析层</span><span class="code">emptyContent 给 delete 开例外 —— <b>不开则 delete 提案 100% 进不来</b>（delete 天然没有正文）</span><span class="st"><span class="chip c-bad">地雷</span></span></div>
+  <div class="lyr"><span class="name">4 · 采纳层</span><span class="code">adoptProposal 加一支，转调已有的 deleteNote（留旧版 + 进废纸篓）</span><span class="st"><span class="chip c-acc">改</span></span></div>
+  <div class="lyr"><span class="name">5 · 渲染层</span><span class="code">proposalKindLabel / proposalKindColor 两个穷举 switch ⇒ 编译期点名；diff 补一条对称提示</span><span class="st"><span class="chip c-acc">改</span></span></div>
+</div>
+
+<p><b>payload 形状</b>：<code>target_path</code> + <code>base_hash</code> + <code>reason</code> + <code>sources</code> 必填；<code>title</code> 不要；<code>content</code> 不要。好消息是 <code>:225</code> 那条 <code>kind != .insight ⇒ 要 base_hash</code> 把 delete 自动划进"要指纹"那侧 —— <b>不用改</b>。</p>
+
+<p><b>落地复用什么</b>：<code>KnowledgeStore.deleteNote</code>（<code>:1469-1491</code>）已经是成品 —— 内容进 <code>note_revisions</code>（origin 记的是"这一版谁写的"，不是删除者）+ 文件进<b>系统废纸篓</b>。这是 P15.2 留下的两道退路，delete 一行不新写。它也正好是「零先例自动删知识」那条红线的合规落点：<b>只出提案 ⇒ 必经人拍板</b>。</p>
+
+<h3>改动七 · 出厂档期与常量</h3>
+
+<p><code>dreamDefaultCron = "0 3 * * 0"</code>（周日，<code>SchedulerService.swift:98</code>）⇒ <code>"0 3 * * *"</code>。⚠️ 本机库里那条任务<b>已经</b>是每天（有人手动改过），所以这一条只影响<b>新库种出来的默认值</b> —— 不改的话，新装的 MangoX 还是周更。</p>
+
+<h2><span class="n">04</span>待办与跟进<span class="en">TODO</span></h2>
+
+<h3>前置门（不过就不做）</h3>
+
+<div class="todos">
+  <div class="todo">
+    <span class="tn">1</span>
+    <div class="tbody">
+      <div class="tt">改动四（<code>base_hash</code> 交给扩展）必须先落地</div>
+      <div class="td"><b>判据</b>：扩展侧造一个"文件读不到"的反例 ⇒ 提案应带<b>空</b> base_hash 并被 <code>baseHashRequired</code> 拒；再造成"能读到" ⇒ base_hash 应<b>等于</b> <code>KnowledgeStore.noteHash(真内容)</code>（这条断言能变红：随便改一位就红）。<b>为什么必须先</b>：delete 比 merge / replace 更依赖这道指纹闸门，带着一条必然拒的闸门去做"点错一次少一篇"的功能，是把它建在沙子上。<b>状态</b>：<span class="chip c-ok">已落地（批 1）</span></div>
+    </div>
+  </div>
+</div>
+
+<h3>验收项</h3>
+
+<div class="call">
+  <div class="lbl">落地状态</div>
+  <p><b>五组全部已落地</b>，每组都配了反例（把实现改回去必须变红）。实测中有价值的一件事：<b>两条判据原先是"假绿"的，被造反例这一步逼出来并修强了</b>。</p>
+  <p>① 「回合裁剪」原来只断言"留下的提问是问 3、开头的问 1 没了" —— 而退回 <code>suffix</code> 时这两条<b>照样过</b>（裁尾部时问 3 还在、问 1 也没了）。真正区分新旧的是<b>切点落在哪</b>，现在钉的是"跳过省略标注之后的第一个正文行必须是完整的 <code>用户: …</code>"。② 「正文段留最新」原来只断言"丢了东西、也点名了" —— 丢<b>最新</b>的那批同样能过；现在直接钉"留下的必须是最新的那批"（<code>n0</code> 在、<code>n4</code> 不在）。</p>
+</div>
+
+<div class="todos">
+  <div class="todo">
+    <span class="tn">2</span>
+    <div class="tbody">
+      <div class="tt">回合结构：留下的第一段必须是完整的「用户: …」</div>
+      <div class="td">造一场超预算的会话（多个回合）⇒ 断言裁剪后的第一行<b>以 <code>用户: </code> 开头</b>、且不存在"没有提问的回答"。反例：把裁剪改回 <code>suffix</code> ⇒ <b>必须变红</b>。</div>
+    </div>
+  </div>
+  <div class="todo">
+    <span class="tn">3</span>
+    <div class="tbody">
+      <div class="tt">窗口下限：漏跑一天料不丢</div>
+      <div class="td">造 <code>lastRunAt = now - 50 小时</code> ⇒ 断言窗口起点取的是 <b>50 小时前</b>而不是 36 小时前。反例：把 <code>max</code> 改成固定 36h ⇒ 变红。</div>
+    </div>
+  </div>
+  <div class="todo">
+    <span class="tn">4</span>
+    <div class="tbody">
+      <div class="tt">常驻 <code>[笔记]</code> 段零改动</div>
+      <div class="td">断言 <code>KnowledgeBaseScan.indexBlock</code> 的输出在本版<b>逐字不变</b>（<code>maxCharsPerBase</code> / <code>maxLinesPerBase</code> 没动）。这条守的是"别给所有对话加钱"。</div>
+    </div>
+  </div>
+  <div class="todo">
+    <span class="tn">5</span>
+    <div class="tbody">
+      <div class="tt"><code>delete</code> 的三条反例</div>
+      <div class="td">① delete 带 content ⇒ 应被拒（或忽略）② delete 缺 base_hash ⇒ <code>baseHashRequired</code> ③ 目标已被外部删掉 ⇒ 采纳应给 <code>noteMissing</code>，<b>不是</b>当成功删行。</div>
+    </div>
+  </div>
+</div>
+
+<h3>待拍板</h3>
+
+<div class="todos">
+  <div class="todo blocked">
+    <span class="tn">6</span>
+    <div class="tbody">
+      <div class="tt">笔记正文超预算时，丢"最旧的"还是别的</div>
+      <div class="td">本版先取<b>最旧</b>（简单、可解释）。备选是"最久没被引用的"或"与今天会话无语义交集的"，都需要 App 侧先算一个分 —— 那是另一批的事。<b>状态</b>：<span class="chip c-ok">已拍板（按最旧 · 观察一年）</span></div>
+    </div>
+  </div>
+  <div class="todo">
+    <span class="tn">7</span>
+    <div class="tbody">
+      <div class="tt">被拒绝过的 delete 提案会每天重提</div>
+      <div class="td">采纳之后那篇真的没了 ⇒ 下轮扫描看不到 ⇒ <b>自然不重提</b>；但<b>拒绝之后那篇还在</b> ⇒ 日更下每天都会再提一次。P15.8/5f 已经为"终态记录"付过一次代价并推翻过，本版<b>不再引入墓碑</b>，先靠入库去重（同 pending 的 <code>target_path</code> 只留一条）兜住。真被烦到再加沉默期。<b>状态</b>：<span class="chip c-ok">已拍板（先靠入库去重兜）</span></div>
+    </div>
+  </div>
+  <div class="todo">
+    <span class="tn">8</span>
+    <div class="tbody">
+      <div class="tt">系统消息会被标成"助手"</div>
+      <div class="td"><code>KnowledgeStore.swift:960</code> 写的是 <code>role == .user ? "用户" : "助手"</code>，而角色有三值（<code>MessageModels.swift:8</code>）。要不要加 <code>.system</code> 分支 —— 顺手能改，也可能本来就是想要的。<b>实测（10-15）</b>：<code>MessageRole.system</code> 在<b>全仓零产出点</b>（构造 <code>ChatMessage</code> 的 9 处全传 <code>.user</code> / <code>.assistant</code>），本机库 <code>user 18 / assistant 82 / system 0</code> ⇒ 这个分支<b>当前不可达</b>。<b>状态</b>：<span class="chip c-warn">待定</span></div>
+    </div>
+  </div>
+</div>
+
+<h2><span class="n">05</span>风险与边界<span class="en">RISK &amp; BOUNDARY</span></h2>
+
+<div class="call warn">
+  <div class="lbl">代价（如实报，不劝阻）</div>
+  <p>① 单次 dream 的输入量约 <b>14 倍</b>（17k → 240k），日更就是每天一次这个量级；② 首 token 延迟明显变长；③ <b>长上下文有"中间遗忘"</b> —— 塞满不等于判断更准，所以<b>分段结构与关键信息落位</b>比单纯堆料重要（同「persona 段结构性首位」那条判据）。</p>
+</div>
+
+<div class="call">
+  <div class="lbl">一条会撞碎的不变量</div>
+  <p><code>dreamShortlist</code>（<code>SchedulerService.swift:343-346</code>）现在的界是 <code>MaxSessions + excludeCount</code>，而它上面 <code>:327-342</code> 那段注释<b>证明过</b>"读的量只与 MaxSessions 有关、与全库 events 无关"。取消会话数上限 ⇒ 这个证明失效，必须把界换成"<b>窗口内全部会话</b>"，并把那段证明与守它的冒烟<b>一起重写</b>（冒烟现在拿它和"读全体"比逐字相等）。</p>
+</div>
+
+<div class="call ok">
+  <div class="lbl">红线：合规性说明</div>
+  <p>「<b>零先例自动删知识</b>」禁的是<b>自动删</b>。dream 只出提案、退路齐全（旧版进版本史 + 文件进废纸篓）、必经人拍板 ⇒ 不破线。删除仍然是本功能里<b>唯一不可逆</b>的动作，所以审阅面必须把"能从废纸篓捞回来"写出来 —— 安全垫存在而用户不知道，等于没留。</p>
+</div>
+
+<h3>delete 审阅面（线框示意）</h3>
+
+<p class="lead">⚠️ 这一版<b>不出实机效果图</b>：仓库里的真实坐标还没改，任何"效果图"都会是假图（本仓已有一次这样的教训）。下面是<b>线框</b>，实施后按真源码出图替换。</p>
+
+<div class="mocks">
+  <div class="mock">
+    <div class="cap">收件箱 · 左列一行</div>
+    <div class="win">
+      <div class="pane side">
+        <div class="row on"><div class="lab">提案 · 删</div><span class="k">1</span></div>
+        <div class="sep"></div>
+        <div class="row"><div class="lab">笔记区</div><span class="k">12</span></div>
+      </div>
+      <div class="pane">
+        <div class="row"><div class="lab"><b>删</b> &nbsp;shell-quirks</div><span class="k">全局笔记 / shell-quirks.md · 2 个来源</span></div>
+        <div class="row"><div class="lab"><b>换</b> &nbsp;持久化选型</div><span class="k">项目笔记 / persist.md · 1 个来源</span></div>
+      </div>
+    </div>
+    <div class="note">动作标记 <b>删</b> 与增 / 并 / 换同列同宽（侧栏对齐）。</div>
+  </div>
+  <div class="mock">
+    <div class="cap">审阅面 · 删除提案</div>
+    <div class="win">
+      <div class="pane">
+        <div class="mi"><span>目标</span><span class="k">全局笔记 / shell-quirks.md</span></div>
+        <div class="mi"><span>为什么提</span><span class="k">结论已被今天的会话推翻</span></div>
+        <div class="mi"><span>提出时的指纹</span><span class="k">a3f1c8e2…</span></div>
+        <div class="sep"></div>
+        <div class="mi hl"><span>现在</span><span>采纳后</span></div>
+        <div class="mi"><span># zsh 里 PATH 的写法</span><span class="k">（空）</span></div>
+        <div class="mi"><span>结论是 export PATH 放最后</span><span class="k">（空）</span></div>
+        <div class="sep"></div>
+        <div class="mi"><span class="k">这篇会进废纸篓，旧版留在版本史里 · 可撤回</span><span class="pill">采纳</span> <span class="pill">丢弃</span></div>
+      </div>
+    </div>
+    <div class="note">diff <b>左满右空</b> —— 现有并排 diff 天然能画，零新渲染路径。补一条与 <code>insight</code> 对称的提示：<b>"右边是空的 —— 这篇会被删掉"</b>。</div>
+  </div>
+</div>
+
+<h2><span class="n">06</span>运行可靠性<span class="en">DAEMON</span></h2>
+
+<div class="call">
+  <div class="lbl">一句话</div>
+  <p>boss 说的「常驻」其实是<b>三个互不相干的问题</b>：① <b>App Nap 降频</b>（app 还在，定时器被合并 / 推迟，<b>漏掉的不补</b>）② <b>重启后不自动起</b>③ <b>Mac 睡眠</b>。三者的严重度与修法完全不同。本版只修 ①；②③ <b>明确不做</b>，改为把"睡过去期间漏了哪些任务"列成一张清单 —— 补不补由人拍板。</p>
+</div>
+
+<h3>A · 三个问题，三套代价</h3>
+
+<div class="tbl">
+<table class="def">
+  <thead><tr><th>#</th><th>问题</th><th>症状</th><th>本版</th></tr></thead>
+  <tbody>
+    <tr><td class="num">①</td><td>App Nap 降频</td><td>app 还在，但「窗口不可见 + 无音频 + 在后台 + 没声明"我还在干活"」<b>四条全中</b> ⇒ 定时器被推到几秒一跳，<b>漏掉的不补</b></td><td><span class="chip c-ok">已修</span></td></tr>
+    <tr><td class="num">②</td><td>重启后不自动起</td><td>登录项 / <code>SMAppService</code> 零命中 ⇒ 重启之后没有任何东西在跑</td><td><span class="chip c-warn">不做</span></td></tr>
+    <tr><td class="num">③</td><td>Mac 睡眠</td><td>系统层面睡着，app 无能为力（合盖 / 手动睡眠 / 关机全都挡不住）</td><td><span class="chip c-warn">不做 · 出清单</span></td></tr>
+  </tbody>
+</table>
+</div>
+
+<p class="lead">实测（不是推论）：App Nap 激活后，100ms 与 200ms 两个定时器<b>双双变成 5 秒一跳</b>，且那份复现记录的注释明写 <b>does not make up for missed timers by firing multiple times</b> —— <b>漏掉的那几次不会补</b>。这就是"该在 03:00 跑、醒来发现没跑"的机制。</p>
+
+<h3>B · 为什么 ②③ 不做</h3>
+
+<div class="call warn">
+  <div class="lbl">代价与收益倒挂</div>
+  <p><b>②</b> 技术上能注册登录项（<code>ServiceManagement.framework</code>，本仓 deployment target 够），但<b>本 app 未签名</b>（<code>mangox.entitlements</code> 是空 dict ⇒ 非沙盒）⇒ <code>register</code> 可能失败或落 <code>.requiresApproval</code>。<b>收益不确定 + 要动签名链路</b> ⇒ 挂起。</p>
+  <p><b>③</b>「防空闲睡眠」那条断言的类型名里 <code>UserIdle</code> 三个字就是答案 —— 它<b>只防空闲</b>。合盖 / 手动睡眠 / 关机 / 退出 app 全都不在它的覆盖里。<b>这不是实现问题，是系统没开这个口子。</b>而本机是笔记本（<code>MacBookPro17,1</code>，有电池）⇒ 代价是全天候的，覆盖的却只是 5 种漏跑场景里的 1 种。</p>
+</div>
+
+<h3>C · 方案：只防降频 + 一张清单</h3>
+
+<div class="grid g3">
+  <div class="v"><div class="face">防降频：一条常驻断言<span>调 <code>beginActivity</code> 向系统声明"我还在干活"。<b>选项刻意不含</b> <code>IdleSystemSleepDisabled</code> —— 那一档会让 Mac 永不休眠（<code>.userInitiated</code> 的定义里就带着它）。用 <code>.userInitiatedAllowingIdleSystemSleep</code>：<b>只防降频，不碰睡眠</b>。<b>⚠️ 这一条已不再由冒烟守</b> —— 见 §06 E。</span></div><span class="chip c-ok">已落地</span></div>
+  <div class="v"><div class="face">断言必须强持有<span>头文件明写：对象一被释放，断言就自动结束。存局部变量 = 没加。所以它是一条 <code>private(set)</code> 属性，并且 <code>start</code> / <code>stop</code> 严格对称（重复 start 不许越堆越多）。</span></div><span class="chip c-ok">已落地</span></div>
+  <div class="v"><div class="face">清单：该跑却没跑的<span>每次 tick 发现"这一分钟跳了不止一分钟"（睡眠 / 长挂起）就重算一遍。判据是<b>确定的</b>而非猜的：<code>lastRunAt</code> 只在 fire <b>真起来</b>时写 ⇒ 窗口内任何 cron 点只要真跑过，<code>lastRunAt</code> 必比它更晚 —— 反证。</span></div><span class="chip c-ok">已落地</span></div>
+  <div class="v"><div class="face">零新列、零新状态<span>地基全是现成的：<code>scheduled_tasks.last_run_at</code> 已落库 · <code>createdAt</code> 已存在 · <code>CronExpr.matches</code> 是纯函数 · 认账走 settings KV。整个功能<b>一行 DB 都没动</b>。</span></div><span class="chip c-ok">已落地</span></div>
+</div>
+
+<div class="call">
+  <div class="lbl">窗口起点 = 四个候选里最晚的那个</div>
+  <p><code>max(回溯上限, createdAt, lastRunAt, ackAt)</code> —— 三种来源（真跑 / 出生 / 认账）叠加一个上限，是<b>并集</b>关系。<code>createdAt</code> 兜"新建但从没跑过"（否则会误报它出生之前的每一个 cron 点）；<b>7 天</b>的上限兜"从没跑过、且很久以前建的"（否则一路回到它出生那天）。回溯是逐分钟扫的 —— 先在分钟位上筛一道，再交给日历分解。</p>
+</div>
+
+<div class="call">
+  <div class="lbl">口径：漏跑 ≠ 只因为睡眠</div>
+  <p>调度那条路上有<b>三条</b>"到点了但跳过"的分支：<b>项目已删</b> · <b>该任务回合在途</b> · <b>并发已满</b>。后两条<b>也算漏跑</b> —— 它们同样是"这次没跑"，而且用户点开那个日志会话能看到跳过原因。<b>项目已删的不算</b>：那不是漏跑，是配置坏了，另有提示位。</p>
+</div>
+
+<h3>D · 漏跑清单的界面（线框示意）</h3>
+
+<p class="lead">⚠️ 同 §05 的 delete 审阅面：<b>出图 harness 还没修好</b>（见 §04 待办），所以这里先给<b>线框</b> —— 但它的<b>形状与每个数值都照抄已落地的实现</b>（<code>ScheduledView.swift:200-265</code>：8pt 内边距 · <code>radiusSm</code> 圆角 · <code>bgCard</code> 底 · 描边 = <code>accent</code> 45% · 字号 11/10/12/10）。<b>线框 ≠ 实机截图</b> —— 这点必须说清楚，本仓已经吃过一次"图跟章节对齐而不是跟源码对齐"的亏。</p>
+
+<div class="mocks">
+  <div class="mock">
+    <div class="cap">Schedule 页 · 列表顶部（仅在有漏跑时出现）</div>
+    <div class="win">
+      <div class="pane">
+        <div class="mi hl"><span>漏跑 1 个任务</span><span>补跑只跑最近一次; 忽略 = 认下这批, 不再提示</span></div>
+        <div class="sep"></div>
+        <div class="mi"><span>晨间整理 &nbsp;<span class="k">每天 03:00 · 漏 3 次 · 最近 2 天前</span></span><span><span class="pill">补跑</span> <span class="pill">忽略</span></span></div>
+      </div>
+    </div>
+    <div class="note">左侧两行（任务名 + <code>档期 · 漏 N 次 · 最近 X</code>），右侧两个纯文字按钮。<b>没有漏跑时整块不画</b> —— 不是画一个空卡。</div>
+  </div>
+</div>
+
+<div class="call">
+  <div class="lbl">两个按钮都是必需的</div>
+  <p><b>「忽略」一定要有</b> —— boss 原话"有时候我觉得漏了就漏了，可以忽略"。它是<b>认账</b>：把"我认下这批"的时刻记进 settings KV，窗口起点随之前移 ⇒ 不再提示。</p>
+  <p><b>「补跑」只跑最近一次</b> —— 不是省事，是经济学：dream 的水位本来就会把窗口拉长（<code>min(now − 36h, lastRunAt)</code>），补一次就把漏掉那几天的料一起捞回来；补 N 次反而会在<b>同一个日志会话里连投 N 个回合</b>，后面几个全被"该任务回合在途"挡掉 —— <b>白点</b>。</p>
+  <p>⚠️ 补跑必须<b>认账</b>，否则"点了没反应"：调度那条路有在途保护，补跑可能当场被跳过、<code>lastRunAt</code> 不动 ⇒ 条目刷新后<b>原样留着</b>。所以无论这次真的跑没跑成，都要把认账一并落下去。</p>
+</div>
+
+<h3>E · 门禁缺口与未采纳的路</h3>
+
+<div class="call bad">
+  <div class="lbl">⚠️ 门禁缺口（不假装它被盖住了）</div>
+  <p>冒烟<b>证不了</b> App Nap 真的被压住了 —— 那需要"窗口不可见 + 真进 napping"，测试进程里无法复现。它能守的只有两条：<b>"代码在"</b>与<b>"选项还在防降频那一档"</b>。<b>真机验收</b> = <code>pmset -g assertions</code> 里出现那条 reason。<b>同 §02 那条"门的绿盖不到模型判断对不对"</b>。</p><p><b>② 撤掉的一格（2026-10-15）</b>：原来还有一条断言守"选项<b>不含</b> <code>IdleSystemSleepDisabled</code>"（即"没被偷偷换成会禁睡眠的 <code>.userInitiated</code>"）。<b>已按 boss 拍板移除</b> —— 它是全仓<b>唯一</b>用代码引用那个符号的地方（生产代码只在 <code>SchedulerService.swift:119</code> 的注释里提它），boss 担心 CI 那条 <code>scripts/smoke/run.sh</code> 在别的 SDK 上编不过。</p><p>⛔ <b>留下的缺口，别以为被邻居盖住了</b>：剩下那条 <code>contains(.userInitiatedAllowing…)</code> <b>守不了</b>这件事 —— 两个常量的位是<b>交叠</b>的（<code>UserInitiated</code> = <code>0x00FFFFFF | (1&lt;&lt;20)</code> = <code>0x00FFFFFF</code>；<code>AllowingIdleSystemSleep</code> = <code>0x00FFFFFF &amp; ~(1&lt;&lt;20)</code> = <code>0x00EFFFFF</code>），而 <code>OptionSet.contains</code> 判的是"位有交集" ⇒ <b>真换成 <code>.userInitiated</code>，它照样绿</b>。⇒ 这条性质现在只能靠 review 看那段注释与常量本身。</p><p>要补回同一道守卫、又不碰任何 SDK 符号，一行就够：<code>napSuppressionOptions.rawValue &amp; (1 &lt;&lt; 20) == 0</code>（<code>1 &lt;&lt; 20</code> 就是 <code>NSActivityIdleSystemSleepDisabled</code> 那一位，纯 <code>UInt64</code> 运算，与符号的可用性 / 弃用标注完全无关）。<b>待 boss 定，当前未加。</b></p>
+</div>
+
+<div class="tbl">
+<table class="def">
+  <thead><tr><th>未采纳</th><th>为什么不</th></tr></thead>
+  <tbody>
+    <tr><td><code>SMAppService</code> 登录项</td><td>app 未签名 ⇒ <code>register</code> 可能失败 / 需人工批准。见 B。</td></tr>
+    <tr><td>菜单栏常驻图标</td><td>要新增一个 <code>MenuBarExtra</code> 场景 —— 那是"多一个入口"的产品决策，不是"让定时器准点"的技术手段。</td></tr>
+    <tr><td>唤醒后自动补跑</td><td>会破 cron 语义：cron 说"03:00 跑"，睡到 11:00 醒来补一次，任务的<b>时间点就变成"看机器什么时候醒"</b>。boss 拍的是<b>交给清单、由人决定</b>。</td></tr>
+    <tr><td><code>launchd</code> 定时唤醒</td><td>那是<b>环境外</b>的东西（要写用户级 plist）—— App 不代管用户系统里的其它配置（同"两根都可写、但不代改 <code>.gitignore</code>"那条边界）。</td></tr>
+  </tbody>
+</table>
+</div>
+
+<h2><span class="n">07</span>改动面<span class="en">SURFACE</span></h2>
+
+<div class="tw">
+<table>
+  <thead><tr><th>#</th><th>位置</th><th>改动</th><th>状态</th></tr></thead>
+  <tbody>
+    <tr><td class="num">1</td><td class="mono">CodexTheme.swift:443-446</td><td>四个常量重定；新增笔记目录 / 正文两个预算数</td><td><span class="chip c-ok">已改</span></td></tr>
+    <tr><td class="num">2</td><td class="mono">PiRpcTransport.swift:422-540</td><td>扩展源码：kind 加 <code>delete</code>；import <code>node:crypto</code> 自算指纹</td><td><span class="chip c-ok">已改</span></td></tr>
+    <tr><td class="num">3</td><td class="mono">NoteProposal.swift:30-38</td><td><code>Kind</code> 加 <code>case delete</code>（与 2 同批）</td><td><span class="chip c-ok">已改</span></td></tr>
+    <tr><td class="num">4</td><td class="mono">NoteProposal.swift:218</td><td><code>emptyContent</code> 给 delete 开例外</td><td><span class="chip c-ok">已改</span></td></tr>
+    <tr><td class="num">5</td><td class="mono">SchedulerService.swift:270-346</td><td>窗口改小时 + 水位；取消会话数上限；回合整对丢；<code>dreamShortlist</code> 界改写</td><td><span class="chip c-ok">已改</span></td></tr>
+    <tr><td class="num">6</td><td class="mono">SchedulerService.swift:126-177</td><td><code>dreamPrompt</code> 改写（地图 → 地图 + 正文；base_hash 不用填）；<code>dreamFirePrompt</code> 拼笔记段</td><td><span class="chip c-ok">已改</span></td></tr>
+    <tr><td class="num">7</td><td class="mono">SchedulerService.swift:98</td><td><code>dreamDefaultCron</code> → <code>0 3 * * *</code></td><td><span class="chip c-ok">已改</span></td></tr>
+    <tr><td class="num">8</td><td class="mono">PersistenceStore.swift:135-145</td><td><code>note_revisions</code> 加列 <code>sources TEXT</code> + 写入 / 读取带上它</td><td><span class="chip c-ok">已改</span></td></tr>
+    <tr><td class="num">9</td><td class="mono">KnowledgeStore.swift:1586-1616</td><td><code>adoptProposal</code> 加 delete 支，转调 <code>deleteNote</code></td><td><span class="chip c-ok">已改</span></td></tr>
+    <tr><td class="num">10</td><td class="mono">KnowledgeView.swift:813,823,982</td><td>两个穷举 switch + diff 的对称提示</td><td><span class="chip c-ok">已改</span></td></tr>
+    <tr><td class="num">11</td><td class="mono">KnowledgeStore.swift:949-962</td><td>加"分回合"的辅助纯函数（裁剪切点用）；<code>sessionMaterial</code> 本体不动</td><td><span class="chip c-ok">已改</span></td></tr>
+    <tr><td class="num">12</td><td class="mono">scripts/smoke/smokeMain.swift</td><td>§04 的五组新断言（含每组的反例）；§06 另有 19 条；本版文案含 <code>P17</code> 者共 <b>69 条</b></td><td><span class="chip c-ok">已改</span></td></tr>
+    <tr><td class="num">13</td><td class="mono">CodexTheme.swift:285</td><td><code>Tune</code> 加 <code>missedFiresLookbackDays = 7</code>（漏跑回溯上限）</td><td><span class="chip c-ok">已改</span></td></tr>
+    <tr><td class="num">14</td><td class="mono">SchedulerService.swift:常量区</td><td><code>napSuppressionReason</code> / <code>napSuppressionOptions</code>（<b>不含</b> <code>IdleSystemSleepDisabled</code>）+ 属性 <code>napAssertion</code></td><td><span class="chip c-ok">已改</span></td></tr>
+    <tr><td class="num">15</td><td class="mono">SchedulerService.swift:调度三件套</td><td><code>startScheduler</code> 幂等加断言 · 新增对称的 <code>stopScheduler</code> · <code>schedulerTick</code> 里 <code>gap &gt; 1</code> 触发重算</td><td><span class="chip c-ok">已改</span></td></tr>
+    <tr><td class="num">16</td><td class="mono">SchedulerService.swift:漏跑清单整段</td><td><code>MissedFire</code> / <code>missedWindowStart</code> / <code>missedSummary</code> / <code>missedAckKey</code> / <code>refreshMissedFires</code> / <code>catchUpMissedFire</code> / <code>ignoreMissedFire</code></td><td><span class="chip c-ok">已改</span></td></tr>
+    <tr><td class="num">17</td><td class="mono">ChatStore.swift:593</td><td><code>willTerminate</code> 加 <code>stopScheduler()</code>；漏跑清单的 facade 三个</td><td><span class="chip c-ok">已改</span></td></tr>
+    <tr><td class="num">18</td><td class="mono">ScheduledView.swift:171,200-265</td><td>列表顶部 <code>missedSection</code> 四个成员（只在真有漏跑时出现）</td><td><span class="chip c-ok">已改</span></td></tr>
+    <tr><td class="num">19</td><td class="mono">PersistenceStore.swift</td><td><b>零改动</b> —— 认账复用 settings KV，来源复用现成的 <code>scheduled_tasks.last_run_at</code></td><td><span class="chip c-ok">已改</span></td></tr>
+    <tr><td class="num">20</td><td class="mono">scripts/l10n/en_values.py</td><td>+9 条（含两个 <code>.help()</code> 的中文 —— 它也会被收进词表）</td><td><span class="chip c-ok">已改</span></td></tr>
+  </tbody>
+</table>
+</div>
+
+<div class="call">
+  <div class="lbl">施工进度</div>
+  <p><b>三批全部已落地。</b><b>批 1</b> = #2 里算指纹的那一半（<code>base_hash</code> 从模型挪给扩展）+ <code>dreamPrompt</code> 那句 · <b>批 2</b> = #3 #4 #9 #10（<code>delete</code> 完整链路）· <b>批 3</b> = #1 #5 #6 #7 #8 #11（输入重拼：36 小时窗口 + 水位 + 回合整对丢 + <code>dreamShortlist</code> 换界 + 笔记目录 / 正文两层 + <code>note_revisions.sources</code>）。</p>
+  <p>每一批各自过双门禁，并<b>造反例确认能红</b>：批 1 红 4 条 · 批 2 红 4 条 · 批 3（3a）红 4 条 · 批 3（3b）红 3 条 —— 每一条都可解释、没有多余的红。收口读数：冒烟 <b>1237 PASS / 0 FAIL / 0 warning</b>，<code>xcodebuild</code> <b>BUILD SUCCEEDED</b> / 0 warning / 0 error（删掉三个 <code>.o</code> 强制重编，产物与现时刻只差 1 秒 ⇒ 确认真编了）。</p>
+  <p><b>批 4</b>（运行可靠性 · 独立于 dream）= #13~#20（#19 是零改动的那行 —— 地基全是现成的）。反例五轮，各自单独跑、<b>全部恰好变红</b>：删掉整段 <code>beginActivity</code> ⇒ 红 <b>3</b> · 去掉 <code>if napAssertion == nil</code> ⇒ 红 <b>1</b> · 选项换成 <code>.userInitiated</code> ⇒ 红 <b>1</b>（⚠️ <b>该守卫后来按 boss 拍板移除、此反例已失效</b> —— 见 §06 E） · <code>missedWindowStart</code> 拿掉 <code>createdAt</code> ⇒ 红 <b>1</b> · 拿掉回溯上限 ⇒ 红 <b>1</b>。收口读数：冒烟 <b>1259 PASS / 0 FAIL / 0 warning</b>（这是移除 §06 E 那条守卫<b>之前</b>的读数；移除后预期 <b>1258</b> —— 按 boss 指示<b>未重跑</b>），<code>xcodebuild</code> <b>BUILD SUCCEEDED</b> / 0 warning / 0 error。</p>
+</div>
+
+<div class="foot">
+P17 · 前身 P15（越用越懂你 · dream 出自这一版）· 唯一来源 = 本文件 · 样式源 <code>docs/assets/design-doc.css</code>（由 <code>scripts/docs/design_doc_css.py --apply</code> 同步）· 2026-10-15
+</div>
+
+</div>
+</body>
+</html>

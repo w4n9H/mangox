@@ -139,10 +139,17 @@ final class PersistenceStore {
             content    TEXT NOT NULL,               -- 被覆盖/删除前的**整篇原文**
             sha256     TEXT NOT NULL,               -- 那一版的指纹
             written_at REAL NOT NULL,
-            origin     TEXT NOT NULL                -- NoteRevisionOrigin.rawValue (小写落库)
+            origin     TEXT NOT NULL,               -- NoteRevisionOrigin.rawValue (小写落库)
+            sources    TEXT NOT NULL DEFAULT '[]'   -- P17: [ProposalSource] 的 JSON (形状同 note_proposals.sources)
         )
         """)
         try db.run("CREATE INDEX IF NOT EXISTS idx_note_revisions ON note_revisions(root_id, path, written_at)")
+        // P17 补列 —— 老库升上来时 `CREATE TABLE IF NOT EXISTS` **不会动它** ⇒ 必须显式 ALTER。
+        // 存量行被 `DEFAULT '[]'` 填成**空列表**: 那不叫「缺」而叫「没有来源记录」——
+        // 本列上线之前写下的版本, 谁也没法回头补出它当初的依据。
+        // ⚠️ 形状与 `note_proposals.sources` **逐字同源**（都是 `TEXT NOT NULL` + JSON）:
+        // 两处各写一套格式的话, 其中一处悄悄改了, 另一处读出来就是空, 而**零红灯**。
+        addColumnIfMissing("note_revisions", "sources", "TEXT NOT NULL DEFAULT '[]'")
         // P15.3: dream 的**提案**。`sources` 是一列 JSON 文本 (条数不定、永远整块读写)。
         // ⚠️ 提案**不落 `_proposals/` 目录**: 扫描器只挡 `hasPrefix(".")` 与 `excludedNames`
         // 那三个名字, 下划线两头都不占 ⇒ 落盘的提案会被当成笔记扫进索引、每轮吃 prompt 预算。
@@ -153,7 +160,7 @@ final class PersistenceStore {
         CREATE TABLE IF NOT EXISTS note_proposals (
             id          TEXT PRIMARY KEY,
             root_id     TEXT NOT NULL,              -- 笔记根 id (note:global / note:project:<pid>)
-            kind        TEXT NOT NULL,              -- NoteProposalKind.rawValue (insight / merge / replace)
+            kind        TEXT NOT NULL,              -- NoteProposalKind.rawValue (insight / merge / replace / delete)
             target_path TEXT NOT NULL,              -- 根内相对路径 (与 note_revisions.path 同形)
             base_hash   TEXT NOT NULL,              -- 提出时的指纹; insight 恒空串
             title       TEXT NOT NULL,              -- 可空串
@@ -847,11 +854,11 @@ final class PersistenceStore {
     /// 记下一个旧版本。**只增不改不删** —— 它的语义就是"这一版曾经存在过"。
     func appendNoteRevision(_ r: NoteRevision) throws {
         try db.run("""
-            INSERT INTO note_revisions (id, root_id, path, content, sha256, written_at, origin)
-            VALUES (?,?,?,?,?,?,?)
+            INSERT INTO note_revisions (id, root_id, path, content, sha256, written_at, origin, sources)
+            VALUES (?,?,?,?,?,?,?,?)
             """, [.text(r.id.uuidString), .text(r.rootId), .text(r.path), .text(r.content),
                   .text(r.sha256), .real(r.writtenAt.timeIntervalSince1970),
-                  .text(r.origin.rawValue)])
+                  .text(r.origin.rawValue), .text(encodeJSON(r.sources) ?? "[]")])
     }
 
     /// 某一篇的历史（新 → 旧）。
@@ -860,16 +867,21 @@ final class PersistenceStore {
     /// P15.4 的"变更史"界面读同一个函数 —— 不另开一条查询路径。
     func loadNoteRevisions(rootId: String, path: String) throws -> [NoteRevision] {
         try db.query("""
-            SELECT id, root_id, path, content, sha256, written_at, origin
+            SELECT id, root_id, path, content, sha256, written_at, origin, sources
             FROM note_revisions WHERE root_id = ? AND path = ?
             ORDER BY written_at DESC
             """, [.text(rootId), .text(path)]).compactMap { row in
             guard let id = UUID(uuidString: text(row, "id")),
                   let origin = NoteRevisionOrigin(rawValue: text(row, "origin")) else { return nil }
+            // ⚠️ `sources` 解析失败回落**空列表**, 而不是像 `loadNoteProposals` 那样**丢整行** ——
+            // 这个不对称是有意的: 提案表里 `sources` 是**非空约束的一部分**（拿不出指针的不入表）,
+            // 丢了它那行就不该存在; 而版本史里它只是一条**附加信息** —— 丢了它这一版仍然完整
+            // （content / sha256 / origin 都在）, 而**丢整行会让变更史凭空少一版**, 那是更重的损失。
             return NoteRevision(id: id, rootId: text(row, "root_id"), path: text(row, "path"),
                                 content: text(row, "content"), sha256: text(row, "sha256"),
                                 writtenAt: Date(timeIntervalSince1970: double(row, "written_at")),
-                                origin: origin)
+                                origin: origin,
+                                sources: decodeJSON([ProposalSource].self, text(row, "sources")) ?? [])
         }
     }
 

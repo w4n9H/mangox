@@ -7,7 +7,7 @@
    **本文件由 scripts/l10n/gen_strings.py --write 生成, 别手改** ——
    译文改 scripts/l10n/en_values.py 的 VALUES, 再跑 --write。
 
-   条数: 673
+   条数: 686
 */
 
 " [附件: %@]" = " [Attachment: %@]";
@@ -204,7 +204,9 @@
 "创建" = "Create";
 "创建备份目录失败: %@" = "Could not create the backup directory: %@";
 "创建这个 Inbox" = "Create this Inbox";
+"删" = "Drop";
 "删掉这条提案; 磁盘上的笔记一个字节都不会动" = "Delete this proposal; nothing on disk will be touched";
+"删掉这篇" = "Drop this note";
 "删除" = "Delete";
 "删除「%@」？" = "Delete “%@”?";
 "删除任务 (保留会话与工作日志)" = "Delete task (keep session and work log)";
@@ -253,6 +255,7 @@
 "只读命令静默放行, 危险命令自动拒绝并记下原因 (回执告知) — 远程驱动用。" = "Read-only commands pass silently; dangerous ones are refused automatically with the reason recorded (and sent back in the receipt) — for remote-driven work.";
 "只读显示本轮真正发出去的注入块 —— 门禁绿 ≠ 改对了" = "Read-only view of the injection block actually sent this turn — a green gate does not mean it is right";
 "可选: 执行前先探这个 URL, 不通则不跑 (空 = 不探)" = "Optional: probe this URL before running; if it is unreachable the task is skipped (empty = no probe)";
+"右边是空的 —— 采纳后这篇进系统废纸篓, 还能在那里捞回来。" = "The right side is empty — accepting moves this note to the system Trash, where you can still recover it.";
 "名字" = "Name";
 "名称" = "Name";
 "含端口, 如 imap.163.com:993" = "Include the port, e.g. imap.163.com:993";
@@ -323,6 +326,7 @@
 "已允许（始终）" = "Allowed (always)";
 "已删除" = "Deleted";
 "已删除会话" = "Deleted session";
+"已删除的任务" = "Deleted task";
 "已删除的会话" = "Deleted session";
 "已复制" = "Copied";
 "已拒绝" = "Denied";
@@ -355,6 +359,7 @@
 "待运行" = "Pending";
 "快捷键 %@ 被其他 App 占用, 请在设置中更改捕获热键" = "The hotkey %@ is taken by another app — change the capture hotkey in settings";
 "快速捕获热键" = "Quick capture hotkey";
+"忽略" = "Ignore";
 "思考中…" = "Thinking…";
 "思考过程" = "Reasoning";
 "我必须怎么做" = "My Rules";
@@ -370,6 +375,7 @@
 "扫到 %lld 个文档 (md / txt / html, 深度 ≤ 3)" = "%lld documents found (md / txt / html, depth ≤ 3)";
 "把会话数据库 (含知识库) 与图片附件、会话记录完整拷贝到目标目录的 mangox-backup-<时间戳>/ 子目录, 供人工保管" = "Copies the session database (including the knowledge base), image attachments and session logs into a mangox-backup-<timestamp>/ folder in the target directory for safekeeping.";
 "把这一份整篇写进上面那条目标; 被顶掉的那一版会进变更史" = "Write this whole text into the target above; the version it replaces goes to the history";
+"把这一篇移进系统废纸篓; 旧内容会先进变更史" = "Move this note to the system Trash; its old content is recorded in the change history first";
 "拉取失败 (%@), 已回落预设清单" = "Fetch failed (%@); fell back to the built-in preset list";
 "拒绝" = "Deny";
 "拷贝到 ~/.mangox/extensions (默认停用)" = "Copied to ~/.mangox/extensions (disabled by default)";
@@ -462,6 +468,7 @@
 "最多 %lld 张" = "Up to %lld";
 "最多留 200 条" = "Keeps the latest 200";
 "最小化为任务台" = "Minimize to the task bar";
+"最近 %@" = "Last %@";
 "最近拒收" = "Recent rejections";
 "最近提交" = "Recent commits";
 "最近收信 %@" = "Last received %@";
@@ -532,6 +539,8 @@
 "清除" = "Clear";
 "源会话回合进行中，结束后再发起侧问" = "A turn is running in the source session; wait for it to finish before starting a side chat";
 "源会话快照 · 含 %lld 轮上下文 · %@ fork · 主线新消息不同步" = "Source session snapshot · %lld turns of context · forked %@ · new messages in the main line do not sync";
+"漏 %lld 次" = "%lld missed";
+"漏跑 %lld 个任务" = "%lld tasks missed";
 "点「常驻」区头的文件夹按钮: 目录不在时会就地建出来; 若那个位置被同名文件占着, 请先移走它" = "Click the folder button in the “Always on” header: it creates the folder if it is missing; if a file of the same name occupies that spot, move it away first";
 "点击复制 hash: %@" = "Click to copy hash: %@";
 "点击查看大图" = "Click to view full size";
@@ -557,6 +566,7 @@
 "移进「废纸篓」(还能捞回来); 当前内容先记进变更史" = "Move to the Trash (still recoverable); the current content is recorded in the revision history first";
 "移除" = "Remove";
 "稳定段永不参与降级 — 出现这条说明组装有 bug, 请反馈" = "The stable segment never takes part in degradation — seeing this means an assembly bug; please report it";
+"立刻补跑最近一次 (不等定时)" = "Run the most recent missed one now (without waiting)";
 "立即备份" = "Back up now";
 "立即运行 (不等定时; 关掉开关也能跑)" = "Run now (ignores the schedule; works even when the toggle is off)";
 "笔记" = "Notes";
@@ -585,9 +595,12 @@
 "自定义模型与模式" = "Custom model and mode";
 "草稿还没保存 —— 下面的索引预览显示的是已保存的那句" = "Draft not saved yet — the index preview below shows the saved sentence";
 "行标题是文件名加上一句固定说明（如 SOUL.md - 我是谁）；表外的文件就只有文件名" = "A row title is the file name plus a fixed description (e.g. SOUL.md - Who I Am); files outside the list show only the file name";
+"补跑" = "Catch up";
+"补跑只跑最近一次; 忽略 = 认下这批, 不再提示" = "Catch up runs only the most recent one; Ignore accepts this batch and stops asking";
 "解析失败: %@" = "Parsing failed: %@";
 "触发条件 (每轮轻检查)" = "Trigger condition (checked lightly each round)";
 "触发条件与动作为必填" = "Trigger condition and action are required";
+"认下这批漏跑, 不再提示" = "Accept these misses and stop asking";
 "认证失败, 检查授权码%@" = "Authentication failed — check the app password%@";
 "记忆" = "Memory";
 "设置" = "Settings";

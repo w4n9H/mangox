@@ -145,6 +145,35 @@ struct NoteRevision: Equatable, Identifiable {
     let sha256: String
     let writtenAt: Date
     let origin: NoteRevisionOrigin
+    /// **这一版内容的来源指针**（P17）—— 会话 id 或笔记相对路径, 形状与 `note_proposals.sources` 同。
+    ///
+    /// 为什么要它: 来源指针原来只活在 `note_proposals` 里, 而那张表**拍过板就删行**（P15.8/5f）
+    /// ⇒ 一篇笔记落地之后, "它当初是凭什么写的"就**没有任何地方记着**了。下一次 dream 想判
+    /// "这篇的依据还成立吗", 手里只剩正文 —— 只能重读全文去猜。
+    ///
+    /// 默认 `[]` = **没有来源记录**, 那是诚实的「空」而不是「缺」: 人写的版本本来就没有指针;
+    /// 老库升上来的行也是空的（本列上线之前的事, 谁也补不出来）。
+    ///
+    /// ⚠️ 有默认值 ⇒ memberwise init 的 `sources` 可省 —— 但全仓**唯一该传它**的地方是
+    /// `adoptProposal`（那是唯一"带着指针落盘"的路径）, 冒烟有一条端到端断言钉着它。
+    let sources: [ProposalSource]
+
+    /// 显式 init（不靠合成的 memberwise）—— 因为 `sources` 是个**带默认值的 `let`**：
+    /// 合成器对这种情况的处理是「**不把它放进 init**」（`let` 有初值 ⇒ 视为已定），
+    /// 于是调用点连写都写不进去（`extra argument 'sources' in call`）。写成 `var` 倒是能进，
+    /// 但其余六个字段全是 `let`，不该为一个字段破例 ⇒ 显式列出，把默认值挪到参数上。
+    /// 现有那些不传 `sources` 的调用点照旧编译得过。
+    init(id: UUID, rootId: String, path: String, content: String, sha256: String,
+         writtenAt: Date, origin: NoteRevisionOrigin, sources: [ProposalSource] = []) {
+        self.id = id
+        self.rootId = rootId
+        self.path = path
+        self.content = content
+        self.sha256 = sha256
+        self.writtenAt = writtenAt
+        self.origin = origin
+        self.sources = sources
+    }
 }
 
 /// 扫描到的单个文档。`relativePath` 用 `/` 分隔且**总是相对库根** ——
@@ -251,6 +280,72 @@ enum KnowledgeBaseScan {
         }
         walk(root, "", 1)
         return out.sorted { $0.relativePath < $1.relativePath }
+    }
+
+    // MARK: 笔记正文段 (P17)
+
+    /// 正文段的一篇**输入** —— 由调用方从磁盘读好（纯函数不碰 IO）。
+    struct NoteBodyInput: Equatable {
+        /// 根的显示名（`[笔记]` 段里那个名字 —— 两处必须逐字同源, 否则模型找不到根）。
+        let label: String
+        /// 根内相对路径。
+        let path: String
+        /// 只用来排序（"从最旧的丢"）。`nil` = 未知 ⇒ 排最后。
+        let modifiedAt: Date?
+        let content: String
+    }
+
+    /// 正文段的组装结果。带 `omitted` 是因为**点名要说得出是谁**（同索引段的「另 N 个文件」判据）。
+    struct NoteBodySegment: Equatable {
+        let text: String
+        let shown: Int
+        let omitted: [String]
+        let chars: Int
+        static let empty = NoteBodySegment(text: "", shown: 0, omitted: [], chars: 0)
+    }
+
+    /// 组装正文段: 段头 + 逐篇 `## <根名> / <相对路径>` 与正文 + （有的话）点名行。
+    ///
+    /// 超预算时**从最旧的丢**（按 `modifiedAt` 倒序保留 = 新的优先）——
+    /// "陈旧"在这本账里正是"更可能被 replace / delete 掉的那一批", 留新的更划算。
+    /// 单篇自己就超预算的**跳过它、继续看下一篇**（不是"到它为止"）: 一篇巨型笔记不该
+    /// 把排在它后面的所有小笔记一起拖下水。
+    static func noteBodyBlock(_ notes: [NoteBodyInput], budget: Int) -> NoteBodySegment {
+        let sorted = notes.sorted {
+            ($0.modifiedAt ?? .distantPast) > ($1.modifiedAt ?? .distantPast)
+        }
+        var kept: [NoteBodyInput] = []
+        var omitted: [String] = []
+        for n in sorted {
+            if renderBody(kept + [n], omitted: omitted).count > budget {
+                omitted.append(n.label + " / " + n.path)
+            } else {
+                kept.append(n)
+            }
+        }
+        // 兜底: 上面那圈判的是"加入这一篇之后**当时**的点名行", 而丢掉一篇会让点名行**变长**
+        // ⇒ 最终长度可能刚好越线。再从最旧的丢一轮（`kept` 是新的在前 ⇒ 尾部就是最旧的）。
+        while kept.count > 1, renderBody(kept, omitted: omitted).count > budget {
+            let dropped = kept.removeLast()
+            omitted.append(dropped.label + " / " + dropped.path)
+        }
+        guard !kept.isEmpty || !omitted.isEmpty else { return .empty }
+        let text = renderBody(kept, omitted: omitted)
+        return NoteBodySegment(text: text, shown: kept.count, omitted: omitted, chars: text.count)
+    }
+
+    /// 正文段的渲染。**段头是契约 token 的兄弟**（同 `【最近会话摘录】`）—— 恒中文, 不进词表。
+    private static func renderBody(_ notes: [NoteBodyInput], omitted: [String]) -> String {
+        var parts = ["【笔记正文 · \(notes.count) 篇】"]
+        for n in notes { parts.append("## \(n.label) / \(n.path)\n\(n.content)") }
+        if !omitted.isEmpty {
+            // 点名最多列 8 个: 全列出来会把"丢了 200 篇"变成一段比正文还长的清单。
+            // 但**个数一定要说全** —— "丢了几篇"才是用户判断"要不要去 read"的依据。
+            let head = omitted.prefix(8).joined(separator: "、")
+            parts.append("（另有 \(omitted.count) 篇正文未列出: \(head)"
+                         + (omitted.count > 8 ? " 等" : "") + " —— 需要时用 read 按路径取）")
+        }
+        return parts.joined(separator: "\n\n")
     }
 
     /// 陈旧天数 —— 未达阈值返回 `nil`（"天天显示 1 天"是噪音, 标记要有信息量）。

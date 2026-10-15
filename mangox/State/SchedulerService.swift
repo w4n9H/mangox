@@ -17,8 +17,14 @@ final class SchedulerService: ObservableObject {
     // P3.6: 本地定时任务 (仅 App 运行期生效, launchd 后置)
     @Published var scheduledTasks: [ScheduledTask] = []
     @Published var showScheduledPanel: Bool = false
+    /// P17 · 运行可靠性: 睡眠 / 长挂起期间漏跑的任务（由 `refreshMissedFires` 重算）。
+    /// 空 = 侧栏那块 UI 整个不出现。
+    @Published var missedFires: [MissedFire] = []
     private var schedulerTimer: Timer?
     private var lastSchedulerMinute: Int = 0
+    /// P17: 防 App Nap 的常驻断言。**必须强持有** —— 头文件明说对象一旦被释放断言就自动结束,
+    /// 存成局部变量等于没加。`private(set)` 是为了让冒烟能断言"加上了 / 交还了"。
+    private(set) var napAssertion: NSObjectProtocol?
     // P3.10: 等待型任务 fire 的回合追踪 (P4.0.2 会话化: 日志会话 sid -> 任务 id)
     private var fireTurnTask: [UUID: UUID] = [:]   // 在途 fire: 日志会话 -> 任务 id
     private var fireDoneHit: Set<UUID> = []        // 本轮日志会话已命中 done 标记
@@ -94,8 +100,30 @@ final class SchedulerService: ObservableObject {
     /// 就永远不回来了）。代价明写：**已经删过它的老库, 下次启动这条会回来** —— 那正是本意的反面。
     /// （老库里若还留着 `dream_task_seeded` 那一行 setting, 是无害的死配置, 不清理。）
 
-    /// 默认档期 = 每周日 03:00（5 字段 cron: 分 时 日 月 周, 0 = 周日）。
-    static let dreamDefaultCron = "0 3 * * 0"
+    /// 默认档期 = **每天** 03:00（5 字段 cron: 分 时 日 月 周）。
+    ///
+    /// ⚠️ **P17 从"每周日"改成"每天"**：dream 的定位是"越用越懂你"（P15 立的），而周更意味着
+    /// 一周里前六天攒下的洞见都要等到周日 —— 那六天的会话还得靠"三周窗口"捞回来（已随之
+    /// 收到 36 小时, 见 `dreamDigestWindowHours`）。
+    /// 只影响**新库种出来的默认值**：老库里那条任务照旧（档期是用户在 Schedule 页能改的字段）。
+    static let dreamDefaultCron = "0 3 * * *"
+
+    /// P17 · 运行可靠性: 防 App Nap 的断言。
+    ///
+    /// **为什么需要**: App Nap 在「窗口不可见 + 无音频 + 在后台 + **没有任何持久断言**」时启动,
+    /// 后果是 timer throttling —— 实测 100ms / 200ms 的 timer 会双双被拉到 **5 秒**一跳, 而且
+    /// **漏掉的不补**。我们的调度是「每秒 tick + 分钟变了才检查」, 一旦某次 tick 跨过整分钟,
+    /// 那一分钟的到期检查**根本不发生** ⇒ 那次任务永不触发。
+    ///
+    /// ⚠️ 选项取 `userInitiatedAllowingIdleSystemSleep` 而**不是** `userInitiated`: 后者的定义
+    /// 里含 `IdleSystemSleepDisabled` ⇒ 会让 Mac **永不休眠**（电池代价）。我们要的只是"别被降频",
+    /// 不需要"别睡眠" —— 这条线由冒烟判据守着（`napSuppressionOptions` 不许含该位）。
+    ///
+    /// 原因串会显示在「活动监视器 → 能耗」与 `pmset -g assertions` 里 ⇒ **刻意不进 L10n 词表**:
+    /// 它是喂给 macOS 的标识而不是界面文案（Apple 自家 app 的 reason 同样是英文裸串）,
+    /// 方向也与 `[笔记]` 那类"进 prompt 的契约 token"相反。
+    static let napSuppressionReason = "MangoX scheduled tasks"
+    static let napSuppressionOptions: ProcessInfo.ActivityOptions = [.userInitiatedAllowingIdleSystemSleep]
 
     /// dream 的指令文本 —— **恒中文**: 它逐字进 prompt（本文件在 `gen_strings.py` 的
     /// `EXCLUDE_FILES` 里, 在这里写 `L()` 的 key 永远进不了词表; 而同文件里既有
@@ -129,37 +157,47 @@ final class SchedulerService: ObservableObject {
     输入:
       ① 最近会话摘录 —— 见本消息**末尾**的【最近会话摘录】段。App 已经摘好: 只含人与助手的
          正文, 工具输出不在内。每段标题里那串 UUID 就是**会话 id**
-      ② 现有笔记 —— 见系统提示里的 [笔记] 段。那里是**地图不是正文**:
-         每个根一行「路径: <绝对根>」, 其下是若干根内相对路径; 要正文用 read 把两者拼起来取。
-         某个根下面写着「（本根暂无笔记）」= 那个根还没有内容, 但它**已经是合法落点**, 可以直接写
+      ② 现有笔记 —— 见本消息里的【笔记目录】与【笔记正文】两段。目录是**地图**: 一行一篇
+         (根内相对路径 · 标题 · 摘要 · 陈旧天数); 正文是**内容本身**。
+         正文超预算时只给最新的那些, 丢掉的会在段尾点名 —— 要它们用 read 按
+         「根路径 + 相对路径」取回来。某个根下面写着「（本根暂无笔记）」= 那个根还没有内容,
+         但它**已经是合法落点**, 可以直接写
 
     产出: 用 note_proposal 工具提交提案（字段口径以该工具自己的描述为准）:
       insight —— 会话里反复出现、但还没有成篇的结论（目标是一个**还不存在**的新文件）
       merge   —— 两篇笔记在讲同一件事, 建议并成一篇（目标是留下的那一篇）
       replace —— 笔记里的某个值已过期, 用新值替换（目标就是那一篇）
+      delete  —— 这一篇整条不再有用（注意它不是"该改"的另一面: "改"要求还有要说的,
+                 "删"要求没有了）。目标是那一篇, 采纳后它进系统废纸篓
 
     硬约束:
       · 提案只是提交给人看的, 他采纳了才会落盘 —— 你不需要也不应该写任何文件
       · 每条提案必须有 sources: 会话来源的 ref 填段头那串会话 id, 笔记来源填根内相对路径
-      · target_path 必须是**绝对路径**, 且父目录是 [笔记] 段里列出的某一个根。
+      · target_path 必须是**绝对路径**, 且父目录是【笔记目录】段里列出的某一个根。
         标着「（本根暂无笔记）」的根**同样是合法落点** —— 它只是还空着, 不是不能写
       · **归属: 项目优先, 全局是例外。** 默认写到**来源会话所属项目**的那一个根:
-        摘要段头的 `归属` 就是那个根的名字, 去 [笔记] 段里按名字找到它的路径。
+        摘要段头的 `归属` 就是那个根的名字, 去【笔记目录】段里按名字找到它的路径。
         只有这两种情况才写全局笔记:
           ① 来源会话的 `归属` 本来就写着「全局笔记」（它不属于任何项目）
           ② 这条结论**明确跨项目** —— 换个项目、换个人也照样成立
         拿不准不是跨项目的理由: 拿不准就写项目根。
-      · merge / replace 必须带 base_hash = 你 read 到的那篇笔记全文的 sha256
-        （insight 的目标还不存在, 任何指纹都是错的, 别填）
+      · **不要填 base_hash** —— 目标文件的指纹由 App 在你写下提案的那一刻自己取
+        （你拿不到它: read 工具只回正文, 目录段里也只有路径与摘要）
+      · **delete 与另外三类不同**: 它不是"写一段新内容" ⇒ **不要 content、也不要 title**;
+        其余三类的 content 必须是**整篇新内容**, 不是 diff
       · **找不到 note_proposal 这个工具** ⇒ 本次档位削掉了扩展工具, 直接结束并说明原因,
         不要改用写文件的方式模拟 —— App 侧没有从文件到提案的解析路径
       · 没有【最近会话摘录】段 ⇒ 最近没有会话, 没料可提, 直接结束
-      · 没有 [笔记] 段 ⇒ **所有笔记根都被停用了**, 没有可写的落点: 直接结束并说明原因
+      · 没有【笔记目录】段 ⇒ **所有笔记根都被停用了**, 没有可写的落点: 直接结束并说明原因
       · 想不出值得提的就一条都不提 —— 那是正常结果, 不是失败
       · 本次跑不完也不算失败: 出几条算几条
     """
 
-    /// dream 的 fire 指令 = **出厂常量** + （有的话）本次摘要（P15.6b）。
+    /// dream 的 fire 指令 = **出厂常量** + （有的话）笔记段 + （有的话）本次摘要（P15.6b / P17）。
+    ///
+    /// 顺序有意（P17）: 笔记在前、会话摘录在后, 与 `dreamPrompt` 里"输入 ① 会话 / ② 笔记"
+    /// 的编号**故意不同** —— 指令正文里那句"见本消息**末尾**的【最近会话摘录】"要成立,
+    /// 会话段就必须压在最后（长上下文里"末尾"是有信息量的位置）。
     ///
     /// ⚠️ **刻意不接收 `task`** —— 参数里没有它, 就**不可能**读错 `task.prompt`。
     ///
@@ -172,8 +210,11 @@ final class SchedulerService: ObservableObject {
     ///
     /// 抽成 internal static 还为了让冒烟能造一条"存量旧行"来断言它 —— 今天之前, 这条路径
     /// **一条判据都没有**（夹具里的 dream 任务都是新种的, 永远走不到"存量"）。
-    static func dreamFirePrompt(digest: String) -> String {
-        digest.isEmpty ? dreamPrompt : dreamPrompt + "\n\n" + digest
+    static func dreamFirePrompt(digest: String, notes: String) -> String {
+        var parts = [dreamPrompt]
+        if !notes.isEmpty { parts.append(notes) }
+        if !digest.isEmpty { parts.append(digest) }
+        return parts.joined(separator: "\n\n")
     }
 
     /// 这一条任务是不是 dream。判据只看 id（见 `dreamTaskID`）。
@@ -267,23 +308,29 @@ final class SchedulerService: ObservableObject {
     ///   注意它们仍计入末尾的点名 —— `sessions` 是"交进来的全部", 点名是"没列出来的全部"。
     /// - Parameter priorOmitted: **没交给本函数的**会话数（调用点为了省掉库读只交了个短名单,
     ///   见 `dreamShortlist`）。必须如实计入点名 —— 否则"省下的读"会变成"少说的数"。
+    /// - Parameter since: **窗口起点**（P17 起由调用方给, 不再是"now 减固定天数"）——
+    ///   它 = `max(now - 36h, 上次 fire 真跑起来的那一刻)`, 见 `dreamDigestSince`。
+    ///   把窗口的**来历**留在调用方, 这个纯函数只管"按给定起点筛"。
     static func sessionDigest(_ sessions: [DreamDigestInput],
+                              since: Date,
                               excludeIds: Set<UUID> = [],
-                              priorOmitted: Int = 0,
-                              now: Date = Date()) -> String {
-        let windowStart = now.addingTimeInterval(-Double(Tune.dreamDigestWindowDays) * 86_400)
+                              priorOmitted: Int = 0) -> String {
         let candidates = sessions
-            .filter { !excludeIds.contains($0.id) && $0.updatedAt >= windowStart }
+            .filter { !excludeIds.contains($0.id) && $0.updatedAt >= since }
             .sorted { $0.updatedAt > $1.updatedAt }        // 新的在前 ⇒ 下面从**尾部**丢最旧的
         guard !candidates.isEmpty else { return "" }
 
         var entries: [String] = []
-        for s in candidates.prefix(Tune.dreamDigestMaxSessions) {
+        // P17: **不再 `prefix(MaxSessions)`** —— 编进几个由窗口决定（窗口内全会话都要）。
+        for s in candidates {
             let lines = KnowledgeStore.sessionMaterial(from: s.messages)
             guard !lines.isEmpty else { continue }   // 整场只有工具输出的会话: 没有可提炼的东西
             var body = lines.joined(separator: "\n")
+            // P17: 单会话超长 ⇒ **按回合整对丢**（原来是 `suffix` 切字符串: ① 开头的用户提问
+            // 整段消失 ② 切点落在半句话中间 ⇒ 喂进去的是"没有提问的回答"）。
             if body.count > Tune.dreamDigestMaxCharsPerSession {
-                body = "…(更早的已省略)\n" + String(body.suffix(Tune.dreamDigestMaxCharsPerSession))
+                body = KnowledgeStore.trimMaterialByTurns(lines,
+                                                          budget: Tune.dreamDigestMaxCharsPerSession)
             }
             // 段头 **4 格**: 会话 id · 标题 · 日期 · **归属**(P15.8)。
             //
@@ -308,7 +355,7 @@ final class SchedulerService: ObservableObject {
 
     /// 摘要的组装 —— 段头 + 会话段 + （有的话）点名行。抽出来是因为上面的循环要反复算长度。
     private static func assemble(_ kept: [String], omitted: Int) -> String {
-        var parts = ["【最近会话摘录 · \(kept.count) 个会话, 窗口 \(Tune.dreamDigestWindowDays) 天】"]
+        var parts = ["【最近会话摘录 · \(kept.count) 个会话, 窗口 \(Tune.dreamDigestWindowHours) 小时】"]
         parts.append(contentsOf: kept)
         if omitted > 0 { parts.append("（另有 \(omitted) 个会话未列出: 更早的 / 超出预算的 / 没有正文的）") }
         return parts.joined(separator: "\n")
@@ -324,25 +371,44 @@ final class SchedulerService: ObservableObject {
 
     static func digestDay(_ d: Date) -> String { digestDayFormatter.string(from: d) }
 
-    /// dream 的**候选短名单** —— 只读它算摘要, 不是读全部会话（2026-10-13 实测后加）。
+    /// dream 的**候选短名单** —— 只读它算摘要, 不是读全部会话。
     ///
-    /// **为什么可以只读一部分而不丢内容**（是证明, 不是"大概够用"）:
-    /// `sessionDigest` 最终只会保留「窗口内 · 未被排除 · 按 `updatedAt` 倒序前 `MaxSessions` 个」。
-    /// 设它在全体里的位次**超出** `MaxSessions + |excludeIds|`。那么排在它前面的会话就多于
-    /// `MaxSessions + |excludeIds|` 个, 其中最多 `|excludeIds|` 个是被排除的
-    /// ⇒ 至少有 `MaxSessions + 1` 个"未被排除且窗口内"的会话排在它前面,
-    /// 与它"在那个子集里排得进前 `MaxSessions`"矛盾。**故界成立。**
-    ///
-    /// 为什么非要这个界: `buildDreamDigest` 是**逐会话全量重放**（`loadMessages` 会把整个事件流
+    /// **为什么要一个界**: `buildDreamDigest` 是**逐会话全量重放**（`loadMessages` 会把整个事件流
     /// 解码成 `ChatMessage`）, 而实测约 **64% 的字节解码完就被 `sessionMaterial` 丢掉**
-    /// （`tool` 卡与 `think` 块 —— 见 §11i 的实测表）。读的量原本等于**全库 events**, 与 12000 字符的
-    /// 摘要预算完全脱钩; 有了这个界, 读的量只与 `MaxSessions` 有关。
+    /// （`tool` 卡与 `think` 块 —— 见 §11i 的实测表）。没有界, 读的量就与摘要预算完全脱钩。
     ///
-    /// 纯函数 ⇒ 冒烟拿它和"读全体"比**逐字相等**来守这条不变量（把界改成
-    /// `prefix(Tune.dreamDigestMaxSessions)` ⇒ 那条立刻红, 因为被排除的会话会占掉名额）。
-    static func dreamShortlist(_ items: [ConversationItem], excludeCount: Int) -> [ConversationItem] {
-        let n = Tune.dreamDigestMaxSessions + max(0, excludeCount)
-        return Array(items.sorted { $0.updatedAt > $1.updatedAt }.prefix(n))
+    /// ⚠️ **P17 换了界的来历, 且换完更强**:
+    /// P15.6 的界是 `MaxSessions + |excludeCount|`, 配一段"为什么它不丢内容"的**证明** ——
+    /// 那条证明成立的前提是"`sessionDigest` 最终只保留前 `MaxSessions` 个"。P17 取消了会话数
+    /// 上限（范围改由 36 小时窗口决定）⇒ **那条证明失效**, 必须换界。
+    ///
+    /// 现在的界就是**窗口本身**, 而且它是**精确的**而不是近似的: `sessionDigest` 用的是同一条
+    /// `updatedAt >= since` 判据 ⇒ 落在这之外的会话**本来就不会进摘要**。
+    /// 近似界要写一段证明"没丢", 精确界不需要 —— 同一条不变量, 换了种更强的成立理由。
+    ///
+    /// 纯函数 ⇒ 冒烟仍拿它和"读全体"比**逐字相等**（把界改成"按 `updatedAt` 倒序取前 N 个"
+    /// ⇒ 那条立刻红, 因为窗口外的会话会占掉名额）。
+    static func dreamShortlist(_ items: [ConversationItem], since: Date) -> [ConversationItem] {
+        items.filter { $0.updatedAt >= since }
+    }
+
+    /// 摘要窗口的起点 = **`max(now - 36h, 上次 fire 真跑起来的那一刻)`**（P17）。
+    ///
+    /// **为什么必须退到 `lastRunAt`**: 固定 36h 的固有毛病是"漏跑一天 ⇒ 那天的料永久掉出窗口"。
+    /// 而 `lastRunAt` 只在 fire **真的起来**时写（`runScheduledFire` 里那一行）, 被跳过的 fire
+    /// （`recordFireSkip`）**不写** ⇒ 取 max 同时解决两件事:
+    ///   ① 正常日更 ⇒ 取 36 小时（`lastRunAt` 更近）
+    ///   ② 漏跑一天 ⇒ 窗口自动拉长到"上次真跑到今天", 那天的会话还在
+    ///
+    /// 代价明写: 漏跑之后那次会**多读**一批历史会话（`replayMessages` 逐条解码）。但
+    /// ① 它只是一次性的, 下一次 fire 的 `lastRunAt` 就回到当下; ② 真正喂给模型的量仍由
+    /// `dreamDigestTotalChars` 截住 ⇒ 多读的是**读**, 不是**喂**。
+    ///
+    /// 纯函数（`now` / `lastRunAt` 都是参数）⇒ 冒烟能喂"上次跑在 50 小时前"造反例。
+    static func dreamDigestSince(now: Date, lastRunAt: Date?) -> Date {
+        let floor = now.addingTimeInterval(-Double(Tune.dreamDigestWindowHours) * 3600)
+        guard let last = lastRunAt else { return floor }
+        return min(floor, last)   // 取**更早**的那个 ⇒ 窗口更长（重复可接受, 丢失不行）
     }
 
     /// 取料 → 编摘要。**这里只做"取", 所有判据在 `sessionDigest` 里**（纯函数, 可造反例）。
@@ -360,7 +426,11 @@ final class SchedulerService: ObservableObject {
         let all = store.allConversations
         var exclude = Set(scheduledTasks.compactMap(\.logSessionId))
         for c in all where c.sideOf != nil { exclude.insert(c.id) }
-        let pass = Self.dreamShortlist(all, excludeCount: exclude.count)
+        // P17: 窗口起点 = max(now - 36h, 上次 fire 真跑起来的那一刻)。**在 fire 之前**算 ——
+        // 此刻 `lastRunAt` 还是上一轮的值（本轮的写在 fire 之后）, 这正是要的那个"上次"。
+        let since = Self.dreamDigestSince(
+            now: Date(), lastRunAt: scheduledTasks.first { Self.isDreamTask($0) }?.lastRunAt)
+        let pass = Self.dreamShortlist(all, since: since)
         // P15.8: 会话 → 归属根名。**从 `noteKnowledgeBases` 的启用态派生**, 不另写一套规则 ——
         // 于是"项目没有 path"与"项目根被用户停用"这两种会话自动回落到全局标签,
         // 而它们本来就没有可写的项目根（那个根压根不在 `[笔记]` 段里）。
@@ -370,8 +440,32 @@ final class SchedulerService: ObservableObject {
                              messages: store.replayMessages(for: c.id),
                              noteRootLabel: labels[c.id] ?? KnowledgeBase.noteGlobalLabel)
         }
-        return Self.sessionDigest(inputs, excludeIds: exclude,
+        return Self.sessionDigest(inputs, since: since, excludeIds: exclude,
                                   priorOmitted: all.count - pass.count)
+    }
+
+    /// dream 的**笔记段** = 【笔记目录】+【笔记正文】（P17）。
+    ///
+    /// 目录借 `knowledgeIndexSegment()`（与常驻 `[笔记]` 段**同一个组装器**, 于是"根名"两处
+    /// 必然一致 —— 归属判断全靠它）。正文是 P17 新开的段, 只在 here 用一次。
+    ///
+    /// ⚠️ 两段都可能为空: 目录为空 = 所有根都被停用（`dreamPrompt` 里"没有【笔记目录】段 ⇒ 直接结束"
+    /// 那一支的判据）; 正文为空 = 笔记都是空的（那是合法状态, 不是错误）。
+    ///
+    /// ⚠️ **一处已知的措辞重叠（有意不改）**: `knowledgeIndexSegment()` 的段头那句
+    /// 「只给索引与摘要; 需要正文时用 read 工具按路径取」是**常驻段**的语境 —— 搬进 dream 之后,
+    /// 正文另有【笔记正文】一段, 那句话读起来会有点旧。不动它: 它是**每一轮对话**都在的字节,
+    /// 为了让 dream 读着顺一点去改常驻段, 代价与收益倒挂。`dreamPrompt` 的输入②已经把两段的
+    /// **分工**写清楚了（"目录是地图、正文是内容本身"）—— 指令比段头权威。
+    private func buildDreamNotes() -> String {
+        guard let store else { return "" }
+        var parts: [String] = []
+        if let idx = store.knowledge.knowledgeIndexSegment() {
+            parts.append("【笔记目录】\n" + idx.text)
+        }
+        let body = store.knowledge.noteBodySegment()
+        if !body.text.isEmpty { parts.append(body.text) }
+        return parts.joined(separator: "\n\n")
     }
 
     /// 会话 id → 那条会话**该往哪个笔记根写**（根名）。P15.8。
@@ -409,21 +503,41 @@ final class SchedulerService: ObservableObject {
     // MARK: - 调度 + fire (P3.9)
 
     /// 调度器: 每秒 tick, 分钟变化时才检查 (对齐 cron 的最小粒度; 睡眠唤醒后靠分钟差兜底)。
+    /// P17: 同时持一条防 App Nap 的断言 —— 没有它 tick 会被系统降频到秒级甚至更粗,
+    /// 跨过整分钟就漏掉一次到期检查（详见 `napSuppressionOptions`）。
     func startScheduler() {
+        if napAssertion == nil {   // 幂等: 重复 start 不许堆断言
+            napAssertion = ProcessInfo.processInfo.beginActivity(
+                options: Self.napSuppressionOptions,
+                reason: Self.napSuppressionReason)
+        }
         schedulerTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.schedulerTick() }
         }
     }
 
+    /// 停调度 + 交还断言（与 `startScheduler` 对称; MailboxSentinelService 同款）。
+    func stopScheduler() {
+        schedulerTimer?.invalidate()
+        schedulerTimer = nil
+        if let t = napAssertion { ProcessInfo.processInfo.endActivity(t) }
+        napAssertion = nil
+    }
+
     private func schedulerTick() {
         let now = Date()
         let minute = Int(now.timeIntervalSince1970 / 60)
+        let gap = minute - lastSchedulerMinute
         guard minute != lastSchedulerMinute else { return }
         lastSchedulerMinute = minute
         for task in scheduledTasks where task.enabled {
             guard let cron = task.cronExpr, cron.matches(now) else { continue }
             runScheduledFire(task, at: now)
         }
+        // P17: 大跳 = 睡眠 / 长时间挂起 ⇒ 重算漏跑清单。放在到期检查**之后**: 刚跑过的任务
+        // `lastRunAt` 已经前移, 不会被自己算成"漏跑"。首次启动时 `lastSchedulerMinute` 是 0
+        // ⇒ gap 巨大 ⇒ 顺带把"启动时算一次"也覆盖了。
+        if gap > 1 { refreshMissedFires(now: now) }
     }
 
     /// 到点投递 (P3.9 单日志会话): 任务的全部运行追加进同一个日志会话 (首次 fire 建立)。
@@ -543,6 +657,105 @@ final class SchedulerService: ObservableObject {
             sessionId: logId, ChatMessage(role: .user, content: .text(text)))
     }
 
+    // MARK: - 漏跑清单 (P17 · 运行可靠性)
+
+    /// 一个任务的漏跑汇总 —— **只留次数和最近一次**, 不留整个时刻数组。
+    /// 口径来自产品（boss 拍板）: 补跑**只跑最近一次**, 前面的次数只用来表达严重程度。
+    /// 顺带让内存与窗口长度**脱钩** —— `* * * * *` 漏 7 天是一万次, 存数组会白白堆一万个 Date。
+    struct MissedFire: Identifiable, Equatable {
+        let taskId: UUID
+        let count: Int
+        let last: Date
+        var id: UUID { taskId }
+    }
+
+    /// 窗口起点 = **四个候选里最晚的那个**。
+    ///   `floor`     —— 回溯上限 (`Tune.missedFiresLookbackDays`)
+    ///   `createdAt` —— 兜住"新建任务从没跑过", 否则会误报它出生前的每一个 cron 点
+    ///   `lastRunAt` —— 上次**真跑**的时刻（被 `recordFireSkip` 跳过的不算, 见那里的注释）
+    ///   `ackAt`     —— 用户点过"忽略"的时刻
+    /// 取最晚 = "上一次已知状态之后"; 三种来源（真跑 / 出生 / 认账）与上限之间是**并集**关系。
+    static func missedWindowStart(task: ScheduledTask, now: Date, floor: Date, ackAt: Date?) -> Date {
+        var start = max(floor, task.createdAt)
+        if let last = task.lastRunAt { start = max(start, last) }
+        if let ack = ackAt { start = max(start, ack) }
+        return start
+    }
+
+    /// 窗口内"该跑却没跑"的汇总 —— **纯函数**（now / floor / ackAt 全是参数）⇒ 冒烟能造反例。
+    ///
+    /// 「没跑」是**确定**的而不是猜的: `lastRunAt` 只在 fire **真的起来**时写
+    /// (`runScheduledFire` 末尾), 所以窗口内任何一个 cron 点只要真跑过, `lastRunAt` 就该比它更晚
+    /// —— 反证。
+    static func missedSummary(for task: ScheduledTask, now: Date,
+                              floor: Date, ackAt: Date?) -> MissedFire? {
+        guard task.enabled, let cron = task.cronExpr else { return nil }
+        let start = missedWindowStart(task: task, now: now, floor: floor, ackAt: ackAt)
+        guard start < now else { return nil }
+        var count = 0
+        var last: Date?
+        // 起点 = **start 之后**的第一个整分（**开区间**）。「上次跑过」与「已认账」都意味着那个
+        // 时刻已经处理完了, 不含它本身。
+        // ⚠️ 这里踩过一次: 写 `.rounded(.up)` 在 start **恰好是整分**时原地不动 ⇒ 把 `lastRunAt`
+        //    那一刻也算成漏跑（实测 3 变 4) —— 正是冒烟那条"恰好 3 次"抓出来的。
+        var t = Date(timeIntervalSince1970: (start.timeIntervalSince1970 / 60).rounded(.down) * 60 + 60)
+        let cal = Calendar.current
+        while t <= now {
+            // 先在"分钟"位上筛一道: cron 的分钟集通常很窄, 这一步挡掉绝大部分迭代
+            // （逐分钟 × 7 天 = 10080 次, 不筛的话每次都要白做一遍日历分解）。
+            if cron.minutes.contains(cal.component(.minute, from: t)), cron.matches(t) {
+                count += 1
+                last = t
+            }
+            t = t.addingTimeInterval(60)
+        }
+        guard let lastAt = last else { return nil }
+        return MissedFire(taskId: task.id, count: count, last: lastAt)
+    }
+
+    /// ack 的 KV 键（每任务一条; 值 = 认账时刻的 epoch 秒）。
+    static func missedAckKey(_ taskId: UUID) -> String { "sched_missed_ack_\(taskId.uuidString)" }
+
+    /// 重算全部任务的漏跑清单。
+    func refreshMissedFires(now: Date = Date()) {
+        guard let store else { missedFires = []; return }
+        let floor = now.addingTimeInterval(-Double(Tune.missedFiresLookbackDays) * 86400)
+        var out: [MissedFire] = []
+        for task in scheduledTasks where task.enabled {
+            // 项目已删的任务**不算漏跑**: 它每次到点都会被 `recordFireSkip` 跳过, 而那里
+            // **不写** `lastRunAt` ⇒ 它会永远赖在清单里。那是配置坏了, 有别的提示位。
+            if let pid = task.projectId, !store.projects.contains(where: { $0.id == pid }) { continue }
+            let ack = store.persistence?
+                .loadSettingText(key: Self.missedAckKey(task.id))
+                .flatMap(Double.init)
+                .map { Date(timeIntervalSince1970: $0) }
+            if let m = Self.missedSummary(for: task, now: now, floor: floor, ackAt: ack) {
+                out.append(m)
+            }
+        }
+        missedFires = out.sorted { $0.last > $1.last }   // 最近漏的排前面
+    }
+
+    /// 补跑**最近的一次**（boss 拍板: 不管漏了几次都只跑最近那次）。
+    /// 内容层面为什么够: P17 的水位 `min(now - 36h, lastRunAt)` 本来就会把窗口拉长, 补这一次
+    /// 就把漏掉那几天的料一起捞回来了; 真去补 N 次反而会在同一个日志会话里连投 N 个回合,
+    /// 后面几个全被"在途则跳过"的保护挡掉 —— 白点。
+    func catchUpMissedFire(_ taskId: UUID) {
+        guard let task = scheduledTasks.first(where: { $0.id == taskId }) else { return }
+        runScheduledFire(task)
+        // ⚠️ 无论这次 fire 是否被在途保护跳过, 都要认账 —— 否则 `lastRunAt` 没前移, 条目原样留着
+        // ⇒ 用户看到的是"点了没反应"。同 `runNowButton` 那条"禁用按钮反而把记录藏起来"的理由。
+        ignoreMissedFire(taskId)
+    }
+
+    /// 认账: 这批漏跑我看见了, 不补。**要落库**是因为下次开机不该再问一遍 ——
+    /// 没有这一条, 用户"决定不补"这个动作就没有落点, 清单会一直挂在那儿。
+    func ignoreMissedFire(_ taskId: UUID) {
+        store?.persistence?.saveSettingText(
+            key: Self.missedAckKey(taskId), value: String(Date().timeIntervalSince1970))
+        refreshMissedFires()
+    }
+
     // MARK: - 交接文件 (P3.9)
 
     /// 交接文件路径: 项目任务 → <项目>/.mangox/tasks/<taskId>.md (进文件树/可 @ 引用);
@@ -618,7 +831,7 @@ final class SchedulerService: ObservableObject {
         // 负责让它体面收场, 不需要在这里造一个空段。
         // P15.6b: 指令正文取 `dreamFirePrompt`（= **常量**）, **不是** `task.prompt`。
         if Self.isDreamTask(task) {
-            return Self.dreamFirePrompt(digest: buildDreamDigest())
+            return Self.dreamFirePrompt(digest: buildDreamDigest(), notes: buildDreamNotes())
         }
         guard task.continuous else { return task.prompt }
         var sections: [String] = []

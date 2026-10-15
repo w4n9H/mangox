@@ -23,7 +23,8 @@ enum NoteProposalStatus: String {
 
 // MARK: - 提案的三类动作
 
-/// 提案的三类动作 —— 与 P15 §04 批 3 那句「三件事一起上、不拆」一一对应。
+/// 提案的四类动作 —— 前三件是 P15 §04 批 3 那句「三件事一起上、不拆」;
+/// `delete` 是 P17 补的第四件（当时那版没有"删", 一篇"整条没用了"的笔记只能被硬塞进"换"里）。
 ///
 /// `rawValue` 小写且恒 ASCII: 它同时是**落库字符串**与**扩展写给 spool 的 token**
 /// （`mangox-dream.ts` 那侧写的就是这三个词）⇒ 改名 = 两边一起改 + 数据迁移。
@@ -35,6 +36,10 @@ enum NoteProposalKind: String, CaseIterable {
     case merge
     /// 换: 用新值覆盖过期值（旧值留旧版）。
     case replace
+    /// 删: 这一篇整条不再有用 —— 它不是「该改」的另一侧（"改"要求还有要说的, "删"要求没有了）。
+    /// 它**不要 `content`**（产出是"文件进废纸篓", 没有新字节可写）,
+    /// 但**要 `base_hash`** —— 删的是不是它读到的那一版, 是这个动作唯一的判据。
+    case delete
 }
 
 // MARK: - 来源指针
@@ -72,7 +77,7 @@ struct NoteProposalDraft: Equatable {
     /// **根内相对路径**（不是绝对路径）。落库形状与 `note_revisions.path` 一致 ——
     /// 绝对路径会把"项目当时在哪个目录"烤进数据里, 而 `rootId` 已经表达了归属。
     let targetPath: String
-    /// merge / replace 必填（乐观并发的本地版）; insight 恒空串 —— 目标文件还不存在, 任何指纹都是错的。
+    /// merge / replace / delete 必填（乐观并发的本地版）; insight 恒空串 —— 目标文件还不存在, 任何指纹都是错的。
     let baseHash: String
     let title: String
     let content: String
@@ -124,7 +129,7 @@ enum ProposalRejection: Equatable, Error {
     case emptyContent
     case emptySources
     case sourceKindUnknown(String)
-    /// merge / replace 少了 `base_hash`。
+    /// merge / replace / delete 少了 `base_hash`。
     case baseHashRequired
     /// `target_path` 不是绝对路径（扩展/模型写成了相对路径 ⇒ 根都定不下来）。
     case targetNotAbsolute
@@ -215,8 +220,13 @@ enum NoteProposalSpool {
         let target = try required(dict, "target_path")
         // content **不 trim 后落库**: 它是要写进文件的那份字节, 首尾空行是作者写的。
         let content = raw(dict, "content")
-        guard !content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            throw ProposalRejection.emptyContent
+        // `delete` 没有新字节可写（产出是"文件进废纸篓"）⇒ 空的 `content` 对它是**正常**的。
+        // 其余三类都要求非空: 一份"要写进去的东西"若是空的, 采纳的结果是**把这篇文章清空** ——
+        // 而那多半不是提案的意思（真是想清空, 那正是 `delete`）。
+        if kind != .delete {
+            guard !content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                throw ProposalRejection.emptyContent
+            }
         }
         // `base_hash` 是**结构上可选**的键（insight 没有它）, 所以不能走 `required` ——
         // 走 `required` 的话缺失会被通用的 `missingField` 拦掉, 而 `baseHashRequired`
