@@ -18,6 +18,10 @@ struct TopBarTitleControls: View {
             .foregroundStyle(CodexTheme.textPrimary)
             .lineLimit(1)
             .truncationMode(.tail)
+            // ⚠️ 定宽 (不是 maxWidth): 见 `Tune.topBarTitleWidth` —— 不给宽时上两行是**死设置**,
+            //    toolbar 按理想宽排版, 长标题会越过分隔线压进正文区。
+            .frame(width: Tune.topBarTitleWidth, alignment: .leading)
+            .help(store.selectedTitle)   // 截断后仍能悬停读全名
     }
 }
 

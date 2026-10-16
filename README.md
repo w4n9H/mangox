@@ -2,7 +2,7 @@
 
 macOS 原生 AI Agent 客户端（SwiftUI），对标 Codex Desktop 的交互形态，底层对接 [pi CLI](https://github.com/earendil-works/pi) 作为推理引擎。
 
-![version](https://img.shields.io/badge/version-0.1.20-orange)
+![version](https://img.shields.io/badge/version-0.1.21-orange)
 ![release](https://github.com/w4n9H/mangox/actions/workflows/release.yml/badge.svg)
 
 > 下载安装包请看[「下载与本地签名」](#下载与本地签名必读) —— **包需要你本机签一次名才能开**，原因和做法都在那节。
@@ -153,7 +153,7 @@ git tag -d v0.1.15 && git push origin :refs/tags/v0.1.15
 git tag v0.1.15 && git push origin v0.1.15
 ```
 
-## 已知限制 (v0.1.20)
+## 已知限制 (v0.1.21)
 
 - **常规 / 完整档比上一版多 3 个内置工具，上下文占用随之变多（有意）**：`grep` / `find` / `ls` 是 pi 默认**关闭**的只读三件套，本版在 Standard / Full 档打开它们（4 → 7 个内置工具）⇒ 每回合多注入约 **2.2k 字符**。要最省上下文的档就选 Minimal（4 个）
 - **联网搜索的 Key 不落盘 ⇒ 换机器 / 重装要重填（有意）**：它只存 Keychain，也**不会**被写进 `模型` 那类物化配置或导出文件；代价是迁移时得重新扫码建一次
@@ -188,7 +188,8 @@ git tag v0.1.15 && git push origin v0.1.15
 - **宽表横滚时表头跟着一起滚**（有意）：表头与正文同属一张 `Grid`，没有冻结首行；冻结要把表头拆出去并同步横滚偏移，收益不抵复杂度
 - **代码块的「↵ 换行」开关是块内临时态**（有意）：不落库、切走再回来就回到默认（关）—— 一行命令的折行偏好不构成全局配置语义
 - **轨迹视图的回合时长是估计值**：按事件时间差计算（低估最后一个块的流式时长）；手动停止的回合可能没有 usage（显示 token 缺省）
-- **输入框空态看不到光标（有意）**：占位提示与系统插入点是同一起点，竖线会压进首字的左半；故**空草稿时不画插入点**，一旦输入立即恢复（CJK 与拉丁的首字左边距不同，靠挪提示位置治不了）
+- **输入框聚焦后占位提示会消失（有意）**：插入点与占位提示是**同一起点**（竖线会压进首字左半），所以让它俩**永不同时在场** —— 聚焦即藏提示、失焦即显（AppKit 原生 `NSTextField` 也是这个行为）。点进空输入框看不到占位提示是**预期**，不是提示丢了
+- **思考卡默认折叠、长内容手动展开是一次性排版（有意）**：起手折叠、右侧只给一枚「思考中…」，展开与否归用户，回合结束自动收回。手动展开一段超长思考是**同步**排版 —— 本机最长一条（225 行 / 18 942 字符）约 **0.62s**，本版不做懒加载；真要「滚着看全 + 代价封顶」得上「拆块 + `LazyVStack`」，等真有需求再说
 - **设置窗只跟随最近聚焦的窗口（有意）**：设置窗经 `@FocusedValue` 取 store ⇒ 用 `⌘N` 开多窗时，它服务的是最近聚焦的那个窗口。要消掉得把 store 提升到 App 层，动的是窗口模型，本版不碰
 - **`⌘F` 是「在当前视图里查找」，不是全局搜索（有意）**：它接的是工作区文件过滤框。MangoX 没有全局搜索功能，而 `⌘F` 需要一个宿主 —— 本版按 macOS 惯例接到当前视图，没有新起一个搜索面
 - **睡眠期间错过的 cron 点不会自动补（有意）**：cron 说「03:00 跑」就是 03:00 跑 —— 睡到 11:00 醒来补一次，等于把任务的时间点变成「看机器什么时候醒」。所以只**列清单**（补跑 / 忽略），不静默补；补跑也只跑**最近一次**（水位会把窗口拉长，补一次就把那几天的料一起捞回来）
@@ -196,7 +197,7 @@ git tag v0.1.15 && git push origin v0.1.15
 - **重启后不会自动启动（本版未做）**：登录项未接 —— App 未签名，注册可能失败或需要人工批准，宁可留着也不加一条不可靠的自启路径
 - **「选项没被换成会禁睡眠那一档」没有自动判据**：那条守卫因 CI 兼容被移除（见 CHANGELOG「工程」），剩余断言盖不到它（两个常量的位是交叠的）⇒ 目前靠 code review
 
-> 注：App 图标源图在 `icon_work/AppIcon.png`（1024），`scripts/gen-icon.sh` 展开为全 10 档 `mangox/Resources/AppIcon.icns`，经 Info.plist `CFBundleIconFile` 挂载。
+> 注：App 图标源图在 `icon_work/AppIcon.png`（1024，由 `icon_work/draw_icon.py` 程序化生成、可逐字节复现），`scripts/gen-icon.sh` 展开为全 10 档 `mangox/Resources/AppIcon.icns`，经 Info.plist `CFBundleIconFile` 挂载。⚠️ `icon_work/` 整体不进版本控制（只放行 `*.py`）。
 > 坑（2026-09-14 实证，勿回退 asset catalog 方案）：本机 actool/Xcode 16.2 对 appiconset 无论单尺寸 universal（静默不产出）还是传统多尺寸（icns 只塞 ≤256 档）都不完整，Dock 放大即糊；iconutil 直出 icns 才是全档。
 
 ## License

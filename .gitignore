@@ -69,8 +69,13 @@ fastlane/test_output
 # macOS
 .DS_Store
 
-# 本地工作文件 (图标生成中间稿, 终稿在 AppIcon.appiconset)
-icon_work/
+# 本地工作文件 (图标源图 / 候选稿)
+# 终稿 = mangox/Resources/AppIcon.icns (走 scripts/gen-icon.sh 出的, 绕开 actool)
+# ⚠️ 必须写 `icon_work/*` 而不是 `icon_work/`: 后者忽略的是**整个目录**, 而
+#    git 的硬规则是「父目录被忽略时, 里头的 `!...` 否定规则一律不生效」⇒
+#    写成 `icon_work/` 的话下面的放行行形同虚设, 脚本照样进不了版本控制。
+icon_work/*
+!icon_work/*.py
 
 # 构建产物
 build/

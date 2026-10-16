@@ -13,6 +13,8 @@ struct ChatComposer: View {
     @ObservedObject var store: ChatStore
     /// CompactTextEditor 实测内容高度回调 (SwiftUI 外部 frame 才是权威布局)。
     @State private var editorHeight: CGFloat = Tune.editorMinHeight
+    /// 输入框焦点态 —— 占位提示据此**在获得焦点时退场** (见 `inputCard` 里的条件)。
+    @State private var editorFocused = false
     // P13: 档位 popover 的展开态移进共用件 AgentModePicker, 这里不再需要它
 
     var body: some View {
@@ -100,11 +102,15 @@ struct ChatComposer: View {
                     maxHeight: Tune.editorMaxHeight,
                     onSubmit: { store.sendDraft() },
                     onHeightChange: { editorHeight = $0 },
-                    onImagePaste: { data, ext in store.addPendingImage(data, suggestedExtension: ext) }
+                    onImagePaste: { data, ext in store.addPendingImage(data, suggestedExtension: ext) },
+                    onFocusChange: { editorFocused = $0 }
                 )
                 .frame(height: editorHeight)
 
-                if store.draft.isEmpty {
+                // ⚠️ 占位提示**在获得焦点时必须退场** —— 它和系统插入点占同一像素, 只能二选一
+                //    (判据与来历见 `PasteInterceptTextView` 上方的长注释)。
+                //    这也正是 AppKit 自己的行为: NSTextField 一开始编辑, placeholder 就消失。
+                if store.draft.isEmpty && !editorFocused {
                     Text(Copy.composerPlaceholder)
                         .font(CodexTheme.fontSmall)
                         .foregroundStyle(CodexTheme.textMono)
@@ -507,23 +513,46 @@ struct CompactTextEditor: NSViewRepresentable {
     var onHeightChange: (CGFloat) -> Void = { _ in }
     /// P7-M6b: ⌘V 拦截 — 剪贴板是图片时不进文本, 走附件通道 (data, ext)。
     var onImagePaste: (Data, String) -> Void = { _, _ in }
+    /// 焦点变化回传 (2026-10-16): 占位提示据此**在获得焦点时退场** —— 见下方长注释。
+    var onFocusChange: (Bool) -> Void = { _ in }
 
     /// P7-M6b: 剪贴板图片拦截 — 双路由 (⌘V 可能经菜单 paste: 或 key equivalent 派发,
     /// 两条路都拦; 剪贴板无图时放行常规文本粘贴)。
     private final class PasteInterceptTextView: NSTextView {
         var onImagePaste: ((Data, String) -> Void)?
+        var onFocusChange: ((Bool) -> Void)?
 
-        /// 空草稿时**不画插入点** —— 那一行归占位提示 (两者同起点, 叠在一起会互相啃字:
-        /// 2026-09-21 boss"那个闪烁线和那句'给 MangoX 发消息'重叠了, 感官非常不友好";
-        /// 截图实测: 光标占 x 102–105, 而"给"的墨迹从 x 97 起 → 竖线落在字的左半)。
+        /// 插入点与占位提示**占同一像素, 只能二选一** —— 同一条冲突的两面, 各踩中过一次:
+        ///   · 2026-09-21 boss"那个闪烁线和那句'给 MangoX 发消息'重叠了, 感官非常不友好"
+        ///     (截图实测: 光标占 x 102–105, 而"给"的墨迹从 x 97 起 → 竖线落在字的左半)。
+        ///   · 2026-10-16 boss"鼠标点上去了, 没有那个闪烁的竖标, 但是可以正常输入"
+        ///     —— 上一版为躲重叠, 在 `drawInsertionPoint` 里**只按 `string.isEmpty` 就不画**;
+        ///     但占位提示并不随焦点退场 ⇒ 空框一被聚焦就**两样都没有**(光标被压掉、提示还占着位)。
         ///
-        /// 为什么不是"把提示往右挪几个点": 首字的左边距是**字体/语言相关**的
-        /// (CJK 与拉丁不同), 一个硬编码偏移不可能对两门语言都对; 空态只留提示 = 语言无关。
-        /// ⚠️ 只拦"画"、不拦"擦": 擦除路径 (`turnedOn == false`) 必须照常走,
-        /// 否则把草稿删空后屏幕上会留下一根擦不掉的旧光标。
-        override func drawInsertionPoint(in rect: NSRect, color: NSColor, turnedOn flag: Bool) {
-            if flag, string.isEmpty { return }
-            super.drawInsertionPoint(in: rect, color: color, turnedOn: flag)
+        /// 修法 = **按焦点裁决, 不按"有没有字"**: 获得焦点 ⇒ 提示退场、插入点照画;
+        /// 失焦 ⇒ 提示回来(此时本来也没有插入点)。⇒ 两者**永不同时在场**, 重叠从根上不成立。
+        /// 这也正是 AppKit 自己的行为 (NSTextField 一开始编辑, placeholder 就消失);
+        /// ⚠️ 且它**语言无关** —— 不必去猜"首字左边距"那个字体/语言相关的偏移
+        /// (那是 2026-09-21 否掉"把提示往右挪几个点"的理由, 现在依然成立)。
+        override func becomeFirstResponder() -> Bool {
+            let ok = super.becomeFirstResponder()
+            if ok { notifyFocus(true) }
+            return ok
+        }
+
+        override func resignFirstResponder() -> Bool {
+            let ok = super.resignFirstResponder()
+            if ok { notifyFocus(false) }
+            return ok
+        }
+
+        /// ⚠️ **先把回调取出来再跳异步**: 属性读发生在 MainActor 上(合法), 而
+        ///     `DispatchQueue.main.async` 的闭包**不是** actor-isolated —— 直接在闭包里读
+        ///     `self.onFocusChange` 可能触并发隔离告警(本项目要求 warning 为 0)。
+        ///     跳异步本身是为了避开 "Modifying state during view update"。
+        private func notifyFocus(_ focused: Bool) {
+            let callback = onFocusChange
+            DispatchQueue.main.async { callback?(focused) }
         }
 
         override func paste(_ sender: Any?) {
@@ -569,6 +598,7 @@ struct CompactTextEditor: NSViewRepresentable {
         textView.textContainer?.widthTracksTextView = true
         textView.string = text
         textView.onImagePaste = onImagePaste
+        textView.onFocusChange = onFocusChange
         textView.delegate = context.coordinator
         scrollView.documentView = textView
 

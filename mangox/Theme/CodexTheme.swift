@@ -401,8 +401,23 @@ enum Tune {
     static let modePillVPadding: CGFloat   = 4    // 原版胶囊层次 (灰容器+白泡+阴影) 依赖此高度
     static let modePillMinWidth: CGFloat   = 50
 
+    /// 左上会话名: 窗口左缘 → 标题**文字左沿**的距离 (2026-10-16 从 boss 截图量得, 135.5pt)。
+    /// 组成 = 交通灯区 + 侧栏开关 + 最小化按钮 + 各自间距 —— 三者都钉在窗口左缘、宽度固定 ⇒ 常量。
+    static let topBarTitleLeadingInset: CGFloat = 136
+    /// 标题右缘与侧栏分隔线之间的留白 (不让文字贴线)。
+    static let topBarTitleTrailingGap: CGFloat  = 8
+    /// 左上会话名的**定宽** —— 判据 = "标题不许越过分隔线"。
+    /// ⚠️ 必须给**定宽**, 不能只靠调用点那个 `lineLimit(1)`: 标题住在 toolbar 的 `.navigation` 区,
+    ///    macOS 按内容的**理想宽**排版、并不按侧栏宽去约束它 ⇒ 没有定宽时 `lineLimit` 永远不触发,
+    ///    10 字标题会直接压过分隔线约 11pt (实测: 分隔线在 256pt, 标题墨迹 135.5→266.9pt)。
+    /// ⚠️ 侧栏收起时**仍用同一个宽**: 分隔线那时落在窗口左缘(无参考线), 但标题保持同列宽才不会
+    ///    因为 toggle 侧栏而忽长忽短。
+    static var topBarTitleWidth: CGFloat {
+        sidebarWidth - topBarTitleLeadingInset - topBarTitleTrailingGap
+    }
+
     // 欢迎页
-    static let welcomeMarkSize: CGFloat     = 36  // π 字号
+    static let welcomeMarkSize: CGFloat     = 26  // X 字号: 36 是 π 的, X 是 cap-height 须缩到 26
     static let welcomeQuestionSize: CGFloat = 24  // 问句字号
     static let welcomeStackSpacing: CGFloat = 14
 
@@ -479,7 +494,7 @@ enum Tune {
 enum Copy {
 
     // 欢迎页
-    static let welcomeMark = "π"
+    static let welcomeMark = "X"
     // **UI 可见文案一律用 `static var`** —— `static let` 是懒加载的一次性求值,
     // 会把 L() 的结果冻结在首次访问, 之后切语言不再跟随。
     static var welcomeQuestion: String { L("今天做点什么？") }
