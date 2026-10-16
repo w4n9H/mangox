@@ -58,9 +58,24 @@ struct ChatView: View {
         viewportHeight = h
     }
 
+    /// 「是否已贴底」的**唯一判据** —— 抽成纯函数是为了**可断言**（冒烟 T-UI 守着它）。
+    ///
+    /// `contentBottomY` = 内容底相对**视口顶**的 y（`contentBottomProbe` 报的那个数）。
+    /// 2026-10-16 实测它的三个取值（一次性探针，读数见当日 log）：长内容滚到顶 = **内容高**、
+    /// 滚到底 = **视口高**、内容不满一屏 = **内容高**。据此「距视口底」= `contentBottomY - viewportHeight`，
+    /// 落进 140pt 内才算跟随区。
+    ///
+    /// ⚠️ **原式 `contentBottomY > viewportHeight - 140` 是写反的**（`>` 应为 `<`、`-140` 应为 `+140`）：
+    ///    它对**任何**超出一屏的内容恒为 `true` ⇒ `guard nearBottom` 形同虚设 ⇒ P9-#9 那条
+    ///    「上滑阅读不拽回」**一直没有真正生效**（同一处还让"不满一屏"被误判成 `false`）。
+    ///    症状是静默的（自动跟随照跑），所以只靠读代码看不出来 —— 这条断言就是为了不让它再翻回去。
+    static func isNearBottom(contentBottomY: CGFloat, viewportHeight: CGFloat) -> Bool {
+        viewportHeight == 0 ? true : contentBottomY < viewportHeight + 140
+    }
+
     /// 内容底进入视口底 140pt 内 = 跟随区 (Bool 去重, 不随滚动帧重渲染)。
     private func handleContentBottom(_ bottomY: CGFloat) {
-        let v = viewportHeight == 0 ? true : bottomY > viewportHeight - 140
+        let v = ChatView.isNearBottom(contentBottomY: bottomY, viewportHeight: viewportHeight)
         if nearBottom != v { nearBottom = v }   // 等值不写, 防 PreferenceKey 高频触发失效性更新
     }
 
@@ -70,10 +85,57 @@ struct ChatView: View {
         }
     }
 
+    /// 滚动锚点 —— **自动跟随 / 初屏定位 / "回到最新"按钮共用同一个目标**。
+    ///
+    /// ⚠️ 别在三处各写一遍: 流式期的目标是 `streaming-tail` 那个**哨兵**(它挂在流式指示器上,
+    /// 比最后一条消息还要靠下), 其余时候才是最后一条消息的 id。分头写迟早分叉 —— 症状是
+    /// "自动跟随停在 A、点按钮却跳到 B", 两处单看都对、合起来错。
+    private var scrollTarget: AnyHashable {
+        store.isStreaming ? "streaming-tail" : (store.messages.last?.id ?? UUID())
+    }
+
+    /// 回到最新 (2026-10-16 boss: "往上翻了记录, 还要再往下翻才能到最底部")。
+    /// 出现条件复用 P9-#9 的 `nearBottom`（**修好后的**那个, 见 `isNearBottom`）—— 不另起一套判定,
+    /// 两套判定迟早不一致, 会得到"在跟随区里却显示按钮"这种自相矛盾的状态。
+    /// ⚠️ 它**只响应点击, 绝不自动滚**: "上滑阅读不拽回"是 P9-#9 立的规矩, 别让这个按钮
+    ///    变成第二个自动跟随。
+    private func jumpToLatestButton(_ proxy: ScrollViewProxy) -> some View {
+        Button {
+            withAnimation(CodexTheme.animMed) { proxy.scrollTo(scrollTarget, anchor: .bottom) }
+        } label: {
+            Image(systemName: "arrow.down")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(CodexTheme.textSecondary)
+                .frame(width: Tune.jumpToLatestSize, height: Tune.jumpToLatestSize)
+                .background(Circle().fill(CodexTheme.bgElevated))
+                .overlay(Circle().strokeBorder(CodexTheme.border, lineWidth: 1))
+                .shadow(color: .black.opacity(0.10), radius: 4, y: 1)
+        }
+        .buttonStyle(.plain)
+        .help(Copy.jumpToLatest)
+        .padding(.bottom, Tune.jumpToLatestInset)
+        .transition(.opacity.combined(with: .scale(scale: 0.9)))
+    }
+
     /// 滚动列 = ScrollView + 摘要胶囊占位行 (拆子表达式, 防 type-check 超时)。
     private func scrollColumn(_ proxy: ScrollViewProxy) -> some View {
         VStack(spacing: 0) {
             scrollContent(proxy)
+                // 回到最新: 浮层挂在 ScrollView 上 (不占布局流, 不与内容互相挤压)
+                // ⚠️ `!store.messages.isEmpty` 不只是"没消息就没得回" —— 空态**根本不挂**
+                //    `contentBottomProbe`(见 scrollContent 的 if), 此时 `bottomY` 会停在旧值或偏好
+                //    默认 `0`, 靠它单个判据会得到幽灵按钮。
+                // ⚠️ `.animation(value:)` 必须挂在 `if` 的**父层**（挂在条件分支自己身上,
+                //    insertion / removal 的 transition 不会动）; 但父层要选**只罩住按钮**的那一层 ——
+                //    挂到 `scrollContent` 上就等于把动画广播进整个 ScrollView 子树(消息/滚动都在里头)。
+                .overlay(alignment: .bottom) {
+                    ZStack {
+                        if !store.messages.isEmpty, !nearBottom {
+                            jumpToLatestButton(proxy)
+                        }
+                    }
+                    .animation(CodexTheme.animFast, value: nearBottom)
+                }
             // P6.3.2: 离开摘要胶囊 — 独立占位行 (浮层会盖住最该读的最新内容, 2026-09-14 否决)
             if store.awaySummary != nil {
                 HStack {
@@ -85,7 +147,7 @@ struct ChatView: View {
                             onJump: {
                                 store.dismissAwaySummary()
                                 withAnimation(CodexTheme.animMed) {
-                                    proxy.scrollTo(store.messages.last?.id ?? UUID(), anchor: .bottom)
+                                    proxy.scrollTo(scrollTarget, anchor: .bottom)
                                 }
                             },
                             onDismiss: { store.dismissAwaySummary() })
@@ -125,14 +187,14 @@ struct ChatView: View {
         //    onChange(of: store.messages) 管。
         .onAppear {
             DispatchQueue.main.async {
-                proxy.scrollTo(store.messages.last?.id ?? UUID(), anchor: .bottom)
+                proxy.scrollTo(scrollTarget, anchor: .bottom)
             }
         }
         .onChange(of: store.selectedConversationId) { _, _ in
             // 换会话: replay 内容整批替换, 兜底滚到最新 (首帧 onAppear 之外的双保险)
             DispatchQueue.main.async {
                 withAnimation(nil) {
-                    proxy.scrollTo(store.messages.last?.id ?? UUID(), anchor: .bottom)
+                    proxy.scrollTo(scrollTarget, anchor: .bottom)
                 }
             }
         }
@@ -145,9 +207,8 @@ struct ChatView: View {
             DispatchQueue.main.async {
                 guard nearBottom, !scrollScheduled else { return }
                 scrollScheduled = true
-                let anchor: AnyHashable = store.isStreaming ? "streaming-tail" : (store.messages.last?.id ?? UUID())
                 withAnimation(CodexTheme.animMed) {
-                    proxy.scrollTo(anchor, anchor: .bottom)
+                    proxy.scrollTo(scrollTarget, anchor: .bottom)
                 }
                 DispatchQueue.main.async { scrollScheduled = false }
             }

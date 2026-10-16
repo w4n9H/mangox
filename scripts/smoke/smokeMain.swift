@@ -3518,6 +3518,40 @@ struct SmokeMain {
         check(Tune.sidebarRowIndent > 8,
               "T-UI 侧栏层级: 项目内会话行有真实缩进 (顶层恒 8, 子行必须更进)")
 
+        // ---- 侧栏版本号 (2026-10-16) ----
+        // 那行小字是用户判断"这次升级成没成"的依据 ⇒ 它必须**就是**包里的版本号。
+        // 纯函数那半先钉死行为: 空串与 nil 都回落 dev, **不假装有版本**。
+        check(AppVersion.formatted("0.1.21") == "v0.1.21"
+              && AppVersion.formatted(nil) == "dev"
+              && AppVersion.formatted("") == "dev",
+              "T-UI 版本号格式化: 非空带 v 前缀, 空/nil 回落 dev"
+              + " (实测 \(AppVersion.formatted("0.1.21")) / \(AppVersion.formatted(nil)))")
+        // 薄壳那半与真源对齐 —— **手写版本号会在这里红**: 显示的必须由 Info.plist 算出来。
+        let plistVer = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
+        check(AppVersion.display == AppVersion.formatted(plistVer),
+              "T-UI 侧栏版本号与 Info.plist 同源 (raw=\(plistVer ?? "nil") → \(AppVersion.display))")
+
+        // ---- 「是否已贴底」判据 (2026-10-16) ----
+        // ⚠️ 这条公式**曾经写反过**（`>` 写成 `<` 的反面 / `-140` 写成 `+140` 的反面）：写反时
+        //    它对**任何**超出一屏的内容恒为 true ⇒ P9-#9「上滑阅读不拽回」的守卫形同虚设。
+        //    症状是**静默的**（自动跟随照跑、门禁全绿），读代码看不出来 —— 所以在这里钉住。
+        //    下面这些数不是编的: 1200/300/100 是 2026-10-16 一次性探针在真机跑出来的
+        //    「长内容滚到顶 / 滚到底 / 内容不满一屏」三个实测读数(见当日 daily log)。
+        check(!ChatView.isNearBottom(contentBottomY: 1200, viewportHeight: 300),
+              "T-UI 贴底判据: 长内容滚到顶 (内容底=内容高 1200 / 视口 300) = 不在跟随区 → 上滑不拽回")
+        check(ChatView.isNearBottom(contentBottomY: 300, viewportHeight: 300),
+              "T-UI 贴底判据: 长内容滚到底 (内容底 = 视口高) = 跟随区")
+        check(ChatView.isNearBottom(contentBottomY: 439, viewportHeight: 300),
+              "T-UI 贴底判据: 距视口底 140pt 内 (439 < 440) = 跟随区")
+        check(!ChatView.isNearBottom(contentBottomY: 441, viewportHeight: 300),
+              "T-UI 贴底判据: 刚越过 140pt (441) = 已离开跟随区 (判据是 < 不是 ≤)")
+        check(ChatView.isNearBottom(contentBottomY: 100, viewportHeight: 300),
+              "T-UI 贴底判据: 内容不满一屏 (100 < 300) = 本来就在底 → 「回到最新」不该出现")
+        check(ChatView.isNearBottom(contentBottomY: 0, viewportHeight: 300),
+              "T-UI 贴底判据: 空态探针缺席 → 偏好回落默认 0 = 视为贴底 (防幽灵按钮)")
+        check(ChatView.isNearBottom(contentBottomY: 999, viewportHeight: 0),
+              "T-UI 贴底判据: 视口还没量到 (0) = 先当贴底, 不抢在初屏定位之前插手")
+
         // ===== T-COLOR (P10.8): 暗色板舒适区 =====
         // 起因: boss 反馈"黑色主题看着眼睛很累"。采样截图 + 算 WCAG 定位到**两级**问题:
         //  ① 旧值近纯黑底(#0D0D10, 亮度 0.0041) 压近纯白正文(#EDEDED) = 对比度 16.6:1

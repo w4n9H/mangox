@@ -263,6 +263,27 @@ jobs:
           # 启动验证由 install-from-release.sh 内部完成 (进程存活), 失败它自己会红。
           pkill -f "$work/installed/MangoX.app/Contents/MacOS/" 2>/dev/null || true
 
+          echo "再走一遍 —— zip 分支 (用户实际走的就是这条)"
+          # ⚠️ 输出目录里必须**故意放一个诱饵 .app**: zip 分支曾用
+          #    `find "$OUTPUT" -name '*.app' | head -1` 定址 —— 找的是"目录里任意一个
+          #    .app"而不是"刚解出来的那个", 于是拿着诱饵去清属性 + 重签, 真包一个字节
+          #    没动 (用户侧表现 = codesign `Operation not permitted`, 因为诱饵是别人
+          #    签过的 app, macOS 14+ 的 App Management 会拦)。没有诱饵, 这条门禁
+          #    只会绿 —— "定址"这件事它盖不住。
+          mkdir -p "$work/zipout/Decoy.app/Contents/MacOS"
+          printf 'not-a-real-binary' > "$work/zipout/Decoy.app/Contents/MacOS/decoy"
+          ditto -c -k --sequesterRsrc --keepParent "$work/src/MangoX.app" "$work/MangoX.zip"
+          before="$(shasum -a 256 "$work/zipout/Decoy.app/Contents/MacOS/decoy" | awk '{print $1}')"
+
+          scripts/install-from-release.sh "$work/MangoX.zip" -o "$work/zipout" --no-open --no-launch-check
+
+          [[ -d "$work/zipout/MangoX.app" ]] || { echo "::error::zip 解出来的不是 MangoX.app"; exit 1; }
+          zid="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$work/zipout/MangoX.app/Contents/Info.plist")"
+          [[ "$zid" == "moofs.mangox" ]] || { echo "::error::认错了 bundle: $zid"; exit 1; }
+          after="$(shasum -a 256 "$work/zipout/Decoy.app/Contents/MacOS/decoy" | awk '{print $1}')"
+          [[ "$before" == "$after" ]] || { echo "::error::诱饵 app 被动过 —— 定址错了"; exit 1; }
+          echo "  ✓ 认对了 bundle, 且没碰诱饵"
+
       # 这里**不**算 sha256: 每架构各出一份的话, 资产就是 2 个 zip + 2 个 .sha256,
       # 而两份校验和的正文在"哪一个对应哪个架构"这件事上要靠文件名, 读的人得自己配对。
       # 单个 checksums.txt (两个架构都在里面) 交给下面的 publish job 出 —— 它反正要等

@@ -89,9 +89,21 @@ case "$INPUT" in
         [[ -n "$OUTPUT" ]] || OUTPUT="$(cd "$(dirname "$INPUT")" && pwd)/MangoX"
         mkdir -p "$OUTPUT"
         log "  解包到: $OUTPUT"
-        ditto -x -k "$INPUT" "$OUTPUT" >/dev/null
-        DST_APP="$(find "$OUTPUT" -maxdepth 1 -name '*.app' -type d | head -1)"
-        [[ -n "$DST_APP" ]] || die "压缩包里没找到 .app"
+        # ⚠️ 必须先解到**空的临时目录**再定位 bundle, 不能解进 $OUTPUT 之后用
+        #    `find "$OUTPUT" -name '*.app' | head -1` —— 那句找的是"目录里**任意**
+        #    一个 .app", 不是"刚解出来的这个"。$OUTPUT 里只要本来就有别的 app
+        #    (2026-10-16 实测: `-o ~/Applications` 撞上已有的 PyCharm.app),
+        #    就会拿着**别人的** app 去清属性 + 重签名, 报
+        #    `codesign ... Operation not permitted` (那是 macOS 14+ 的 App Management
+        #    在拦"改别人签过的 bundle"), 而真正该装的那个包一个字节都没动。
+        STAGE="$(mktemp -d)"
+        trap 'rm -rf "$STAGE"' EXIT
+        ditto -x -k "$INPUT" "$STAGE" >/dev/null
+        SRC_APP="$(find "$STAGE" -maxdepth 2 -name '*.app' -type d | head -1)"
+        [[ -n "$SRC_APP" ]] || die "压缩包里没找到 .app"
+        DST_APP="$OUTPUT/$(basename "$SRC_APP")"
+        rm -rf "$DST_APP"
+        ditto "$SRC_APP" "$DST_APP"
         ;;
     *)
         die "只认 .app 或 .zip: $INPUT"

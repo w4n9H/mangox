@@ -332,7 +332,17 @@ enum Tune {
     static let composerTopPadding: CGFloat      = 8    // pill 行上方
     static let composerBottomPadding: CGFloat   = 14   // 输入卡下方
     static let composerStackSpacing: CGFloat    = 6    // pill 行与输入卡间距
-    static let editorMinHeight: CGFloat         = 88   // 输入框最小高 (= 初始高)
+    /// 输入框最小高 = **初始高**（空文本时 `CompactTextEditor` 报回来的就是它）。
+    ///
+    /// ⚠️ **88 → 44（2026-10-16 boss：`输入框太高了，严重积压了对话区域，我感觉至少可以减少一半`）**。
+    ///    那 88 是 P14 第四批对齐参考图时定的，但**没有一条约束需要它** —— 一屏里它白占约 44pt，
+    ///    而空输入框真正被用到的只有顶部那一行（14pt 字 ≈ 17pt 行高 + 上下 inset 4 ≈ 21pt）。
+    ///    改完的账：输入卡 **143 → 99pt**，整块输入区 **195 → 151pt**。
+    /// ⚠️ **它的下限由控件行顶出来，不是随便减**：卡高 = 8(上内边距) + 本值 + 6(行距) + 33(控件行，含 33pt 发送键) + 8(下内边距)。
+    ///    要 1 行字放得下，本值不低于 ~40；再想矮就得动 `sendButtonSize` 或那两处内边距，别只往下砍这个数。
+    /// ⚠️ 它**同时**是 `@State editorHeight` 的初值与 `CompactTextEditor(minHeight:)` —— 两处都读这个 token，
+    ///    所以改它不会首帧跳变（**别在任何一处写死数字**）。
+    static let editorMinHeight: CGFloat         = 44   // 输入框最小高 (= 初始高)
     static let editorMaxHeight: CGFloat         = 200  // 输入框最大高
     static let cardHPadding: CGFloat            = 12   // 输入卡内边距·水平
     static let cardVPadding: CGFloat            = 8    // 输入卡内边距·垂直
@@ -486,6 +496,13 @@ enum Tune {
     // ⚠️ 输出区这个数**同时是行为开关**: 没有它, 工具输出会随内容无限长 (P16 立项的起因)。
     static let toolOutputMaxHeight: CGFloat = 180   // 工具输出区 (固定高滚动区)
     static let toolDiffMaxHeight: CGFloat   = 260   // 审批卡 diff 预览 (原硬编码在 DiffPreviewView)
+
+    // 回到最新 (2026-10-16 boss: "往上翻了记录, 还要再往下翻才能到最底部")。
+    // 它是挂在消息列底缘的**浮层** —— 不占布局流, 所以整件事只有这两个数。
+    // ⚠️ 只响应点击, **绝不自动滚** —— "上滑阅读不拽回"是 P9-#9 立的规矩 (判据 = ChatView.isNearBottom);
+    //    让这个按钮顺手接管自动跟随 = 那个规矩当场作废。
+    static let jumpToLatestSize: CGFloat  = 30   // 圆形按钮直径 (13pt 图标 + 上下呼吸)
+    static let jumpToLatestInset: CGFloat = 12   // 距消息列底缘的留白
 }
 
 // MARK: - ★ 文案区 (Copy)
@@ -516,6 +533,9 @@ enum Copy {
 
     // 流式状态
     static var streamingIndicator: String { L("生成中…") }
+
+    // 回到最新按钮 (浮层 tooltip; 文案与图标语义一致 —— "最新"指流末尾, 不是"页面底部")
+    static var jumpToLatest: String { L("回到最新") }
 }
 
 // MARK: - Color hex helper

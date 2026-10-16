@@ -62,10 +62,18 @@ struct SidebarView: View {
     // MARK: - Brand header (主题切换已移入 设置 → 外观, P10.7)
 
     private var brandHeader: some View {
-        HStack(spacing: 8) {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
             Text("MangoX")
                 .font(.system(size: 14, weight: .semibold))
                 .foregroundStyle(CodexTheme.textPrimary)
+            // 当前版本 —— 用户靠它判断"这次升级成没成", 所以必须**跟着包走**
+            // (真源 = Info.plist, 见 `AppVersion`; **不许手写**, 会漂)。
+            // 颜色用三级而非 muted: muted 在亮色底色上只有 ~3.0 (那是给**图标**的地板),
+            // 11pt 文字要 4.5 —— 这条由 palette_probe 的「侧栏三级」档守着。
+            Text(AppVersion.display)
+                .font(CodexTheme.fontTiny)
+                .foregroundStyle(CodexTheme.textTertiary)
+                .monospacedDigit()
             Spacer()
         }
         .padding(.horizontal, 10)

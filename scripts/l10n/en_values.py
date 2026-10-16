@@ -204,6 +204,7 @@ VALUES = {
     '启用': 'Enabled',
     '响应格式不认识': 'Unrecognized response format',
     '四': 'Thu',
+    '回到最新': 'Back to latest',
     '回合完成 · 耗时 %02d:%02d': 'Turn finished · took %02d:%02d',
     '回合完成 · 耗时 %02d:%02d\\n%@': 'Turn finished · took %02d:%02d\\n%@',
     '回合完成通知': 'Turn completion notifications',
