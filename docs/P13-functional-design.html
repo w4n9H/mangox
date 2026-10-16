@@ -289,12 +289,14 @@ details.fold[open]>summary{margin-bottom:4px}
 <h3>要做什么：四档 <b>两层</b></h3>
 <p>三个老档的能力面<b>完全不动</b>（<code>--tools</code>、<code>-e</code>、业务扩展挂载三项都保持现状）；codemode <b>另起一层</b>，放在老档上方，用一条分割线隔开：</p>
 
+<p class="lead">⚠️ <b>2026-10-16 修正</b>：其中 <code>--tools</code> 一项<b>已不再"保持现状"</b> —— 常规 / 完整档从「不传」改为 <code>+grep,+find,+ls</code>（把 pi 默认关闭的只读三件套打开，内置 4 → 7）。原因：pi 默认<b>只开 4 个</b>内置工具，而 allowlist 写法会连扩展工具一起裁掉 ⇒ 只能用 modifier 增补。本节与 §03 的两张表<b>已按新值同步</b>，概念层面"老档 = 给多少工具"这条不变。</p>
+
 <div class="flow">
   <div class="lyr"><div class="name">codemode</div><div class="code">模型<b>只能</b>调 <code>codemode</code> 一个工具，其余全部经脚本内层调用 —— <code>mode=only</code></div><div class="st"><span class="chip c-acc">独立维度</span></div></div>
   <div class="arrowdown">▼ &nbsp;分割线 &nbsp;▼</div>
   <div class="lyr"><div class="name">迷你</div><div class="code"><code>read / bash / write / edit</code> 四件套，不挂业务扩展</div><div class="st"><span class="chip c-mute">老档·不变</span></div></div>
-  <div class="lyr"><div class="name">常规</div><div class="code">内置工具全量，不挂业务扩展（默认档）</div><div class="st"><span class="chip c-mute">老档·不变</span></div></div>
-  <div class="lyr"><div class="name">全工具</div><div class="code">内置工具全量 + 全部业务扩展</div><div class="st"><span class="chip c-mute">老档·不变</span></div></div>
+  <div class="lyr"><div class="name">常规</div><div class="code">四件套 + <code>grep / find / ls</code>（7 个），不挂业务扩展（默认档）</div><div class="st"><span class="chip c-mute">老档·不变</span></div></div>
+  <div class="lyr"><div class="name">全工具</div><div class="code">上述 7 个 + 全部业务扩展</div><div class="st"><span class="chip c-mute">老档·不变</span></div></div>
 </div>
 
 <div class="call ok">
@@ -307,8 +309,8 @@ details.fold[open]>summary{margin-bottom:4px}
 <tbody>
 <tr><td><b>codemode</b></td><td class="mono">Codemode</td><td class="mono">+codemode</td><td class="mono">llama.cpp, codemode</td><td>—</td><td><b>1</b>（只有 codemode）</td></tr>
 <tr><td><b>迷你</b></td><td class="mono">Minimal</td><td class="mono">read,bash,write,edit</td><td class="mono">llama.cpp</td><td>—</td><td>4</td></tr>
-<tr><td><b>常规</b></td><td class="mono">Standard</td><td class="mono">不传</td><td class="mono">llama.cpp</td><td>—</td><td>pi 默认激活集</td></tr>
-<tr><td><b>全工具</b></td><td class="mono">Full</td><td class="mono">不传</td><td class="mono">llama.cpp</td><td>✓</td><td>pi 默认激活集 + 扩展工具</td></tr>
+<tr><td><b>常规</b></td><td class="mono">Standard</td><td class="mono">+grep,+find,+ls</td><td class="mono">llama.cpp</td><td>—</td><td><b>7</b>（默认 4 + 只读三件套）</td></tr>
+<tr><td><b>全工具</b></td><td class="mono">Full</td><td class="mono">+grep,+find,+ls</td><td class="mono">llama.cpp</td><td>✓</td><td><b>7</b> + 扩展工具</td></tr>
 </tbody>
 </table></div>
 <p class="lead">⚠️ 最后一行是<b>本次修掉的语义漂移</b>：「全工具」此前一度被设计成"内置全量 <b>+ codemode</b> + 业务扩展"，现在回到<b>纯老档</b>（不含 codemode）。<br>
@@ -567,11 +569,11 @@ declare const tools: { write(args: {
 <tbody>
 <tr><td><b>codemode</b></td><td class="mono">+codemode <span class="chip c-acc">modifier</span></td><td class="mono">llama.cpp, codemode</td><td>—</td><td><b>只有 codemode</b></td><td>已激活的直调工具（read/bash/edit/write…）</td></tr>
 <tr><td><b>迷你</b></td><td class="mono">read,bash,write,edit <span class="chip c-info">allowlist</span></td><td class="mono">llama.cpp</td><td>—</td><td>那四个</td><td><span class="chip c-mute">无 codemode</span></td></tr>
-<tr><td><b>常规</b></td><td class="mono">不传</td><td class="mono">llama.cpp</td><td>—</td><td>内置全量</td><td><span class="chip c-mute">无 codemode</span></td></tr>
-<tr><td><b>全工具</b></td><td class="mono">不传</td><td class="mono">llama.cpp</td><td>✓</td><td>内置全量 + 扩展工具</td><td><span class="chip c-mute">无 codemode</span></td></tr>
+<tr><td><b>常规</b></td><td class="mono">+grep,+find,+ls <span class="chip c-info">modifier</span></td><td class="mono">llama.cpp</td><td>—</td><td>7 个（四件套 + 只读三件套）</td><td><span class="chip c-mute">无 codemode</span></td></tr>
+<tr><td><b>全工具</b></td><td class="mono">+grep,+find,+ls <span class="chip c-info">modifier</span></td><td class="mono">llama.cpp</td><td>✓</td><td>7 个 + 扩展工具</td><td><span class="chip c-mute">无 codemode</span></td></tr>
 </tbody>
 </table></div>
-<p class="lead">两条轴：<b>老档沿"给多少工具"单调</b>（四件套 ⊂ 内置全量 ⊂ 内置全量+扩展），<b>codemode 在正交的那条轴上</b>（模型能不能直调）。<br>
+<p class="lead">两条轴：<b>老档沿"给多少工具"单调</b>（四件套 ⊂ 7 件套 ⊂ 7 件套+扩展），<b>codemode 在正交的那条轴上</b>（模型能不能直调）。<br>
 ⚠️ 最后两列的关系是<b>可调面 ⊇ 声明面</b>：codemode 层里模型只看到 1 条声明，但脚本能调到那 4 条 + <code>searchTools</code> 能搜到的任何已注册工具。</p>
 
 <h3><code>mode</code> 从哪来：一个三行的自建扩展，不写 <code>settings.json</code></h3>

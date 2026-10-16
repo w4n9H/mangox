@@ -15,6 +15,8 @@ enum ToolKind: String, Hashable, Codable, CaseIterable {
     case write
     case fetch
     case image
+    /// 通用"搜索"档。当前**唯一**生产方 = P10.1b 的自建联网搜索扩展（工具名 `bocha_web_search`,
+    /// 真源在 `PiRpcTransport.webSearchToolNames`, 由 `kindFor` 按名归位到这里）。
     case search
     /// 留位: pi 0.85.1 内置 8 个工具 (read/bash/edit/write/find/grep/ls/powershell) **无 delegate**,
     /// 全项目当前**零生产方** —— 保留是为了让"扩展给的子代理工具"有确定归处, 不落 `other`。
@@ -27,8 +29,9 @@ enum ToolKind: String, Hashable, Codable, CaseIterable {
     /// `OTHER · codemode · code=…`(boss 实测报"codemode 显示不对"就是这个)。
     case codemode
     /// 未知工具的中性归类。**存在的意义 = 不再谎报**: 旧版 `kindFor` 的 `default` 把任何
-    /// 未登记的工具一律标成 `read` ⇒ 装了 web-search / subagents 这类扩展后, 标签与颜色
+    /// 未登记的工具一律标成 `read` ⇒ 装了 subagents / mcp-adapter 这类扩展后, 标签与颜色
     /// **一起错**, 且落库的 `kind` 已失真、事后无法分辨。宁可是诚实的 `OTHER`。
+    /// ⚠️ 自己扩展注册的工具**不该**住这儿 —— 按名归位才是终点（见 `.search` / `.codemode`）。
     case other
 
     /// 展示用名 = **原样工具名**（`rawValue`，小写；多词名自然成驼峰，如 `searchTools`）。

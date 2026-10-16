@@ -7,7 +7,7 @@
    **本文件由 scripts/l10n/gen_strings.py --write 生成, 别手改** ——
    译文改 scripts/l10n/en_values.py 的 VALUES, 再跑 --write。
 
-   条数: 686
+   条数: 690
 */
 
 " [附件: %@]" = " [Attachment: %@]";
@@ -233,10 +233,11 @@
 "刷新工作区" = "Refresh workspace";
 "刷新文件树与 git 状态" = "Refresh the file tree and git status";
 "前往源会话" = "Go to the source session";
-"功能完整的编码 Agent, 内置工具全量 (读/写/Shell/检索), 不挂业务扩展 — 日常默认档。" = "A full-featured coding agent with every built-in tool (read/write/shell/search) and no business extensions — the everyday default.";
+"功能完整的编码 Agent, 内置 7 个工具 (读/写/Shell + grep/find/ls 检索三件套), 不挂业务扩展 — 日常默认档。" = "A full-featured coding agent with seven built-in tools (read / write / shell plus the grep/find/ls search trio) and no business extensions — the everyday default.";
 "加入白名单" = "Add to allowlist";
 "加载中…" = "Loading…";
 "单条消息最多 %lld 张图片, 超出请拆条发送" = "Up to %lld images per message — split into several messages if you need more";
+"博查 API Key" = "Bocha API key";
 "占用 %lld 个保留 key" = "holds %lld reserved key(s)";
 "压缩中（%@）…" = "Compacting (%@)…";
 "原始邮件" = "Original message";
@@ -320,6 +321,7 @@
 "工具相位落库" = "Persist tool phases";
 "工具面与危险命令裁决 (无人值守路径没有审批 UI)" = "Tool surface and dangerous-command judgement (unattended paths have no approval UI)";
 "左边是空的 —— 这是一篇**还不存在**的笔记(增)。" = "The left side is empty — this note does not exist yet (new).";
+"已保存 (重新输入可覆盖)" = "Saved (type a new key to replace)";
 "已停用 · 每 %llds" = "Disabled · every %llds";
 "已停用 —— 索引里不出现这个库" = "Disabled — this base does not appear in the index";
 "已允许" = "Allowed";
@@ -399,10 +401,7 @@
 "提于 %@" = "Proposed %@";
 "提出时的指纹" = "Base hash";
 "提案" = "Proposal";
-"提炼" = "Distill";
-"提炼中…" = "Distilling…";
 "提炼依据: %@" = "Distilled from: %@";
-"提炼本会话 → 待审核记忆" = "Distill this session → memory to review";
 "搜索会话、项目" = "Search chats and projects";
 "摘掉" = "Unmount";
 "摘掉知识库「%@」？" = "Unmount knowledge base “%@”?";
@@ -484,6 +483,8 @@
 "未知错误" = "Unknown error";
 "未知项目" = "Unknown project";
 "未选择备份目录" = "No backup directory chosen";
+"未配置 Key" = "No key set";
+"未配置 —— 联网搜索不可用" = "Not configured - web search unavailable";
 "未配置: %@" = "Not configured: %@";
 "未验证 — 拉取失败, 使用预设清单兜底" = "Not verified — fetch failed, using the built-in preset list";
 "本会话改动" = "Changes in this session";
@@ -589,6 +590,8 @@
 "网页版邮箱「设置 → 客户端设置」开启 IMAP/SMTP, 生成客户端专用密码 —— 用它当密码, 不是登录密码" = "In the web mailbox, open Settings → Client settings, enable IMAP/SMTP and generate a client-specific password — use that as the password, not your login password";
 "网页版邮箱「设置 → 账户」开启 IMAP/SMTP 服务, 短信验证后得到授权码 —— 用它当密码, 不是登录密码" = "In the web mailbox, open Settings → Account, enable IMAP/SMTP and verify by SMS to get the app password — use that as the password, not your login password";
 "老档位 · 行为不变" = "Older modes · unchanged";
+"联网搜索 (博查 API Key)" = "Web search (Bocha API key)";
+"联网搜索扩展没配博查 API Key —— 挂上它也只会每次调用都回「未启用」, 所以不挂。在 设置 → 联网搜索 里填一个 Key 并保存, 它就会挂上。" = "The web search extension has no Bocha API key set - mounting it would only make every call answer not enabled, so it stays unmounted. Enter a key under Settings - Web search and save; it gets mounted right away.";
 "自定义" = "Custom";
 "自定义 provider: 填 Base URL, 可选测试" = "Custom provider: fill in the base URL, testing is optional";
 "自定义…" = "Custom…";
@@ -668,6 +671,7 @@
 "邮箱地址" = "Email address";
 "邮箱绑定后不可修改 (一个邮箱只服务一个 Inbox)" = "The mailbox cannot be changed after binding (one mailbox serves one Inbox)";
 "邮箱账号" = "Mailbox accounts";
+"配好 Key 才会挂上内置搜索扩展 (工具 bocha_web_search); Key 存 Keychain, 只在 spawn 时以环境变量注入 pi 进程, 不落盘" = "The built-in search extension (tool bocha_web_search) is mounted only once a key is set; the key lives in the Keychain and is passed to the pi process as an environment variable at spawn time, never written to disk";
 "采纳" = "Accept";
 "采纳前, 磁盘上的笔记一个字节都不会变 —— 上面那份 diff 只是「如果」。" = "Nothing on disk changes until you accept — the diff above is only a \"what if\".";
 "采纳后" = "After accepting";

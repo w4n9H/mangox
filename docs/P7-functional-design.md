@@ -104,12 +104,14 @@ p.environment?["PI_CODING_AGENT_DIR"] = ModelMaterializer.configDir.path
 
 | 档 | UI 名 | 工具集 | spawn 映射 |
 |---|---|---|---|
-| minimal | Minimal（极简） | read / bash / write / edit | `--tools read,bash,write,edit` + 不挂业务扩展 |
-| standard | Standard（常规） | 内置 8 全量 | 不带 `--tools`（pi 默认即全量）+ 不挂业务扩展 |
-| full | Full（完整） | 内置 8 + 扩展注册工具 | 不带 `--tools` + 挂全部业务扩展 |
+| minimal | Minimal（极简） | read / bash / write / edit（4） | `--tools read,bash,write,edit` + 不挂业务扩展 |
+| standard | Standard（常规） | 上述 4 + grep / find / ls（7） | `--tools +grep,+find,+ls` + 不挂业务扩展 |
+| full | Full（完整） | 上述 7 + 扩展注册工具 | `--tools +grep,+find,+ls` + 挂全部业务扩展 |
+
+> ⚠️ **2026-10-16 修正**：本表原写 "standard：内置 8 全量 / 不带 `--tools`"、"full：不带 `--tools`"，**两句都是错的**。真机实测（pi 1.1.0）：pi 默认**只开 4 个**内置工具（`DEFAULT_TOOL_NAMES = ["read","bash","edit","write"]`），`grep` / `find` / `ls` 在 `pi --help` 里明标 **off by default**；而 `read,bash,write,edit` 是 **allowlist** 写法，会**连扩展注册的工具一起裁掉**。所以"想多要内置工具"只能用 **modifier 增补**（`+x`）。详见 §3-③。
 
 - 极简集默认含 read/edit 的理由：盲写不可用（看不到文件改什么）。**用户原话是 bash/write，定稿前一行确认即可调**。
-- 档位差异用**挂载扩展与否**表达"含不含扩展"，不依赖 `--tools` 对扩展工具的过滤行为（该行为未证伪，见 §3-③）——三档映射在两种证伪结果下都成立。
+- 档位差异拆成**两半**：内置工具几件走 `--tools`（minimal 用 allowlist 裁到 4；standard/full 用 `+x` 增补到 7），含不含扩展走**挂载与否**——两半互不依赖（allowlist 会连扩展一起裁，见 §3-③）。
 - powershell 为 Windows 侧工具，macOS 物理不可用，不必特判。
 
 ### 2.2 扩展挂载矩阵
@@ -124,7 +126,7 @@ p.environment?["PI_CODING_AGENT_DIR"] = ModelMaterializer.configDir.path
 ### 2.3 审批开关（独立，照旧）
 
 - `askApproval` 布尔、composer 手型按钮、transport 自动应答 + bash 只读白名单（`PiRpcTransport.swift:757-765`）**全部不动**。
-- 与模式正交组合：如"Standard 档 + 审批开"= 工具全量但每步弹卡；"Minimal 档 + 审批关"= 定时任务轻装跑。
+- 与模式正交组合：如"Standard 档 + 审批开"= 内置 7 个工具但每步弹卡；"Minimal 档 + 审批关"= 定时任务轻装跑。
 - 无人值守路径（`MockData.swift:932`）不受影响。
 
 ### 2.4 项目记忆与 UI
@@ -149,12 +151,23 @@ p.environment?["PI_CODING_AGENT_DIR"] = ModelMaterializer.configDir.path
 - 对照（用户真实 `~/.pi/agent`）→ 7 条 / 2 providers（deepseek+minimax），恰为用户有 auth 的两家 → **`get_available_models` 只返回"有可用凭据"的模型**（与 models.md "models load but stay unavailable without auth" 一致）。
 - **设计影响**：§1.3 的"内置目录只读基线展示"不成立，**砍掉**——MangoX settings 页是唯一模型面，无需"浏览内置"区；物化 models.json 只写 MangoX 管理的条目，无合并冲突面。
 
-### ③ --tools 是否过滤扩展工具 — ✅ 文档实锤（不再依赖实测）
+### ③ --tools 是否过滤扩展工具 — ✅ 已实测（allowlist 裁、modifier 不裁）
 
 `docs/usage.md` Tool Options 明写：`--tools <list>` = "Allowlist specific **built-in, extension, and custom tools**"（`--exclude-tools` 同理；`--no-builtin-tools` 才是只关内置保留扩展）。
 
-- **三档映射因此有双保险**：既可用 `--tools` 白名单（扩展工具一并被裁），也可用"不挂业务扩展"（§2.1 现行策略）。极简/常规档两条路都成立，Full 档全放开。
-- 将来做"自定义档/工具清单视图"时可直接用 `--tools` 精确勾选，无遗漏风险。
+**2026-10-16 真机补正（pi 1.1.0）**——原文只写到"两种语法"就收了，漏了三条更硬的事实：
+
+| 写法 | 扩展工具声明 | 内置 | transcript |
+|---|---|---|---|
+| `--tools read,bash,write,edit` + 挂业务扩展 | **0 / 0** | 4 | 7437 |
+| 不传 `--tools` | ✓ | **4** | 7432 |
+| `--tools +grep,+find,+ls` + 挂业务扩展 | **✓ 1 / 1** | **7** | 11258 |
+
+- **allowlist（`a,b,c`）确实裁扩展工具**：挂 `mangox-web-search.ts` 时 `bocha_web_search` 的声明独有短语 0 命中，且 transcript 7437 ≈ 无扩展基线 7432。
+- **但"不传 = 内置全量"是错的**：pi 默认只开 `read / bash / edit / write` 四个（`settings-manager.js` `DEFAULT_TOOL_NAMES` + `agent-session.js` `defaultActiveToolNames` 两处一致），`grep / find / ls` 在 `pi --help` 明标 **off by default**（探针：不传 0 命中，`+grep` 才 1 命中）。
+- ⇒ **"想多要内置工具"的唯一写法是 modifier 增补 `+x`**：它在默认 4 个上加，且**不碰**扩展工具（实测 `+grep,+find,+ls` + 挂扩展 ⇒ `bocha_web_search` 与 `grep` 都在，transcript 11258）。代价是每回合多注入约 **2.2k 字符**（7437 → 9646，无扩展时）。
+- ⇒ 现行映射（§2.1）：**minimal 用 allowlist 裁到 4；standard / full 用 `+grep,+find,+ls` 增补到 7**。原表写"standard / full 不带 `--tools`"正是被"双保险"这句误导的结果。
+- 将来做"自定义档/工具清单视图"时，**只能**用 modifier 增补勾选，用 allowlist 会连带砸掉扩展工具。
 
 ## 4. 里程碑与门禁
 

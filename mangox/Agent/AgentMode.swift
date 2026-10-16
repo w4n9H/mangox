@@ -34,7 +34,7 @@ enum AgentMode: String, Codable, CaseIterable, Identifiable {
         case .minimal:
             L("仅 read / bash / write / edit 四个内置工具, 不挂业务扩展 — 轻装跑定时任务与快速问答。")
         case .standard:
-            L("功能完整的编码 Agent, 内置工具全量 (读/写/Shell/检索), 不挂业务扩展 — 日常默认档。")
+            L("功能完整的编码 Agent, 内置 7 个工具 (读/写/Shell + grep/find/ls 检索三件套), 不挂业务扩展 — 日常默认档。")
         case .full:
             L("具备标准模式全部能力, 并挂载全部业务扩展, 扩展注册的工具一并进入工具池。")
         }
@@ -44,20 +44,25 @@ enum AgentMode: String, Codable, CaseIterable, Identifiable {
     /// 菜单也靠它把上层与老档分开 —— **不写死名单**, 免得将来加层时两处不一致。
     var isCodemodeLayer: Bool { self == .codemode }
 
-    /// spawn 期 --tools 取值 (nil = 不传, pi 默认即内置全量)。
-    /// ⚠️ 两种语法**不同源**: `a,b,c` = **只留**这些; `+x` = 在全量基础上**增补**。
+    /// spawn 期 --tools 取值 (nil = **不传该参数**; 当前四档都返回非 nil, nil 留给将来可能的"默认集"档)。
+    /// ⚠️ 两种语法**不同源**（实测 2026-10-16, pi 1.1.0）:
+    ///   - `a,b,c` = **只留**这些（allowlist）—— 连**扩展注册的工具一起裁掉**
+    ///     （挂 `mangox-web-search.ts` 时 `bocha_web_search` 的声明 0 命中）⇒ "想多要内置工具"绝不能用它;
+    ///   - `+x` = 在 pi 默认的 4 个（read/bash/edit/write）上**增补**, 不碰扩展工具。
     /// 名字从 allowlist 改掉正是因为装得下 modifier 了 —— 叫 allowlist 会读反。
     /// 极简含 read/edit 的理由: 盲写不可用 (看不到文件改什么)。
     var toolListArguments: [String]? {
         switch self {
         case .codemode: ["+codemode"]
         case .minimal: ["read", "bash", "write", "edit"]
-        case .standard, .full: nil
+        // 常规/完整 = 在 pi 默认 4 个上**增补**只读三件套 ⇒ 7 个, 且不裁业务扩展注册的工具。
+        case .standard, .full: ["+grep", "+find", "+ls"]
         }
     }
 
-    /// 业务扩展是否挂载 (§2.1: 档位差异用挂载扩展与否表达"含不含扩展",
-    /// 不依赖 --tools 对扩展工具的过滤行为 — 两种证伪结果下都成立)。
+    /// 业务扩展是否挂载 (§2.1: 档位差异里"含不含扩展"这一半用挂载与否表达)。
+    /// ⚠️ 另一半（内置工具几件）走 `toolListArguments` 的 **modifier 增补**写法 —— 两半互不依赖
+    ///    （allowlist 写法会连扩展工具一起裁掉, 已实测, 见 `toolListArguments`）。
     /// P13: codemode 层**不挂** —— 挂了它就退化成"全工具 + 只留 codemode", 这一层失去独立理由
     /// (见 docs/P13 §02)。所以"codemode 能调业务扩展吗"的答案在四档里是"调不到, 因为没注册"。
     var mountsBusinessExtensions: Bool { self == .full }
@@ -70,12 +75,16 @@ enum AgentMode: String, Codable, CaseIterable, Identifiable {
 
     /// 这一档的 `--tools` 会不会**削掉扩展注册的工具**（= 内置之外、由 `pi.registerTool` 注册的那些）。
     ///
-    /// 判据是各档 `--tools` 的语义（`a,b,c` = **只留** / `+x` = 在默认全量上**增补**）:
+    /// 判据是各档 `--tools` 的语义（`a,b,c` = **只留** / `+x` = 在**默认 4 个**上**增补**）:
     ///   - `minimal` 只留 read/bash/write/edit ⇒ 扩展注册的工具全没了;
     ///   - `codemode` 虽然传的是 `+codemode`（增补）, 但**自建 codemode 扩展自己钉了
     ///     `mode: "only"`**（`PiRpcTransport.ensureCodemodeExtensionFile`）⇒ 模型视野里
     ///     只剩 codemode 一个工具。这档的"少"不来自 `--tools`, 来自扩展 —— 判据不能只看参数。
-    ///   - `standard` / `full` 不传 `--tools`（pi 默认全量）⇒ 工具在。
+    ///   - `standard` / `full` 传 `+grep,+find,+ls`（**增补**写法）⇒ 扩展工具在。
+    ///
+    /// ⚠️ **判据不自证**: 本属性是**硬编码档位**、不看 `--tools` 的实际取值 ⇒ 谁把 `+grep` 误写成
+    ///    `grep`（allowlist）, 它照样返回 true、调用方照样不告警, 实际却把这一档裁成 3 个工具。
+    ///    参数形态那一面由冒烟 T23 的"报 true 的档, 每一项必须带 `+`"那条钉住。
     ///
     /// ⚠️ 用途是**告警**, 不是拦截 —— 用户选了这一档就是他的决定, App 不替他改档
     /// （同"能由产品回答的问题不要拿去问用户"那条的反面: 这是**用户的**选择, 不归产品回答）。

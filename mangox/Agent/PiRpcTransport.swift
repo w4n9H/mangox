@@ -120,6 +120,18 @@ final class PiRpcTransport: AgentTransport {
     /// 免得又冒出一个"从别处顺手改一下"的调用点 —— 双闸门靠的就是"只有这里能改"。
     func updateDreamSpool(_ spool: String?) { dreamSpool = spool }
 
+    /// P10.1b: 博查 API Key (nil/空 = 未配置)。**只在这里定格, 只经 env 下发**, 不落盘。
+    ///
+    /// ⚠️ 与 `dreamSpool` 同一层（实例级、spawn 期定格），但**不是任务语义** —— 它是
+    /// "这台机器配没配联网搜索"的**配置投影**, 由 `ChatStore` 在建实例与重扫时下发。
+    /// 为什么不直接在 spawn 里读 Keychain: transport 拿不到 store（P9.1c 起配置一律经
+    /// `update*` 推进来），而"读一次、定格到这次 spawn"正是 env 这类参数需要的语义
+    /// （进程复用期间 key 变了要重启才生效，同 `dreamSpool` / `desiredKnowledge`）。
+    private var webSearchKey: String?
+
+    /// 协议侧入口 (P10.1b)。key 变更后需重启引擎才生效。
+    func updateWebSearchKey(_ key: String?) { webSearchKey = key }
+
     /// P7-M3: 接收自管模型物化产物 (ChatStore 在模型变更时推送)。
     func updatePIConfig(_ output: ModelMaterializer.Output?) {
         piConfig = output
@@ -585,6 +597,386 @@ final class PiRpcTransport: AgentTransport {
         return path
     }
 
+    // MARK: - P10.1b 联网搜索 (自建扩展, 只调博查)
+
+    /// P10.1b: 博查 API Key 的 env 名 —— **契约 token**: 逐字进子进程 env,
+    /// `mangox-web-search.ts` 那侧读的就是它。改它 = 两边一起改（同 `dreamSpoolEnvKey`）。
+    static let webSearchKeyEnvKey = "MANGOX_BOCHA_KEY"
+
+    /// 自建搜索扩展**注册出来的工具名** —— Plugins 面板在那一行下面展开它们。
+    ///
+    /// ⚠️ **与 `webSearchExtensionSource` 同源同改**: 冒烟断言「这张表里每个名字都能在
+    /// 上面那段源码里找到 `name: "<名字>"`」（同 `dreamToolNames` 那条守）。
+    ///
+    /// ⚠️ **必须 `nonisolated`**（2026-10-13 修，`dreamToolNames` 的同款）: 本类是
+    /// `@MainActor`, 裸 `static let` 会被判主线程隔离；消费方 `ExtensionItem`
+    /// 住在**非隔离**枚举里, 它的 `static let` 初始化在非隔离上下文求值 ⇒ Swift 6 下是 error。
+    nonisolated static let webSearchToolNames: [String] = ["bocha_web_search"]
+
+    /// 自建搜索扩展的**文件名** —— 三处要用（落地 / spawn 前的挂载保底 / 面板侧拼路径）,
+    /// 写死三次就会漂。面板那一处见 `ChatStore.scanExtensions`。
+    nonisolated static let webSearchExtensionFileName = "mangox-web-search.ts"
+
+    /// P10.1b: 自建联网搜索扩展 —— **只调博查**, 一次 POST, 零依赖。
+    ///
+    /// ⚠️ **为什么自建而不是挂 npm 包**（本方案的立项依据, 数字全是实测）:
+    ///   · `pi-web-access` 那条路 spawn 期联网 `npm install`，拖进 **150+ 传递依赖**
+    ///     （实测落盘 **82 MB / 10,776 个文件**）；本文件是 **1 个文件 / ~9 KB**，零依赖。
+    ///   · npm 包**离线就静默消失**：`installMissing()` 开头 `if (isOfflineModeEnabled()) return false`
+    ///     ⇒ 调用方 `continue`，扩展整段没了**且零报错**；自建没有这条路径。
+    ///   · 包的落点由 `PI_CODING_AGENT_DIR` 决定 ⇒ 必须绑"有自管模型"这个前置条件；自建走
+    ///     `~/.mangox/extensions/`，**不耦合配置目录**。
+    ///   · 我们只用得到"搜一下"。包里的 web fetch / PDF / YouTube / GitHub clone 全用不上。
+    ///
+    /// ⚠️ **key 只走 env**（`webSearchKeyEnvKey`）: Keychain → spawn env, **不落盘**。
+    /// npm 路的 key 必须写进 pi 的配置目录（那侧的配置读取路径写死 `homedir()`）—— 自建把这条也消掉了。
+    ///
+    /// ⚠️ **双闸门**（同 dream 的判据）: ① **挂载闸门** —— 没配 key 时 `ChatStore` 把它压成停用,
+    /// 根本不发 `-e`；② **激活闸门** —— 只有那一次 spawn 会设 env。两道都要: 只挂不给 env ⇒
+    /// 工具每次都回"未启用"; 只给 env 没挂扩展 ⇒ 模型根本看不到这个工具。
+    ///
+    /// ⚠️ **为什么用 `#"""` 原始字符串**: TS 里有 `\n`（字符串里的换行）与 `${…}` 两种形态,
+    /// 普通 Swift 字面量会把 `\n` 变成真换行 ⇒ 写出去的扩展是坏的（同 dream 那条）。
+    ///
+    /// ⚠️ **输出上限是"按 10 篇 × 每篇 8 KB"定的**（boss 定），但**卡片渲染是有代价的**:
+    /// 工具输出在卡片里是**一个 `Text`**（`ToolCallRenderer` 侧 `ToolDetail("输出", out)` 一行），
+    /// 而单块 `Text` 在 SwiftUI 里是**平方级**的（另一次实测: 3341 行 36s vs 按块 646ms）。
+    /// 默认（只要摘要）约 5 KB ⇒ 无感；80 KB 只在模型显式要 `content: true` 时才够得着。
+    /// **真嫌慢的话正确的修法在视图侧（按块渲染），不是在这里偷偷砍结果。**
+    static let webSearchExtensionSource: String = #"""
+        // Auto-deployed by MangoX (P10.1b). Thin Bocha web search: one POST, zero runtime
+        // deps beyond node built-ins and typebox.
+        //
+        // The key is NOT read from disk: MangoX injects MANGOX_BOCHA_KEY into this process
+        // (Keychain -> spawn env), so the secret never lands on the filesystem. If the
+        // variable is unset the tool refuses -- only a session with a configured key gets
+        // this extension mounted in the first place.
+        import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+        import { Type } from "typebox";
+        import { mkdtemp, writeFile } from "node:fs/promises";
+        import { tmpdir } from "node:os";
+        import { join } from "node:path";
+
+        const KEY_ENV = "MANGOX_BOCHA_KEY";
+        const ENDPOINT = "https://api.bochaai.com/v1/web-search";
+
+        // Retry policy mirrors the hand-rolled Python client this project already uses:
+        // 5 attempts total, exponential backoff 1s / 2s / 4s, retry on 5xx and transport
+        // errors only. 4xx is NOT retried -- a bad key or an exhausted quota does not fix
+        // itself by waiting, and retrying silently only makes the user wait longer for the
+        // same answer.
+        const MAX_ATTEMPTS = 5;
+        const BACKOFF_MS = [1000, 2000, 4000];
+        const RETRYABLE = new Set([500, 502, 503, 504]);
+        const ATTEMPT_TIMEOUT_MS = 20000;
+
+        // Sized for 10 results with a full page body each (8 KB). The default (summaries
+        // only) stays around 5 KB. See the MangoX-side note on why this ceiling is not
+        // lower: one Text carrying a large block is quadratic to lay out, but the correct
+        // fix for that lives in the view, not here.
+        const MAX_LINES = 2000;
+        const MAX_BYTES = 80000;
+        const MAX_BODY_CHARS = 8000;
+
+        function ok(text) {
+            return { content: [{ type: "text", text: text }], details: undefined };
+        }
+
+        function sleep(ms) {
+            return new Promise(function (resolve) { setTimeout(resolve, ms); });
+        }
+
+        // Trim a raw response down to something that fits inside an error message.
+        function brief(body) {
+            const flat = String(body || "").replace(/\s+/g, " ").trim();
+            return flat.length > 400 ? flat.slice(0, 400) + "..." : flat;
+        }
+
+        function hintFor(status) {
+            if (status === 401 || status === 403) {
+                return "Bocha rejected the API key. Check it in MangoX: Settings - Web search.";
+            }
+            if (status === 429) {
+                return "Bocha rate limit or quota reached. Wait, or check the plan on open.bochaai.com.";
+            }
+            if (status === 400) return "Bocha rejected the request parameters.";
+            return "Unexpected response from Bocha.";
+        }
+
+        // Per-attempt deadline, relayed from the caller's cancellation signal. Written with
+        // a plain AbortController on purpose -- AbortSignal.any / AbortSignal.timeout are
+        // not available on every node pi may run on, and this needs no typings.
+        function deadline(parent, ms) {
+            const box = new AbortController();
+            let expired = false;
+            const timer = setTimeout(function () { expired = true; box.abort(); }, ms);
+            const relay = function () { box.abort(); };
+            if (parent) {
+                if (parent.aborted) box.abort();
+                else parent.addEventListener("abort", relay);
+            }
+            return {
+                signal: box.signal,
+                expired: function () { return expired; },
+                release: function () {
+                    clearTimeout(timer);
+                    if (parent) parent.removeEventListener("abort", relay);
+                },
+            };
+        }
+
+        // Returns the parsed JSON payload, or throws a message that names what to do next.
+        async function postSearch(body, key, signal) {
+            let lastFailure = "no attempt was made";
+            for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+                if (signal && signal.aborted) {
+                    throw new Error("bocha_web_search was cancelled before it reached Bocha.");
+                }
+                const guard = deadline(signal, ATTEMPT_TIMEOUT_MS);
+                let response;
+                try {
+                    response = await fetch(ENDPOINT, {
+                        method: "POST",
+                        headers: {
+                            "Content-Type": "application/json",
+                            Accept: "application/json",
+                            Authorization: "Bearer " + key,
+                        },
+                        body: JSON.stringify(body),
+                        signal: guard.signal,
+                    });
+                } catch (error) {
+                    const why = guard.expired()
+                        ? "timed out after " + ATTEMPT_TIMEOUT_MS + "ms"
+                        : String(error);
+                    lastFailure = "could not reach " + ENDPOINT + " (" + why + ")";
+                    // A caller-side cancel is not a retryable transport fault.
+                    if (signal && signal.aborted) throw new Error("bocha_web_search was cancelled.");
+                    if (attempt < MAX_ATTEMPTS) {
+                        await sleep(BACKOFF_MS[Math.min(attempt - 1, BACKOFF_MS.length - 1)]);
+                        continue;
+                    }
+                    break;
+                } finally {
+                    guard.release();
+                }
+                if (response.ok) {
+                    const rawBody = await response.text();
+                    try {
+                        return JSON.parse(rawBody);
+                    } catch (error) {
+                        throw new Error("Bocha returned a body that is not JSON: "
+                            + String(error) + " - " + brief(rawBody));
+                    }
+                }
+                const raw = await response.text();
+                if (!RETRYABLE.has(response.status)) {
+                    throw new Error("Bocha HTTP " + response.status + ". " + hintFor(response.status)
+                        + (raw ? " Body: " + brief(raw) : ""));
+                }
+                lastFailure = "Bocha HTTP " + response.status + (raw ? " (" + brief(raw) + ")" : "");
+                if (attempt < MAX_ATTEMPTS) {
+                    await sleep(BACKOFF_MS[Math.min(attempt - 1, BACKOFF_MS.length - 1)]);
+                    continue;
+                }
+            }
+            throw new Error("Bocha search failed after " + MAX_ATTEMPTS + " attempts: " + lastFailure);
+        }
+
+        function render(query, pages, requested, withBody) {
+            const lines = [];
+            lines.push("Results for " + query + " - " + pages.length + " of " + requested + " requested");
+            lines.push("");
+            for (let i = 0; i < pages.length; i++) {
+                const page = pages[i];
+                lines.push((i + 1) + ". " + (page.name || "Untitled"));
+                const link = page.url || page.displayUrl || "";
+                if (link) lines.push("   " + link);
+                const description = String(page.summary || page.snippet || "").replace(/\s+/g, " ").trim();
+                if (description) lines.push("   " + description);
+                if (withBody) {
+                    const body = String(page.content || "").replace(/\s+/g, " ").trim();
+                    if (body) {
+                        lines.push("   body: "
+                            + (body.length > MAX_BODY_CHARS ? body.slice(0, MAX_BODY_CHARS) + "..." : body));
+                    }
+                }
+                const date = page.datePublished || page.dateLastCrawled;
+                if (date) lines.push("   published: " + date);
+                lines.push("");
+            }
+            return lines.join("\n").trim();
+        }
+
+        // Cut on a line boundary: the budget is measured on the UTF-8 form and a line is
+        // kept or dropped whole, so a multi-byte character is never split in half.
+        function truncate(text) {
+            const lines = text.split("\n");
+            const encoder = new TextEncoder();
+            let bytes = 0;
+            let kept = 0;
+            for (const line of lines) {
+                bytes += encoder.encode(line + "\n").length;
+                if (kept >= MAX_LINES || bytes > MAX_BYTES) break;
+                kept += 1;
+            }
+            if (kept >= lines.length) return { text: text, note: "" };
+            return {
+                text: lines.slice(0, kept).join("\n"),
+                note: "[" + kept + " of " + lines.length + " lines shown; "
+                    + (lines.length - kept) + " omitted.]",
+            };
+        }
+
+        export default function (pi: ExtensionAPI) {
+            pi.registerTool({
+                name: "bocha_web_search",
+                label: "Bocha web search",
+                description: [
+                    "Search the web with Bocha (a Chinese search API) and return a plain list of",
+                    "results: title, URL, summary, and publish date for each hit.",
+                    "",
+                    "Use it for current events, recent releases, prices, documentation, or anything",
+                    "that may have changed after the training cutoff. Bocha covers Chinese-language",
+                    "and mainland sources especially well. Keep queries short; prefer the user's own",
+                    "language.",
+                    "",
+                    "Results are trimmed to " + MAX_LINES + " lines or " + MAX_BYTES + " bytes. If",
+                    "trimmed, the full text is written to a temp file whose path is appended.",
+                ].join("\n"),
+                parameters: Type.Object({
+                    query: Type.String({ description: "Search query." }),
+                    count: Type.Optional(Type.Integer({
+                        minimum: 1, maximum: 50,
+                        description: "How many results to ask for (1-50). Default 10.",
+                    })),
+                    freshness: Type.Optional(Type.Union([
+                        Type.Literal("noLimit"), Type.Literal("oneDay"), Type.Literal("oneWeek"),
+                        Type.Literal("oneMonth"), Type.Literal("oneYear"),
+                    ], { description: "Time window for results. Default noLimit." })),
+                    summary: Type.Optional(Type.Boolean({
+                        description: "Ask Bocha for an AI summary per result. Default true.",
+                    })),
+                    include: Type.Optional(Type.String({
+                        description: "Only search these sites. Domains separated by | or , (max 20).",
+                    })),
+                    exclude: Type.Optional(Type.String({
+                        description: "Never search these sites. Domains separated by | or , (max 20).",
+                    })),
+                    content: Type.Optional(Type.Boolean({
+                        description: "Also return page body text (up to " + MAX_BODY_CHARS
+                            + " characters each). Default false.",
+                    })),
+                }, { additionalProperties: false }),
+
+                async execute(_toolCallId, params, signal) {
+                    const key = process.env[KEY_ENV];
+                    if (!key) {
+                        // Second gate -- the first is MangoX not mounting this extension at all.
+                        // Reaching here means the mount and the env disagree, so say so instead
+                        // of failing silently.
+                        return ok("bocha_web_search is not enabled in this session: "
+                            + "no Bocha API key was provided.");
+                    }
+                    const requested = params.count || 10;
+                    const payload = await postSearch({
+                        query: params.query,
+                        count: requested,
+                        freshness: params.freshness || "noLimit",
+                        summary: params.summary === undefined ? true : params.summary,
+                        include: params.include || "",
+                        exclude: params.exclude || "",
+                    }, key, signal);
+
+                    const logId = payload && payload.log_id ? " (log_id " + payload.log_id + ")" : "";
+                    if (!payload || typeof payload !== "object") {
+                        throw new Error("Bocha returned a payload that is not an object" + logId + ".");
+                    }
+                    if (Number(payload.code) !== 200) {
+                        throw new Error("Bocha error code " + String(payload.code) + logId + ": "
+                            + (payload.msg || "no message given"));
+                    }
+                    const webPages = payload.data ? payload.data.webPages : undefined;
+                    const value = webPages ? webPages.value : undefined;
+                    if (value === undefined) {
+                        return ok('No web results for "' + params.query + '"' + logId + ".");
+                    }
+                    if (!Array.isArray(value)) {
+                        throw new Error("Bocha returned webPages.value that is not an array"
+                            + logId + ".");
+                    }
+                    const pages = value.filter(function (page) {
+                        return typeof page === "object" && page !== null;
+                    }).slice(0, requested);
+                    if (pages.length === 0) {
+                        return ok('No web results for "' + params.query + '"' + logId + ".");
+                    }
+
+                    const full = render(params.query, pages, requested, params.content === true);
+                    const trimmed = truncate(full);
+                    if (!trimmed.note) return ok(trimmed.text);
+
+                    let note = trimmed.note;
+                    try {
+                        const dir = await mkdtemp(join(tmpdir(), "mangox-web-search-"));
+                        const path = join(dir, "results.txt");
+                        await writeFile(path, full, "utf8");
+                        note += " Full output: " + path;
+                    } catch (error) {
+                        note += " (writing the full output failed: " + String(error) + ")";
+                    }
+                    return ok(trimmed.text + "\n\n" + note);
+                },
+            });
+        }
+        """#
+
+    /// 把 `webSearchExtensionSource` 写到 `<dir>/mangox-web-search.ts`, 返回路径。
+    ///
+    /// 三个调用点，都**幂等**（内容相等就不写）:
+    ///   ① `ChatStore.scanExtensions()` —— 无条件, 与 approval 同判据。这条保证"面板恒有一行",
+    ///      没配 Key 时那一行挂着 `BlockedReason.needsBochaKey` 胶囊说明去哪儿补 ——
+    ///      否则新用户在插件面板里根本看不到有这个能力。
+    ///   ② `ChatStore.setBochaKey(_:)` —— 走 ① 的同一趟扫掠, 不单独调。
+    ///   ③ `spawnProcess()` —— **挂载前保底, 这条不能省**: `-e` 列表里有它而文件不在 ⇒
+    ///      pi 会 `Error: Failed to load extension` **直接起不来**（P12.1a 在 stderr 上见过这条）。
+    ///
+    /// ⚠️ **`dir` 必须能指到别处**（默认才是生产目录）: ① 的调用方是 `ChatStore`, 它的托管目录
+    /// 在冒烟里是**夹具**（`managedExtensionsDir`）—— 写死 `NSHomeDirectory()` 会让冒烟
+    /// 一边往真实 `~/.mangox/extensions` 落文件、一边在夹具里扫不到它（行根本不出, 断言恒假）。
+    static func ensureWebSearchExtensionFile(dir: String? = nil) -> String {
+        let dir = dir ?? (NSHomeDirectory() + "/.mangox/extensions")
+        let path = dir + "/" + Self.webSearchExtensionFileName
+        let source = Self.webSearchExtensionSource
+        try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+        let existing = try? String(contentsOfFile: path, encoding: .utf8)
+        if existing != source {
+            try? source.write(toFile: path, atomically: true, encoding: .utf8)
+        }
+        return path
+    }
+
+    /// P10.1b: 把「这个 key 该怎么进子进程环境」抽成**纯函数** —— 门禁要能对四种组合变红
+    /// （同 `businessExtensionPaths` 那条"提成 static 纯函数是为了这条判据能变红"）。
+    ///
+    /// 返回 `nil` = **不要碰 `p.environment`**：谁也不提这个变量时就不该凭空造一份环境字典
+    /// （那会把父进程的整个环境连带复制进去，含义就变了）。
+    ///
+    /// ⚠️ **两个方向都要管**，只写"有 key 就设进去"是不够的:
+    ///   · `key != nil` ⇒ 设进去（`existing` 为空就拿父环境当底，同 dream 那道守卫的写法）；
+    ///   · `key == nil` 且**父进程环境里已有同名变量** ⇒ 必须**删掉**。
+    ///     反例：用户在终端 `export MANGOX_BOCHA_KEY=…` 之后从这个 shell 起 App ⇒ 子进程会继承它,
+    ///     于是「App 里没配 key（面板显示未配置、扩展不挂）」与「扩展其实拿到了 key」**同时为真**,
+    ///     而且这条**不会亮任何红灯**。标记不许比事实说得多 —— 所以这个键必须由我们完全接管。
+    static func webSearchEnvironment(existing: [String: String]?,
+                                     key: String?,
+                                     inherited: [String: String]) -> [String: String]? {
+        if key == nil, inherited[webSearchKeyEnvKey] == nil { return nil }
+        var env = existing ?? inherited
+        env[webSearchKeyEnvKey] = key      // nil = 移除该键（Swift 字典下标赋 nil 即删除）
+        return env
+    }
+
     // MARK: - AgentTransport
 
     func send(prompt: String, images: [OutgoingImage]) {
@@ -846,6 +1238,15 @@ final class PiRpcTransport: AgentTransport {
         // `SchedulerService` 在 fire 前设、fire 收尾时清。三老档与普通会话上它是 nil
         // ⇒ 扩展段逐字节不变（同 codemode 那条"是'不存在', 不是'挂了但没生效'"）。
         let dreamExtPath = dreamSpool != nil ? Self.ensureDreamExtensionFile() : nil
+        // P10.1b: 搜索扩展**保底落地**（文件本来由 `ChatStore.scanExtensions` 写好了, 这里只防
+        // "列表里有它、文件却不在"——删过 / 换过托管目录 / 首次 spawn 抢在扫掠之前）。
+        // 判据 = 它在**启用列表**里（那已经是"用户开着 + 有 key"的交集, 见 `ChatStore.scanExtensions`）
+        // ⇒ 没配 key 时不调用它, 省一次无谓的文件比对。
+        // ⚠️ 顺序必须是**先落地再拼参数**: `-e` 指向一个不存在的文件 ⇒ pi 报
+        // `Error: Failed to load extension` 并直接退出。
+        if desiredExtensions.contains(where: { $0.hasSuffix(Self.webSearchExtensionFileName) }) {
+            _ = Self.ensureWebSearchExtensionFile()
+        }
         var args = spec.scriptArgs + ["--mode", "rpc"]
         // P12.1b + P13: 扩展参数 (关自动发现 + 补回内置 provider + 挂托管扩展 + codemode 层)。
         // 业务扩展仅完整档挂载 (P7-M4); 系统扩展 (审批桥) 四档恒挂。
@@ -884,7 +1285,7 @@ final class PiRpcTransport: AgentTransport {
             // ephemeral: 任务 fire 轮次等, transcript 仅存进程内存
             args += ["--no-session"]
         }
-        // P7-M4 + P13: 档位对 --tools 的取值 (极简裁内置 / codemode 加 modifier / 另两档不传 = pi 默认全量)。
+        // P7-M4 + P13: 档位对 --tools 的取值 (极简裁内置 / 常规·完整在其上增补只读三件套 / codemode 加自己的 modifier)。
         // ⚠️ 与上面那段 extensionArguments **必须同进同退**: codemode 档要"挂上"与"激活"两件事都做
         //    (扩展是 defaultActive: false —— 只 `--extension` 挂载不会生效, 已实测)。
         args += AgentMode.spawnArguments(for: desiredMode, businessExtensions: [])
@@ -918,6 +1319,17 @@ final class PiRpcTransport: AgentTransport {
         if let spool = dreamSpool {
             if p.environment == nil { p.environment = ProcessInfo.processInfo.environment }
             p.environment?[Self.dreamSpoolEnvKey] = spool
+        }
+        // P10.1b: 博查 key 只走 env（Keychain → 子进程环境），**不落盘**。
+        // ⚠️ 守卫 26 同款: 上面那段只在"有自管模型"时才给 `p.environment` 赋值, 其余情况它是
+        //    **nil**（= 子进程自己继承父环境）。那时 `p.environment?[k] = v` 是**静默空操作** ——
+        //    扩展挂上了、工具也注册了, 但读不到 key ⇒ 每次调用都回"未启用", 而门禁全绿。
+        // ⚠️ 判据不写成 `if let key = webSearchKey`: 那会漏掉"父进程里残留了同名变量"这一半
+        //    （用户 export 过再从该 shell 起 App）—— 那一半不删就等于**面板说没配、扩展却拿到了**。
+        if let env = Self.webSearchEnvironment(existing: p.environment,
+                                               key: webSearchKey,
+                                               inherited: ProcessInfo.processInfo.environment) {
+            p.environment = env
         }
         p.arguments = args
         p.currentDirectoryURL = URL(fileURLWithPath: cwd)   // App cwd=/ 问题的正式修复
@@ -1692,6 +2104,13 @@ final class PiRpcTransport: AgentTransport {
         // ⚠️ 脚本可能以 `// @options:` 开头 —— 那就显示那一行 (pi 自己的 renderer 也是把该行
         //    当脚本一部分渲染的), 不特判、不猜"哪行才算正文"。
         if kind == .codemode { return (args["code"] as? String ?? name, nil) }
+        // P10.1b 联网搜索: 唯一要紧的参数就是**查询词** —— 它没有 path/command ⇒ 走下面的通用式
+        // 会让 `title` 退成工具名 (`bocha_web_search`)、`command` 恒 nil ⇒ **查询词从卡上消失**,
+        // 而且比落 `.other` 还糟 (`.other` 至少把首个标量参数放进 command 列)。
+        // ⚠️ 判据钉在**工具名**上 (`webSearchToolNames`), **不**写成 `kind == .search`: `.search`
+        //    是通用的"搜索"档, 将来别的搜索工具的参数未必叫 `query` —— 拿它去猜就是"把 A 的
+        //    字段喂给 B"。`kind == .codemode` 那条敢按 kind 写, 是因为 codemode 只会有一个生产方。
+        if Self.webSearchToolNames.contains(name) { return (args["query"] as? String ?? name, nil) }
         let title = path ?? cmd ?? name
         return (title, (cmd != nil && title == cmd) ? nil : cmd)
     }
@@ -1725,11 +2144,18 @@ final class PiRpcTransport: AgentTransport {
         // P13: codemode 由**自建扩展**注册 (pi 的 `builtin:codemode` 没有传 options 的口子),
         // 但上报的工具名恒为 `codemode` ⇒ 按名归位, 不落 other。
         case "codemode": return .codemode
-        // ⚠️ **不许再 return .read** —— 那是谎报: 装了 web-search / subagents 这类扩展后,
+        // P10.1b: 自建联网搜索扩展注册的工具 —— 同 codemode 那条, 按名归位。
+        // ⚠️ 这里**只能写死字面量** (`switch` 的 case 模式放不下 `webSearchToolNames`),
+        //    所以"字面量与 `webSearchToolNames` 不许漂"靠冒烟那条 — 它用常量当工具名发 RPC
+        //    ⇒ 谁把这里改错名字, 那条断言立刻红。
+        case "bocha_web_search": return .search
+        // ⚠️ **不许再 return .read** —— 那是谎报: 装了 subagents / mcp-adapter 这类扩展后,
         // 卡片标签会**读作 READ**, 轨迹页 chip 更连**颜色一起错** (`defaultColor` 只在轨迹页用;
         // 卡片标签色走 `railColor`, 由相态决定 ⇒ 那里错的是文字不是颜色)。
         // 且落库的 kind 已失真、事后分不出"真 read"和"未知工具"。
         // 中性 OTHER 难看, 但它是诚实的; 真名由 `toolHead` 放进 title (见下)。
+        // ⚠️ 但它只是**兜底**, 不是终点: 我们自己扩展注册的工具**该按名归位** (上面 codemode 与
+        //    `bocha_web_search` 都是) —— OTHER 留给"连参数含义都不可知"的第三方扩展。
         default: return .other
         }
     }

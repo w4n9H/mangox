@@ -143,13 +143,30 @@ struct ExtensionsView: View {
     /// 行右侧那一格: 托管区给启停开关, 只读区给来源胶囊。
     ///
     /// ⚠️ 分派判据是**挂载策略** (`isOnDemand`), **不能只看 `isBuiltIn`**:
-    ///   · 恒挂内置 (approval) → 禁用开关 + "不可停用" (**与 P3.11 一模一样, 一个字没动**)
+    ///   · 条件不满足 (P10.1b 缺 key) → 不给开关, 挂一颗"缺什么"的胶囊 —— 给了开关就是**说谎**
+    ///   · 恒挂不给开关 (`unswitchableNames`: approval) → 禁用开关 + "不可停用"
     ///   · 按需挂载 (dream)    → 不给开关, 挂一颗胶囊 —— 给它开关就是**说谎**
-    ///   · 普通托管            → 常规开关
+    ///   · 其余 (普通托管 + **可停用的自带**, 如 web-search) → 常规开关
+    ///
+    /// ⚠️ **开关的判据是 `unswitchableNames`, 不是 `isBuiltIn`** —— `isBuiltIn` 现在只表示
+    /// "MangoX 自带 ⇒ **不可删除**"。两者在 web-search 上分家（不可删、但**可停用**），
+    /// 拿 `isBuiltIn` 当开关守卫会把它说成"不可停用"（标记比事实说得多）。
+    ///
+    /// ⚠️ `blockedReason` 必须**排在 `isOnDemand` 之前**: 两者都是"不给开关", 但原因不同,
+    /// 说错原因用户就去错的地方找解药（"按需加载"看着像正常状态, 缺 key 是要他去设置里办事）。
     @ViewBuilder
     private func trailingBadge(_ item: ExtensionItem) -> some View {
         if item.source == .managed {
-            if item.isOnDemand {
+            if let blocked = item.blockedReason {
+                Text(Self.blockedLabel(blocked))
+                    .font(.system(size: 9))
+                    .foregroundStyle(CodexTheme.textMuted)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(CodexTheme.bgPill)
+                    .clipShape(Capsule())
+                    .help(LK(Self.blockedHelp(blocked)))
+            } else if item.isOnDemand {
                 Text("按需加载")
                     .font(.system(size: 9))
                     .foregroundStyle(CodexTheme.textMuted)
@@ -159,12 +176,18 @@ struct ExtensionsView: View {
                     .clipShape(Capsule())
                     .help("App 内置扩展：只在需要它的那次运行里挂载，不是常开")
             } else {
+                // ⚠️ 开关的**禁用**判据是 `unswitchableNames`（不给开关）, **不是** `isBuiltIn`
+                //    （不可删除）—— 两者在 web-search 上分家: 它归自带所以不可删, 但它**可停用**;
+                //    拿 `isBuiltIn` 当开关守卫会把它变成"不可停用", 而那是说谎。
+                //    这一档实际只有 approval 走到（dream 走上面 onDemand 分支）。
+                //    ⚠️ `.help(...)` 那句**必须留在一行内** —— `scan_wiring.py` 判据是"取字面量
+                //    **开引号之前同一行**的前缀", 把 `LK(` 折到上一行 ⇒ 它只看到 `? ` ⇒ 判成未接线（实测变红）。
                 CodexMiniToggle(isOn: Binding(
                     get: { item.enabled },
                     set: { _ in store.toggleExtension(item) }
                 ),
-                disabled: item.isBuiltIn)   // 内置审批扩展恒开
-                .help(LK(item.isBuiltIn ? "内置审批扩展, 不可停用" : "启停 (重启引擎生效)"))
+                disabled: ExtensionItem.unswitchableNames.contains(item.name))
+                .help(LK(ExtensionItem.unswitchableNames.contains(item.name) ? "内置审批扩展, 不可停用" : "启停 (重启引擎生效)"))
             }
         } else {
             Text(item.source.label)
@@ -174,6 +197,26 @@ struct ExtensionsView: View {
                 .padding(.vertical, 2)
                 .background(CodexTheme.bgPill)
                 .clipShape(Capsule())
+        }
+    }
+
+    /// 条件不满足时那颗胶囊的**文案**。出数据不出文案 ⇒ `BlockedReason` 只有原因, 措辞在这儿。
+    ///
+    /// ⚠️ 走 `L()` + 调用侧 `Text(String)`（本文件 `item.source.label` 同款）: `LK()` 返回
+    /// `String`, 用 `Text(LK(x))` 会变 **verbatim 渲染** ⇒ 英文界面下这颗胶囊恒中文。
+    /// ⚠️ `switch` 不带 `default`: 加第二档时**编不过**（这是我们想要的 —— 静默走 default
+    /// 会让新档位沿用上一档的措辞, 而那是"标记说错话"）。
+    private static func blockedLabel(_ reason: ExtensionItem.BlockedReason) -> String {
+        switch reason {
+        case .needsBochaKey: return L("未配置 Key")
+        }
+    }
+
+    /// 悬停说明: 必须写清**缺什么 + 去哪补**。只说"挂不上"等于没说。
+    private static func blockedHelp(_ reason: ExtensionItem.BlockedReason) -> String {
+        switch reason {
+        case .needsBochaKey:
+            return L("联网搜索扩展没配博查 API Key —— 挂上它也只会每次调用都回「未启用」, 所以不挂。在 设置 → 联网搜索 里填一个 Key 并保存, 它就会挂上。")
         }
     }
 

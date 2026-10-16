@@ -357,6 +357,33 @@ final class ChatStore: ObservableObject {
     /// smoke 注入: 托管扩展目录 (默认 ~/.mangox/extensions)
     private let managedExtensionsDir: String
 
+    /// P10.1b: 博查 API Key 的 Keychain 账号名。与模型 key **共用同一个 store**
+    /// （口径 = 服务名, 与"account = provider 名"那条约定同族）。
+    /// 三处要用它（扫掠闸门 / 下发 transport / 设置页存取）⇒ 不许写死三次。
+    static let bochaKeyAccount = "bocha"
+
+    /// 当前配的博查 key（空串/缺失都算"没配"）。**唯一读数口** —— 面板闸门、下发 transport、
+    /// 设置页回显全走它, 免得三处各写一次 `?? ""` 并各自漏掉空串那半边。
+    var bochaKey: String? {
+        let key = modelKeyStore.key(account: Self.bochaKeyAccount) ?? ""
+        return key.isEmpty ? nil : key
+    }
+
+    /// P10.1b: 存/清博查 key 的**唯一写口**。`nil` 或空串 = 清除。
+    ///
+    /// ⚠️ 写完之后**必须**跑一次 `scanExtensions()` —— 这一个动作同时翻三样东西: 面板那一行的
+    /// 挂不上胶囊、进入"可挂载"的启用列表、以及把 key 下发到各 transport。漏掉它, 设置页
+    /// 会显示"已保存"而插件面板毫无变化（两条真源各说各话, **零红灯**）。
+    func setBochaKey(_ key: String?) {
+        let trimmed = (key ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty {
+            try? modelKeyStore.deleteKey(account: Self.bochaKeyAccount)
+        } else {
+            try? modelKeyStore.setKey(trimmed, account: Self.bochaKeyAccount)
+        }
+        scanExtensions()
+    }
+
     /// 扫描三区扩展并叠加启停状态 (spawn 带 --no-extensions, 自动发现区在 MangoX 内不生效)
     func scanExtensions() {
         let fm = FileManager.default
@@ -364,10 +391,29 @@ final class ChatStore: ObservableObject {
         let scanDir = { (dir: String) -> [String] in
             (try? fm.contentsOfDirectory(atPath: dir))?.sorted() ?? []
         }
+        // P10.1b: 博查 key 是自建搜索扩展的**挂载条件**, 每次重扫现读一次 ——
+        // 用户在设置里存/清 key 之后, 就是靠这里把状态翻过来的。
+        let searchKey = bochaKey
+        // P10.1b: 搜索扩展**无条件落地** —— 与 approval 同判据（都是"我们自带的、不可删的"）。
+        //
+        // ⚠️ 早先写成"有 key 才落地"是错的, 两个理由:
+        //   ① 没配 key 的**新用户**在插件面板里根本看不到这一项 ⇒ 找不到"去设置填 Key"这条线索
+        //      （`BlockedReason.needsBochaKey` 那颗胶囊与它的 help 文案就成了够不着的死代码）。
+        //   ② "有 key 才写"并不能防打地鼠 —— 恰恰相反: 它让文件在**有 key 时**每次重扫都被写回来,
+        //      于是"删除"变成点一下又回来。真正的根因是"自动维护的文件不许删", 已在
+        //      `ExtensionItem.builtInNames` 里解决（web-search 归自带 ⇒ 删除按钮根本不给）。
+        _ = PiRpcTransport.ensureWebSearchExtensionFile(dir: managedExtensionsDir)
+        // 没配 key ⇒ 挂不上（原因见 `ExtensionItem.BlockedReason.needsBochaKey`）。
+        let searchBlocked: ExtensionItem.BlockedReason? = searchKey == nil ? .needsBochaKey : nil
         // 托管区
         for f in scanDir(managedExtensionsDir) where f.hasSuffix(".ts") || f.hasSuffix(".js") {
+            // ⚠️ 判据是**文件名**, 不是"这个托管项注册了工具": 后者会把用户自己导入的第三方
+            //    扩展一起卷进"缺 key 就不给开关"里 —— 别人家的扩展不归我们的 key 管。
+            let blocked: ExtensionItem.BlockedReason? =
+                (f == PiRpcTransport.webSearchExtensionFileName) ? searchBlocked : nil
             items.append(managedItem(name: (f as NSString).deletingPathExtension,
-                                     path: managedExtensionsDir + "/" + f))
+                                     path: managedExtensionsDir + "/" + f,
+                                     blockedReason: blocked))
         }
         // P15.7: dream **投影**成一条 —— 它的 `.ts` 只在 dream 那次 fire 才落盘 (双闸门的第一道),
         // 平时磁盘上根本没有这个文件 ⇒ 纯扫描永远列不出它, 于是 `note_proposal` 在哪都没人找得到。
@@ -402,7 +448,18 @@ final class ChatStore: ObservableObject {
         // 下发 spawn 加载列表 (P4.0.2: 快照 + 池内已有实例同步刷新; 新实例由 transportFor 补发)
         let enabled = items.filter { $0.source == .managed && $0.enabled }.map(\.path)
         currentExtensionPaths = enabled
+        // ⚠️ **注入实例（冒烟单实例）也必须收到** —— 它**不在 `transports` 池里**
+        // （`transportFor` 对它 early-return）⇒ 只推 `transports.values` 的话,
+        // 冒烟里 `MockTransport.lastDesiredExtensions` / `lastWebSearchKey` 永远是 nil,
+        // "配置有没有真的推下去"那几条断言就变成**恒假绿**。
+        // 同族: `askApproval` / `agentMode` 的 didSet 都推了注入实例, 这里早先漏了。
+        injectedTransport?.updateExtensions(enabled)
         transports.values.forEach { $0.updateExtensions(enabled) }
+        // P10.1b: key 与扩展列表**同源下发**。只推列表会让 transport 停在旧 key 上,
+        // 而 key 是"下次 spawn 才生效"的参数 —— 它得先到 transport, 才谈得上生效。
+        // 清 key 时下发 nil（`MockTransport` 会记下来, 冒烟据此断言"清掉不是留旧值"）。
+        injectedTransport?.updateWebSearchKey(searchKey)
+        transports.values.forEach { $0.updateWebSearchKey(searchKey) }
     }
 
     /// 构造一条**托管**扩展项 —— 磁盘扫描与 dream 投影走**同一个入口** (P15.7)。
@@ -410,19 +467,31 @@ final class ChatStore: ObservableObject {
     /// ⚠️ 为什么必须共用: 「内置的挂载策略与工具名」只能有**一处**赋值。分头写的话, dream 刚跑过
     /// （磁盘上真有那个 `.ts`）会走扫描分支 ⇒ 面板里那一项**从"按需胶囊"变回"恒开开关"**,
     /// 同一个东西两种说法 —— 而且换脸前后**都是绿的**, 冒烟抓不到。
-    private func managedItem(name: String, path: String) -> ExtensionItem {
+    private func managedItem(name: String, path: String,
+                             blockedReason: ExtensionItem.BlockedReason? = nil) -> ExtensionItem {
         let builtIn = ExtensionItem.builtInNames.contains(name)
+        // "不给开关"是**另一个**集合（见 `unswitchableNames`）—— web-search 归自带（不可删）
+        // 但**可停用** ⇒ 它必须尊重用户的静音选择。
+        let noSwitch = ExtensionItem.unswitchableNames.contains(name)
+        // ⚠️ 条件不满足时**必须压成 false**: 否则面板会显示"这一项开着"而它其实挂不上 ——
+        //    开关比事实说得多（同 P15.6b「在说谎」那条, 只是方向反过来）。
+        let on = blockedReason == nil && (noSwitch || !disabledExtensionPaths.contains(path))
         return ExtensionItem(name: name, path: path, source: .managed,
-                             enabled: builtIn || !disabledExtensionPaths.contains(path),
+                             enabled: on,
                              isBuiltIn: builtIn,
                              toolNames: ExtensionItem.builtInToolNames[name] ?? [],
                              isSynthetic: false,
-                             isOnDemand: ExtensionItem.builtInOnDemand.contains(name))
+                             isOnDemand: ExtensionItem.builtInOnDemand.contains(name),
+                             blockedReason: blockedReason)
     }
 
     /// 启停托管扩展 (生效需重启引擎)
+    ///
+    /// ⚠️ 守卫用 `unswitchableNames`（**不给开关**）而**不是** `isBuiltIn`（**不可删除**）——
+    /// 后者会把 web-search 一起挡住, 而它本来就该能静音（那两个名字分家见 `ExtensionItem`）。
     func toggleExtension(_ item: ExtensionItem) {
-        guard item.source == .managed, !item.isBuiltIn else { return }
+        guard item.source == .managed,
+              !ExtensionItem.unswitchableNames.contains(item.name) else { return }
         if item.enabled {
             disabledExtensionPaths.insert(item.path)
         } else {
@@ -445,7 +514,11 @@ final class ChatStore: ObservableObject {
         scanExtensions()
     }
 
-    /// 删除托管扩展 (内置除外)
+    /// 删除托管扩展 —— **内置（MangoX 自带）除外**。
+    ///
+    /// ⚠️ 守卫是 `isBuiltIn`（= 名字在 `builtInNames` 里, 意思是**不可删除**）: 自带的那几个
+    /// 每次重扫 / spawn 都会被重新写回磁盘, 允许删就只是"点一下又回来"。**这与"能不能停用"是两件事**
+    /// —— web-search 不可删、但可停用（见 `toggleExtension`）。
     func deleteExtension(_ item: ExtensionItem) {
         guard item.source == .managed, !item.isBuiltIn else { return }
         try? FileManager.default.removeItem(atPath: item.path)
@@ -497,7 +570,10 @@ final class ChatStore: ObservableObject {
         // 无默认值的 let 需最先初始化 (两阶段: 赋值前不可访问 self)
         self.injectedTransport = transport
         self.managedExtensionsDir = managedExtensionsDir ?? (NSHomeDirectory() + "/.mangox/extensions")
-        self.modelKeyStore = modelKeyStore ?? KeychainModelKeyStore()
+        // ⚠️ 走 `current`（不是直接 `KeychainModelKeyStore()`）: 冒烟进程靠它整体换成内存实现 ——
+        //    否则 `init` 尾部那次 `scanExtensions()` 会去读用户**真实**钥匙串（条目存在时弹窗 +
+        //    `SecItemCopyMatching` 一直等答复 ⇒ 冒烟挂死）。见 `KeychainModelKeyStore.current`。
+        self.modelKeyStore = modelKeyStore ?? KeychainModelKeyStore.current
 
         // P3.1: 首启播种 SampleSession, 之后全部从 SQLite 加载; 打不开库则回退纯 mock
         // dbPath: smoke 注入独立库文件用 (默认 ~/.mangox/mangox.db)
@@ -1150,6 +1226,7 @@ final class ChatStore: ObservableObject {
         t.updateKnowledgeContext(knowledge.currentKnowledgeBlock)
         t.updateMode(agentMode)   // P7-M4: 档位快照 (新实例补发)
         t.updatePIConfig(model.currentPIConfig)   // P7-M3: 物化产物快照 (缺失 = 会话 spawn 读 ~/.pi/agent → 全量目录泄漏)
+        t.updateWebSearchKey(bochaKey)            // P10.1b: 搜索 key 快照 (env 只在 spawn 期定格)
         if !currentProvider.isEmpty {
             t.setModel(provider: currentProvider, modelId: currentModelId)
             t.setThinkingLevel(thinkingLevel.rawValue)

@@ -27,29 +27,44 @@
 | # | 扩展 | 版本 (pin) | 作用 | 勘察结论 |
 |---|------|-----------|------|---------|
 | a | `pi-mcp-adapter` | 2.34.0 | MCP 生态桥 (单 proxy 工具 `mcp` + `mcpScript`) | `getAgentDir()` 原生读 `PI_CODING_AGENT_DIR`, 默认配置 `<agentDir>/mcp.json` — MangoX 自管配置零冲突; 可导入 Cursor/Claude/Windsurf/VSCode 配置; 工具路径 UI 依赖面仅 1×notify+1×confirm; OAuth 走 callback server + 浏览器; 体积大 (index.ts ~88K) 演进快, 必须 pin |
-| b | `pi-web-access` | 0.28.0 | 多 provider 聚合搜索 (web_search + fetch_content) | 401K 下载/月头部体量; **博查 (Bocha) 在 30+ provider 列表中**, 国内直连稳定/中文质量好/免费, 设为默认 provider; 免 key 的 DuckDuckGo/Exa 可做零配置兜底; **workflow 必须配 `none` 或 `auto-summary`** 规避 curator TUI; 7.3MB/9 依赖 |
+| b | ~~`pi-web-access`~~ → **自建 `mangox-web-search`** | 不依赖 npm (pin 无意义) | 只调博查的联网搜索 (工具 `bocha_web_search`) | **路线改道 2026-10-15 (boss 拍板)**。原选 `pi-web-access` 那条已**实机跑通**（落点对、阳性 6 命中 / 阴性 0），但 `-e npm:` 的代价不可接受，三条**全实测**：① spawn 期联网 `npm install`，落盘 **82 MB / 10,776 个文件**（150+ 传递依赖：express·hono·undici·unpdf·defuddle·turndown·linkedom…），对照自建 = **1 文件 / ~9 KB**；② `dist/core/package-manager.js:1015` `installMissing()` 开头 `if (isOfflineModeEnabled()) return false` ⇒ 调用方 `continue` ⇒ **离线时扩展整段静默消失、零报错**；③ 包落点由 `PI_CODING_AGENT_DIR` 决定 ⇒ 必须绑"有自管模型"这个前置条件。自建版：零依赖（只有 type-only 的 pi 包 + `typebox` + node 内建）、落 `~/.mangox/extensions/mangox-web-search.ts`、**key 只走 spawn env（`MANGOX_BOCHA_KEY`）不落盘**（npm 路必须把 key 写进 pi 配置目录，那侧配置读取写死 `homedir()`）；参数面 7 个（`query`/`count`/`freshness`/`summary`/`include`/`exclude`/`content`）；端点 `api.bochaai.com/v1/web-search` 与 `autocoder-nano/utils/http_utils.py` 同源（现成包用的 `api.bocha.cn` 是另一个域，不采用）；输出上限按 **10 篇 × 8 KB**（`MAX_LINES 2000` / `MAX_BYTES 80000` / `MAX_BODY_CHARS 8000`），超限落临时文件并把路径交给模型 |
 | c | `@gotgenes/pi-subagents` | 21.7.1 | 子代理 (in-process, pi SDK AgentSession) | 选它不选 tintinweb 原版 (重 TUI fleet view); 工具 `subagent`/`get_result`/`steer`; **前台进度走 tool onUpdate 流** → 映射 tool_execution_update 事件, MangoX 需接线该事件并在 TrajectoryView 工具卡渲染; callback-form setWidget RPC 不可序列化直接丢弃; 自定义代理读 `$PI_CODING_AGENT_DIR/agents/*.md` + 项目 `.pi/agents/*.md`; provider-inheritance 模块解决子会话 provider 解析 (#812), models.json/auth.json 路线不受影响 |
 | d | `@injaneity/pi-computer-use` | v0.4.3 | macOS GUI 计算机操作 | **AX-first 语义定位** (`@e1` 引用优先于裸坐标), ScreenCaptureKit 截图仅兜底; Chromium CDP 快路; stealth 模式 (`PI_COMPUTER_USE_STEALTH=1`, 纯 AX 后台不抢焦点) 可做成设置开关; 需 Accessibility + Screen Recording 权限 (授予 MangoX/helper); helper 路径随 `PI_CODING_AGENT_DIR` → `~/.mangox/pi-config/helpers/...`, TCC 按路径授权 |
 | e | `pi-memory` | 0.4.2 | 会话间记忆 (纯 markdown) | 6 核心工具零外部依赖; **存储目录优先读 `PI_MEMORY_DIR` env** (不读 PI_CODING_AGENT_DIR), spawn 时指向 `~/.mangox/pi-config/memory/`; 每回合注入 MEMORY.md+SCRATCHPAD.md+今昨日志, **KV cache-stable 前缀设计**; `memory_search` 语义搜索需外部 qmd CLI — **默认不装**, 纯工具模式起步; 与 KnowledgeStore 边界: 知识库=人工策展, 记忆=agent 自主沉淀, 互不混用 |
 
-**落选记录**: `@ollama/pi-web-search` (被 pi-web-access 覆盖) / `bocha-web-search-pi-extension` (216/月, 被 pi-web-access 覆盖) / tintinweb subagents (重 TUI) / swairshah computer-use (grounding 依赖 vision 模型) / TUI 类 (plannotator/statusline/studio 等, RPC 模式无意义)。
+**落选记录**: `@ollama/pi-web-search` (被 pi-web-access 覆盖) / `pi-web-access` (**本身也落选** —— 见 1.2 的改道记录) / `bocha-web-search-pi-extension` (216/月; 零依赖 19KB，但仍**是 npm 包**，只解决"依赖重"一条，另两条根因照旧，且 key 必须落 `~/.pi/agent/bocha-web-search/config.json` ⇒ **当规格书用、不当依赖用**) / tintinweb subagents (重 TUI) / swairshah computer-use (grounding 依赖 vision 模型) / TUI 类 (plannotator/statusline/studio 等, RPC 模式无意义)。
 
 ### 1.2 托管路线 (对齐 P3.11)
 
-1. 安装: `pi install npm:<pkg>@<pinned>` 装进 `~/.mangox/pi-config/` (`PI_CODING_AGENT_DIR` 指向), **不碰用户 `~/.pi/agent`**
-2. spawn: 维持 `--no-extensions` + 白名单逐个 `--extension`; 五件套各配开关 (Settings 页)
-3. 环境变量: `PI_MEMORY_DIR` (e), `PI_COMPUTER_USE_STEALTH` (d, 可选开关), workflow 配置 (b)
-4. UI 事件策略: `notify` → toast; `setWidget` (callback form) / TUI overlay 请求 → 扩展层静默丢弃; MCP elicitation v1 自动拒绝
+**通则（五件套共用）**
+
+1. spawn: 维持 `--no-extensions` + 白名单逐个 `--extension`（业务扩展**只完整档挂**，系统扩展四档恒挂）; 每件各配开关 (Settings 页)
+2. 自管配置**不碰**用户 `~/.pi/agent`
+3. UI 事件策略: `notify` → toast; `setWidget` (callback form) / TUI overlay 请求 → 扩展层静默丢弃; MCP elicitation v1 自动拒绝
+
+**(a) mcp-adapter / (c) subagents / (d) computer-use / (e) pi-memory —— 走 npm 托管**
+
+`pi install npm:<pkg>@<pinned>` 装进 MangoX 自管的 `PI_CODING_AGENT_DIR`; 环境变量: `PI_MEMORY_DIR` (e)、`PI_COMPUTER_USE_STEALTH` (d, 可选开关)。
+
+**(b) 联网搜索 —— 不进 npm, 源码内嵌 App 自建**（2026-10-15 改道, 依据见 1.1 的 b 行）
+
+1. **源码 = 唯一真源**: `PiRpcTransport.webSearchExtensionSource`（Swift 原始字符串常量，`#"""…"""` —— 必须原始字符串，否则 TS 里的 `\n` 被 Swift 先吃掉），由 `ensureWebSearchExtensionFile(dir:)` 落盘
+2. **落盘点两处，都幂等**（内容相等不写）: ① `ChatStore.scanExtensions()` **无条件**（与 approval 同判据：面板恒有一行；没配 key 时那一行挂 `BlockedReason.needsBochaKey` 胶囊 + 悬停说明指到设置页 —— 否则新用户根本看不到有这个能力，那套文案就是够不着的死代码）② `spawnProcess()` **挂载前保底**（`-e` 指向不存在的文件 ⇒ pi 报 `Failed to load extension` 直接起不来）
+3. **双闸门**（同 dream 的判据）: ① **挂载闸门** —— 没配 key ⇒ `enabled` 被压成 false、不进 `-e` 列表 ② **激活闸门** —— 只有那次 spawn 设 env。两道都要：只挂不给 env ⇒ 工具每次回 "not enabled"；只给 env 不挂 ⇒ 模型看不到这个工具
+4. **key 通道**: Keychain（account `bocha`，与模型 key **共用一个 store**）→ `ChatStore.bochaKey`（唯一读数口）→ `PiRpcTransport.updateWebSearchKey` → spawn env。⚠️ **这个键由我们完全接管**：父进程残留同名变量 + App 未配 ⇒ 必须**显式删除**（否则"面板说未配置"与"扩展拿到了 key"同时为真，且**零红灯**）；判据抽成纯函数 `webSearchEnvironment(existing:key:inherited:)`，四种组合都能变红
+5. **归属（两个集合必须分开）**: 进 `builtInNames` ⇒ **不可删**（删了下次重扫/ spawn 又写回来 = 打地鼠，所以删除按钮根本不给）; **不进** `unswitchableNames` ⇒ **可停用**（挂载由"有没有配 Key"决定，但用户仍可主动静音）。⚠️ 早先这两个语义挤在 `isBuiltIn` 一个字段里，加 web-search 时才拆开 —— 拿 `isBuiltIn` 当开关守卫会把"可停用"说成"不可停用"（标记比事实说得多）
 
 ### 1.3 分批与门禁
 
 | 批次 | 内容 | 冒烟要点 |
 |------|------|---------|
 | P10.1a | mcp-adapter | 挂一个 echo MCP server, proxy 工具调用闭环; mcp.json 物化读写 |
-| P10.1b | web-access | 博查 provider 配 key 后 web_search 调用; workflow=none 不产生 curator UI 事件 |
+| P10.1b | ~~web-access (npm)~~ → **联网搜索（自建博查扩展）** | `webSearchToolNames` 与源码 `name: "…"` 同源; `const KEY_ENV` 与 `webSearchKeyEnvKey` 逐字一致; **零依赖**（import 只有 type-only 的 pi 包 / typebox / node 内建）; 端点唯一（`api.bochaai.com`）; 原始字符串首行无前导空白; `webSearchEnvironment` **四组合**（含"父残留必须删掉"反例）; 面板闸门（没 key ⇒ 有行 + 胶囊 + 不进 `-e` 列表；有 key ⇒ 胶囊消失 + 进列表 + 文件在盘 + key 下发; 清 key ⇒ 下发 **nil** 不是留旧值）; 归属拆分（可删=否 / 可停=是）+ 删除守卫。**真机**另跑 `tool_surface_probe.py --marker bocha_web_search` |
 | P10.1c | subagents | **接线 tool_execution_update** (当前只接 8/21 事件) + 工具卡渲染 AgentDetails; 串行/并行各一例 |
 | P10.1d | computer-use | 权限 precheck + 授权引导深链; 截图经 ImagePipeline 在工具卡渲染; stealth 开关 |
 | P10.1e | pi-memory | PI_MEMORY_DIR 隔离验证; memory_write/read 闭环; 注入内容不污染流式渲染 |
+
+> ✅ **编号冲突已裁（2026-10-15 boss 拍：代码统一回 `P10.1b`）**: 这次**自建搜索扩展**一度被标成 `P10.1c` —— 那是**改道时的路线字母**（A = 现成包 `bocha-web-search-pi-extension` / B = `pi-web-access` npm / C = 自建），不是本表的批次字母（b = 联网搜索、c = 子代理）。已把代码里 **54 处** `P10.1c` 机械改回 **`P10.1b`**（路线换了，格子没换：b 格 = 联网搜索）。⇒ `P10.1c` 从此**只**指本表的子代理批次，**一号一物**。
 
 风险: mcp-adapter 版本演进快; gotgenes 与 pi SDK 内部 API 强耦合 (升 pi 需回归); 每批需先在 pi 0.85.1 实测兼容再 pin。
 
@@ -96,7 +111,7 @@ MangoX 常驻家里 Mac; Settings 配置**邮箱账号池** (可多个, 用户�
 - **正文即 prompt (决定 6)**: **无命令模板** —— 不对任务类型做任何预设, 邮件正文清洗后**全文**作为 prompt 直接下达, 任何任务都可表达
 - **正文清洗 (必须)**: 取第一个 `text/plain` part → 在第一条引用行截断 (`>` 前缀 / `On … wrote:` / `在…写道：` / `-----Original Message-----`)。**不做清洗则第 3 轮的 prompt 会内嵌前两轮全文** (context 翻倍 + 语义混乱)
 - **主题清洗 (必须, 决定 13)**: `mailbox_tasks.title` 与**回执主题**都必须剥掉 —— ①`Re:` / `Re[2]:` / `Fwd:` / `回复:` / `转发:` 类前缀 (可重复) ②`[MGOX]` 意图标记 ③**`<secret>` 子串**。第 ③ 条是硬要求: 主题清洗漏掉 secret, 就等于让 secret 随每一封回执扩散到锁屏通知 / 邮件列表 / 服务商日志 / 转发链。清洗后由 MangoX 重新拼装 `[MGOX][DONE] [MGOX-<id8>] <title>`
-- **工具面 (决定 7, 覆盖原决定 1)**: 邮箱任务用 **`AgentMode.full`** —— 内置工具全量 (含 bash/write/edit) + 挂全部托管扩展, 与回家 app 内手工会话的工具面**完全一致**。实现成本 ≈ 0 (`beginTurn(modeOverride: .full)` 现成), 原决定 1 设想的"工具白名单透传"前置改动**取消**。
+- **工具面 (决定 7, 覆盖原决定 1)**: 邮箱任务用 **`AgentMode.full`** —— 内置 7 个工具 (含 bash/write/edit 与 grep/find/ls 只读三件套) + 挂全部托管扩展, 与回家 app 内手工会话的工具面**完全一致**。实现成本 ≈ 0 (`beginTurn(modeOverride: .full)` 现成), 原决定 1 设想的"工具白名单透传"前置改动**取消**。
 - **审批策略 (决定 8)**: 既不"弹卡等确认"也不"全自动放行", 走**风险分级自动裁决** —— bash 交 `BashRiskEvaluator` (现成), 安全命令静默放行, 危险命令 **deny 且不阻塞**, 任务回执告知"卡在 X, 请回 app 内跑"。**原确认流 (blocked 邮件往返) 因此不做** —— 邮件往返分钟级等不到 pi 的响应窗口, 而"不阻塞的自动裁决"同时给出了刹车与活性
 - **配置分层 (决定 10)**: **账号** (`MailboxAccount`) 只管连接与凭据 (host / 地址 / 授权码), **哨兵** (`MailboxSentinel`) 管策略 (白名单 / 密钥 / 项目 / 间隔 / 执行配置), 一个账号只能被一个哨兵绑定。白名单与共享密钥落**哨兵级** —— 一个哨兵的完整语义 = "用这个邮箱, 接受这些人的指令, 在这个目录里干活"
 - **执行位置 (决定 11 / 12)**: `cwd = sentinel.projectId → project.path`, 无项目回落 `NSHomeDirectory()` —— **与 ScheduledTask / 快速捕获同款一行式解析, 零新概念**。项目在**首封时快照**进 `mailbox_tasks.project_id`, 后续轮次不重算 (中途变 cwd 会触发 `ensureProcessForCwd` 重启进程丢记忆; "换个地方干"应当开新线程)。spawn 前**校验目录存在**, 被删/移走 → 任务 FAILED + 回执告知, 不 fire。**cwd 只是默认落点, 不是访问控制边界** (见 §2.6 ②)
@@ -433,7 +448,7 @@ P10.5 只把 decode 挪到后台, 未做窗口化 —— 长会话仍是「全�
 - [x] P10.6a: LazyVStack + 重放缓存 LRU 上限 + 冒烟全绿 (**实机验证通过 2026-09-18**)
 - [ ] P10.6b: 窗口化分页 (待定, 非阻塞)
 - [ ] P10.1a: mcp-adapter 托管冒烟 (echo server 闭环)
-- [ ] P10.1b: web-access + 博查 key 调用闭环
+- [x] P10.1b: 联网搜索 — **改自建博查扩展**（零 npm 依赖；挂载闸门 = 有无 Key；不可删但**可停用**）+ 冒烟 28 条 + 门禁全绿 (2026-10-15)。⚠️ 真机只验到工具面（声明是否进模型上下文），**半次真调用未打**（要真 key）
 - [ ] P10.1c-e: 视当日进度 (c 需先接线 tool_execution_update)
 - [x] P10.2: 设计定稿 + 十五项拍板 (本档 §2.5, 2026-09-18)
 - [x] P10.2a-0: 补 `BashRiskEvaluator` 误放行洞 (实修六类: 四类参数洞 + `2>file`/`&>file` + `2>&1` 切段) + `ApprovalMode` 三档 (`interactive`/`autoAllow`/`autoJudge`) + `beginTurn(approvalOverride:)` 接线 (§2.6, 2026-09-18; 纯函数语料 31 危险 + 27 只读全绿)

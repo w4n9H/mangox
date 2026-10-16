@@ -75,6 +75,8 @@ icon_work/
 # 构建产物
 build/
 DerivedData/
+# README/CI 推荐的出包 derivedDataPath (xcodebuild -derivedDataPath out)
+out/
 
 # 本地agent配置
 .agents/

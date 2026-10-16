@@ -49,9 +49,20 @@ final class MockTransport: AgentTransport {
     private(set) var lastDreamSpool: String?
     private(set) var dreamSpoolUpdates: Int = 0
 
+    /// P10.1b smoke 断言用: 最近一次下发的博查 key。判据同 `lastDreamSpool` ——
+    /// **"被清回 nil"要能观察到**（清了 key 却还挂在旧值上 = 面板说没配、实际还在用）。
+    private(set) var lastWebSearchKey: String?
+    private(set) var webSearchKeyUpdates: Int = 0
+
     func updateDreamSpool(_ spool: String?) {
         lastDreamSpool = spool
         dreamSpoolUpdates += 1
+    }
+
+    /// P10.1b: 记录下发的搜索 key —— 冒烟靠它断言"配置变更有没有真的推到 transport"。
+    func updateWebSearchKey(_ key: String?) {
+        lastWebSearchKey = key
+        webSearchKeyUpdates += 1
     }
 
     func updateSessionBinding(_ sessionId: UUID?) {

@@ -32,6 +32,9 @@ struct SettingsView: View {
     @State private var recording = false          // P8-T27: 热键录制中
     @State private var keyMonitor: Any?           // P8-T27: 录制用 keyDown 监听
 
+    // P10.1b 联网搜索 (博查)
+    @State private var bochaKeyInput = ""
+
     enum TestState: Equatable { case idle, testing, done }
 
     /// 勾选行条目 (seed 元数据 或 /models 拉回的 id + 保守默认 / 目录元数据)。
@@ -58,6 +61,7 @@ struct SettingsView: View {
                     appearanceSection
                     languageSection
                     modelSection
+                    webSearchSection
                     concurrencySection
                     notificationSection
                     captureSection
@@ -666,6 +670,51 @@ struct SettingsView: View {
         formError = nil
         missingMetaNote = nil
         lastFetchedIds = []
+    }
+
+    // MARK: - P10.1b 联网搜索 (博查 API Key)
+
+    /// 博查 key 是**内置搜索扩展的挂载条件** —— 没它还把扩展挂上, 只会让模型每次调用都收到
+    /// "未配置"。所以这一栏不是"可选项", 而是插件面板里那一行的**电源**。
+    private var webSearchSection: some View {
+        let hasKey = store.bochaKey != nil
+        return VStack(alignment: .leading, spacing: 12) {
+            settingRow(title: "联网搜索 (博查 API Key)",
+                       detail: "配好 Key 才会挂上内置搜索扩展 (工具 bocha_web_search); Key 存 Keychain, 只在 spawn 时以环境变量注入 pi 进程, 不落盘") {
+                HStack(spacing: 8) {
+                    SecureField("博查 API Key", text: $bochaKeyInput)
+                        .textFieldStyle(.roundedBorder)
+                        .font(CodexTheme.fontSmall)
+                        .frame(minWidth: 220)
+                    Button("保存") { saveBochaKey() }
+                        .fixedSize()
+                        .disabled(bochaKeyInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    if hasKey {
+                        Button("清除") { store.setBochaKey(nil) }
+                            .fixedSize()
+                    }
+                }
+            }
+            Divider().overlay(CodexTheme.divider)
+            // ⚠️ 两个分支**各写一个字面量** —— 压成 `LK(三目)` 会让英文界面恒中文 (verbatim 渲染)。
+            if hasKey {
+                Text("已保存 (重新输入可覆盖)")
+                    .font(.system(size: 11))
+                    .foregroundStyle(CodexTheme.toolDone)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else {
+                Text("未配置 —— 联网搜索不可用")
+                    .font(.system(size: 11))
+                    .foregroundStyle(CodexTheme.textMuted)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .settingsCard()
+    }
+
+    private func saveBochaKey() {
+        store.setBochaKey(bochaKeyInput)
+        bochaKeyInput = ""
     }
 
     // MARK: - 并发上限

@@ -35,6 +35,21 @@ PI_CANDIDATES = ["/opt/homebrew/bin/pi", "/usr/local/bin/pi"]
 UNIQUE_PHRASES = {
     "codemode": ["searchTools", "ALL_TOOLS", "QuickJS",
                  "describeNamespace", "@options"],
+    # P10.1b · 自建联网搜索扩展: 取它 `description` 里的独有句子 ——
+    # 工具名本身可能只作为无关文字出现（同上面那条教训），所以必须看**声明本体**。
+    "bocha_web_search": ["Search the web with Bocha",
+                         "Bocha covers Chinese-language"],
+    # pi 内置的"只读三件套"(grep/find/ls) **默认不开** ——
+    # `dist/core/settings-manager.js:35` `DEFAULT_TOOL_NAMES = ["read","bash","edit","write"]`。
+    # ⇒ 探针判据（2026-10-16）: 不传 `--tools` 应 **0**; 传 `--tools +grep,+find,+ls` 应 **≥1**
+    #   （后者是**阳性对照**，缺了 0 就没意义）。
+    #   现行 spawn 映射: minimal 传 allowlist `read,bash,write,edit`(裁到 4);
+    #   standard / full 传 `+grep,+find,+ls`(在默认 4 个上增补到 7)。
+    "grep": ["Search file contents for a pattern",
+             "Respects .gitignore. Output is truncated"],
+    # 同族: 另两个 off-by-default 的内置工具, 用于核 `--tools +grep,+find,+ls` 三件套是否都生效。
+    "find": ["Search for files by glob pattern"],
+    "ls": ["Returns entries sorted alphabetically"],
 }
 
 POSITIVE_CONTROLS = ["bash", "read"]

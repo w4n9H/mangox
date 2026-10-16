@@ -181,7 +181,7 @@ VALUES = {
     '到点投递给 Agent 的 prompt…': 'The prompt delivered to the agent when the time comes…',
     '刷新文件树与 git 状态': 'Refresh the file tree and git status',
     '前往源会话': 'Go to the source session',
-    '功能完整的编码 Agent, 内置工具全量 (读/写/Shell/检索), 不挂业务扩展 — 日常默认档。': 'A full-featured coding agent with every built-in tool (read/write/shell/search) and no business extensions — the everyday default.',
+    '功能完整的编码 Agent, 内置 7 个工具 (读/写/Shell + grep/find/ls 检索三件套), 不挂业务扩展 — 日常默认档。': 'A full-featured coding agent with seven built-in tools (read / write / shell plus the grep/find/ls search trio) and no business extensions — the everyday default.',
     '加入白名单': 'Add to allowlist',
     '加载中…': 'Loading…',
     '单条消息最多 %lld 张图片, 超出请拆条发送': 'Up to %lld images per message — split into several messages if you need more',
@@ -296,10 +296,7 @@ VALUES = {
     '排队 %lld 个': '%lld queued',
     '排队 %lld 条': '%lld queued',
     '探测地址': 'Probe URL',
-    '提炼': 'Distill',
-    '提炼中…': 'Distilling…',
     '提炼依据: %@': 'Distilled from: %@',
-    '提炼本会话 → 待审核记忆': 'Distill this session → memory to review',
     '搜索会话、项目': 'Search chats and projects',
     '摘要重试中…': 'Retrying summary…',
     '收件实现未接入 (P10.2c)': 'Receiving is not wired up yet (P10.2c)',
@@ -801,4 +798,13 @@ VALUES = {
     '补跑': 'Catch up',
     '补跑只跑最近一次; 忽略 = 认下这批, 不再提示': 'Catch up runs only the most recent one; Ignore accepts this batch and stops asking',
     '认下这批漏跑, 不再提示': 'Accept these misses and stop asking',
+
+    # ── P10.1b · 联网搜索 (自建博查扩展) ──
+    '联网搜索 (博查 API Key)': 'Web search (Bocha API key)',
+    '博查 API Key': 'Bocha API key',
+    '配好 Key 才会挂上内置搜索扩展 (工具 bocha_web_search); Key 存 Keychain, 只在 spawn 时以环境变量注入 pi 进程, 不落盘': 'The built-in search extension (tool bocha_web_search) is mounted only once a key is set; the key lives in the Keychain and is passed to the pi process as an environment variable at spawn time, never written to disk',
+    '已保存 (重新输入可覆盖)': 'Saved (type a new key to replace)',
+    '未配置 —— 联网搜索不可用': 'Not configured - web search unavailable',
+    '未配置 Key': 'No key set',
+    '联网搜索扩展没配博查 API Key —— 挂上它也只会每次调用都回「未启用」, 所以不挂。在 设置 → 联网搜索 里填一个 Key 并保存, 它就会挂上。': 'The web search extension has no Bocha API key set - mounting it would only make every call answer not enabled, so it stays unmounted. Enter a key under Settings - Web search and save; it gets mounted right away.',
 }

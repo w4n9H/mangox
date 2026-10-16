@@ -78,7 +78,7 @@
 
 - **`--help` 逐行 diff**：1.0.2（187 行）→ 1.0.4（191 行），差异**只有** `--tools` / `--exclude-tools` 的说明文字 + 新增 `--no-mcp`。**零新增 / 删除与 MangoX 相关的 flag。**
 - **1.0.3 的破坏性变更**（Azure provider 改名 `azure-openai-responses` → `azure`）：MangoX 全库（`.swift` / `.md` / `.json`）grep `azure` = **0 命中** ⇒ **不涉及**。（用户手填 `models.json` 片段里的旧键属 §九 R4 的范畴，不是代码问题。）
-- **1.0.4 的 `--tools` 语义变化**（支持 `*` 通配；"未以 `mcp__` 开头就保留 MCP 工具"）：MangoX 只传 `read,bash,write,edit`（`AgentMode.toolAllowlist`），**无 `mcp__*` 条目**；且 MangoX 不启 `builtin:mcp` ⇒ **行为不变**。
+- **1.0.4 的 `--tools` 语义变化**（支持 `*` 通配；"未以 `mcp__` 开头就保留 MCP 工具"）：MangoX 只传 `read,bash,write,edit`（`AgentMode.toolAllowlist`），**无 `mcp__*` 条目**；且 MangoX 不启 `builtin:mcp` ⇒ **行为不变**。> ⚠️ **2026-10-16 补**：属性已改名 `toolListArguments`，且**不再"只传 `read,bash,write,edit`"** —— 常规 / 完整档改传 `+grep,+find,+ls`（见 §1.4 同段补注）。
 - **`--no-mcp`：核过，有意不加 —— 但理由于 2026-10-08 复核后改准。** 实现链：`dist/cli/args.js:163-165`（解析）→ `dist/main.js:634`（`disabledBuiltinExtensions: parsed.noMcp ? ["mcp"] : undefined`）→ 落在 `resource-loader.js:405-406` 那道 filter 上：
   ```js
   const extensionPaths = (this.noExtensions ? cliEnabledExtensions : this.mergePaths(cliEnabledExtensions, enabledExtensions))
@@ -97,7 +97,7 @@
 > **1.1.0 的 CHANGELOG 没有 Breaking Changes 段** —— 这是这个版本最重要的先行信号。
 
 - **`--help` 逐行 diff**：1.0.4（191 行）→ **1.1.0（195 行）**，差异**只有 3 行**：`--tools` 说明下多一句 `Only +name/-name entries add to or remove from the defaults` + Examples 里多一个 `pi --tools +codemode`。**零 flag 增删。**
-- **`--tools` 新语法（`+name` / `-name`）对 MangoX 零影响**：解析在 `dist/core/settings-manager.js:35-55`（`isToolModifier` = 以 `+`/`-` 开头），而 `sdk.js:151` 用 **`options.tools?.some(isToolModifier)`** 决定整份列表的语义 —— **只要有一个 modifier 就整份按增量处理，否则整份就是 allowlist（原样替换，即 1.0.x 的行为）**。MangoX 只传 `read,bash,write,edit`（`AgentMode.toolAllowlist`，无前缀）⇒ 走后者。**额外收获**：`getToolListError` 明确**禁止混用**（`"tool names cannot be mixed with +name or -name entries"`）⇒ 不存在"部分前缀被静默误解"的灰区。
+- **`--tools` 新语法（`+name` / `-name`）对 MangoX 零影响**：解析在 `dist/core/settings-manager.js:35-55`（`isToolModifier` = 以 `+`/`-` 开头），而 `sdk.js:151` 用 **`options.tools?.some(isToolModifier)`** 决定整份列表的语义 —— **只要有一个 modifier 就整份按增量处理，否则整份就是 allowlist（原样替换，即 1.0.x 的行为）**。MangoX 原先只传 `read,bash,write,edit`（`AgentMode.toolAllowlist`，无前缀）⇒ 走后者。**⚠️ 2026-10-16 起**：常规 / 完整档改传 `+grep,+find,+ls` ⇒ **这两档走"增量"分支**（minimal 仍走 allowlist；codemode 走 `+codemode`）。因为**混用被 `getToolListError` 禁止**，每档的列表必须**同质** —— 冒烟 T23 有一条专钉"报『不削扩展工具』的档，每一项必须带 `+`"（否则会被静默按 allowlist 处理、连扩展工具一起裁）。旧名 `toolAllowlist` 也已改名 `toolListArguments`。**额外收获**：`getToolListError` 明确**禁止混用**（`"tool names cannot be mixed with +name or -name entries"`）⇒ 不存在"部分前缀被静默误解"的灰区。
 - **`rpc-types.d.ts` 逐字相同**（477 行，`diff` 退码 0）⇒ **RPC 命令表 / 响应形状 / 扩展 UI 方法集零变化**。
 - **RPC 命令集 33 → 33、会话事件名 37 → 37**（两版 `rpc-mode.js` 的 `case "x"` 与 `agent-session.js` 的 `type: "x"` 集合差均为空）⇒ 无新增 / 删除的命令与事件。
 - **`--no-extensions` 的加载逻辑 `resource-loader.js` 逐字相同**；**内置扩展注册表 `dist/extensions/index.js` 逐字相同**（`llama.cpp` 非 replaceable，`codemode`/`tool-search`/`mcp` replaceable）⇒ **P12.1b 的 `-e builtin:llama.cpp` 契约未变**（§1.3 的 `--no-mcp` 纯冗余判定同样仍成立，R7 的前提没变）。
@@ -142,7 +142,7 @@
 | 14 | 模型物化 | `ModelMaterializer.swift:30-129` | 写 `models.json`（`providers.<p>.{models,baseUrl,api}` + 模型级 `api/reasoning/input/contextWindow/maxTokens/cost/thinkingLevelMap/compat/samplingParams`）+ `auth.json` |
 | 15 | 蒸馏进程 | `MemoryDistiller.swift:47-53` | 同 #3 的扩展段（**调用同一个** `extensionArguments`）+ `--no-session` + `--model` `--thinking` |
 | 16 | 档位语义 | `AgentTransport.swift:115-150` | `ThinkingLevel` 枚举 + `supported(reasoning:map:)`（自称复刻 pi `getSupportedThinkingLevels`） |
-| 17 | 模式 → `--tools` | `AgentMode.swift:35-64` | 极简档 `--tools read,bash,write,edit` |
+| 17 | 模式 → `--tools` | `AgentMode.toolListArguments` | 极简 `read,bash,write,edit`（allowlist 裁到 4）；常规 / 完整 `+grep,+find,+ls`（增补到 7）；codemode `+codemode`（2026-10-16 更新） |
 | 18 | 预设 provider | `ProviderPresets.swift` | 自建 4 家 `deepseek/kimi/minimax/zhipu(GLM)` + `api` 适配器名（P13 砍库，原 8 家；`ollamaStyle` 能力保留给自定义端点） |
 
 ---

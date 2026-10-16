@@ -99,6 +99,11 @@ protocol AgentTransport: AnyObject {
     /// 档位菜单里 ⇒ 主会话也能挂上 dream 扩展）也不做成全局（那会污染别的会话）。
     /// 它同时是 dream 的**第二道闸门**: 只有这一份 transport 知道 spool 在哪。
     func updateDreamSpool(_ spool: String?)
+    /// P10.1b: 下发博查 API Key (nil = 未配置; spawn 期注入 `MANGOX_BOCHA_KEY` env)。
+    ///
+    /// **实例级**, 与 `updateDreamSpool` 同一层 —— 但语义不同: 那个是**任务**语义（只有 dream
+    /// 的那次 fire 有值）, 这个是**配置**投影（本机配没配联网搜索）。变更后需重启引擎才生效。
+    func updateWebSearchKey(_ key: String?)
     /// P10.2b: 本回合 `autoJudge` 档拦下的命令 (回执写"卡在哪"的数据来源; 空 = 无拦截)。
     /// 语义: 调用时机在回合**落定后**、下一次 `send` 前 (send 时清零)。
     var autoJudgeBlocks: [AutoJudgeBlock] { get }

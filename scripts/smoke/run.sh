@@ -78,6 +78,7 @@ DEVELOPER_DIR="$DEV" xcrun swiftc \
     -sdk "$SDK" \
     -target "$ARCH-apple-macos14.0" \
     -D DEBUG \
+    -D SMOKE \
     -o "$OUT/smoke" \
     "$SMOKE_DIR/smokeMain.swift" \
     $SRC

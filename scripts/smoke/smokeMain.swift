@@ -148,6 +148,19 @@ struct SmokeMain {
 
     @MainActor
     static func run() async {
+        // ⚠️ **冒烟的第一道前置**: key store 必须已被隔离 —— 判据是**生效的那个 store 是内存实现**,
+        //    而不是"开关开着"（开关开着但实现没换, 照样会读写用户的真钥匙串）。
+        //    且必须放在**建任何 ChatStore 之前**, 并且**拒绝运行**而不是只报一条 FAIL:
+        //    `ChatStore.init` 尾部无条件跑 `scanExtensions()`, 后者起手读 `bochaKey` ⇒ 隔离一旦失效,
+        //    冒烟里几十个构造点会轮流去读用户真实钥匙串, macOS **疯狂弹授权框**
+        //    （实测 2026-10-16: 只报 FAIL 继续跑的那版, 弹到用户叫停）。
+        //    `as?` 判断本身**不碰钥匙串** ⇒ 这条前置自己不会引发弹窗。
+        guard KeychainModelKeyStore.isSmokeIsolated,
+              KeychainModelKeyStore.current is InMemoryModelKeyStore else {
+            print("FAIL - 守卫 28: 冒烟必须以 `-D SMOKE` 编译且 key store 隔离生效"
+                  + "（否则它会读写用户真实钥匙串）⇒ 拒绝运行")
+            exit(1)
+        }
         let dir = NSTemporaryDirectory() + "mx-smoke-\(UUID().uuidString)"
         try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
         // 全部用例夹具挂到这一个根下 ⇒ `report()` 里"删一个目录"就把它们收干净 (见 `fixturesRoot`)。
@@ -208,6 +221,41 @@ struct SmokeMain {
         PiRpcTransport.sessionDirectoryOverride = piTmp
         check(PiRpcTransport.sessionDirectory.hasPrefix(NSTemporaryDirectory()),
               "守卫 27: 冒烟期 transcript 根重定向到临时目录 (实测 \(PiRpcTransport.sessionDirectory))")
+        // ⚠️ 第五个"生产调用点不传参数"的注入面 —— 但这次不是落盘根, 是**钥匙串**。
+        //    `ChatStore.init` 的 `modelKeyStore:` 是函数级参数, 而 init 尾部**无条件**跑
+        //    `scanExtensions()`, 后者起手读 `bochaKey` ⇒ 没传参数的构造点全都会去读用户真实钥匙串。
+        //    实测 2026-10-16: 0.1.20 发版门禁正卡在这里, 冒烟里 52/58 个 `ChatStore` 构造点没传参数。
+        //    ⚠️ 与 21/22/23/26/27 同族, 但比它们更阴: 那四个漏了是"写脏用户目录", 这个漏了是**卡住 /
+        //    疯狂弹授权框**; 而且它只在"用户配过搜索 key"这一种状态下才暴露（条目不存在时
+        //    `SecItemCopyMatching` 静默回 `errSecItemNotFound`）—— 典型的"测试依赖用户真实状态"。
+        //    ⇒ **隔离本身不是在这里查的**, 而是 `run()` **入口那道 guard**（漏了就拒绝运行）。
+        //      这里只查隔离**生效之后**仍然可能出错的三件事。
+        let ksNow = KeychainModelKeyStore.current as? InMemoryModelKeyStore
+        let ksAgain = KeychainModelKeyStore.current as? InMemoryModelKeyStore
+        check(ksNow != nil && ksNow === ksAgain,
+              "守卫 28b: 冒烟期 key store 是**全进程共享一个实例** (真实钥匙串也是共享的; 每次现建一个新的会让跨 store 断言失真)")
+        // 那条缝本身也要能证明**有效**（否则是个没人读的变量）: 临时换成另一个实例 ⇒ current 跟着换。
+        do {
+            let injected = InMemoryModelKeyStore()
+            KeychainModelKeyStore.keyStoreOverride = injected
+            let takenOver = KeychainModelKeyStore.current as? InMemoryModelKeyStore
+            check(takenOver != nil && takenOver === injected,
+                  "守卫 28c: 进程级 override 真能接管 current")
+            KeychainModelKeyStore.keyStoreOverride = nil
+        }
+        // 端到端: 不带 `modelKeyStore:` 建一个**真** ChatStore ⇒ 它读到的 key 必须来自那个共享内存 store。
+        // 这条才是"init 的回落真的走 current"的证明 —— 上面两条只证明 current 本身对。
+        do {
+            let ksDir = fixtureDir("key-store-guard")
+            let shared = KeychainModelKeyStore.current
+            try? shared.setKey("sk-guard-not-real", account: ChatStore.bochaKeyAccount)
+            let ksStore = ChatStore(transport: MockTransport(), dbPath: ksDir + "/ks.db",
+                                    managedExtensionsDir: ksDir + "/ext")
+            ksStore.mailbox.stopScheduler()
+            check(ksStore.bochaKey == "sk-guard-not-real",
+                  "守卫 28d: 不带 modelKeyStore 的 ChatStore 经 current 读 key (实测 \(ksStore.bochaKey ?? "nil"))")
+            try? shared.deleteKey(account: ChatStore.bochaKeyAccount)   // 自清理: 别影响后面的面板闸门断言
+        }
         // ---- 失败现场修剪 (2026-10-12, boss: "只留最近 3 次失败现场") ----
         // 判据件**必须**指向一个夹具子目录 —— 传 `NSTemporaryDirectory()` 的话, 它会连**本次运行正在用**
         // 的 `fixturesRoot` 一起纳入排序 (名字同样匹配), 一旦被清掉, 后面所有用例的夹具就散在已删的父
@@ -918,6 +966,22 @@ struct SmokeMain {
             check(cm?.command == nil, "T-TOOL codemode 不降级到 command 副列")
             check(cm?.kind.defaultColor == ToolKind.bash.defaultColor,
                   "T-TOOL codemode 与 bash 同族色 (都是「把活干出去」)")
+            // P10.1b 联网搜索: 按名归位到 `.search`, 且**查询词必须占 title**。
+            // ⚠️ 工具名取自 `webSearchToolNames`（**不是**手抄字面量）—— 这样 `kindFor` 那个
+            //    case 与常量一旦漂开, 这条立刻红（同"两处各写一次必然分叉"那条）。
+            // 只改 `kindFor` 不改 `toolHead` 的症状: kind 对了, 但走通用式 (`title = path ?? cmd ?? name`)
+            // ⇒ title 退成工具名、command 恒 nil ⇒ **查询词从卡上消失**（比落 other 还糟）。
+            let wsTool = PiRpcTransport.webSearchToolNames[0]
+            pi.handleRPCLine(#"{"type":"tool_execution_start","toolCallId":"ws1","toolName":"\#(wsTool)","args":{"query":"武汉今天天气","count":10}}"#)
+            let bsearch = lastTool(sink).flatMap { $0 }
+            check(bsearch?.kind == .search,
+                  "T-TOOL \(wsTool) 按名归位到 search (不落 other ⇒ 徽章不再显示 OTHER, 实测 \(String(describing: bsearch?.kind)))")
+            check(bsearch?.kind.label == "search", "T-TOOL 联网搜索徽章 = search (原样工具名不变式之外的单点)")
+            check(bsearch?.title == "武汉今天天气",
+                  "T-TOOL 查询词占 title (走通用式会退成工具名 ⇒ 查询词凭空消失)")
+            check(bsearch?.command == nil, "T-TOOL 联网搜索不降级到 command 副列")
+            check(bsearch?.kind.defaultColor == ToolKind.fetch.defaultColor,
+                  "T-TOOL 联网搜索与 fetch 同族色 (检索族都走 info 冷蓝)")
             // 内置 8 个仍全部正确 (回归)
             for (name, kind) in [("read", ToolKind.read), ("bash", .bash), ("edit", .edit),
                                  ("write", .write), ("find", .find), ("grep", .grep), ("ls", .ls)] {
@@ -1676,10 +1740,20 @@ struct SmokeMain {
             print("== T23 P7-M4: 模式选择器 ==")
             check(AgentMode.spawnArguments(for: .minimal, businessExtensions: ["/x/e.ts"])
                   == ["--tools", "read,bash,write,edit"], "T23 极简档 --tools 白名单, 不挂扩展")
-            check(AgentMode.spawnArguments(for: .standard, businessExtensions: ["/x/e.ts"]).isEmpty,
-                  "T23 常规档零参数 (pi 默认全量内置)")
+            check(AgentMode.spawnArguments(for: .standard, businessExtensions: ["/x/e.ts"])
+                  == ["--tools", "+grep,+find,+ls"], "T23 常规档在 pi 默认 4 个上增补只读三件套 (= 7), 不挂扩展")
             check(AgentMode.spawnArguments(for: .full, businessExtensions: ["/x/e.ts"])
-                  == ["--extension", "/x/e.ts"], "T23 完整档挂业务扩展, 不带 --tools")
+                  == ["--tools", "+grep,+find,+ls", "--extension", "/x/e.ts"],
+                  "T23 完整档 = 常规档那 7 个 + 挂业务扩展 (--tools 段与常规档逐字节相同)")
+            // ⚠️ 判据不自证: `exposesExtensionTools` 是**硬编码档位**、不看 --tools 的实际取值 ——
+            // 谁把 `+grep` 误写成 `grep`（allowlist）, 它照样返回 true、上面两条断言也照样绿,
+            // 实际却把这一档裁成 3 个工具。所以直接把**参数形态**钉住。
+            let additiveModes = AgentMode.allCases.filter(\.exposesExtensionTools)
+            check(!additiveModes.isEmpty && additiveModes.allSatisfy { m in
+                      let items = m.toolListArguments ?? []
+                      return !items.isEmpty && items.allSatisfy { $0.hasPrefix("+") }
+                  },
+                  "T23 报「不削扩展工具」的档, --tools 必须全是增补写法 (+x) —— 写成 allowlist 会静默削掉扩展工具")
             // P13: codemode 层 —— ⚠️ 两条轴("挂上扩展" + "--tools 激活")**必须同进同退**,
             // 分开断言抓不到这条耦合 (少一条就是"挂了却没生效", 且没有红灯)。
             check(AgentMode.spawnArguments(for: .codemode, businessExtensions: ["/x/e.ts"])
@@ -5669,7 +5743,8 @@ struct SmokeMain {
                       "P15.3 补种: 档期也回到**出厂** = 每周日 03:00"
                       + " (实测 \(refilled?.cron ?? "nil") · \(refilledDesc))")
             }
-            // 四个档位到底哪几档会削掉新工具 —— 判据是各档 `--tools` 的语义, 逐档钉住
+            // 四个档位到底哪几档会削掉新工具 —— 判据是各档 `--tools` 的语义, 逐档钉住。
+            // ⚠️ 本属性是**硬编码档位**、不看参数: 参数形态那一面由 T23 的"增补档必须带 `+`"守住。
             check(!AgentMode.minimal.exposesExtensionTools && !AgentMode.codemode.exposesExtensionTools
                     && AgentMode.standard.exposesExtensionTools && AgentMode.full.exposesExtensionTools,
                   "P15.3 档位: minimal / codemode **削掉**扩展注册的工具; standard / full 不削"
@@ -6230,6 +6305,152 @@ struct SmokeMain {
                 check(pe.extensions.contains(where: { $0.name == "mangox-dream" })
                       && pe.extensions.count == before,
                       "P15.7 守卫: 投影项**停不掉也删不掉**（内置名单挡住）—— 面板里它永远在")
+            }
+        }
+
+        // ===== P10.1b (2026-10-15): 联网搜索 —— 自建博查扩展, 零 npm 依赖 =====
+        //
+        // 这一段能红的意义: 这条路的**立项依据**是"别把 150+ 传递依赖拖进来" —— 实测 npm 那条
+        // (`pi-web-access@0.41.0`) 落盘 **82 MB / 10,776 个文件**, 而且离线时会被
+        // `installMissing()` 顶掉、**扩展整段静默消失**。这里能抓的是源码形态 / 闸门判据 /
+        // 面板与 `-e` 列表的联动; 抓不到"博查真的返回了结果"（那要真 key, 冒烟不联网）。
+        do {
+            let wsSrc = PiRpcTransport.webSearchExtensionSource
+
+            // ① 工具名表与源码**同源**（同 dream 那条守: 改源码忘改表 ⇒ 红）。
+            check(!PiRpcTransport.webSearchToolNames.isEmpty
+                  && PiRpcTransport.webSearchToolNames.allSatisfy {
+                      wsSrc.contains("name: \"\($0)\"")
+                  },
+                  "P10.1b 同源: `webSearchToolNames` 每个名字都能在源码里找到 `name: \"…\"`"
+                  + "（实测 \(PiRpcTransport.webSearchToolNames))")
+
+            // ② env 名是**契约 token**: 必须逐字出现在扩展源码里。两边分头改 ⇒ 扩展永远读不到 key,
+            //    而它只会回一句 "not enabled"（看着像"没配置", 其实是常量漂了）—— **零红灯**。
+            check(wsSrc.contains("const KEY_ENV = \"\(PiRpcTransport.webSearchKeyEnvKey)\""),
+                  "P10.1b 契约: 源码 `const KEY_ENV` 与 `webSearchKeyEnvKey` 逐字一致"
+                  + "（实测 \(PiRpcTransport.webSearchKeyEnvKey))")
+
+            // ③ **零依赖** —— 这条就是路线判据本身。谁 import 了别的包, 等于把 82MB 那条路又接了
+            //    回来, 而且伪装成"只是加了一行 import"。允许的只有: type-only 的 pi 包 / typebox / node 内建。
+            let wsImports = wsSrc.split(separator: "\n").map(String.init)
+                .filter { $0.hasPrefix("import ") }
+            check(wsImports.count == 5 && wsImports.allSatisfy {
+                      $0.contains("@earendil-works/pi-coding-agent")
+                      || $0.contains("\"typebox\"") || $0.contains("\"node:")
+                  },
+                  "P10.1b 零依赖: import 只有 type-only 的 pi 包 / typebox / node 内建"
+                  + "（实测 \(wsImports.count) 行: \(wsImports))")
+
+            // ④ 端点**唯一**: 只用 `api.bochaai.com`（与 boss 手搓的 Python 客户端同源）。
+            //    现成那个包用的是 `api.bocha.cn`, 是**另一个域** —— 混进来这里红。
+            check(wsSrc.contains("const ENDPOINT = \"https://api.bochaai.com/v1/web-search\""),
+                  "P10.1b 端点: 与 `autocoder-nano/utils/http_utils.py` 同源"
+                  + "（api.bochaai.com/v1/web-search）")
+
+            // ⑤ 原始字符串的缩进剥干净了（同 dream 那条: 定界符与内容行缩进不一致 ⇒ 写出去的扩展里
+            //    import 不再顶格 —— 照样"看着没事"）。
+            let wsFirst = wsSrc.split(separator: "\n", omittingEmptySubsequences: false)
+                .first.map(String.init) ?? ""
+            check(wsFirst.hasPrefix("// Auto-deployed by MangoX (P10.1b)."),
+                  "P10.1b 常量: 多行字符串首行无前导空白（实测 [\(wsFirst.prefix(34))…])")
+
+            // ⑥ `webSearchEnvironment` 四组合 —— **纯函数**, 这是本段最值钱的一格。
+            check(PiRpcTransport.webSearchEnvironment(existing: nil, key: nil, inherited: [:]) == nil,
+                  "P10.1b env: 谁也不提这个变量 ⇒ **不碰**环境字典"
+                  + "（凭空造一份会把父环境整个复制进去, 含义就变了）")
+            let envSet = PiRpcTransport.webSearchEnvironment(existing: nil, key: "k1",
+                                                            inherited: ["A": "1"]) ?? [:]
+            check(envSet[PiRpcTransport.webSearchKeyEnvKey] == "k1" && envSet["A"] == "1",
+                  "P10.1b env: 有 key ⇒ 设进去, 且以父环境为底（实测 \(envSet))")
+            let envKeep = PiRpcTransport.webSearchEnvironment(existing: ["B": "2"], key: "k2",
+                                                             inherited: ["A": "1"]) ?? [:]
+            check(envKeep["B"] == "2" && envKeep["A"] == nil
+                  && envKeep[PiRpcTransport.webSearchKeyEnvKey] == "k2",
+                  "P10.1b env: 已有环境字典**优先**于父环境（把 inherited 整个并进来 ⇒ 含义就变了）")
+            // 反例（这一格是本段的核心）: 父进程残留同名变量 + App 没配 key ⇒ **必须删掉它**。
+            // 不删的话「面板说未配置」与「扩展拿到了 key」同时为真, 而且**零红灯**。
+            let envLeak = PiRpcTransport.webSearchEnvironment(
+                existing: nil, key: nil, inherited: [PiRpcTransport.webSearchKeyEnvKey: "leak"])
+            check(envLeak.map { $0[PiRpcTransport.webSearchKeyEnvKey] == nil } == true,
+                  "P10.1b env 反例: 父残留 + 没配 key ⇒ 键被**删掉**（实测 \(String(describing: envLeak)))")
+
+            // ⑦ 面板闸门 + 落地 + 下发: 全走**夹具目录**, 一个字节都不碰 ~/.mangox。
+            let wsDir = fixtureDir("p10.1c")
+            let wsBlockedMock = MockTransport()
+            let wsA = ChatStore(transport: wsBlockedMock, dbPath: wsDir + "/a.db",
+                                managedExtensionsDir: wsDir + "/ext-a",
+                                modelKeyStore: InMemoryModelKeyStore())
+            wsA.mailbox.stopScheduler()
+            wsA.scanExtensions()
+            let blockedRow = wsA.extensions.first { $0.name == "mangox-web-search" }
+            check(blockedRow != nil,
+                  "P10.1b 面板: **没配 key 也有这一行**（扩展无条件落地, 与 approval 同判据）"
+                  + " —— 少了它, \"去设置里填 Key\"那条线索在界面上不存在")
+            check(blockedRow.flatMap { $0.blockedReason } == .needsBochaKey,
+                  "P10.1b 闸门: 没 key ⇒ blockedReason 必须说得出原因")
+            check(blockedRow?.enabled == false,
+                  "P10.1b 闸门: 没 key ⇒ enabled 被**压成 false**（漏压 ⇒ 面板说\"开着\"而它挂不上）")
+            check(!(wsBlockedMock.lastDesiredExtensions ?? [])
+                    .contains(where: { $0.hasSuffix("mangox-web-search.ts") }),
+                  "P10.1b 闸门: 没 key ⇒ **不进** spawn 的 -e 列表"
+                  + "（实测 \(String(describing: wsBlockedMock.lastDesiredExtensions)))")
+
+            // ⑧ 归属拆分 —— 这是加 web-search 时新拆出来的两个集合, 一个都不能合回去:
+            //    `builtInNames` = 不可删除（删了下次重扫又写回来, 那是打地鼠）;
+            //    `unswitchableNames` = 不可停用。web-search 是"前是后否"。
+            check(ExtensionItem.builtInNames.contains("mangox-web-search"),
+                  "P10.1b 归属: web-search 算**自带** ⇒ 不可删除")
+            check(!ExtensionItem.unswitchableNames.contains("mangox-web-search"),
+                  "P10.1b 归属 反例: web-search **必须能停用** —— 塞进 unswitchableNames 就是"
+                  + "\"标记比事实说得多\"（面板会说不许停, 而代码其实允许）")
+
+            // ⑨ 配好 key: 胶囊消失、进 -e 列表、文件真在磁盘上、key 推到 transport。
+            let wsLiveMock = MockTransport()
+            let wsB = ChatStore(transport: wsLiveMock, dbPath: wsDir + "/b.db",
+                                managedExtensionsDir: wsDir + "/ext-b",
+                                modelKeyStore: InMemoryModelKeyStore())
+            wsB.mailbox.stopScheduler()
+            check(wsB.bochaKey == nil, "P10.1b 初始: 没配 key ⇒ bochaKey 为 nil（空串也算没配）")
+            wsB.setBochaKey("sk-test-1")
+            let liveRow = wsB.extensions.first { $0.name == "mangox-web-search" }
+            check(liveRow != nil, "P10.1b 配按键: 保存之后那一行仍在")
+            check(liveRow.flatMap { $0.blockedReason } == nil, "P10.1b 配按键: 配好 key ⇒ 挂不上胶囊消失")
+            check(liveRow?.enabled == true, "P10.1b 配按键: 配好 key ⇒ 开关变成\"开着\"")
+            check(liveRow.map { FileManager.default.fileExists(atPath: $0.path) } == true,
+                  "P10.1b 落地: `.ts` 真在磁盘上（路径 = 夹具, 不碰 ~/.mangox）"
+                  + "（实测 \(String(describing: liveRow?.path)))")
+            check((wsLiveMock.lastDesiredExtensions ?? [])
+                    .contains(where: { $0.hasSuffix("mangox-web-search.ts") }),
+                  "P10.1b 下发: 配好 key ⇒ **进** -e 列表"
+                  + "（实测 \(String(describing: wsLiveMock.lastDesiredExtensions)))")
+            check(wsLiveMock.lastWebSearchKey == "sk-test-1",
+                  "P10.1b 下发: key 作为**配置投影**推到了 transport"
+                  + "（实测 \(String(describing: wsLiveMock.lastWebSearchKey)))")
+
+            // ⑩ 清 key: 必须**把 nil 推下去**（留旧值 ⇒ 面板说没配、子进程却还带着旧 key）;
+            //    文件**留着**（我们从不删它）⇒ 那一行回到"挂不上 + 说得出原因"。
+            wsB.setBochaKey("   ")          // 空白串 = 清除
+            check(wsB.bochaKey == nil, "P10.1b 清除: 空白串按清除处理（trim 后为空 ⇒ 删 Keychain 条目）")
+            check(wsLiveMock.lastWebSearchKey == nil && wsLiveMock.webSearchKeyUpdates >= 2,
+                  "P10.1b 清除: 下发的是 **nil**, 不是停在旧值上"
+                  + "（实测 last=\(String(describing: wsLiveMock.lastWebSearchKey))"
+                  + " n=\(wsLiveMock.webSearchKeyUpdates))")
+            let clearedRow = wsB.extensions.first { $0.name == "mangox-web-search" }
+            check(clearedRow != nil, "P10.1b 清除: 文件留着 ⇒ 那一行还在")
+            check(clearedRow.flatMap { $0.blockedReason } == .needsBochaKey
+                  && clearedRow?.enabled == false,
+                  "P10.1b 清除: 回到\"挂不上 + 说得出原因\"（enabled 又被压回 false）")
+
+            // ⑪ 删除守卫: 自带项删不掉（删了下次重扫又写回来 = 打地鼠; 这一条就是抓那个的）。
+            if let row = clearedRow {
+                let before = wsB.extensions.count
+                wsB.deleteExtension(row)
+                check(wsB.extensions.count == before
+                      && wsB.extensions.contains(where: { $0.name == "mangox-web-search" }),
+                      "P10.1b 守卫: 自带项**删不掉** —— 少了这道, 面板里点\"删除\"就是点一下又回来")
+            } else {
+                check(false, "P10.1b 守卫: 夹具里必须真的存在那一行（否则上面那条是空转的假绿）")
             }
         }
 
