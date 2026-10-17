@@ -12,14 +12,11 @@ private struct ChatContentBottomKey: PreferenceKey {
     static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
 }
 
-private struct ChatViewportHeightKey: PreferenceKey {
-    static var defaultValue: CGFloat = 0
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
-}
-
 struct ChatView: View {
     @ObservedObject var store: ChatStore
     @State private var viewportHeight: CGFloat = 0
+    /// 最近一次内容底读数 —— 视口高**后到**时靠它重判（见 `refreshViewport`），否则判据会停在错的档上。
+    @State private var lastBottomY: CGFloat = 0
     @State private var nearBottom = true   // 初始视为在底部 (初屏定位 = scrollContent 的 onAppear)
     /// 自动滚动同帧合并标记: 流式期同帧多个 chunk 只调度一次滚动 (防 "update multiple times per frame")。
     @State private var scrollScheduled = false
@@ -37,30 +34,11 @@ struct ChatView: View {
         }
     }
 
-    // MARK: - P9-#9 滚动探针 (独立成员: 拆小表达式避免类型检查超时)
-
-    private var contentBottomProbe: some View {
-        GeometryReader { g in
-            Color.clear.preference(key: ChatContentBottomKey.self,
-                                   value: g.frame(in: .named("chatScroll")).maxY)
-        }
-    }
-
-    private var viewportHeightProbe: some View {
-        GeometryReader { g in
-            Color.clear.preference(key: ChatViewportHeightKey.self,
-                                   value: g.frame(in: .named("chatScroll")).height)
-        }
-    }
-
-    /// 视口高度只在布局/窗口变化时更新 (滚动中恒定)。
-    private func handleViewportHeight(_ h: CGFloat) {
-        viewportHeight = h
-    }
+    // MARK: - P9-#9 滚动判据
 
     /// 「是否已贴底」的**唯一判据** —— 抽成纯函数是为了**可断言**（冒烟 T-UI 守着它）。
     ///
-    /// `contentBottomY` = 内容底相对**视口顶**的 y（`contentBottomProbe` 报的那个数）。
+    /// `contentBottomY` = 内容底相对**视口顶**的 y（`messageBlocks` 末尾那枚探针报的数）。
     /// 2026-10-16 实测它的三个取值（一次性探针，读数见当日 log）：长内容滚到顶 = **内容高**、
     /// 滚到底 = **视口高**、内容不满一屏 = **内容高**。据此「距视口底」= `contentBottomY - viewportHeight`，
     /// 落进 140pt 内才算跟随区。
@@ -69,19 +47,48 @@ struct ChatView: View {
     ///    它对**任何**超出一屏的内容恒为 `true` ⇒ `guard nearBottom` 形同虚设 ⇒ P9-#9 那条
     ///    「上滑阅读不拽回」**一直没有真正生效**（同一处还让"不满一屏"被误判成 `false`）。
     ///    症状是静默的（自动跟随照跑），所以只靠读代码看不出来 —— 这条断言就是为了不让它再翻回去。
+    /// ⚠️ `viewportHeight == 0` 的兜底**不是**判"在底部"，是判"还没量到"（首帧）。它曾经是个
+    ///    长期谎言：探针挂错位置 ⇒ 视口高恒 0 ⇒ 这一支永远命中 ⇒ `nearBottom` 恒 true。
+    ///    现在视口高由 `messageList` 外层 `GeometryReader` 直接赋值，这一支只在首帧成立。
     static func isNearBottom(contentBottomY: CGFloat, viewportHeight: CGFloat) -> Bool {
         viewportHeight == 0 ? true : contentBottomY < viewportHeight + 140
     }
 
     /// 内容底进入视口底 140pt 内 = 跟随区 (Bool 去重, 不随滚动帧重渲染)。
     private func handleContentBottom(_ bottomY: CGFloat) {
+        lastBottomY = bottomY
         let v = ChatView.isNearBottom(contentBottomY: bottomY, viewportHeight: viewportHeight)
         if nearBottom != v { nearBottom = v }   // 等值不写, 防 PreferenceKey 高频触发失效性更新
     }
 
+    /// 视口高度变了就**用已知的内容底重判一次**。
+    ///
+    /// ⚠️ 少了这一步就有一个真实的错窗：内容底偏好可能**先于**视口高到达 —— 那时
+    ///    `viewportHeight` 还是 0、判据走 `== 0 ? true` 兜底（判"在底部"）。视口高稍后到达，
+    ///    但若用户没动、内容也没变，`handleContentBottom` 不会再被触发 ⇒ `nearBottom` 就停在
+    ///    那个错的 `true` 上，直到下一次滚动才纠正（症状：「明明在上头看历史，新消息还是把
+    ///    你拽回底部」——正是 P9-#9 要禁止的那件事）。
+    private func refreshViewport(_ h: CGFloat) {
+        guard viewportHeight != h else { return }
+        viewportHeight = h
+        if lastBottomY > 0 { handleContentBottom(lastBottomY) }
+    }
+
+    /// ⚠️ 外面这层 `GeometryReader` 是**视口高度的唯一真源**（2026-10-16 上机实测定的）。
+    ///    原来把它做成一枚 `.background(...)` 里的 preference 探针：实测 `GeometryReader`
+    ///    内部读数**完全正确**（视口高 642/670、内容底 24141 且随滚动变化），但**传到父层恒为 0**
+    ///    —— `.background()` / `.overlay()` 是装饰层，其 preference 不并入被装饰视图的 primary
+    ///    preference ⇒ `onPreferenceChange` 只收到 `defaultValue`。后果是 `isNearBottom` 一直走
+    ///    `viewportHeight == 0 ? true` 的兜底 ⇒ `nearBottom` **恒 true** ⇒ ① 「回到最新」永不出现
+    ///    ② P9-#9「上滑阅读不拽回」其实从未生效（0.1.22 只改了判据方向，输入是 0 等于没修）。
+    ///    ⇒ 这里**直接赋值、不走 preference**；`ChatViewportHeightKey` 随之整条删掉。
     private var messageList: some View {
-        ScrollViewReader { proxy in
-            scrollColumn(proxy)
+        GeometryReader { outer in
+            ScrollViewReader { proxy in
+                scrollColumn(proxy)
+            }
+            .onAppear { refreshViewport(outer.size.height) }
+            .onChange(of: outer.size.height) { _, h in refreshViewport(h) }
         }
     }
 
@@ -123,8 +130,8 @@ struct ChatView: View {
             scrollContent(proxy)
                 // 回到最新: 浮层挂在 ScrollView 上 (不占布局流, 不与内容互相挤压)
                 // ⚠️ `!store.messages.isEmpty` 不只是"没消息就没得回" —— 空态**根本不挂**
-                //    `contentBottomProbe`(见 scrollContent 的 if), 此时 `bottomY` 会停在旧值或偏好
-                //    默认 `0`, 靠它单个判据会得到幽灵按钮。
+                //    内容底探针（它住在 `messageBlocks` 的 LazyVStack 末尾，见那里注释），
+                //    此时 `bottomY` 会停在旧值或偏好默认 `0`, 靠它单个判据会得到幽灵按钮。
                 // ⚠️ `.animation(value:)` 必须挂在 `if` 的**父层**（挂在条件分支自己身上,
                 //    insertion / removal 的 transition 不会动）; 但父层要选**只罩住按钮**的那一层 ——
                 //    挂到 `scrollContent` 上就等于把动画广播进整个 ScrollView 子树(消息/滚动都在里头)。
@@ -174,12 +181,9 @@ struct ChatView: View {
                 }
             } else {
                 messageBlocks
-                    .background(contentBottomProbe)   // P9-#9: 内容底部探针 (视口坐标系, 随滚动实时变化)
             }
         }
-        .background(viewportHeightProbe)      // P9-#9: 视口高度探针 (挂 ScrollView 自身, 不随内容滚动)
         .coordinateSpace(name: "chatScroll")
-        .onPreferenceChange(ChatViewportHeightKey.self) { handleViewportHeight($0) }
         .onPreferenceChange(ChatContentBottomKey.self) { handleContentBottom($0) }
         // ⚠️ 这里**不能**用锚底 (`defaultScrollAnchor(.bottom)`) —— 它会在**内容尺寸变化时重新
         //    锚底**: 展开任意一行, 整列都跳一下, 体感"点了 A 打开了 B"(与 TrajectoryView:153
@@ -282,6 +286,18 @@ struct ChatView: View {
                 .padding(.leading, 4)
                 .id("streaming-tail")
             }
+
+            // P9-#9: 内容底部探针。⚠️ 必须是**内容树里的真实子视图** —— 它原来挂在
+            // `messageBlocks.background(...)` 上，而 `.background` / `.overlay` 的 preference
+            // **不向父层传播**（上机实测：内部算得全对、父层恒收 0）⇒ 判据永远是兜底值。
+            // `frame(height: 0)` 让它不占高度；`.padding(.top, -spacing)` 抵掉 LazyVStack
+            // 在它前面插的那一档块距，否则内容底凭空多 10pt、底部留白从 18 变 28。
+            GeometryReader { g in
+                Color.clear.preference(key: ChatContentBottomKey.self,
+                                       value: g.frame(in: .named("chatScroll")).maxY)
+            }
+            .frame(height: 0)
+            .padding(.top, -Tune.chatBlockSpacing)
         }
         .padding(.horizontal, Tune.chatHPadding)
         .padding(.vertical, Tune.chatVPadding)

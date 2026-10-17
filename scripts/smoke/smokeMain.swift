@@ -3568,6 +3568,33 @@ struct SmokeMain {
         check(ChatView.isNearBottom(contentBottomY: 999, viewportHeight: 0),
               "T-UI 贴底判据: 视口还没量到 (0) = 先当贴底, 不抢在初屏定位之前插手")
 
+        // ---- 探针形态门 (2026-10-17) ----
+        // 上面那串判据守的是**公式**，这一组守的是**输入从哪来** —— 公式全绿、输入恒 0 的
+        // 组合在 0.1.22 真实发生过一整版。当时两枚探针都挂在 `.background(...)` 里，
+        // 2026-10-17 离屏实测（同结构最小复现，NSHostingView 600x500 / 内容约 2400pt）：
+        //     探针在内容树  → 视口高 500.0、内容底 **2390.0**（对）
+        //     探针在 .background → 内容底 **0.0**（`.background`/`.overlay` 属装饰层，
+        //                          preference 不并入被装饰视图的 primary preference
+        //                          ⇒ `onPreferenceChange` 只收到 defaultValue）
+        // 后果：判据永远走 `viewportHeight == 0 ? true` 兜底 ⇒ 「回到最新」永不出现、
+        // P9-#9「上滑阅读不拽回」也从未生效，且**编译零 warning、公式断言全绿**。
+        // ⇒ 把形态本身钉住，防止有人"顺手"把探针挪回 background / 改回 preference 传视口高。
+        let chatSrc = (try? String(
+            contentsOf: URL(fileURLWithPath: #filePath)
+                .deletingLastPathComponent().deletingLastPathComponent()
+                .deletingLastPathComponent()
+                .appendingPathComponent("mangox/Views/Chat/ChatView.swift"),
+            encoding: .utf8)) ?? ""
+        check(!chatSrc.isEmpty, "T-UI 探针形态门: 能读到 ChatView.swift (实测 \(chatSrc.count) 字符)")
+        // ⚠️ 判据用 `ChatViewportHeightKey.self` 而不是裸名字 —— 代码里的**注释**会提到这个
+        //    历史名字（解释它为什么被删），拿裸名字当判据会被注释误伤成假红（2026-10-17 实测踩到）。
+        check(!chatSrc.contains("ChatViewportHeightKey.self"),
+              "T-UI 探针形态门: 视口高不走 preference (它在 .background 里传不出来, 离屏实测恒 0)")
+        check(!chatSrc.contains(".background(contentBottomProbe)"),
+              "T-UI 探针形态门: 内容底探针不挂在 .background 上 (离屏实测传 0, 内容树里传 2390)")
+        check(chatSrc.contains("padding(.top, -Tune.chatBlockSpacing)"),
+              "T-UI 探针形态门: 内容底探针抵掉了 LazyVStack 那档块距 (否则内容底凭空多 10pt、底部留白 18→28)")
+
         // ===== T-COLOR (P10.8): 暗色板舒适区 =====
         // 起因: boss 反馈"黑色主题看着眼睛很累"。采样截图 + 算 WCAG 定位到**两级**问题:
         //  ① 旧值近纯黑底(#0D0D10, 亮度 0.0041) 压近纯白正文(#EDEDED) = 对比度 16.6:1
