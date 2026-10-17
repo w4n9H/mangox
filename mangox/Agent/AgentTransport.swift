@@ -34,6 +34,18 @@ enum AgentEvent {
     case usageTick(SessionStats)
     /// P6.1.2: 回合过程态 (agent_start/auto_retry/compaction/queue/summarization 驱动)。
     case phaseChanged(RuntimePhase)
+    /// 上下文压缩**成功** (pi `compaction_end` 带 result)。
+    ///
+    /// 与 `.extensionNotify` 那条一次性横幅**并存**, 两者管的是不同的事:
+    /// 横幅说"刚刚发生了什么"(8s 后消失), 这个事件让 Store 在消息流里落一条**常驻**标记,
+    /// 并在当场改写上下文统计 (pi 压缩后 `contextUsage.tokens/percent` 报 null,
+    /// 不接管的话底栏会一直挂着**压缩前**的旧百分比)。
+    /// ⚠️ 中止/失败**不发**这个事件 —— 什么都没变, 只留横幅 (与 `.compaction` case 的立场一致)。
+    /// `reason` = pi 原值 (`manual` / `threshold` / `overflow`)。
+    /// **刻意是 String 不是枚举**: 这是第三方契约值, pi 加第四种原因时, 枚举要么 decode 失败
+    /// 把整条事实丢掉, 要么得写自定义容错; 而 UI 只需要分辨「用户手动」与「引擎自动」两档 ——
+    /// 把判据放在渲染期, 不认识的原因也能照实保留下来。
+    case contextCompacted(tokensBefore: Int, tokensAfter: Int, reason: String)
     case streamEnded
 }
 

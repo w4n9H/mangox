@@ -1,0 +1,51 @@
+{
+  "_note": "pi 契约基线 —— 由 scripts/diag/pi_upgrade_probe.py --update-baseline 生成。升级 pi 后若体检全过，就更新这一份；它是\"上次确认可用\"的唯一记录。",
+  "piVersion": "1.3.0",
+  "verifiedAt": "2026-10-17",
+  "rpcDataKeys": {
+    "get_state": [
+      "autoCompactionEnabled",
+      "followUpMode",
+      "isCompacting",
+      "isStreaming",
+      "messageCount",
+      "model",
+      "pendingMessageCount",
+      "sessionId",
+      "steeringMode",
+      "thinkingLevel"
+    ],
+    "get_available_models": [
+      "models"
+    ],
+    "get_session_stats": [
+      "assistantMessages",
+      "cost",
+      "sessionId",
+      "tokens",
+      "toolCalls",
+      "toolResults",
+      "totalMessages",
+      "userMessages"
+    ]
+  },
+  "cliFlags": [
+    "--mode",
+    "--session",
+    "--session-dir",
+    "--fork",
+    "--no-session",
+    "--extension",
+    "--no-extensions",
+    "--tools",
+    "--append-system-prompt",
+    "--model",
+    "--thinking"
+  ],
+  "extensions": [
+    "mangox-approval.ts",
+    "mangox-codemode.ts",
+    "mangox-dream.ts",
+    "mangox-web-search.ts"
+  ]
+}

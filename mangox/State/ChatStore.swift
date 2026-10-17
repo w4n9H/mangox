@@ -2113,6 +2113,24 @@ extension ChatStore: AgentTransportDelegate {
             // P6.0②: 扩展 fire-and-forget 通知 → 底栏横幅 (8s 自清; error/warning 用错误样式)。
             setExtensionNotice(message, isError: type == "error" || type == "warning")
 
+        case .contextCompacted(let before, let after, let reason):
+            // A: 常驻标记 —— 与一次性横幅**同时**存在, 一个管"此刻", 一个管"回看"。
+            // 视图/后台同构处理 (后台会话写 liveTurns 镜像, 切回来时随迁移并入 messages)。
+            // ⚠️ 这条**不过 `inView` 守卫**: 后台会话压缩完, 用户切回来时必须看到它发生过
+            //    (横幅那条会挂到别的会话上, 见 .extensionNotify 缺 inView 的已知偏差)。
+            let marker = ChatMessage(role: .system,
+                                     content: .compaction(tokensBefore: before,
+                                                          tokensAfter: after,
+                                                          reason: reason))
+            if inView {
+                messages.append(marker)
+            } else {
+                liveTurns[sid, default: []].append(marker)
+            }
+            persistMessage(marker, sid: sid)   // 重启重放要能重建这条事实
+            // B: 当场改写上下文统计 (仅当前选中会话 —— sessionStats 只服务它)
+            if inView { applyCompactionTokens(after) }
+
         case .usageTick(let stats):
             // P6.1.1: 流式期用量 tick (仅前台会话; context% 缺省沿用最近一次上报)
             guard inView else { break }
@@ -2370,6 +2388,25 @@ extension ChatStore: AgentTransportDelegate {
         var merged = s
         if merged.contextPercent == nil { merged.contextPercent = sessionStats?.contextPercent }
         sessionStats = merged
+    }
+
+    /// B: 压缩成功后**立刻**用 pi 的 `estimatedTokensAfter` 改写上下文统计。
+    ///
+    /// 为什么必须做: pi 压缩后把 `contextUsage.tokens/percent` 报成 **null**
+    /// (`rpc-commands.md`: "null immediately after compaction until a fresh
+    /// post-compaction assistant response provides valid usage data"), 而
+    /// `applySessionStats` 遇到 null 是**沿用上次的值** ⇒ 底栏会一直挂着**压缩前**
+    /// 那个百分比, 直到下一次 settled 上报。数字是错的, 但看不出错 —— 这正是 B 要堵的洞。
+    ///
+    /// 改写的是 pi 自己给的估算值, 下一次完整上报到达后自然被真值覆盖; 窗口未知时
+    /// 百分比留 nil (UI 显示 "--"), 不猜一个分母。
+    private func applyCompactionTokens(_ tokens: Int) {
+        var s = sessionStats ?? SessionStats()
+        s.contextTokens = tokens
+        s.contextPercent = s.contextWindow > 0
+            ? Double(tokens) / Double(s.contextWindow) * 100
+            : nil
+        sessionStats = s
     }
 
     // MARK: - P6.2.3: Trace HTML 导出

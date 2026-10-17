@@ -51,6 +51,13 @@ final class PiRpcTransport: AgentTransport {
     internal private(set) var sentCommands: [[String: Any]] = []
     /// P6.1.1: 流式期 usage tick 节流 (500ms)。
     private var lastUsageTickAt = Date.distantPast
+    /// 最近一次**完整**会话统计 (get_session_stats 的解析结果)。`usageTick` 以它为底稿,
+    /// 只覆写用量字段 —— 见 `noteLiveUsage` 里那条"整结构体替换"的坑。
+    private var lastFullStats: SessionStats?
+    /// spawn 期解析的压缩预算 (见 `PiCompactionBudget`)。0 = 未知。
+    /// 只在 spawn 定格: 它是 pi 的**配置**投影, 进程复用期间改了文件也不会重新生效
+    /// (pi 自己也是 spawn 期读一次) ⇒ 跟着进程生命周期走才能与 pi 口径一致。
+    private var resolvedReserveTokens = 0
     /// P6.1.1: settled 后拉 get_session_stats, 响应到达再拆进程 (2s 兜底强拆)。
     private var settleStatsPending = false
     private var settleStatsTask: Task<Void, Never>?
@@ -1302,13 +1309,25 @@ final class PiRpcTransport: AgentTransport {
         p.executableURL = URL(fileURLWithPath: spec.executable)
         // P7-M3: 自管模型物化 — 有自管模型才注入 (覆盖整个配置目录, 与 ~/.pi/agent 互不相干);
         // 指纹不变由 writeIfNeeded 跳写, 避免 spawn 期磁盘搅动。
+        //
+        // ⚠️ 这一支同时决定**压缩预算从哪个文件读**: `PI_CODING_AGENT_DIR` 一改, pi 就只读
+        //    该目录的 settings.json, `~/.pi/agent/settings.json` **一个字节都不参与**。
+        //    底栏那条「压缩线」必须跟着同一个判据走 (读错文件 = 画一条永远不会发生的线,
+        //    而且零红灯), 所以 `agentDirOverride` 在这里定格后立刻交给解析器。
+        var agentDirOverride: URL?
         if let cfg = piConfig, cfg.modelCount > 0 {
             let dir = ModelMaterializer.configDirectory()
             if (try? ModelMaterializer.writeIfNeeded(cfg, to: dir)) != nil {
                 p.environment = ProcessInfo.processInfo.environment
                 p.environment?["PI_CODING_AGENT_DIR"] = dir.path
+                agentDirOverride = dir
             }
         }
+        // 压缩预算 (只供底栏画线; 不参与我们这边任何行为) —— 与 pi 同口径: spawn 期读一次。
+        resolvedReserveTokens = PiCompactionBudget.reserveTokens(
+            agentDirOverride: agentDirOverride,
+            projectDir: URL(fileURLWithPath: cwd, isDirectory: true),
+            model: desiredModel)
         // P15.3: 双闸门的第二道 —— spool 路径只经 env 下发, 且只有 dream 的 spawn 会设它。
         //
         // ⚠️ **必须显式给 `p.environment` 赋值, 不能写 `p.environment?[...] = x` 就算完** ——
@@ -1720,6 +1739,8 @@ final class PiRpcTransport: AgentTransport {
         case "compaction_end":
             // 一次性横幅 (复用 extensionNotify 通道); 压缩后 run 继续 (overflow 场景 willRetry 重试)
             emitCompactionBanner(dict)
+            // 常驻标记 + 当场改写上下文统计 (成功才发; 中止/失败什么都没变, 见 AgentEvent 注释)
+            emitCompactionMarker(dict)
             emit(.phaseChanged(.streaming))
 
         case "summarization_retry_scheduled", "summarization_retry_attempt_start":
@@ -1999,7 +2020,9 @@ final class PiRpcTransport: AgentTransport {
             }
         case "get_session_stats":
             // P6.1.1: 会话统计上报 (spawn 期 + settled 拆进程前各拉一次)
-            delegate?.transport(self, didReportSessionStats: Self.parseSessionStats(data))
+            let full = Self.parseSessionStats(data, reserveTokens: resolvedReserveTokens)
+            lastFullStats = full                 // usageTick 的底稿 (见 noteLiveUsage)
+            delegate?.transport(self, didReportSessionStats: full)
             if settleStatsPending {
                 settleStatsPending = false
                 settleStatsTask?.cancel()
@@ -2049,15 +2072,38 @@ final class PiRpcTransport: AgentTransport {
         emit(.extensionNotify(type: aborted ? "warning" : "info", message: String(message.prefix(200))))
     }
 
+    /// A: `compaction_end` 带 result ⇒ 一条**常驻**事实 (消息流系统标记 + 改写上下文统计)。
+    ///
+    /// 判据只看 `result != nil` 且 `aborted != true` —— 这与横幅那边"三路"的判据**有意不同**:
+    /// 横幅要覆盖失败/中止(用户此刻需要知道), 而常驻行只记"发生了改变"的事。
+    /// `estimatedTokensAfter` 缺失时也**不发** —— 一条说不出代价的标记没有信息量。
+    private func emitCompactionMarker(_ dict: [String: Any]) {
+        guard dict["aborted"] as? Bool != true,
+              let result = dict["result"] as? [String: Any],
+              let after = result["estimatedTokensAfter"] as? Int else { return }
+        let before = result["tokensBefore"] as? Int ?? 0
+        // reason 缺失时给空串而不是猜 "threshold": 标记上"不知道谁触发的"是诚实,
+        // 猜成自动压缩则是编事实 (它可能来自我们以后要加的手动入口)。
+        emit(.contextCompacted(tokensBefore: before, tokensAfter: after,
+                               reason: dict["reason"] as? String ?? ""))
+    }
+
     /// message_update 顶层累计 usage → usageTick (500ms 节流)。
     /// 流式 usage 无 context%, contextPercent 留 nil 由 Store 沿用最近一次上报。
+    ///
+    /// ⚠️ **必须带上 context 三件套** (`contextTokens` / `contextWindow` / `contextReserveTokens`)。
+    ///    `.usageTick` 是**增量投影**, 而 Store 侧 `applySessionStats` 是**整结构体替换**
+    ///    (只对 percent 做 nil 兜底) —— 早先这里每个 tick 都新建一个空 `SessionStats`,
+    ///    于是 `contextWindow` / `contextReserveTokens` 在第一个 tick 就被清成 0:
+    ///    底栏那条「压缩线」会随即消失, 且**零红灯**(0 读起来就是"未知")。
+    ///    修法是让 tick 从最近一次**完整**上报继承底稿, 只覆写用量那几项。
     private func noteLiveUsage(_ u: [String: Any]) {
-        let stats = SessionStats(
-            contextPercent: nil,
-            inputTokens: u["input"] as? Int ?? 0,
-            outputTokens: u["output"] as? Int ?? 0,
-            cacheReadTokens: u["cacheRead"] as? Int ?? 0,
-            costUSD: (u["cost"] as? [String: Any])?["total"] as? Double)
+        var stats = lastFullStats ?? SessionStats()
+        stats.contextPercent = nil
+        stats.inputTokens = u["input"] as? Int ?? 0
+        stats.outputTokens = u["output"] as? Int ?? 0
+        stats.cacheReadTokens = u["cacheRead"] as? Int ?? 0
+        stats.costUSD = (u["cost"] as? [String: Any])?["total"] as? Double
         let now = Date()
         guard now.timeIntervalSince(lastUsageTickAt) >= 0.5 else { return }
         lastUsageTickAt = now
@@ -2065,7 +2111,10 @@ final class PiRpcTransport: AgentTransport {
     }
 
     /// get_session_stats data → SessionStats (字段缺失容忍; percent null → nil)。
-    private static func parseSessionStats(_ data: [String: Any]) -> SessionStats {
+    /// `reserveTokens` 由调用方给 (spawn 期解析的压缩预算, 0 = 未知) —— 这个文件是无状态
+    /// 的解析函数, 刻意不自己去读盘 (它会被冒烟直接喂 JSON 断言)。
+    private static func parseSessionStats(_ data: [String: Any],
+                                          reserveTokens: Int = 0) -> SessionStats {
         func int(_ v: Any?) -> Int { v as? Int ?? 0 }
         func dbl(_ v: Any?) -> Double? {
             if let d = v as? Double { return d }
@@ -2078,6 +2127,7 @@ final class PiRpcTransport: AgentTransport {
             contextPercent: dbl(c["percent"]),
             contextTokens: int(c["tokens"]),
             contextWindow: int(c["contextWindow"]),
+            contextReserveTokens: reserveTokens,
             inputTokens: int(t["input"]),
             outputTokens: int(t["output"]),
             cacheReadTokens: int(t["cacheRead"]),

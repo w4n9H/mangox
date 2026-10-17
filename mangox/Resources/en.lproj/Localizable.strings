@@ -7,7 +7,7 @@
    **本文件由 scripts/l10n/gen_strings.py --write 生成, 别手改** ——
    译文改 scripts/l10n/en_values.py 的 VALUES, 再跑 --write。
 
-   条数: 691
+   条数: 700
 */
 
 " [附件: %@]" = " [Attachment: %@]";
@@ -112,9 +112,13 @@
 "一行一个地址; 名单外的信静默丢弃并移入 Trash" = "One address per line; mail from anyone else is silently dropped and moved to Trash.";
 "三" = "Wed";
 "上下文 %@" = "Context %@";
+"上下文 %@ / 压缩线 %@" = "Context %@ / compaction line %@";
 "上下文压缩失败：%@" = "Context compaction failed: %@";
 "上下文压缩完成：%lld → %lld tokens" = "Context compacted: %lld → %lld tokens";
 "上下文压缩已中止" = "Context compaction aborted";
+"上下文已压缩 · %lld → %lld tokens" = "Context compacted · %lld → %lld tokens";
+"上下文自动压缩（接近上限）· %lld → %lld tokens" = "Context auto-compacted (near limit) · %lld → %lld tokens";
+"上下文自动压缩（溢出恢复）· %lld → %lld tokens" = "Context auto-compacted (overflow recovery) · %lld → %lld tokens";
 "上次 %@" = "%@ last time";
 "上次收信 %@" = "Last received %@";
 "上次退出时回合还在跑, 重启后无法结算" = "A turn was still running when you last quit; it cannot be settled after restart.";
@@ -159,6 +163,7 @@
 "位置" = "Location";
 "低 · 每 30 分钟" = "Low · every 30 min";
 "你写的" = "You wrote it";
+"你手动压缩了上下文 · %lld → %lld tokens" = "You compacted the context · %lld → %lld tokens";
 "你是谁" = "Who You Are";
 "侧问创建失败：快照回读未完成 (回合未成功)" = "Could not start the side chat: the snapshot could not be read back (the turn did not succeed).";
 "侧问快照创建失败：无法读取源会话记忆文件" = "Could not create the side-chat snapshot: the source session's memory file is unreadable.";
@@ -239,7 +244,10 @@
 "单条消息最多 %lld 张图片, 超出请拆条发送" = "Up to %lld images per message — split into several messages if you need more";
 "博查 API Key" = "Bocha API key";
 "占用 %lld 个保留 key" = "holds %lld reserved key(s)";
-"压缩中（%@）…" = "Compacting (%@)…";
+"压缩中 · 手动…" = "Compacting · manual…";
+"压缩中 · 接近上限…" = "Compacting · near limit…";
+"压缩中 · 溢出恢复…" = "Compacting · overflow recovery…";
+"压缩中…" = "Compacting…";
 "原始邮件" = "Original message";
 "去审核" = "Review";
 "去调 priority, 或把它改成「需要时才查」" = "Raise its priority, or switch it to “On demand”";
@@ -464,6 +472,7 @@
 "更新失败, 保留原目录" = "Update failed; kept the existing catalog";
 "更新模型目录" = "Refresh model catalog";
 "更早" = "Earlier";
+"更早的消息仍在会话记录里，但模型不再看到原文 —— 它只看到一份摘要。" = "Earlier messages are still in the transcript, but the model no longer sees the originals — only a summary.";
 "最后修改" = "Last modified";
 "最多 %lld 张" = "Up to %lld";
 "最多留 200 条" = "Keeps the latest 200";

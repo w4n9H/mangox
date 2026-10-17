@@ -31,7 +31,7 @@ struct BottomStatusBar: View {
 
             dot
 
-            Text("上下文 \(contextText)")
+            Text(contextText)
                 .font(CodexFonts.monoFont(10))
                 .foregroundStyle(CodexTheme.textSecondary)
 
@@ -76,10 +76,20 @@ struct BottomStatusBar: View {
             .foregroundStyle(CodexTheme.textMuted)
     }
 
-    /// contextPercent == nil (刚压缩完/未上报) → "--"
+    /// 上下文用量 —— **带压缩线** (D)。
+    ///
+    /// 两段式而不是恒两段: `compactionLinePercent` 需要窗口 + 预算都已知 (预算由
+    /// `PiCompactionBudget` 在 spawn 期解析)。任一缺失就退回只显示百分比 ——
+    /// 画一条猜出来的线比不画更坏 (用户会据此判断"还能聊多久")。
+    ///
+    /// `contextPercent == nil` 只剩一种来源 = 本会话还没上报过统计 (见 SessionStats 注释);
+    /// 压缩后不再是 nil —— `ChatStore.applyCompactionTokens` 会当场用 pi 的估算值接管。
     private var contextText: String {
-        guard let p = stats?.contextPercent else { return "--" }
-        return String(format: "%.1f%%", p)
+        let pct = stats?.contextPercent.map { String(format: "%.1f%%", $0) } ?? "--"
+        guard let line = stats?.compactionLinePercent else {
+            return String(format: L("上下文 %@"), pct)
+        }
+        return Copy.contextWithLine(pct, String(format: "%.1f%%", line))
     }
 
     private func tokenText(_ v: Int?) -> String {

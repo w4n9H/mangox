@@ -536,6 +536,50 @@ enum Copy {
 
     // 回到最新按钮 (浮层 tooltip; 文案与图标语义一致 —— "最新"指流末尾, 不是"页面底部")
     static var jumpToLatest: String { L("回到最新") }
+
+    // 上下文压缩 (A + D)
+    //
+    // ⚠️ A 的文案**必须在渲染期**取词: 消息里存的是 `.compaction(tokensBefore:tokensAfter:reason:)`
+    //    结构化字段, 不是拼好的句子 —— 存句子就等于把当时的语言冻在库里 (切语言后永远不跟随)。
+    /// 消息流里的常驻标记。与 8s 横幅同一件事, 措辞有意不同:
+    /// 横幅是"刚发生了什么"的**播报**, 标记是"这里断过一次"的**档案** ⇒ 用"已压缩"。
+    ///
+    /// `reason` 是 pi 的原值 (`manual` / `threshold` / `overflow`), 判据**放在这里**而不是
+    /// 落库成枚举: 第三方契约值随时可能多出第四种, 不认识的照实显示成"已压缩"即可,
+    /// 而"用户自己压的"必须和"引擎自己压的"分得出来 —— 那是回看时唯一有意义的一维。
+    static func compactedMarker(reason: String, before: Int, after: Int) -> String {
+        switch reason {
+        case "manual":
+            return String(format: L("你手动压缩了上下文 · %lld → %lld tokens"), before, after)
+        case "threshold":
+            return String(format: L("上下文自动压缩（接近上限）· %lld → %lld tokens"), before, after)
+        case "overflow":
+            return String(format: L("上下文自动压缩（溢出恢复）· %lld → %lld tokens"), before, after)
+        default:
+            return String(format: L("上下文已压缩 · %lld → %lld tokens"), before, after)
+        }
+    }
+    /// 标记的 tooltip —— 一句话说清"为什么该在意这一行"。
+    static var compactedMarkerHelp: String {
+        L("更早的消息仍在会话记录里，但模型不再看到原文 —— 它只看到一份摘要。")
+    }
+    /// 压缩进行中胶囊。原来直接把 pi 的值拼成「压缩中（threshold）…」—— 中文界面里
+    /// 冒出一个英文契约值, 看着像没做完; 而且 `threshold` 这个词对用户没有意义。
+    /// ⚠️ 胶囊的判据与标记的判据**共用同一套 reason 语义**, 别在两处各写一份映射。
+    static func compactingCapsule(reason: String) -> String {
+        switch reason {
+        case "manual":    return L("压缩中 · 手动…")
+        case "threshold": return L("压缩中 · 接近上限…")
+        case "overflow":  return L("压缩中 · 溢出恢复…")
+        default:          return L("压缩中…")
+        }
+    }
+    /// 底栏 (D): 「上下文 62.4% / 压缩线 91.8%」。
+    /// 压缩线 = (窗口 - 预算) / 窗口, 取自 pi 的 `compaction.reserveTokens`
+    /// (见 `PiCompactionBudget`) —— 到这条线 pi 才会压缩, 不是我们另立的阈值。
+    static func contextWithLine(_ pct: String, _ line: String) -> String {
+        String(format: L("上下文 %@ / 压缩线 %@"), pct, line)
+    }
 }
 
 // MARK: - Color hex helper

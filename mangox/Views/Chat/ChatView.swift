@@ -233,14 +233,19 @@ struct ChatView: View {
     /// message、role 都是 .assistant ⇒ 「同 role 连续」正好等价于「属于同一回合」。
     /// ⚠️ 上面两个标记在这个判据上**只差第一条**（`prev == nil`）—— 故意不合并:
     ///    间距与作者是两件事, 合并会让第一条消息凭空多顶 14pt。
+    /// ⚠️ 上下文压缩标记 (role `.system`) 是**分界线**, 不是"谁说的": 它自己既不画作者小标,
+    ///    也不吃回合首行那档加宽间距 (细线上下都该跟着走)。但它**会**把 `prev` 变成 `.system`
+    ///    ⇒ 紧跟其后的 assistant 重新成为"回合首行" —— 这正是压缩点该有的观感
+    ///    (压缩只发生在回合边界, 所以这条不会把某个回合从中间劈开)。
     private var messageRows: [MessageRow] {
         var out: [MessageRow] = []
         out.reserveCapacity(store.messages.count)
         var prev: MessageRole?
         for m in store.messages {
+            let isMarker = m.role == .system
             out.append(MessageRow(message: m,
-                                  isTurnStart: prev != nil && prev != m.role,
-                                  isAuthorHead: prev != m.role))
+                                  isTurnStart: !isMarker && prev != nil && prev != m.role,
+                                  isAuthorHead: !isMarker && prev != m.role))
             prev = m.role
         }
         return out
@@ -539,7 +544,39 @@ struct MessageBlockView: View {
                              onAlwaysAllow: { store.alwaysAllowTool(tool.id) })
         case .plan(let q):
             PlanQuestionCardView(question: q)
+        case .compaction(let before, let after, let reason):
+            compactionMarker(before: before, after: after, reason: reason)
         }
+    }
+
+    /// 上下文压缩标记 (A) —— 一条细线夹一行小字, 居中。
+    ///
+    /// 为什么是**分界线**而不是卡片: 它描述的是"历史在这里断开", 不是一次发言。
+    /// 卡片会跟工具卡抢同一层视觉, 而这件事应该在读完一整段之后才被注意到。
+    ///
+    /// 配色只取中性 token: `divider` 画线、`textTertiary` 写字 (在内容面上 4.86:1, 过 AA)。
+    /// ⚠️ **不许用 `textMuted`** —— 那一档是**图标**色 (3.2:1), 拿它写字是既有约定里明令禁止的;
+    /// 也**不许用琥珀** (思考专用) 或红 (错误专用): 压缩是正常事件, 不是告警。
+    private func compactionMarker(before: Int, after: Int, reason: String) -> some View {
+        HStack(spacing: 8) {
+            compactionHairline
+            Text(Copy.compactedMarker(reason: reason, before: before, after: after))
+                .font(.system(size: 10.5))
+                .foregroundStyle(CodexTheme.textTertiary)
+                .lineLimit(1)
+                .fixedSize()
+            compactionHairline
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 2)
+        .help(Copy.compactedMarkerHelp)
+    }
+
+    private var compactionHairline: some View {
+        Rectangle()
+            .fill(CodexTheme.divider)
+            .frame(maxWidth: .infinity)
+            .frame(height: 1)
     }
 
     private var rawText: String? {

@@ -798,10 +798,20 @@ struct SmokeMain {
 
             pi.handleRPCLine(#"{"type":"compaction_start","reason":"threshold"}"#)
             check(lastPhase(sink) == .compacting(reason: "threshold"), "T16 compaction_start → compacting")
+            // reason 可读化: 胶囊里不许再出现 pi 的英文契约值 (threshold / manual / overflow)
+            check(lastPhase(sink)?.capsuleText == "压缩中 · 接近上限…",
+                  "T16 compacting 胶囊文案 (reason 译成人话)")
             pi.handleRPCLine(#"{"type":"compaction_end","reason":"threshold","aborted":false,"willRetry":true,"result":{"summary":"s","tokensBefore":150000,"estimatedTokensAfter":32000}}"#)
             check(lastPhase(sink) == .streaming, "T16 compaction_end → 回 streaming")
             check(lastNotice(sink)?.0 == "上下文压缩完成：150000 → 32000 tokens", "T16 压缩完成横幅")
             check(lastNotice(sink)?.isError == false, "T16 压缩完成横幅为 info")
+            // A: 成功压缩**同时**发常驻标记事件 (横幅管"此刻", 标记管"回看" —— 两条并存)
+            check(sink.events.contains { e in
+                if case .contextCompacted(let b, let a, let r) = e {
+                    return b == 150000 && a == 32000 && r == "threshold"
+                }
+                return false
+            }, "T16 compaction_end 成功 → contextCompacted (常驻标记数据源, 带 reason)")
 
             pi.handleRPCLine(#"{"type":"summarization_retry_scheduled","attempt":1,"maxAttempts":3,"delayMs":2000,"errorMessage":"terminated"}"#)
             check(lastPhase(sink) == .summarizing, "T16 summarization_retry_scheduled → summarizing")
@@ -814,6 +824,12 @@ struct SmokeMain {
             pi.handleRPCLine(#"{"type":"compaction_end","reason":"overflow","aborted":true,"willRetry":false,"result":null}"#)
             check(lastNotice(sink)?.0 == "上下文压缩已中止" && lastNotice(sink)?.isError == true,
                   "T16 压缩中止 → warning 横幅")
+            // 中止**不发**常驻标记: 什么都没变, 只留 8s 横幅 (判据不是"有没有 result"这一条,
+            // 而是"这次压缩有没有真的改变上下文") —— 计数而不是"最后一条", 防的是"又发了一遍"
+            let ctxMarkers = sink.events.filter { e in
+                if case .contextCompacted = e { return true }; return false
+            }.count
+            check(ctxMarkers == 1, "T16 中止的压缩不落常驻标记 (计数仍为 1)")
         }
 
         // ---- T17 P6.2: Trace v2 (toolcall 提前卡 / 工具分组 / 折叠规则 / Details / export_html) ----
@@ -7336,6 +7352,115 @@ struct SmokeMain {
                   "P17 漏跑: 忽略**落了库** —— 重建 store 后它不再提示（只在内存里清 ⇒ 这里立刻红）")
             napStore.scheduler.stopScheduler()
             napStore2.scheduler.stopScheduler()
+        }
+
+        // ---- T-CTX: 上下文压缩可见性 —— 常驻标记 (A) / 即时百分比 (B) / 压缩线 (D) ----
+        // 立项依据 (2026-10-17 boss): "现在只有低栏那个状态才有压缩显示, 对话区域…没有吧" ——
+        // 确认属实后钉死三条不变量:
+        //   ① 压缩**成功**才落常驻行, 且落库可重放 (= 8s 横幅之后仍然有证可查)
+        //   ② 压缩后百分比立刻由 `estimatedTokensAfter` 接管 (pi 报 null 时不许沿用旧值)
+        //   ③ 压缩线只在预算**真的解析到**时才画
+        // 三条都是"看着没问题但一拍就错"的类型: ①漏 = 用户以为模型还记得全部历史;
+        // ②漏 = 底栏挂着压缩前的数(数字是错的但看不出错); ③漏 = 画一条永远不会发生的线。
+        print("== T-CTX: 上下文压缩可见性 (常驻标记 / 即时百分比 / 压缩线) ==")
+        do {
+            // ① 压缩预算解析 (纯函数): 递归合并 + modelOverrides 优先级 + 默认回落
+            func ctxJSON(_ s: String) -> Data { Data(s.utf8) }
+            check(PiCompactionBudget.resolveReserveTokens(global: nil, project: nil, model: nil) == 16384,
+                  "T-CTX 无配置 → 内置默认 16384")
+            check(PiCompactionBudget.resolveReserveTokens(
+                    global: ctxJSON(#"{"compaction":{"reserveTokens":8000}}"#),
+                    project: nil, model: nil) == 8000,
+                  "T-CTX 全局 ordinary 生效")
+            check(PiCompactionBudget.resolveReserveTokens(
+                    global: ctxJSON(#"{"compaction":{"reserveTokens":8000}}"#),
+                    project: ctxJSON(#"{"compaction":{"reserveTokens":6000}}"#),
+                    model: nil) == 6000,
+                  "T-CTX 项目级覆盖全局")
+            // 文档原话的直译: "a global model-specific value beats a project-wide fallback"
+            check(PiCompactionBudget.resolveReserveTokens(
+                    global: ctxJSON(#"{"compaction":{"modelOverrides":{"p/m":{"reserveTokens":400000}}}}"#),
+                    project: ctxJSON(#"{"compaction":{"reserveTokens":6000}}"#),
+                    model: "p/m") == 400000,
+                  "T-CTX 全局 model-specific 胜过项目级 fallback")
+            check(PiCompactionBudget.resolveReserveTokens(
+                    global: ctxJSON(#"{"compaction":{"modelOverrides":{"p/m":{"reserveTokens":400000}}}}"#),
+                    project: ctxJSON(#"{"compaction":{"modelOverrides":{"p/m":{"reserveTokens":9000}}}}"#),
+                    model: "p/m") == 9000,
+                  "T-CTX 项目级可为同一模型单独覆盖")
+            check(PiCompactionBudget.resolveReserveTokens(
+                    global: ctxJSON(#"{"compaction":{"reserveTokens":-5}}"#),
+                    project: nil, model: nil) == 16384,
+                  "T-CTX 非法值不参与 (回落默认, 不显示猜的数)")
+            // 递归合并: 项目只写 enabled 不该把全局 reserveTokens 抹成默认
+            check(PiCompactionBudget.resolveReserveTokens(
+                    global: ctxJSON(#"{"compaction":{"reserveTokens":8000,"keepRecentTokens":9000}}"#),
+                    project: ctxJSON(#"{"compaction":{"enabled":false}}"#),
+                    model: nil) == 8000,
+                  "T-CTX 深层合并 (项目只写 enabled 不动 reserveTokens)")
+
+            // ② 压缩线 = (窗口 - 预算) / 窗口
+            var lineStats = SessionStats(contextPercent: 10, contextTokens: 20000,
+                                         contextWindow: 200000, contextReserveTokens: 20000)
+            check(abs((lineStats.compactionLinePercent ?? 0) - 90) < 0.001,
+                  "T-CTX 压缩线 = (200000-20000)/200000 = 90%")
+            lineStats.contextReserveTokens = 0
+            check(lineStats.compactionLinePercent == nil, "T-CTX 预算未知 → 不画线")
+            lineStats.contextReserveTokens = 300000
+            check(lineStats.compactionLinePercent == nil, "T-CTX 预算超窗口 → 不画线 (线落在窗口外)")
+            lineStats.contextReserveTokens = 16384
+            lineStats.contextWindow = 0
+            check(lineStats.compactionLinePercent == nil, "T-CTX 窗口未知 → 不画线")
+        }
+        do {
+            // ③ ChatStore 侧: 标记入流 + 落库重放 + 百分比即时改写
+            let ctxDir = fixtureDir("ctx")
+            let ctxMock = MockTransport()
+            let ctxStore = ChatStore(transport: ctxMock, dbPath: ctxDir + "/ctx.db",
+                                     managedExtensionsDir: ctxDir + "/ext")
+            ctxStore.newConversation()
+            guard let ctxSid = ctxStore.selectedConversationId else { check(false, "T-CTX 建会话"); report() }
+            // 先来一次完整统计 (窗口已知), 再压缩 —— 顺序反了就测不到 B
+            ctxStore.transport(ctxMock, didReportSessionStats: SessionStats(
+                contextPercent: 75, contextTokens: 150000, contextWindow: 200000,
+                contextReserveTokens: 16384, inputTokens: 1000, outputTokens: 50,
+                cacheReadTokens: 0, costUSD: nil))
+            ctxStore.transport(ctxMock, didEmit: .contextCompacted(tokensBefore: 150000,
+                                                                   tokensAfter: 32000,
+                                                                   reason: "threshold"))
+            if let last = ctxStore.messages.last, case .compaction(let b, let a, let r) = last.content {
+                check(last.role == .system && b == 150000 && a == 32000 && r == "threshold",
+                      "T-CTX 压缩成功 → 消息流里一条 .system 常驻标记 (带 reason)")
+            } else {
+                check(false, "T-CTX 压缩成功 → 消息流里一条 .system 常驻标记 (带 reason)")
+            }
+            check(abs((ctxStore.sessionStats?.contextPercent ?? 0) - 16) < 0.001,
+                  "T-CTX 百分比立刻 = 32000/200000 = 16% (不沿用压缩前的 75%)")
+            check(ctxStore.sessionStats?.contextTokens == 32000, "T-CTX contextTokens 同步改写")
+            // 落库重放: 重启后这条事实必须还在 (否则 A 只是"当次会话内的安慰")
+            let replayed = ctxStore.replayMessages(for: ctxSid)
+            check(replayed.contains { m in
+                if case .compaction(let b, let a, let r) = m.content {
+                    return b == 150000 && a == 32000 && r == "threshold"
+                }
+                return false
+            }, "T-CTX 常驻标记落库, 重放后 reason 一并回来")
+            // reason → 文案: 三档要分得出来, 不认识的值退回"已压缩"(不许猜成自动)
+            check(Copy.compactedMarker(reason: "manual", before: 1, after: 2).contains("手动"),
+                  "T-CTX reason=manual → 「你手动压缩了上下文」")
+            check(Copy.compactedMarker(reason: "overflow", before: 1, after: 2).contains("溢出恢复"),
+                  "T-CTX reason=overflow → 「接近上限/溢出恢复」两档分开")
+            check(Copy.compactedMarker(reason: "some-new-reason", before: 1, after: 2).contains("已压缩"),
+                  "T-CTX 不认识的 reason → 退回「已压缩」(不猜成自动压缩)")
+            // 记忆提炼 / dream 的材料**不许**吃进这条 (它是标记, 不是"谁说了什么")
+            let material = KnowledgeStore.sessionMaterial(from: [
+                ChatMessage(role: .user, content: .text("人说的话")),
+                ChatMessage(role: .system,
+                            content: .compaction(tokensBefore: 150000, tokensAfter: 32000,
+                                                 reason: "threshold")),
+            ])
+            check(material.count == 1 && !material.joined().contains("压缩"),
+                  "T-CTX 压缩标记不进 sessionMaterial (不污染记忆提炼/dream)")
         }
 
         report()    }
