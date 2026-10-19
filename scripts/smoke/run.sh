@@ -72,6 +72,31 @@ if grep -rn '^[[:space:]]*\.defaultScrollAnchor(' mangox/Views/ ; then
     exit 1
 fi
 
+# ④ 冒烟主文件的**体量棘轮** (2026-10-19) —— 判据 = 行数**只减不增**。
+#    为什么要有这条: 冒烟已长到 7000+ 行, 而且几乎全在**一个函数 `run()`** 里
+#    (Swift 函数体不能跨文件 ⇒ 只要它还是一个大函数, 就必然是一个大文件)。
+#    2026-10-19 的教训: 想靠"按注释锚点机械抽 67 个函数"一次解决 —— 结果抽断了 `run()` 里
+#    几百个共享夹具的作用域, 约束求解器掉进 salvage() 指数爆炸, 编译从 126 秒涨到 19 分钟以上,
+#    而且**零红灯**(编译日志 0 字节, 看着像卡死)。⇒ 改走"冻结 + 增量外移":
+#    先把主文件冻在这个数上, 新用例一律进 scripts/smoke/cases/ 并自带夹具(用 fixtureDir);
+#    外移成功一段就把 size_budget 调**小**。
+#    要调大 = 一次需要评审的决策, 必须出现在 diff 里 —— 这条门存在的全部意义就在这里。
+BUDGET_FILE="$SMOKE_DIR/size_budget"
+[[ -f "$BUDGET_FILE" ]] || { echo "错误: 缺 $BUDGET_FILE (体量棘轮门的基线文件)" >&2; exit 1; }
+BUDGET="$(tr -d '[:space:]' < "$BUDGET_FILE")"
+NOWLINES="$(wc -l < "$SMOKE_DIR/smokeMain.swift" | tr -d '[:space:]')"
+if (( NOWLINES > BUDGET )); then
+    echo "FAIL - smokeMain.swift 已 $NOWLINES 行, 超出预算 $BUDGET 行" >&2
+    echo "       新用例请放 scripts/smoke/cases/ (自带夹具, 用 fixtureDir), 不要再往主文件里加。" >&2
+    echo "       外移成功一段后, 把 scripts/smoke/size_budget 调**小**。" >&2
+    exit 1
+fi
+
+# 冒烟自己的源文件: 除 smokeMain.swift 外还有 SmokeCore.swift / SmokeFakes.swift,
+# 以后新增的 cases/ 也自动进来。判据 = "脚本目录下所有 .swift" ⇒ 加文件不用改这一行
+# (和 mangox/ 下新增文件不用改 pbxproj 是同一个思路)。
+SMOKE_SRC=$(find "$SMOKE_DIR" -name "*.swift" | sort)
+
 SRC=$(find mangox -name "*.swift" ! -name "mangoxApp.swift" | sort)
 
 DEVELOPER_DIR="$DEV" xcrun swiftc \
@@ -80,7 +105,7 @@ DEVELOPER_DIR="$DEV" xcrun swiftc \
     -D DEBUG \
     -D SMOKE \
     -o "$OUT/smoke" \
-    "$SMOKE_DIR/smokeMain.swift" \
+    $SMOKE_SRC \
     $SRC
 
 "$OUT/smoke"
