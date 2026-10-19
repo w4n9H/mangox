@@ -138,6 +138,10 @@ struct ToolCallCardView: View {
                 Spacer(minLength: 8)
 
                 phaseBadge
+                    // 定宽 + 右对齐: 三态徽标宽度不同 (`等待` / 圈+`运行中` / 耗时+`完成`),
+                    // 不定宽的话左边命令会被反复挤窄、截断位置跟着跳 —— 连发快工具时就是
+                    // "整行在闪"。见 `Tune.toolPhaseBadgeWidth` 的账。
+                    .frame(minWidth: Tune.toolPhaseBadgeWidth, alignment: .trailing)
             }
             .padding(.horizontal, 10)
             .padding(.vertical, 4)
@@ -316,6 +320,9 @@ struct ToolCallCardView: View {
                     Text(verbatim: ms >= 1000 ? String(format: "%.1fs", Double(ms) / 1000) : "\(ms)ms")
                         .font(CodexTheme.fontMonoXs)
                         .foregroundStyle(CodexTheme.textTertiary)
+                        // 数字等宽: `16ms` / `999ms` / `1.2s` 逐字宽度一致 ⇒ 耗时出现与变化
+                        // 都不会改变徽标的内容宽 (定宽只是兜底, 这条让数字本身不抖)
+                        .monospacedDigit()
                 }
                 Text(tool.phase.label)
                     .font(CodexTheme.fontMonoXs)

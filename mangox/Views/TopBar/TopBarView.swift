@@ -32,10 +32,10 @@ struct TopBarCapsuleControls: View {
 
     var body: some View {
         HStack(spacing: 0) {
-            modePillButton("Chat", active: store.capsuleMode == .chat) {
+            modePillButton(L("对话"), active: store.capsuleMode == .chat) {
                 store.capsuleMode = .chat
             }
-            modePillButton("Trace", active: store.capsuleMode == .trajectory) {
+            modePillButton(L("轨迹"), active: store.capsuleMode == .trajectory) {
                 store.capsuleMode = .trajectory
             }
         }

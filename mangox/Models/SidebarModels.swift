@@ -20,6 +20,16 @@ struct ProjectGroup: Identifiable, Hashable {
     }
 }
 
+/// 会话默认标题的**唯一真源**（`"New chat"`）。
+///
+/// 为什么单独一个 enum: `ConversationItem.displayTitle` 与 `SidebarFilter` 都是 **nonisolated**
+/// 的, 而 `ChatStore` 是 `@MainActor` —— 直接引用 `ChatStore.defaultConversationTitle` 会报
+/// "main actor-isolated static property ... can not be referenced from a nonisolated context"
+/// （Swift 6 里是 error）。放在这里, 两边都只引用同一个常量。
+enum ConversationTitle {
+    static let defaultValue = "New chat"
+}
+
 struct ConversationItem: Identifiable, Hashable {
     let id: UUID
     var title: String
@@ -38,6 +48,18 @@ struct ConversationItem: Identifiable, Hashable {
         self.updatedAt = updatedAt
         self.unreadCount = unreadCount
         self.sideOf = sideOf
+    }
+
+    /// 显示用标题 —— **默认标题是存储哨兵, 不是文案**。
+    ///
+    /// `ChatStore.defaultConversationTitle` (`"New chat"`) 同时是三个东西:
+    ///   ① 新会话落库时的初始值（库里已有大量这种行, 改它 = 老会话全变"未命名"）;
+    ///   ② `autoTitleIfNeeded` 的判据（"仍是默认标题才自动命名"）;
+    ///   ③ 顶栏/侧栏的显示文本。
+    /// ⚠️ 所以**不能**把它 `L()` 掉 —— 那会让英文模式下建的会话在中文模式下不再被认作默认标题
+    ///    (永不自动命名), 且 ①② 的字节随界面语言漂。正确做法 = 存储保持哨兵, **显示时映射**。
+    var displayTitle: String {
+        title == ConversationTitle.defaultValue ? L("新对话") : title
     }
 }
 
@@ -74,7 +96,9 @@ enum SidebarFilter {
     /// 会话过滤: 不过滤时**原样返回** (含顺序 —— 调用方还要按 updatedAt 排)。
     static func chats(_ chats: [ConversationItem], query: String) -> [ConversationItem] {
         guard isFiltering(query) else { return chats }
-        return chats.filter { matches($0.title, query: query) }
+        // 比 `displayTitle` 而不是 `title`: 中文模式下侧栏写的是「新对话」,
+        // 拿哨兵值 `New chat` 去匹配会让"搜自己看得见的字"搜不到。
+        return chats.filter { matches($0.displayTitle, query: query) }
     }
 
     /// 项目过滤 —— 两种命中, 语义不同 (这是本函数唯一的判断, 也是它值得被断言的原因):
@@ -85,7 +109,7 @@ enum SidebarFilter {
         guard isFiltering(query) else { return projects }
         return projects.compactMap { group in
             if matches(group.title, query: query) { return group }
-            let hits = group.items.filter { matches($0.title, query: query) }
+            let hits = group.items.filter { matches($0.displayTitle, query: query) }
             guard !hits.isEmpty else { return nil }
             var copy = group
             copy.items = hits
@@ -96,14 +120,17 @@ enum SidebarFilter {
 
 extension Date {
     /// Codex-style compact tag: now / 5m / 4h / 1d / 9/7
+    ///
+    /// ⚠️ 这里曾经是纯英文单位（`"\(minutes)m"` / `"now"`），而它是**用户看得见的侧栏行尾**。
+    /// 计算属性里的取词每帧都重算，所以可以用 `L()`（不会像 `static let` 那样把语言冻住）。
     var relativeTag: String {
         let minutes = Int(-timeIntervalSinceNow / 60)
-        if minutes < 1 { return "now" }
-        if minutes < 60 { return "\(minutes)m" }
+        if minutes < 1 { return L("刚刚") }
+        if minutes < 60 { return String(format: L("%lld 分钟"), minutes) }
         let hours = minutes / 60
-        if hours < 24 { return "\(hours)h" }
+        if hours < 24 { return String(format: L("%lld 小时"), hours) }
         let days = hours / 24
-        if days < 7 { return "\(days)d" }
+        if days < 7 { return String(format: L("%lld 天"), days) }
         let f = DateFormatter()
         f.dateFormat = "M/d"
         return f.string(from: self)

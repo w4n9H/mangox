@@ -19,7 +19,8 @@ extension SmokeMain {
     @MainActor
     static var registeredCases: [@MainActor () async -> Void] {
         [
-            // 例: caseNoteProposals,
+            caseUserMessageFold,
+            caseSessionTitlePersist,
         ]
     }
 

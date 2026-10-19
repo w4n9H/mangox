@@ -18,12 +18,18 @@ enum AgentMode: String, Codable, CaseIterable, Identifiable {
     case codemode, minimal, standard, full
     var id: String { rawValue }
 
+    /// 界面标签。⚠️ 2026-10-19 改口径: 原先约定「档位名保持单一写法, 不随界面语言变」
+    /// （英文常量, 不走 `L()`），boss 拍板推翻 —— 中文模式下这一栏与旁边全是中文的界面混排，
+    /// 而且切语言时它一个字都不动。
+    /// ⚠️ **`rawValue` 仍是契约 token**（`storageValue` / `--tools` 组装逐字使用），
+    ///    本地化只发生在 `displayName` 这一层，任何显示都不得回写 `rawValue`。
+    /// 计算属性 ⇒ 每次重算都取当前语言（不会像 `static let` 那样把语言冻住）。
     var displayName: String {
         switch self {
-        case .codemode: "Codemode"
-        case .minimal: "Minimal"
-        case .standard: "Standard"
-        case .full: "Full"
+        case .codemode: L("Codemode")   // 范式专名, 中英同形 —— 走词表只为"每条都过同一个机制"
+        case .minimal: L("极简模式")
+        case .standard: L("常规模式")
+        case .full: L("完整模式")
         }
     }
 

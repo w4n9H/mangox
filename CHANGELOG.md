@@ -5,6 +5,48 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [0.1.25] - 2026-10-19
+
+本版主线 = **修掉四处「静默失效」**。它们的共同点不是难修，而是**看起来完全正常**：改了内存就当落了库（重启才发现）、探针报 0 被当坐标（判据公式对了也没用）、两道本地化门都只扫含汉字的字面量（硬编码英文结构性不可见）、以及三态徽标宽度不固定引出的高频 reflow。同版补上第三道本地化门禁，并把中英文切换做全量收口（33 条硬编码英文）。全量冒烟 **1351 项 ALL PASS** + `xcodebuild` BUILD SUCCEEDED 零 warning。
+
+### 修复
+
+- **项目会话重开后变回 `<New chat>`（只影响项目区）**：`ChatStore.renameConversation` 的项目分支末尾有一个 `return`，把出口那行 `renameSession(...)` **一起跳过**了 —— 标题只改内存、**从没落库**。平铺 `chats` 分支没有 `return`，所以缺陷只在项目区出现，看起来像"项目下的会话才有问题"。
+  - 为什么"输入后又更新"：库里恒为默认标题 ⇒ 重启回读还是 `New chat` ⇒ `autoTitleIfNeeded` 又命中，拿**最新那条消息**重新命一次名。所以这不只是"名字不保存"，**标题每次重启都会漂**。
+  - 修法**不是加一处 `renameSession`，是把 `return` 拿掉**：两个分支都只改内存，落库统一在出口（与 `touchConversation` 同形）。同一个动作不许有两份半径。
+  - 为什么门全绿：原断言只读 `store.chats` —— 那恰好是**唯一**会落库的分支，而且所有断言**只读内存**，对这个缺陷恒绿（内存那半从来没错过）。新门 `CaseSessionTitlePersist`（7 条）改成**重建 `ChatStore` 再回读**，两条分支各测一遍；反例（把 `return` 加回去）只红两条（项目往返 + 漂移），平铺区仍绿 ⇒ 证明它不是"一律红"。
+- **「回到最新」按钮永不出现（boss 第三次报）—— 真因 = 探针报 0 被当坐标**：探针住在 `messageBlocks` 的 `LazyVStack` **末尾**，而 LazyVStack 只实例化**可见**行 ⇒ 探针滚出可见区时它的 `GeometryReader` 报 **0**（不是"内容底在顶部"），而且**后到**，把刚算对的 `near=0` 当场翻回去。真机日志每对都是这个形态：`near=0 bottom=831.4` 紧跟 `near=1 bottom=0.0`。前两次修的判据公式与视口高来源**方向都对，全被这个 0 盖掉**。
+  - 修法：`guard bottomY > 0 else { return }` —— 0 一律当"这一拍没量到"，保留上一次有效读数；另把 `.onPreferenceChange` 从 `ScrollView` 移到 `messageBlocks` 上（与探针**同一个布局容器**，坐标空间仍留在 `ScrollView`）。
+  - 教训：**"探针读数"和"探针语义"是两件事** —— 0 既可能是"位置在 0"也可能是"没布局"。不区分就会得到一个恒定错误、且看起来完全正常的判据。
+- **工具行快速连发时闪烁**：一个工具卡从出现到完成会 emit 4 次（`toolcall_start` / `toolcall_end` / `tool_execution_start` / 结束），快工具把这 4 次压进几十毫秒。三层叠加：① **主因 = 行内 reflow** —— `phaseBadge` 三态文案宽度不同（`等待` / 圈+`运行中` / 耗时+`完成`，`16ms` 与 `1.2s` 数字宽度也不一），左边命令是 `lineLimit(1)` 自适应 ⇒ 徽标一变宽命令就被挤窄、截断位置跳一次；② 自动跟随的 `withAnimation(animMed)` 0.25s 补间被高频触发、互相打断 ⇒ 整屏抖；③ 行级 `.transition` 也在叠加。
+  - 修法：`phaseBadge` 加**定宽**（`Tune.toolPhaseBadgeWidth` + `minWidth` 右对齐）+ 耗时 `.monospacedDigit()`；自动跟随加**连发降级** —— 距上次自动滚动 < 0.3s 就**不带补间瞬移**（高频位移下人眼分辨不出补间，只看得出"抖"；慢工具间隔够长仍走补间，手感一字不变）。时间戳住引用类型 `FollowThrottle`，故意不用 `@State var lastAt: Date` —— 那会让每次滚动都重算 body + 重建 `messageRows`（O(n)）。
+  - 已知边界：`minWidth` 只是下限，error 态的长文案（如 `exit 137 (killed)`）仍会撑开那一行，但它罕见且会自动展开，不是高频闪烁源。
+- **部分显示文本切中英文不生效（33 条硬编码英文）**：nav 5 · 全大写页眉 6 · Composer 2 · 三套档位名（`AgentMode` / `ApprovalMode` / `ThinkingLevel.displayName`）共 14 · 顶栏 2 · 轨迹统计 7 + `TraceSegment` 3 · 计划卡 3 · `Base URL` · 侧栏相对时间 · 时长单位 · 侧问标题前缀。
+  - ⚠️ **推翻了一处明文约定**：`AgentTransport.swift` 原注释写着「档位名是英文常量，不走 `L()`」—— 改成随语言。`rawValue` / `storageValue` **仍是契约 token**，本地化只到 `displayName` 这一层。
+  - ⚠️ **存储哨兵不能本地化**：`defaultConversationTitle = "New chat"` 同时是①落库初始值②`autoTitleIfNeeded` 判据③显示文本。①②要求它不随语言变 ⇒ **存储保持哨兵，显示走 `ConversationItem.displayTitle` 映射**；`SidebarFilter` 也改成比 `displayTitle`，否则中文下搜「新对话」搜不到。
+  - ⚠️ **全大写页眉的做法**：字面量写中文 key，靠 `.textCase(.uppercase)` 恢复英文 `TRACE` / `PLUGINS` 的观感（中文 no-op）—— 不要为了让英文大写而把 key 写成英文。
+  - 文案收口顺带三处：`知识`→`知识库`、`定时`→`定时任务`（nav 与页眉**共用同一个 key**）、档位名加「模式」（`Codemode` 不加 —— 叠词），侧栏分组标题 `Projects` / `Chats` → `L("项目")` / `L("对话")`。
+
+### 新增
+
+- **长用户消息折叠**：贴 1000 行日志原来会原样铺满对话区，而且 `Text(整段)` 的布局是**平方级**的（本仓 `render_probe.py` 实测 3 341 行要 36 秒，按块 646 ms）—— 两个病一起得。现在 `userBubble` 走 `userBody`：
+  - 判据**两个门槛取先到**：行数 > 12 **或** 字符 > 1200（日志是"行多"、长散文是"字多"，只看一个会漏另一种）。
+  - 折叠态 = 6 行预览 + 一行「还有 N 行 · 展开」（**如实报数**，`hiddenLineCount` 为 0 时换「内容较长」）；展开态 = **固定高 260pt 滚动区** + `LazyVStack` **按行渲染** ⇒ 1 万行与 100 行的展开代价相同。
+  - ⚠️ 折叠**只影响渲染**：复制 / 保存为记忆 / 重新生成一律走原文 `rawText` —— 用户说的话不能被 App 藏掉半句。
+  - 展开态按视图实例存活：滚出屏或换会话回到折叠态（同 `ThinkingCardView` 的取舍，"上次点开过"不该变成全局默认）。
+  - 新增 `cases/CaseUserMessageFold.swift`；`smokeMain.swift` **行数一动不动**，棘轮门照过。
+
+### 工程
+
+- **第三道本地化门禁 `scripts/l10n/scan_english.py`**：前两道门（`gen_strings` / `scan_wiring`）的抽取器**都只要含汉字的字面量** ⇒ 硬编码英文**结构性 invisible**：中文模式下是漏译、英文模式下"看起来对"、编译期与运行期零信号。所以它能活到用户来报。
+  - 两条判据：**A 取词位置**（`Text(` / `Button(` / `title:` / `label:` …）+ **B 返回位置**（`case .x: "…"` / `return "…"` —— 三套档位名就是这种形态，只有 A 会漏）。
+  - **位置表不是写死的**：自动发现"文案汇聚函数" —— 扫 `func X(_ p: String…) -> some View` 且函数体含 `Text(p)` 就把 `X` 纳入。因为 `sectionHeader("Projects")` 这种**作者自己封装的落点**，枚举式位置表永远追不上（第一版门就漏了这两条，还漏了 4 条轨迹页角色徽章）。
+  - 豁免清单 `english_allow.txt` 只有 4 条，每条写理由：`MangoX`（品牌）· `Token ↑…`（单位名）· `https://…`（格式示例）· `English` / `zh-Hans`（语言名用它自己的语言书写）。
+  - 两个自己踩过的坑已写进注释：**三引号块必须先剥注释再判**（解释「为什么用 `#"""`」的文档注释也含三引号，先翻状态会让紧随其后的整个 TS 块被当普通代码扫）；**"无空格即符号名"是错判据**（它把第一版门打成"什么都看不见" —— `"Full"` / `"Chat"` / `"Turns"` 全是单字），改成「含分隔符 `./:@#_` 才是符号名」+ kebab-case 才是标识符。
+- **`Text(" \(x)")` 是幽灵键**：`LocalizedStringKey` 带插值会拿 `" %@"` 去查表（查不到就回落 ⇒ 看着正常）。拼接已本地化片段要用 `Text(verbatim:)`（Composer 的模型 pill 已改）。
+- **隔离修正**：`ConversationItem` / `SidebarFilter` 是 nonisolated，读 `@MainActor` 的 `ChatStore` 常量会报 "main actor-isolated ... nonisolated context"（Swift 6 是 error）⇒ 真源下沉成 `enum ConversationTitle { static let defaultValue }`。
+- **改了口径的 4 条老断言一起改**：`T12 时长格式化` · `T18 侧问标题前缀` · `P15.3 档位告警`（改判 `AgentMode.minimal.displayName`，比写死 `"Minimal"` 更抗语言变化）· `P12.2`（它钉的正是被推翻的那条"英文常量不走 L()"）。
+
 ## [0.1.24] - 2026-10-19
 
 本版主线 = **把冒烟脚本从一个 7530 行的单文件拆成 15 个文件，并给它装上「只减不增」的体量棘轮门**。纯工程版，**用户可见行为零变化**：断言 1329 项一条不少、执行顺序一处不动。全量冒烟 **1329 项 ALL PASS** + `xcodebuild` BUILD SUCCEEDED 零 warning。

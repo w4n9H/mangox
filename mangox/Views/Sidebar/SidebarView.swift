@@ -137,27 +137,29 @@ struct SidebarView: View {
 
     private var navSection: some View {
         VStack(alignment: .leading, spacing: 1) {
-            navRow(icon: "square.and.pencil", title: "New chat") {
+            // ⚠️ 2026-10-19: 这五条原先**刻意**是硬编码英文（"nav 保持英文, 与 New chat/Scheduled 一致"）。
+            //    那次决定被 boss 推翻 —— 中文模式下整栏混排英文，且切语言时它们一个字都不动。
+            //    现在全部走 `L()`，key = 中文原文（zh-Hans 词表故意为空 ⇒ 中文回落 key）。
+            navRow(icon: "square.and.pencil", title: L("新对话"), emphasized: true) {
                 store.newConversation()
             }
-            // P3.7: 原 Plugins 槽位复用为知识库/记忆入口 (nav 保持英文, 与 New chat/Scheduled 一致)
-            navRow(icon: "book", title: "Knowledge",
+            navRow(icon: "book", title: L("知识库"),
                    active: model.showKnowledgePanel,
                    badge: model.knowledgePendingCount) {
                 store.toggleKnowledgePanel()
             }
-            navRow(icon: "clock.badge", title: "Scheduled",
+            navRow(icon: "clock.badge", title: L("定时任务"),
                    active: model.showScheduledPanel) {
                 store.toggleScheduledPanel()
             }
             // P3.11: 插件管理 (pi 扩展托管/启停/导入)
-            navRow(icon: "puzzlepiece", title: "Plugins",
+            navRow(icon: "puzzlepiece", title: L("插件"),
                    active: model.showExtensionsPanel) {
                 store.toggleExtensionsPanel()
             }
             // P14: 设置改成**独立窗口** —— 这里只是入口, 开关由 SettingsWindowController 持有
             // (active 读 store.showSettingsPanel: 它是窗口可见性的镜像, 由控制器写入)
-            navRow(icon: "gearshape", title: "Settings",
+            navRow(icon: "gearshape", title: L("设置"),
                    active: model.showSettingsPanel) {
                 SettingsWindowController.shared.toggle(store: store)
             }
@@ -168,6 +170,10 @@ struct SidebarView: View {
     private func navRow(icon: String, title: String,
                         active: Bool = false,
                         badge: Int? = nil,
+                        /// 行文字用 `.medium`（原先靠 `title == "New chat"` 判）——
+                        /// 标题一旦走 `L()`，那句字符串比较就永远不成立（`LocalizedStringKey` 的
+                        /// `==` 不能比 key，同理 String 比的是**当前语言**的译文）。改成显式参数。
+                        emphasized: Bool = false,
                         action: @escaping () -> Void) -> some View {
         Button(action: action) {
             HStack(spacing: 9) {
@@ -177,7 +183,7 @@ struct SidebarView: View {
                     .frame(width: 16)
                 Text(title)
                     .font(.system(size: 13,
-                                  weight: title == "New chat" || active ? .medium : .regular))
+                                  weight: emphasized || active ? .medium : .regular))
                     // P14: 未选中行提亮到 textSecondary (参考图行文字 #494949 ≈ 8.3:1,
                     // textPrimary 的 13.6:1 偏重一档); 选中行保持 textPrimary。
                     .foregroundStyle(active ? CodexTheme.textPrimary : CodexTheme.textSecondary)
@@ -210,7 +216,7 @@ struct SidebarView: View {
         return VStack(alignment: .leading, spacing: 1) {
             // P14: 过滤态下**不画空区块头** —— 只有标题没有内容的组会读成"坏了"。
             // (不过滤时保持原行为: 没项目也留着头, 那是"这里本该有项目"的提示。)
-            if !filtering || !groups.isEmpty { sectionHeader("Projects") }
+            if !filtering || !groups.isEmpty { sectionHeader(L("项目")) }
             ForEach(groups) { group in
                 projectRow(group)
                 // P14: 搜索时**强制展开命中的项目** —— 命中藏在折叠的项目里等于没搜到。
@@ -317,7 +323,7 @@ struct SidebarView: View {
         let sessions = filteredChats.sorted { $0.updatedAt > $1.updatedAt }
         let grouped = Dictionary(grouping: sessions) { DayBucket.bucket(for: $0.updatedAt, now: .now) }
         return VStack(alignment: .leading, spacing: 1) {
-            if !filtering || !sessions.isEmpty { sectionHeader("Chats") }
+            if !filtering || !sessions.isEmpty { sectionHeader(L("对话")) }
             ForEach(DayBucket.allCases, id: \.rawValue) { bucket in
                 if let items = grouped[bucket], !items.isEmpty {
                     dayHeader(bucket, count: items.count)
@@ -415,7 +421,7 @@ struct ConversationRow: View {
                         .font(.system(size: 9))
                         .foregroundStyle(CodexTheme.textMuted)
                 }
-                Text(item.title)
+                Text(item.displayTitle)
                     .font(.system(size: 13))
                     .lineLimit(1)
                     .foregroundStyle(isSelected ? CodexTheme.textPrimary : CodexTheme.textSecondary)

@@ -21,6 +21,12 @@ struct ChatView: View {
     /// 自动滚动同帧合并标记: 流式期同帧多个 chunk 只调度一次滚动 (防 "update multiple times per frame")。
     @State private var scrollScheduled = false
 
+    /// 自动跟随的**节流盒** (2026-10-19)。故意用引用类型: 写 `lastAt` 不该让 ChatView 重渲染 ——
+    /// 换成 `@State var lastAt: Date` 的话, 每次滚动都重算 body + 重建 `messageRows`(O(n)),
+    /// 而这条路径本来就是"高频工具连发"时最热的, 等于用一个抖动换一个卡顿。
+    private final class FollowThrottle { var lastAt: Date = .distantPast }
+    @State private var followThrottle = FollowThrottle()
+
     var body: some View {
         VStack(spacing: 0) {
             if let side = store.activeSideChat {
@@ -56,9 +62,20 @@ struct ChatView: View {
 
     /// 内容底进入视口底 140pt 内 = 跟随区 (Bool 去重, 不随滚动帧重渲染)。
     private func handleContentBottom(_ bottomY: CGFloat) {
+        // ⚠️ 2026-10-19 **这条 guard 是「回到最新」按钮三次不出现的真因**。
+        //    探针住在 `messageBlocks` 的 LazyVStack 末尾, 而 LazyVStack 只实例化**可见**行 ——
+        //    探针滚出可见区时, 它的 GeometryReader 报 **0**, 不是"内容底在顶部"。
+        //    真机日志 (每对都这样, 无一例外):
+        //        near=0 bottom=831.4 viewport=642.0   ← 判对了
+        //        near=1 bottom=0.0   viewport=642.0   ← 被 0 当场翻回去
+        //    前两次修的是判据公式和视口高来源 (方向都对), 全被这个 0 盖掉了。
+        //    0 一律当"这一拍没量到", 保留上一次的有效读数 —— 绝不能当坐标用。
+        guard bottomY > 0 else { return }
         lastBottomY = bottomY
         let v = ChatView.isNearBottom(contentBottomY: bottomY, viewportHeight: viewportHeight)
-        if nearBottom != v { nearBottom = v }   // 等值不写, 防 PreferenceKey 高频触发失效性更新
+        if nearBottom != v {
+            nearBottom = v   // 等值不写, 防 PreferenceKey 高频触发失效性更新
+        }
     }
 
     /// 视口高度变了就**用已知的内容底重判一次**。
@@ -181,10 +198,16 @@ struct ChatView: View {
                 }
             } else {
                 messageBlocks
+                    // ⚠️ 2026-10-19: 探针的 preference **只在这一层收**。
+                    //    它必须与探针待在**同一个布局容器**里（探针住在 `messageBlocks` 的
+                    //    LazyVStack 末尾）；挂到外层 `ScrollView` 上就是跨了一条布局边界 ——
+                    //    症状正是这条判据的历史病: 读数永远收不到 ⇒ `contentBottomY` 停在
+                    //    默认值 ⇒ 判"贴底"恒真 ⇒ **「回到最新」按钮永不出现**（boss 报了三次）。
+                    //    坐标空间 `.named("chatScroll")` 仍在 ScrollView 上，探针照样读得到。
+                    .onPreferenceChange(ChatContentBottomKey.self) { handleContentBottom($0) }
             }
         }
         .coordinateSpace(name: "chatScroll")
-        .onPreferenceChange(ChatContentBottomKey.self) { handleContentBottom($0) }
         // ⚠️ 这里**不能**用锚底 (`defaultScrollAnchor(.bottom)`) —— 它会在**内容尺寸变化时重新
         //    锚底**: 展开任意一行, 整列都跳一下, 体感"点了 A 打开了 B"(与 TrajectoryView:153
         //    同一个坑, 那次只修了 Trace, 漏了这里)。改 onAppear 定位; 流式跟随由下面
@@ -211,8 +234,21 @@ struct ChatView: View {
             DispatchQueue.main.async {
                 guard nearBottom, !scrollScheduled else { return }
                 scrollScheduled = true
-                withAnimation(CodexTheme.animMed) {
+                // ⚠️ 2026-10-19: **连发时不做补间**。一个工具卡从出现到完成要 emit 4 次
+                //    (`toolcall_start` / `toolcall_end` / `tool_execution_start` / 结束), 快速
+                //    工具把这 4 次压进几十毫秒 ⇒ 0.25s 的补间互相打断 ⇒ 整屏内容来回抖, 看着
+                //    就是"闪烁"。判据 = 距上次自动跟随不足一个补间时长 ⇒ 这一拍直接瞬移
+                //    (高频位移下人眼分辨不出补间, 只看得出"抖"; 瞬移反而干净)。
+                //    慢工具间隔够长, 仍走补间 ⇒ 手感一字不变。
+                let now = Date()
+                let burst = now.timeIntervalSince(followThrottle.lastAt) < 0.3
+                followThrottle.lastAt = now
+                if burst {
                     proxy.scrollTo(scrollTarget, anchor: .bottom)
+                } else {
+                    withAnimation(CodexTheme.animMed) {
+                        proxy.scrollTo(scrollTarget, anchor: .bottom)
+                    }
                 }
                 DispatchQueue.main.async { scrollScheduled = false }
             }
@@ -446,6 +482,10 @@ struct MessageBlockView: View {
     @State private var hovering: Bool = false
     /// P7-M6c: 大图预览 (sheet, 不开独立 NSWindow — P4.2 尺寸控制坑)。
     @State private var previewAttachment: Attachment?
+    /// 用户消息的展开态 —— 长消息折叠 (判据在 `UserMessageFold`)。**只活在这个视图实例里**:
+    /// 滚出屏再滚回来、或换会话, 都回到折叠态。有意如此 —— 同 `ThinkingCardView` 的取舍,
+    /// "上次点开过"不该变成全局默认。
+    @State private var userExpanded = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 3) {
@@ -676,16 +716,81 @@ struct MessageBlockView: View {
             if !atts.isEmpty {
                 attachmentRow(atts)
             }
-            Text(s)
-                .font(CodexTheme.fontBody)
-                .foregroundStyle(CodexTheme.textPrimary)
-                .fixedSize(horizontal: false, vertical: true)
-                .textSelection(.enabled)   // 用户消息正文同样可选中复制
+            userBody(s)
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 11)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(CodexTheme.bgCard)
         .clipShape(RoundedRectangle(cornerRadius: CodexTheme.radiusLg))
+    }
+
+    /// 用户消息正文。短文本就是一条 `Text`; 长文本走折叠 —— 判据与切分在 `UserMessageFold`,
+    /// 为什么必须有这一层 (占屏 + `Text(整段)` 是平方级) 写在那里。
+    @ViewBuilder
+    private func userBody(_ s: String) -> some View {
+        if UserMessageFold.shouldFold(s) {
+            foldedUserText(s)
+        } else {
+            Text(s)
+                .font(CodexTheme.fontBody)
+                .foregroundStyle(CodexTheme.textPrimary)
+                .fixedSize(horizontal: false, vertical: true)
+                .textSelection(.enabled)   // 用户消息正文同样可选中复制
+        }
+    }
+
+    /// 折叠态 = 预览 6 行 + 一行「还有 N 行 · 展开」; 展开态 = **固定高滚动区**。
+    /// ⚠️ 展开态**按行渲染** (`LazyVStack`), 不是 `Text(全文)` —— 后者是平方级的。
+    ///    只实例化可见行, 所以 1 万行和 100 行的展开代价一样。
+    /// ⚠️ 提示必须报出**确切行数**: "还剩 1196 行"和"内容被吞了"是两件事。
+    @ViewBuilder
+    private func foldedUserText(_ s: String) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            if userExpanded {
+                ScrollView(.vertical, showsIndicators: true) {
+                    LazyVStack(alignment: .leading, spacing: 2) {
+                        ForEach(Array(s.components(separatedBy: "\n").enumerated()),
+                                id: \.offset) { _, line in
+                            userLine(line)
+                        }
+                    }
+                }
+                .frame(maxHeight: UserMessageFold.expandedMaxHeight)
+            } else {
+                VStack(alignment: .leading, spacing: 2) {
+                    ForEach(Array(UserMessageFold.preview(s).components(separatedBy: "\n").enumerated()),
+                            id: \.offset) { _, line in
+                        userLine(line)
+                    }
+                }
+            }
+
+            Button {
+                withAnimation(CodexTheme.animFast) { userExpanded.toggle() }
+            } label: {
+                HStack(spacing: 4) {
+                    Image(systemName: userExpanded ? "chevron.up" : "chevron.down")
+                        .font(.system(size: 8, weight: .semibold))
+                    Text(userExpanded
+                         ? Copy.userMessageCollapse
+                         : Copy.userMessageExpand(hiddenLines: UserMessageFold.hiddenLineCount(s)))
+                        .font(CodexTheme.fontTiny)
+                }
+                .foregroundStyle(CodexTheme.textTertiary)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+        }
+    }
+
+    /// 一行。**空行写成一个空格** —— `Text("")` 高度为 0, 空行会被吃掉, 观感与原文不符。
+    private func userLine(_ line: String) -> some View {
+        Text(line.isEmpty ? " " : line)
+            .font(CodexTheme.fontBody)
+            .foregroundStyle(CodexTheme.textPrimary)
+            .textSelection(.enabled)
+            .fixedSize(horizontal: false, vertical: true)
+            .frame(maxWidth: .infinity, alignment: .leading)
     }
 }

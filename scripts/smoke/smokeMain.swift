@@ -484,10 +484,10 @@ struct SmokeMain {
                   "T12 超长首句封顶 80+省略号")
 
             // 7) 格式化
-            check(TrajectoryBuilder.formatDuration(900) == "<1s"
-                  && TrajectoryBuilder.formatDuration(65_000) == "1m 5s"
-                  && TrajectoryBuilder.formatDuration(3_700_000) == "1h 1m",
-                  "T12 时长格式化三段")
+            check(TrajectoryBuilder.formatDuration(900) == "<1 秒"
+                  && TrajectoryBuilder.formatDuration(65_000) == "1 分 5 秒"
+                  && TrajectoryBuilder.formatDuration(3_700_000) == "1 小时 1 分",
+                  "T12 时长格式化三段 (单位是**文案**不是符号: 原写死 `1m 5s`)")
             check(TrajectoryBuilder.formatTokens(999) == "999"
                   && TrajectoryBuilder.formatTokens(1500) == "1.5k",
                   "T12 token 格式化 k 缩写")
@@ -1056,7 +1056,7 @@ struct SmokeMain {
             store.startSideChat(from: srcConv, upTo: 2)
             let sideItem = store.chats.first { $0.sideOf == srcConv }
             check(sideItem != nil, "T18 侧问会话已建 (sideOf=源)")
-            check(sideItem?.title.hasPrefix("Side · ") == true, "T18 标题 = Side · <源标题>")
+            check(sideItem?.title.hasPrefix("侧问 · ") == true, "T18 标题 = 侧问 · <源标题>")
             guard let sideId = sideItem?.id else { report() }
             check(store.selectedConversationId == sideId, "T18 侧问会话已选中")
             check(store.activeSideChat?.turns == 2 && store.activeSideChat?.parent == srcConv,
@@ -5658,7 +5658,7 @@ struct SmokeMain {
                     if case .text(let s) = m.content, s.contains("调不到 note_proposal") { return s }
                     return nil
                 }.first ?? ""
-                check(dmWarn.contains("Minimal"),
+                check(dmWarn.contains(AgentMode.minimal.displayName),
                       "P15.3 档位告警: dream 配成会削工具的档时, 往日志写一条 (**只告警**, 不推翻用户选择; 实测 [\(dmWarn)])")
             }
         }
@@ -6168,7 +6168,7 @@ struct SmokeMain {
                   "P12.2 思考级别: 全集七档, max 在**末位** (顺序 = 滑轨停靠序, 与 pi 规范序逐字一致)")
             check(ThinkingLevel.max.rawValue == "max",
                   "P12.2 思考级别: rawValue 是契约 token (逐字进 --thinking / set_thinking_level)")
-            check(ThinkingLevel.max.displayName == "Max", "P12.2 思考级别: 显示名 Max (英文常量, 不走 L())")
+            check(ThinkingLevel.max.displayName == L("最高"), "P12.2 思考级别: 显示名随语言 (原口径是英文常量)")
             check(ThinkingLevel.supported(reasoning: false, map: [:]) == [.off],
                   "P12.2 supported: 非 reasoning 模型只有 off")
             check(ThinkingLevel.supported(reasoning: true, map: [:]) == [.off, .minimal, .low, .medium, .high],

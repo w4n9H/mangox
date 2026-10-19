@@ -496,6 +496,12 @@ enum Tune {
     // ⚠️ 输出区这个数**同时是行为开关**: 没有它, 工具输出会随内容无限长 (P16 立项的起因)。
     static let toolOutputMaxHeight: CGFloat = 180   // 工具输出区 (固定高滚动区)
     static let toolDiffMaxHeight: CGFloat   = 260   // 审批卡 diff 预览 (原硬编码在 DiffPreviewView)
+    /// 工具行右侧徽标的**固定宽度** (2026-10-19) —— 治"连续快调 tool 时整行闪"。
+    /// 徽标在三态之间宽度天然不同 (`等待` / 圈+`运行中` / 耗时+`完成`), 而左边命令是
+    /// `lineLimit(1)` 自适应的 ⇒ 徽标一变宽, 命令就被挤窄、截断位置跳一次。快速连发把三次
+    /// 跳变压进几十毫秒, 看着就是闪; 慢工具那三次隔了几秒, 感知不到。定宽 + 右对齐 ⇒
+    /// 命令的可用宽度从头到尾不变。取 64 = `999ms 完成` (5 字符 mono 11pt + 6 间距 + 2 汉字)。
+    static let toolPhaseBadgeWidth: CGFloat = 64
 
     // 回到最新 (2026-10-16 boss: "往上翻了记录, 还要再往下翻才能到最底部")。
     // 它是挂在消息列底缘的**浮层** —— 不占布局流, 所以整件事只有这两个数。
@@ -518,8 +524,10 @@ enum Copy {
 
     // Composer
     static var composerPlaceholder: String { L("给 MangoX 发消息…") }
-    static let chooseProjectFallback = "Choose project"   // 未选项目时 pill 的占位 (恒英文)
-    static let chooseProjectMenu = "Choose project…"      // pill 菜单里的"取消选择" (恒英文)
+    // ⚠️ 必须是 `static var` + `L()`: 若写成 `static let`，取词只在**首次访问**时发生，
+    //    之后切语言这两个 pill 就冻在旧语言里（本地化门 ②「冻结取词」要红的那一类）。
+    static var chooseProjectFallback: String { L("选择项目") }   // 未选项目时 pill 的占位
+    static var chooseProjectMenu: String { L("选择项目…") }      // pill 菜单里的"取消选择"
 
     // 附件与目录选择面板
     static var attachPanelMessage: String { L("选择要附加的文件") }
@@ -563,6 +571,17 @@ enum Copy {
     static var compactedMarkerHelp: String {
         L("更早的消息仍在会话记录里，但模型不再看到原文 —— 它只看到一份摘要。")
     }
+
+    /// 用户消息折叠 (2026-10-19): 「还有 N 行 · 展开」。
+    /// ⚠️ 必须报**确切行数** —— "内容被折叠"和"内容被吞了"是两件事, 后者不可接受。
+    /// `0` 行 = 行数没超, 是被字符上限截的 (单行超长那种), 换成"内容较长"。
+    static func userMessageExpand(hiddenLines: Int) -> String {
+        hiddenLines > 0
+            ? String(format: L("还有 %lld 行 · 展开"), hiddenLines)
+            : L("内容较长 · 展开")
+    }
+
+    static var userMessageCollapse: String { L("收起") }
     /// 压缩进行中胶囊。原来直接把 pi 的值拼成「压缩中（threshold）…」—— 中文界面里
     /// 冒出一个英文契约值, 看着像没做完; 而且 `threshold` 这个词对用户没有意义。
     /// ⚠️ 胶囊的判据与标记的判据**共用同一套 reason 语义**, 别在两处各写一份映射。

@@ -90,7 +90,8 @@ struct SettingsView: View {
 
     private var header: some View {
         HStack {
-            Text("SETTINGS")
+            Text("设置")
+                    .textCase(.uppercase)
                 .font(.system(size: 11, weight: .semibold))
                 .tracking(0.5)
                 .foregroundStyle(CodexTheme.textMuted)
@@ -275,7 +276,7 @@ struct SettingsView: View {
                         .textFieldStyle(.roundedBorder)
                         .font(CodexTheme.fontSmall)
                 }
-                TextField("Base URL", text: $baseURL)
+                TextField("接口地址", text: $baseURL)
                     .textFieldStyle(.roundedBorder)
                     .font(CodexTheme.fontSmall)
                     .frame(minWidth: 200)

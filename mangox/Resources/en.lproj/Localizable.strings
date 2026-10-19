@@ -7,7 +7,7 @@
    **本文件由 scripts/l10n/gen_strings.py --write 生成, 别手改** ——
    译文改 scripts/l10n/en_values.py 的 VALUES, 再跑 --write。
 
-   条数: 700
+   条数: 752
 */
 
 " [附件: %@]" = " [Attachment: %@]";
@@ -18,10 +18,15 @@
 "%lld 个人格文件读不出来 (权限或编码), 内容未进 prompt: %@" = "%lld persona files cannot be read (permissions or encoding) — their content is not in the prompt: %@";
 "%lld 个来源" = "%lld sources";
 "%lld 个模型因缺元数据未列出: %@" = "%lld models not listed — no metadata available: %@";
+"%lld 分 %lld 秒" = "%lldm %llds";
+"%lld 分钟" = "%lldm";
+"%lld 天" = "%lldd";
 "%lld 天前" = "%lld days ago";
 "%lld 天未更新" = "not updated for %lld days";
 "%lld 字" = "%lld chars";
 "%lld 字节" = "%lld bytes";
+"%lld 小时" = "%lldh";
+"%lld 小时 %lld 分" = "%lldh %lldm";
 "%lld 条与 persona pack 的 key 冲突, 已跳过注入: %@" = "%lld items collide with a persona pack key and were skipped: %@";
 "%lld 条常驻条目被静默丢弃: %@" = "%lld always-on items were silently dropped: %@";
 "%lld 秒" = "%llds";
@@ -36,6 +41,7 @@
 "// 文件过大 (>1 MB), 暂不支持预览" = "// File too large (>1 MB) — preview not supported yet";
 "// 无法读取源码" = "// Cannot read the source";
 "// 空文件" = "// Empty file";
+"<1 秒" = "<1s";
 "= 检查频率 (条件可能成立后按此间隔值守)" = " = check interval (poll at this rate once the condition may hold)";
 "AI 回复生成中…" = "Generating reply…";
 "AI 记忆文件 = 各会话的对话上下文 (<uuid>.jsonl); 误删不可恢复。" = "The AI memory file is each session's conversation context (<uuid>.jsonl); deleting it cannot be undone.";
@@ -49,6 +55,7 @@
 "App 固定任务：不可删除；名字与档期照常可改" = "App-fixed task: it cannot be deleted; its name and schedule are still editable";
 "App 在后台时, 回合结束弹出系统通知; 前台使用时不弹, 点击通知跳回对应会话" = "Posts a system notification when a turn finishes while the app is in the background; no notification while you are using it. Click it to jump back to that session.";
 "Chat: 对话 · Trace: 结构化事件回放" = "Chat: conversation · Trace: structured event replay";
+"Codemode" = "Codemode";
 "HTML 已导出 · 已在 Finder 显示" = "HTML exported · revealed in Finder";
 "IMAP / SMTP 主机不能为空 (含端口)" = "IMAP / SMTP host must not be empty (include the port)";
 "IMAP 主机" = "IMAP host";
@@ -111,6 +118,7 @@
 "一" = "Mon";
 "一行一个地址; 名单外的信静默丢弃并移入 Trash" = "One address per line; mail from anyone else is silently dropped and moved to Trash.";
 "三" = "Wed";
+"上下文" = "Context";
 "上下文 %@" = "Context %@";
 "上下文 %@ / 压缩线 %@" = "Context %@ / compaction line %@";
 "上下文压缩失败：%@" = "Context compaction failed: %@";
@@ -128,6 +136,7 @@
 "丢弃" = "Discard";
 "丢弃本地修改, 重读磁盘文件" = "Discard local changes and reread the file from disk";
 "个任务" = " tasks";
+"中" = "Medium";
 "中 · 每 15 分钟" = "Medium · every 15 min";
 "串行位空闲" = "Serial slot idle";
 "为「%@」设置目录…" = "Set a directory for “%@”…";
@@ -136,6 +145,7 @@
 "事实" = "Fact";
 "二" = "Tue";
 "五" = "Fri";
+"交互" = "Interactive";
 "人格" = "Persona";
 "人格文件 frontmatter 破损 — 修好开头的 --- 收尾后再建带 key 的条目" = "Persona file frontmatter is broken — close the opening --- before creating items with a key";
 "人格文件是只读真源, 去 Finder 打开编辑" = "Persona files are the read-only source of truth — open in Finder to edit";
@@ -161,10 +171,12 @@
 "会话已被删除" = "Session deleted";
 "会话统计尚未上报 (发一轮后可得)" = "Session stats not reported yet (available after one turn)";
 "位置" = "Location";
+"低" = "Low";
 "低 · 每 30 分钟" = "Low · every 30 min";
 "你写的" = "You wrote it";
 "你手动压缩了上下文 · %lld → %lld tokens" = "You compacted the context · %lld → %lld tokens";
 "你是谁" = "Who You Are";
+"侧问 · %@" = "Side · %@";
 "侧问创建失败：快照回读未完成 (回合未成功)" = "Could not start the side chat: the snapshot could not be read back (the turn did not succeed).";
 "侧问快照创建失败：无法读取源会话记忆文件" = "Could not create the side-chat snapshot: the source session's memory file is unreadable.";
 "保存" = "Save";
@@ -174,6 +186,7 @@
 "保存并启用" = "Save and enable";
 "保存日志" = "Save log";
 "修好文件开头的 --- 收尾后自动恢复; 点行尾「文件」去打开目录" = "Closing the opening --- restores it automatically; click “File” at the row’s end to open the folder";
+"值守" = "Watch";
 "值守中 · %@" = "Watching · %@";
 "停止 (⌘.)" = "Stop (⌘.)";
 "停止该任务" = "Stop this task";
@@ -186,11 +199,13 @@
 "全局唤起捕获输入条: 输入后回车即以无人值守模式开跑 (关审批 + Minimal 档); Esc 或点击外部关闭" = "Global hotkey opens the capture bar: type and press Enter to run unattended (approval off, Minimal mode); Esc or clicking outside closes it.";
 "六" = "Sat";
 "共享密钥" = "Shared secret";
+"关" = "Off";
 "关闭" = "Close";
 "关闭提示" = "Dismiss";
 "其他…" = "Other…";
 "具备标准模式全部能力, 并挂载全部业务扩展, 扩展注册的工具一并进入工具池。" = "Everything Standard offers, plus every business extension mounted — tools they register join the tool pool.";
 "内容没变时不会写盘, 也不会留下一条变更记录" = "Nothing is written when the content is unchanged, and no revision is recorded";
+"内容较长 · 展开" = "Long content · Expand";
 "内置" = "Built-in";
 "内置审批扩展, 不可停用" = "Built-in approval extension, cannot be disabled";
 "写一篇新笔记 (存到全局笔记目录, 下一轮组装就会带上它)" = "Write a new note (stored in the global notes directory; the next assembly picks it up)";
@@ -206,6 +221,7 @@
 "分" = "Min";
 "分 时 日 月 周" = "min hour day month weekday";
 "分钟" = "Minutes";
+"刚刚" = "now";
 "创建" = "Create";
 "创建备份目录失败: %@" = "Could not create the backup directory: %@";
 "创建这个 Inbox" = "Create this Inbox";
@@ -241,6 +257,7 @@
 "功能完整的编码 Agent, 内置 7 个工具 (读/写/Shell + grep/find/ls 检索三件套), 不挂业务扩展 — 日常默认档。" = "A full-featured coding agent with seven built-in tools (read / write / shell plus the grep/find/ls search trio) and no business extensions — the everyday default.";
 "加入白名单" = "Add to allowlist";
 "加载中…" = "Loading…";
+"助手" = "Assistant";
 "单条消息最多 %lld 张图片, 超出请拆条发送" = "Up to %lld images per message — split into several messages if you need more";
 "博查 API Key" = "Bocha API key";
 "占用 %lld 个保留 key" = "holds %lld reserved key(s)";
@@ -308,11 +325,15 @@
 "它锁住这些 key，DB 条目里不能再用:" = "It locks these keys, which DB items can no longer use:";
 "完成" = "Done";
 "完整地址, 如 you@example.com" = "Full address, e.g. you@example.com";
+"完整模式" = "Full mode";
+"定时" = "Scheduled";
+"定时任务" = "Scheduled";
 "审批流关闭, 点击开启" = "Approval off, click to enable";
 "审批流开启, 点击关闭" = "Approval on, click to disable";
 "密钥不匹配" = "Secret does not match";
 "密钥闸" = "Secret gate";
 "密钥闸开着但没有密钥 —— 首封会被判「缺密钥」拒绝" = "The secret gate is on but no secret is set — the first message will be rejected as missing the secret.";
+"对话" = "Chat";
 "导入 .ts/.js 到托管区" = "Import .ts / .js into the managed area";
 "导入到托管区" = "Import into the managed area";
 "导出 HTML 并在 Finder 显示" = "Export HTML and reveal it in Finder";
@@ -350,6 +371,7 @@
 "已设置 (留空不修改)" = "Already set (leave blank to keep)";
 "已跑 %lld 次" = "Ran %lld times";
 "帮助" = "Help";
+"常规模式" = "Standard mode";
 "常驻" = "Always on";
 "常驻硬规 %lld 条没进 prompt: %@" = "%lld always-on rules did not make it into the prompt: %@";
 "常驻超限: %lld 条未进本轮 prompt (按 priority 从低到高降级): %@" = "Over resident budget: %lld items skipped this turn's prompt (lowest priority dropped first): %@";
@@ -406,19 +428,24 @@
 "排队 %lld 个" = "%lld queued";
 "排队 %lld 条" = "%lld queued";
 "探测地址" = "Probe URL";
+"接口地址" = "Base URL";
+"推荐" = "Recommended";
 "描述" = "Description";
 "提于 %@" = "Proposed %@";
 "提出时的指纹" = "Base hash";
 "提案" = "Proposal";
 "提炼依据: %@" = "Distilled from: %@";
+"插件" = "Plugins";
 "搜索会话、项目" = "Search chats and projects";
 "摘掉" = "Unmount";
 "摘掉知识库「%@」？" = "Unmount knowledge base “%@”?";
 "摘掉这个库" = "Unmount this base";
 "摘要" = "Summary";
 "摘要重试中…" = "Retrying summary…";
+"收件" = "Inbox";
 "收件实现未接入 (P10.2c)" = "Receiving is not wired up yet (P10.2c)";
 "收信中 · 每 %llds" = "Receiving · every %llds";
+"收起" = "Collapse";
 "收起侧栏" = "Collapse sidebar";
 "收起工作区" = "Collapse workspace";
 "改动会重置该账号的连接实例 (下次收信生效)" = "Saving resets this account's connection (takes effect on the next check).";
@@ -436,6 +463,7 @@
 "新" = "New";
 "新会话" = "New session";
 "新会话-%@" = "New session-%@";
+"新对话" = "New chat";
 "新建 (Cron 定时 · Watch 条件值守 · Inbox 来信驱动)" = "New (Cron schedule · Watch condition · Inbox mail-driven)";
 "新建 Cron 任务" = "New Cron task";
 "新建 Inbox" = "New Inbox";
@@ -481,6 +509,7 @@
 "最近拒收" = "Recent rejections";
 "最近提交" = "Recent commits";
 "最近收信 %@" = "Last received %@";
+"最高" = "Max";
 "服务商" = "Provider";
 "服务端未返回该邮件 (UID 已不存在或被移走)" = "The server returned no such message (the UID no longer exists or was moved)";
 "未上报 %lld 条 (旧会话无 responseId)" = "%lld unreported (older sessions have no responseId)";
@@ -507,6 +536,8 @@
 "来源 · %lld 条" = "Sources · %lld";
 "来自 %@" = "From %@";
 "来自「%@」的快照 · 含 %lld 轮上下文" = "Snapshot from “%@” · %lld turns of context";
+"极简" = "Minimal";
+"极简模式" = "Minimal mode";
 "查看本次注入" = "View this turn's injection";
 "标题" = "Title";
 "标题不能为空" = "The title cannot be empty";
@@ -540,9 +571,11 @@
 "没有匹配的会话或项目" = "No matching chats or projects";
 "注入块在 spawn 期生效; 点此重启引擎立刻生效" = "The injection block takes effect at spawn; restart the engine to apply it now";
 "注入块已是最新" = "Injected block is up to date";
+"注入量" = "PAYLOAD";
 "浅色" = "Light";
 "测试中…" = "Testing…";
 "测试连接" = "Test connection";
+"消息" = "Messages";
 "消息落库" = "Persist messages";
 "深色" = "Dark";
 "添加邮箱" = "Add mailbox";
@@ -569,9 +602,11 @@
 "目标会话已不存在, 捕获未发送" = "The target session no longer exists; capture not sent";
 "直接提问，模型已了解源会话上下文" = "Ask directly — the model already knows the source session's context";
 "知识" = "Knowledge";
+"知识库" = "Knowledge";
 "知识库/记忆: 当前会话注入条数" = "Knowledge base / memory: entries injected into this session";
 "知识库索引整段未进本轮 prompt (体积超预算): %@" = "The knowledge-base index did not fit this turn (over budget): %@";
 "硬规" = "Rule";
+"确认计划" = "Confirm plan";
 "离开期间完成 %lld 轮" = "Completed %lld turns while you were away";
 "离开期间完成 1 轮" = "Completed 1 turn while you were away";
 "移进「废纸篓」(还能捞回来); 当前内容先记进变更史" = "Move to the Trash (still recoverable); the current content is recorded in the revision history first";
@@ -582,12 +617,14 @@
 "立即运行 (不等定时; 关掉开关也能跑)" = "Run now (ignores the schedule; works even when the toggle is off)";
 "笔记" = "Notes";
 "笔记目录" = "Notes folder";
+"第 %lld 轮" = "Turn %lld";
 "等待" = "Waiting";
 "等待审批" = "Awaiting approval";
 "索引宁缺勿残 — 残缺的索引会让你以为资料只有这些; 摘掉或停用一两个库即可恢复" = "A partial index is worse than none — it would read as “these are all the materials”. Unmount or disable a base or two to restore it";
 "索引预览" = "Index preview";
 "细节" = "Details";
 "给 MangoX 发消息…" = "Message MangoX…";
+"缓存" = "Cache";
 "编辑" = "Edit";
 "编辑内容后采纳, 转为正式条目 (需重启引擎生效)" = "Edit and accept to turn it into a proper entry (restart the engine to apply)";
 "缺 IMAP 主机" = "IMAP host missing";
@@ -600,11 +637,15 @@
 "网页版邮箱「设置 → 客户端设置」开启 IMAP/SMTP, 生成客户端专用密码 —— 用它当密码, 不是登录密码" = "In the web mailbox, open Settings → Client settings, enable IMAP/SMTP and generate a client-specific password — use that as the password, not your login password";
 "网页版邮箱「设置 → 账户」开启 IMAP/SMTP 服务, 短信验证后得到授权码 —— 用它当密码, 不是登录密码" = "In the web mailbox, open Settings → Account, enable IMAP/SMTP and verify by SMS to get the app password — use that as the password, not your login password";
 "老档位 · 行为不变" = "Older modes · unchanged";
+"耗时" = "Duration";
 "联网搜索 (博查 API Key)" = "Web search (Bocha API key)";
 "联网搜索扩展没配博查 API Key —— 挂上它也只会每次调用都回「未启用」, 所以不挂。在 设置 → 联网搜索 里填一个 Key 并保存, 它就会挂上。" = "The web search extension has no Bocha API key set - mounting it would only make every call answer not enabled, so it stays unmounted. Enter a key under Settings - Web search and save; it gets mounted right away.";
+"自动放行" = "Auto allow";
+"自动裁决" = "Auto judge";
 "自定义" = "Custom";
 "自定义 provider: 填 Base URL, 可选测试" = "Custom provider: fill in the base URL, testing is optional";
 "自定义…" = "Custom…";
+"自定义回答…" = "Custom answer…";
 "自定义模型与模式" = "Custom model and mode";
 "草稿还没保存 —— 下面的索引预览显示的是已保存的那句" = "Draft not saved yet — the index preview below shows the saved sentence";
 "行标题是文件名加上一句固定说明（如 SOUL.md - 我是谁）；表外的文件就只有文件名" = "A row title is the file name plus a fixed description (e.g. SOUL.md - Who I Am); files outside the list show only the file name";
@@ -613,6 +654,7 @@
 "解析失败: %@" = "Parsing failed: %@";
 "触发条件 (每轮轻检查)" = "Trigger condition (checked lightly each round)";
 "触发条件与动作为必填" = "Trigger condition and action are required";
+"计划提问" = "Plan question";
 "认下这批漏跑, 不再提示" = "Accept these misses and stop asking";
 "认证失败, 检查授权码%@" = "Authentication failed — check the app password%@";
 "记忆" = "Memory";
@@ -625,6 +667,7 @@
 "该邮箱已被其他 Inbox agent 占用 (一个邮箱只能绑一个)" = "This mailbox is already taken by another Inbox agent (one mailbox binds to one only)";
 "该项目下的所有会话与消息记录将一并删除, 此操作不可撤销。" = "All sessions and messages under this project will be deleted too; this cannot be undone.";
 "该预设需要 API Key" = "This preset needs an API key";
+"详情" = "Details";
 "语言 (Language)" = "Language";
 "请先填名称 (编辑器顶部那个大字输入框)" = "Fill in the name first (the large input at the top of the editor)";
 "请填名字" = "Enter a name";
@@ -633,14 +676,19 @@
 "请看图" = "See the image";
 "请选择" = "Choose one";
 "请选择邮箱" = "Choose a mailbox";
+"调用" = "Calls";
 "账号不存在" = "Account does not exist";
 "账号已删除" = "Account deleted";
 "账号缺授权码" = "Account has no app password";
 "超过上限时: 会话发送被拒绝并提示; 定时任务到点会跳过并在日志会话记录原因。" = "When over the limit: sends in sessions are refused with a message, and scheduled tasks skip that run and record the reason in the log session.";
+"超高" = "Extra High";
 "跟随系统" = "Follow system";
 "跟随系统 = 由 macOS 的浅色/深色设置决定; 切换立即生效, 影响全 App (含迷你台)" = "Follow system = decided by macOS light/dark; switching applies immediately across the app (task bar included)";
 "跟随系统 = 由 macOS 的语言设置决定; 切换立即生效, 影响全 App (含迷你台与快速捕获)。系统级文案 (菜单栏 / 系统弹窗) 仍随系统语言, 重启后完全一致。" = "Follow system = decided by the macOS language setting; switching applies immediately across the app (task bar and quick capture included). System-level text (menu bar, system dialogs) still follows the system language and matches after a restart.";
+"轨迹" = "Trace";
+"轮次" = "Turns";
 "轮询间隔" = "Check interval";
+"输入" = "In";
 "输出" = "Output";
 "迁移" = "Migrate";
 "过滤文件…" = "Filter files…";
@@ -651,6 +699,7 @@
 "返回文件树" = "Back to file tree";
 "还原主窗口" = "Restore main window";
 "还差: %@" = "Still missing: %@";
+"还有 %lld 行 · 展开" = "%lld more lines · Expand";
 "还没有可用的邮箱账号" = "No usable mailbox account yet";
 "还没有常驻内容\n点右上角 + 新建条目, 或用常驻区与笔记区的入口放入文件" = "Nothing always-on yet\nUse + in the top right to add an entry, or use the resident and notes section entries to put files in place";
 "这一段会进每轮 prompt 的索引段, 逐字就是 agent 收到的" = "This section goes into the index of every prompt, word for word as the agent receives it";
@@ -674,6 +723,7 @@
 "选择要附加的文件" = "Choose files to attach";
 "选择邮箱" = "Choose a mailbox";
 "选择项目" = "Choose a project";
+"选择项目…" = "Choose project…";
 "选择项目文件夹 (将作为 Agent 工作目录)" = "Choose the project folder (used as the agent's working directory)";
 "选择预设, 填 Key 后测试连接" = "Pick a preset, enter the key and test the connection";
 "邮件正文为空 (或只有 HTML): 请以纯文本发送任务内容。" = "The message body is empty (or HTML only): send the task as plain text.";
@@ -699,6 +749,7 @@
 "间隔" = "Interval";
 "阿里云邮箱" = "Alibaba Cloud Mail";
 "附加文件…" = "Attach files…";
+"需要审批" = "Ask for approval";
 "需要时才查" = "On demand";
 "需要时才查 %lld 条 · 不占预算" = "%lld on demand · off budget";
 "非只读命令" = "non-read-only command";
@@ -708,5 +759,6 @@
 "预设" = "Preset";
 "首封主题里必须带这串密钥 (清洗剥掉后不落库)" = "The first message's subject must carry this secret (stripped during cleanup and never stored)";
 "首次运行前为空; agent 运行后会把关键进展写在这里, 也可手动编辑干预任务方向…" = "Empty before the first run; the agent writes key progress here and you can edit it by hand to steer the task…";
+"高" = "High";
 "高 · 每 5 分钟" = "High · every 5 minutes";
 "高级" = "Advanced";

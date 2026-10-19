@@ -22,9 +22,9 @@ struct TrajectoryView: View {
         var id: String { rawValue }
         var label: String {
             switch self {
-            case .messages: return "Messages"
-            case .turns:    return "Turns"
-            case .details:  return "Details"
+            case .messages: return L("消息")
+            case .turns:    return L("轮次")
+            case .details:  return L("详情")
             }
         }
     }
@@ -54,14 +54,17 @@ struct TrajectoryView: View {
     private func headerRow(_ turns: [TrajectoryTurn]) -> some View {
         let s = TrajectoryBuilder.summary(turns)
         return HStack(spacing: 24) {
-            Text("TRACE")
+            Text("轨迹")
+                // 全大写是**排版手法**而不是字面量的一部分: 英文由 `.textCase` 大写成 "TRACE",
+                // 中文/日文等无大小写的文字是 no-op ⇒ 一个 key 同时服务两种语言。
+                .textCase(.uppercase)
                 .font(.system(size: 11, weight: .semibold))
                 .tracking(0.5)
                 .foregroundStyle(CodexTheme.textMuted)
             statCell(value: s.turns == 0 ? "—" : TrajectoryBuilder.formatDuration(s.durationMs),
-                     label: "Duration")
-            statCell(value: "\(s.turns)", label: "Turns")
-            statCell(value: "\(s.calls)", label: "Calls")
+                     label: L("耗时"))
+            statCell(value: "\(s.turns)", label: L("轮次"))
+            statCell(value: "\(s.calls)", label: L("调用"))
             Spacer()
             // P6.2.2: segment 三档
             HStack(spacing: 2) {
@@ -172,7 +175,7 @@ struct TrajectoryView: View {
                 .font(.system(size: 8, weight: .semibold))
                 .foregroundStyle(CodexTheme.textMuted)
                 .rotationEffect(isExpanded ? .degrees(90) : .zero)
-            Text("Turn \(turn.index)")
+            Text(String(format: L("第 %lld 轮"), turn.index))
                 .font(.system(size: 11, weight: .semibold))
                 .foregroundStyle(CodexTheme.textSecondary)
             Text(turn.startedAt.formatted(date: .omitted, time: .standard))
@@ -313,7 +316,7 @@ struct TrajectoryView: View {
         } label: {
             VStack(alignment: .leading, spacing: 6) {
                 HStack(spacing: 8) {
-                    Text("Turn \(turn.index)")
+                    Text(String(format: L("第 %lld 轮"), turn.index))
                         .font(.system(size: 11, weight: .semibold))
                         .foregroundStyle(CodexTheme.textSecondary)
                     Text(turn.startedAt.formatted(date: .omitted, time: .standard))
@@ -396,12 +399,12 @@ struct TrajectoryView: View {
         HStack(spacing: 16) {
             if let stats = store.sessionStats {
                 if let p = stats.contextPercent {
-                    statCell(value: String(format: "%.1f%%", p), label: "Context")
+                    statCell(value: String(format: "%.1f%%", p), label: L("上下文"))
                 }
-                statCell(value: TrajectoryBuilder.formatTokens(stats.inputTokens), label: "In")
-                statCell(value: TrajectoryBuilder.formatTokens(stats.outputTokens), label: "Out")
+                statCell(value: TrajectoryBuilder.formatTokens(stats.inputTokens), label: L("输入"))
+                statCell(value: TrajectoryBuilder.formatTokens(stats.outputTokens), label: L("输出"))
                 if let cache = stats.cachePercent {
-                    statCell(value: String(format: "%.0f%%", cache), label: "Cache")
+                    statCell(value: String(format: "%.0f%%", cache), label: L("缓存"))
                 }
                 // 费用不显示 (2026-09-14 拍板: Details 只看 token); costUSD 仍在数据链里
             } else {
@@ -424,7 +427,7 @@ struct TrajectoryView: View {
                 withAnimation(CodexTheme.animFast) { toggle(row.id) }
             } label: {
                 HStack(spacing: 10) {
-                    kindChip("LLM", CodexTheme.info)
+                    kindChip(L("模型"), CodexTheme.info).textCase(.uppercase)
                     Text(row.timestamp.formatted(date: .omitted, time: .standard))
                         .font(CodexTheme.fontMonoXs)
                         .foregroundStyle(CodexTheme.textSecondary)
@@ -465,7 +468,7 @@ struct TrajectoryView: View {
         switch event.kind {
         case .user:
             HStack(alignment: .top, spacing: 10) {
-                kindChip("USER", CodexTheme.accent, prominent: true)
+                kindChip(L("用户"), CodexTheme.accent, prominent: true).textCase(.uppercase)
                 Text(event.prompt)
                     .font(.system(size: 12))   // 正文降档: 事件线是主线, 正文退居次要
                     .foregroundStyle(CodexTheme.textSecondary)
@@ -489,7 +492,7 @@ struct TrajectoryView: View {
                 withAnimation(CodexTheme.animFast) { toggle(event.id) }
             } label: {
                 HStack(alignment: .firstTextBaseline, spacing: 10) {
-                    kindChip("ASSISTANT", CodexTheme.info)
+                    kindChip(L("助手"), CodexTheme.info).textCase(.uppercase)
                     Text(TrajectoryBuilder.firstSentence(event.fullText))
                         .font(.system(size: 12))   // 正文降档 (同 USER: 一个字号一个色号)
                         .foregroundStyle(CodexTheme.textSecondary)
@@ -676,7 +679,7 @@ struct TrajectoryView: View {
     /// 实时占位行: 会话在途且无新落定事件 → 旋转弧 + 「生成中」(同侧栏弧样式)。
     private var liveRow: some View {
         HStack(spacing: 10) {
-            kindChip("ASSISTANT", CodexTheme.info)
+            kindChip(L("助手"), CodexTheme.info).textCase(.uppercase)
             CodexSpinner()
             Text("AI 回复生成中…")
                 .font(CodexTheme.fontSmall)

@@ -51,7 +51,8 @@ struct ExtensionsView: View {
     private var listPane: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack {
-                Text("PLUGINS")
+                Text("插件")
+                    .textCase(.uppercase)
                     .font(.system(size: 11, weight: .semibold))
                     .tracking(0.5)
                     .foregroundStyle(CodexTheme.textMuted)

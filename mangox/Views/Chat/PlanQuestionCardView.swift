@@ -14,7 +14,7 @@ struct PlanQuestionCardView: View {
                 Image(systemName: "list.bullet.rectangle")
                     .font(.system(size: 12))
                     .foregroundStyle(CodexTheme.accent)
-                Text("Plan question")
+                Text("计划提问")
                     .font(.system(size: 11, weight: .semibold))
                     .tracking(0.3)
                     .foregroundStyle(CodexTheme.accent)
@@ -36,11 +36,11 @@ struct PlanQuestionCardView: View {
             }
             HStack(spacing: 8) {
                 if question.allowsCustom {
-                    Button("Custom answer…") {}
+                    Button("自定义回答…") {}
                         .buttonStyle(CodexTonalButtonStyle())
                 }
                 Spacer()
-                Button("Confirm plan") {}
+                Button("确认计划") {}
                     .buttonStyle(CodexPrimaryButtonStyle())
                     .disabled(selected == nil)
                     .opacity(selected == nil ? 0.5 : 1)
@@ -81,7 +81,7 @@ struct OptionRow: View {
                             .font(CodexTheme.fontBody)
                             .foregroundStyle(CodexTheme.textPrimary)
                         if option.isRecommended {
-                            Text("Recommended")
+                            Text("推荐")
                                 .font(.system(size: 10, weight: .semibold))
                                 .padding(.horizontal, 6).padding(.vertical, 1)
                                 .background(CodexTheme.accentSoft)

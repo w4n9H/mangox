@@ -308,13 +308,18 @@ enum TrajectoryBuilder {
         return (capped || brokeAtNewline) ? sentence + "…" : sentence
     }
 
+    /// 时长文本（轨迹页 `Duration` 单元格 / 每轮摘要）。
+    /// ⚠️ 单位是**文案**不是符号: 原先写死 `"3m 20s"`，中文模式下它会与旁边的中文对不上
+    /// （2026-10-19 与 `Date.relativeTag` 同一批修）。`String(format:)` 的位置/个数必须与中文一致。
     static func formatDuration(_ ms: Int) -> String {
-        if ms < 1_000 { return "<1s" }
-        if ms < 60_000 { return "\(Int((Double(ms) / 1000).rounded()))s" }
+        if ms < 1_000 { return L("<1 秒") }
+        if ms < 60_000 { return String(format: L("%lld 秒"), Int((Double(ms) / 1000).rounded())) }
         if ms < 3_600_000 {
-            return "\(ms / 60_000)m \(Int((Double(ms % 60_000) / 1000).rounded()))s"
+            return String(format: L("%lld 分 %lld 秒"),
+                          ms / 60_000, Int((Double(ms % 60_000) / 1000).rounded()))
         }
-        return "\(ms / 3_600_000)h \((ms % 3_600_000) / 60_000)m"
+        return String(format: L("%lld 小时 %lld 分"),
+                      ms / 3_600_000, (ms % 3_600_000) / 60_000)
     }
 
     static func formatTokens(_ n: Int) -> String {

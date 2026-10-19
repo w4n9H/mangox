@@ -144,18 +144,19 @@ enum ThinkingLevel: String, CaseIterable, Identifiable {
     case off, minimal, low, medium, high, xhigh, max
     var id: String { rawValue }
 
-    /// 界面标签。**英文常量, 不走 `L()`** —— 与 `AgentMode.displayName` 同款口径
-    /// (档位名保持单一写法, 不随界面语言变)。`rawValue` 是**契约 token** (spawn 的
-    /// `--thinking` 与 `set_thinking_level` 逐字使用), 任何显示都不得回写它。
+    /// 界面标签。⚠️ 2026-10-19 口径变更: 原注释写「英文常量, 不走 `L()`（档位名保持单一写法）」,
+    /// boss 拍板推翻 —— 中文模式下的模型 pill 会显示 `High`, 与旁边中文界面对不上。
+    /// ⚠️ `rawValue` 是**契约 token** (spawn 的 `--thinking` 与 `set_thinking_level` 逐字使用),
+    /// 任何显示都不得回写它; 本地化只在这层。计算属性 ⇒ 切语言即时跟随。
     var displayName: String {
         switch self {
-        case .off: "Off"
-        case .minimal: "Minimal"
-        case .low: "Low"
-        case .medium: "Medium"
-        case .high: "High"
-        case .xhigh: "Extra High"
-        case .max: "Max"
+        case .off: L("关")
+        case .minimal: L("极简")
+        case .low: L("低")
+        case .medium: L("中")
+        case .high: L("高")
+        case .xhigh: L("超高")
+        case .max: L("最高")
         }
     }
 

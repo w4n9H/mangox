@@ -141,7 +141,8 @@ struct ScheduledView: View {
     private var listPane: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack {
-                Text("SCHEDULED")
+                Text("定时任务")
+                    .textCase(.uppercase)
                     .font(.system(size: 11, weight: .semibold))
                     .tracking(0.5)
                     .foregroundStyle(CodexTheme.textMuted)
@@ -574,9 +575,9 @@ struct ScheduledView: View {
         case cron, watch, inbox
         var id: Int { rawValue }
         var label: String { switch self {
-        case .cron: "Cron"
-        case .watch: "Watch"
-        case .inbox: "Inbox"
+        case .cron: L("定时")
+        case .watch: L("值守")
+        case .inbox: L("收件")
         } }
         var help: String { switch self {
         case .cron: L("到点投递 prompt (cron 驱动)")

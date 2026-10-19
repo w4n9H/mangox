@@ -238,7 +238,7 @@ struct ChatComposer: View {
             HStack(spacing: 5) {
                 Image(systemName: store.askApproval ? "hand.raised.fill" : "hand.raised")
                     .font(.system(size: 10))
-                Text("Ask for approval")
+                Text("需要审批")
                     .font(CodexTheme.fontSmall)
             }
             // 开关视觉: on = textPrimary (近黑), off = textTertiary (无状态区分是 A4"点了没反应"的根因)
@@ -267,7 +267,10 @@ struct ChatComposer: View {
                         help: L("模式档位: 决定 agent 可用的工具与扩展 (下回合生效)")) {
             (Text(Image(systemName: "slider.horizontal.3"))
                 .font(.system(size: 10)).foregroundColor(store.agentMode == .standard ? CodexTheme.textTertiary : CodexTheme.textPrimary)
-             + Text(" \(store.agentMode.displayName)")
+             // ⚠️ 别写成 `Text(" \(…)")` —— 那是 `LocalizedStringKey` **带插值**, SwiftUI 会拿
+             //    `" %@"` 去查表（查不到就回落, 看起来正常, 但词表里永远查不出这条"幽灵键"）。
+             //    拼接进来的本就是已本地化的字符串, 所以这里用 `verbatim:` 明确"不要再查表"。
+             + Text(verbatim: " " + store.agentMode.displayName)
                 .font(CodexTheme.fontSmall).foregroundColor(store.agentMode == .standard ? CodexTheme.textTertiary : CodexTheme.textPrimary))
                 .padding(.horizontal, 8)
                 .padding(.vertical, 3)

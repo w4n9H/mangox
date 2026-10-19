@@ -187,7 +187,8 @@ struct KnowledgeView: View {
         let fraction = min(1.0, Double(inj.residentChars) / Double(max(1, Tune.knowledgeTotalCharLimit)))
         return VStack(alignment: .leading, spacing: 5) {
             HStack(spacing: 10) {
-                Text("PAYLOAD")
+                Text("注入量")
+                    .textCase(.uppercase)
                     .font(.system(size: 11, weight: .semibold))
                     .tracking(0.5)
                     .foregroundStyle(CodexTheme.textMuted)
@@ -433,7 +434,8 @@ struct KnowledgeView: View {
             // ③ **就近 > 全局**: 段的入口就在段末, 视线不必离开列表（常驻段最多 3~4 行, 自定义段
             //    永远在首屏内 —— 所以"长列表要滚回来点"这个保留理由不成立, 我自己否掉）。
             // 判据: **一个动作一个入口, 且入口住在这个动作所属的那一段里**。
-            Text("KNOWLEDGE")
+            Text("知识库")
+                .textCase(.uppercase)
                 .font(.system(size: 11, weight: .semibold))
                 .tracking(0.5)
                 .foregroundStyle(CodexTheme.textMuted)

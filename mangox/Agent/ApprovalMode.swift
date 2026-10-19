@@ -29,11 +29,13 @@ enum ApprovalMode: String, Codable, CaseIterable, Identifiable {
 
     var id: String { rawValue }
 
+    /// 界面标签。⚠️ 与 `AgentMode.displayName` 同一次口径变更（2026-10-19）:
+    /// 原注释写「英文常量, 不走 `L()`」, boss 拍板改成随界面语言。计算属性 ⇒ 不冻结语言。
     var displayName: String {
         switch self {
-        case .interactive: "Interactive"
-        case .autoAllow:   "Auto allow"
-        case .autoJudge:   "Auto judge"
+        case .interactive: L("交互")
+        case .autoAllow:   L("自动放行")
+        case .autoJudge:   L("自动裁决")
         }
     }
 

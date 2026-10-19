@@ -27,8 +27,16 @@ struct AwaySummary: Equatable {
 @MainActor
 final class ChatStore: ObservableObject {
 
-    /// 会话默认标题 (首条 user 消息发送后自动替换为消息前 10 字符)。
-    static let defaultConversationTitle = "New chat"
+    /// 会话默认标题 —— **这是存储哨兵, 不是文案**。
+    ///
+    /// ⚠️ 三个身份叠在一起，所以**不得 `L()` 它**：
+    ///   ① 新会话落库的初始值（库里已有大量 `title = 'New chat'` 的行，改值 = 老会话全变"未命名"）；
+    ///   ② `autoTitleIfNeeded` 的判据（`item.title == 这个值` 才自动命名）；
+    ///   ③ 界面显示文本。
+    /// ①② 要求它**不随界面语言变**，③ 要求它随语言变 ⇒ 只能拆开: 存储用本常量,
+    /// 显示走 `ConversationItem.displayTitle`（那里把哨兵映射成 `L("新对话")`）。
+    /// 值本身住在 `ConversationTitle.defaultValue`（nonisolated —— `displayTitle` 在非隔离上下文里读它）。
+    static let defaultConversationTitle = ConversationTitle.defaultValue
 
     /// P4.0.2 Transport 池: sessionId -> 实例 (每会话一个; 内部仍 per-turn 进程, spawn 即跑完即退)。
     private var transports: [UUID: any AgentTransport] = [:]
@@ -204,9 +212,11 @@ final class ChatStore: ObservableObject {
         projects.flatMap(\.items) + chats
     }
 
-    /// 顶栏标题: 当前会话名, 无选中则 "New chat"。
+    /// 顶栏标题: 当前会话名, 无选中则默认标题。
+    /// ⚠️ 走 `displayTitle` 而不是 `title` —— 默认标题是**存储哨兵**(`New chat`),
+    ///    直接显示会让中文模式下的顶栏一直挂着英文（2026-10-19）。
     var selectedTitle: String {
-        allConversations.first { $0.id == selectedConversationId }?.title ?? Self.defaultConversationTitle
+        allConversations.first { $0.id == selectedConversationId }?.displayTitle ?? L("新对话")
     }
 
     // Workspace (第三栏, 文件树): 真实目录扫描 (P3.4), 无项目时为空
@@ -762,19 +772,23 @@ final class ChatStore: ObservableObject {
     }
 
     /// 重命名会话（保留 id, 刷新 updatedAt）。
+    ///
+    /// ⚠️ **落库那一行必须排在两个内存分支之后** —— 2026-10-19 修的一处长期缺陷:
+    /// 项目分支原来是 `return` 出函数, 把下面的 `renameSession` 一起跳过了 ⇒
+    /// **项目下的会话从来没落过标题**（重启回读仍是 `New chat`, 再发一条消息又"自动命名"一次,
+    /// 标题于是每次都跟着最新那条消息漂）。平铺 `chats` 分支没有 `return`, 所以缺陷只在项目区出现;
+    /// 而 T20 的断言只看 `store.chats` ⇒ 全程绿灯。现在两个分支都只**改内存**, 落库统一在出口。
     func renameConversation(_ id: UUID, to title: String) {
         let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
-        for g in projects.indices {
-            if let idx = projects[g].items.firstIndex(where: { $0.id == id }) {
-                let old = projects[g].items[idx]
-                projects[g].items[idx] = ConversationItem(
-                    id: old.id, title: trimmed,
-                    updatedAt: .now,
-                    unreadCount: old.unreadCount,
-                    sideOf: old.sideOf)   // P6.3.1: 侧问标记保留 (重建构造防丢)
-                return
-            }
+        if let pidx = projects.firstIndex(where: { $0.items.contains { $0.id == id } }),
+           let iidx = projects[pidx].items.firstIndex(where: { $0.id == id }) {
+            let old = projects[pidx].items[iidx]
+            projects[pidx].items[iidx] = ConversationItem(
+                id: old.id, title: trimmed,
+                updatedAt: .now,
+                unreadCount: old.unreadCount,
+                sideOf: old.sideOf)   // P6.3.1: 侧问标记保留 (重建构造防丢)
         }
         if let idx = chats.firstIndex(where: { $0.id == id }) {
             let old = chats[idx]
@@ -1322,7 +1336,7 @@ final class ChatStore: ObservableObject {
             activeSideChat = nil
             return
         }
-        let parentTitle = allConversations.first { $0.id == info.sideOf }?.title ?? L("已删除的会话")
+        let parentTitle = allConversations.first { $0.id == info.sideOf }?.displayTitle ?? L("已删除的会话")
         activeSideChat = SideChatInfo(parent: info.sideOf, parentTitle: parentTitle,
                                       turns: info.turns, at: info.at)
     }
@@ -1393,7 +1407,7 @@ final class ChatStore: ObservableObject {
         // fork 时源会话的轮数 (提示条 "含 N 轮源会话上下文")
         let sourceTurns = turns ?? replayMessages(for: sourceId).filter { $0.role == .user }.count
         // 新会话进源会话所在容器 (project 组 or Chats 平铺区)
-        let side = ConversationItem(title: "Side · \(item.title)", sideOf: sourceId)
+        let side = ConversationItem(title: String(format: L("侧问 · %@"), item.title), sideOf: sourceId)
         var inProject: UUID?
         if let g = projects.firstIndex(where: { $0.items.contains(where: { $0.id == sourceId }) }) {
             projects[g].items.insert(side, at: 0)
@@ -2162,7 +2176,7 @@ extension ChatStore: AgentTransportDelegate {
                     accumulateAway(sid: sid, projection: proj)
                 }
                 if elapsed >= 1 {
-                    let title = allConversations.first { $0.id == sid }?.title ?? L("任务")
+                    let title = allConversations.first { $0.id == sid }?.displayTitle ?? L("任务")
                     let mins = Int(elapsed) / 60, secs = Int(elapsed) % 60
                     if appIsForeground {
                         // P4.2: mini 台完成闪显数据 (显示 5s 后自清, mini 窗口保持不自动还原)
@@ -2256,7 +2270,7 @@ extension ChatStore: AgentTransportDelegate {
 
     /// 迷你条 L1: 会话名 / 任务名。
     func turnTitle(_ sid: UUID) -> String {
-        allConversations.first { $0.id == sid }?.title ?? L("任务")
+        allConversations.first { $0.id == sid }?.displayTitle ?? L("任务")
     }
 
     /// 迷你条 L1: 回合计时 (mm:ss)。

@@ -817,4 +817,75 @@ VALUES = {
     '未配置 —— 联网搜索不可用': 'Not configured - web search unavailable',
     '未配置 Key': 'No key set',
     '联网搜索扩展没配博查 API Key —— 挂上它也只会每次调用都回「未启用」, 所以不挂。在 设置 → 联网搜索 里填一个 Key 并保存, 它就会挂上。': 'The web search extension has no Bocha API key set - mounting it would only make every call answer not enabled, so it stays unmounted. Enter a key under Settings - Web search and save; it gets mounted right away.',
+
+    # ── 2026-10-19 · 用户消息折叠 (长输入不再原样铺满对话区) ──
+    # ⚠️ `%lld` 是 `String(format:)` 的说明符, 位置与个数必须与中文一致。
+    '还有 %lld 行 · 展开': '%lld more lines · Expand',
+    '内容较长 · 展开': 'Long content · Expand',
+    '收起': 'Collapse',
+
+    # ── 2026-10-19 · 中英文切换不生效的那批串 (硬编码英文 / 档位名 / 页眉) ──
+    # 背景: 两道本地化门都只扫**含汉字**的字面量 ⇒ 硬编码英文在中文模式下是漏译、
+    # 在英文模式下"看起来对", 于是**永远不会红**。boss 拍板: 全部支持切换。
+    # ⚠️ `新对话` 是 `defaultConversationTitle` 的**显示映射**, 哨兵值本身仍是 `New chat`
+    #    (库里已有那种行, 且它是 `autoTitleIfNeeded` 的判据)。
+    '新对话': 'New chat',
+    '定时': 'Scheduled',
+    '插件': 'Plugins',
+    '注入量': 'PAYLOAD',
+    '刚刚': 'now',
+    '%lld 分钟': '%lldm',
+    '%lld 小时': '%lldh',
+    '%lld 天': '%lldd',
+    '需要审批': 'Ask for approval',
+    '选择项目…': 'Choose project…',
+    '极简': 'Minimal',
+    'Codemode': 'Codemode',
+    '交互': 'Interactive',
+    '自动放行': 'Auto allow',
+    '自动裁决': 'Auto judge',
+    # 思考强度七档 —— `关闭` 已被按钮占着 (值 = Close), 故 off 用单字 `关`。
+    '关': 'Off',
+    '低': 'Low',
+    '中': 'Medium',
+    '高': 'High',
+    '超高': 'Extra High',
+    '最高': 'Max',
+    '对话': 'Chat',
+    '轨迹': 'Trace',
+    '耗时': 'Duration',
+    '轮次': 'Turns',
+    '调用': 'Calls',
+    '上下文': 'Context',
+    '输入': 'In',
+    '缓存': 'Cache',
+    '计划提问': 'Plan question',
+    '确认计划': 'Confirm plan',
+    '推荐': 'Recommended',
+    '自定义回答…': 'Custom answer…',
+    '第 %lld 轮': 'Turn %lld',
+    '侧问 · %@': 'Side · %@',
+    # ── 第三道门（scan_english）建起来后由它自己挖出来的第二批 ──
+    #  `TraceSegment` 三段 + `EditorKind` 三种触发源 + 时长单位; 全是"返回位置"形态的
+    #  `case .x: "English"`, 前两道门（只扫汉字）与第一版 scan_english（把无空格串当符号名）
+    #  都看不见。
+    '消息': 'Messages',
+    '详情': 'Details',
+    '值守': 'Watch',
+    '收件': 'Inbox',
+    '接口地址': 'Base URL',
+    '<1 秒': '<1s',
+    '%lld 分 %lld 秒': '%lldm %llds',
+    '%lld 小时 %lld 分': '%lldh %lldm',
+    # ── 2026-10-19 收口：nav 用全称、档位名带「模式」 ──
+    #  nav 与页眉**故意不同 key**: 侧栏要认得出（「知识库」「定时任务」），
+    #  页眉是 11pt 全会大写的短标签（「知识」「定时」），两处语境不同不该共用一个词。
+    '知识库': 'Knowledge',
+    '定时任务': 'Scheduled',
+    '极简模式': 'Minimal mode',
+    '常规模式': 'Standard mode',
+    '完整模式': 'Full mode',
+    #  `.textCase(.uppercase)` 在调用点恢复英文的 USER / ASSISTANT / MODEL 观感;
+    #  中文没有大小写 ⇒ no-op。`模型`/`用户` 复用既有 key（同一概念不造第二个词）。
+    '助手': 'Assistant',
 }
