@@ -15,6 +15,7 @@
 - **体量棘轮门**（`run.sh` 第 ④ 条）：`smokeMain.swift` 的行数超过 `scripts/smoke/size_budget` 就红，并提示"新用例请放 `cases/`"。跑在编译之前。**预算只减不增**——要调大必须在 diff 里露出来，让"文件变大"成为一次显式决策。
 - **新用例零增长接入**：`cases/AllCases.swift` 是登记表，`run()` 里只留一行 `await runRegisteredCases()`。实测：新建用例 + 登记一行后，主文件**行数一动不动**，PASS 计数正常 +1。
 - **`run.sh` 源列表改为递归**：`find scripts/smoke -name "*.swift"` ⇒ 以后新增用例文件不用改脚本（和 `mangox/` 下新增文件不用改 pbxproj 同一个思路）。CI 调的就是这个脚本，无需改动 workflow。
+- **修掉一条时间窗 flaky（本次 CI 第一次暴露）**：`ignoreMissedFire` 落库的 ack 用的是**真实的现在**，而冒烟重建 store 时把 `now` 写成**写死的「当地今天 12:00」** —— 当地还没过 03:00 时，那一次 03:00 盖不住，清单还剩 1 条 ⇒ 红。这一版的 CI 恰好跑在 **01:44 UTC** 撞上了（本机 09:44 绿，v0.1.23 那次 CI 在 14:00 UTC 也绿，所以它一直没露头；**任何人凌晨 00:00~03:00 跑冒烟都会红**）。修法 = `ignoreMissedFire(_ taskId:, at now: Date = Date())`：默认值让产品行为一字不变，冒烟传同一个 `mfNow` ⇒ ack 与随后的 `refreshMissedFires` 同源、零时钟依赖。**判据**：同一份二进制在 `TZ=UTC` 下跑，修前红、修后全绿。
 
 #### 为什么不做「一次性抽成 67 个函数」
 

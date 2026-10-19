@@ -146,7 +146,10 @@ extension SmokeMain {
               "P17 漏跑: **项目已删**的任务不进清单（那是配置坏了, 不是漏跑）")
         napStore.scheduler.scheduledTasks.removeAll { $0.id == mfOrphan.id }
 
-        napStore.scheduler.ignoreMissedFire(mfId)
+        // ⚠️ 必须传 `at: mfNow`: 不传的话 ack 落的是**真实的现在**, 而下面重建 store 用的是
+        //    `mfNow`(写死的当地 12:00) ⇒ 当地还没过 03:00 时(如 CI 01:44 UTC)那句 03:00
+        //    盖不住, 清单还剩 1 条 —— 2026-10-19 就是这么红的一次。
+        napStore.scheduler.ignoreMissedFire(mfId, at: mfNow)
         check(napStore.missedFires.isEmpty,
               "P17 漏跑: 忽略之后清单立刻空")
 

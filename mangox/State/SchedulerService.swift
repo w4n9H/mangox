@@ -750,10 +750,14 @@ final class SchedulerService: ObservableObject {
 
     /// 认账: 这批漏跑我看见了, 不补。**要落库**是因为下次开机不该再问一遍 ——
     /// 没有这一条, 用户"决定不补"这个动作就没有落点, 清单会一直挂在那儿。
-    func ignoreMissedFire(_ taskId: UUID) {
+    ///
+    /// `at` 只给冒烟注入用（默认 = 真实的现在, 产品行为不变）: 落库的 ack 与紧接着那次
+    /// `refreshMissedFires` 必须是**同一个 now**, 否则"忽略后清单空"会随跑的时刻漂 ——
+    /// 2026-10-19 CI 在 01:44 UTC 跑红过一次, 而本机 09:44 是绿的（差在有没有过当天 03:00）。
+    func ignoreMissedFire(_ taskId: UUID, at now: Date = Date()) {
         store?.persistence?.saveSettingText(
-            key: Self.missedAckKey(taskId), value: String(Date().timeIntervalSince1970))
-        refreshMissedFires()
+            key: Self.missedAckKey(taskId), value: String(now.timeIntervalSince1970))
+        refreshMissedFires(now: now)
     }
 
     // MARK: - 交接文件 (P3.9)
