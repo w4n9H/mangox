@@ -57,7 +57,7 @@ command -v "$PY" >/dev/null 2>&1 || { echo "错误: 找不到 $PY (亮/暗色算
 #    P10.8b: 聊天流里的内嵌面 (工具输出区 / diff 预览) 必须比正文面**亮一档**;
 #    用 bgBase/bgChat/bgInput 就是"在正文面上挖黑洞"(暗色实测 3.01× 亮度差, 久读累眼)。
 if grep -nE 'background\(CodexTheme\.(bgBase|bgChat|bgInput)\)' \
-        mangox/Views/Chat/ToolCallCardView.swift; then
+        mangox/Views/Chat/ToolCallCardView.swift mangox/Views/Chat/ToolRunReceipt.swift; then
     echo "FAIL - 工具行的内嵌面底色退回了低于正文面的一档 (P16: 内嵌面只许 bgCard)" >&2
     exit 1
 fi

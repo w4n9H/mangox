@@ -20,6 +20,7 @@ extension SmokeMain {
     static var registeredCases: [@MainActor () async -> Void] {
         [
             caseUserMessageFold,
+            caseToolRun,
             caseSessionTitlePersist,
         ]
     }

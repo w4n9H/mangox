@@ -7,7 +7,7 @@
    **本文件由 scripts/l10n/gen_strings.py --write 生成, 别手改** ——
    译文改 scripts/l10n/en_values.py 的 VALUES, 再跑 --write。
 
-   条数: 752
+   条数: 757
 */
 
 " [附件: %@]" = " [Attachment: %@]";
@@ -29,6 +29,7 @@
 "%lld 小时 %lld 分" = "%lldh %lldm";
 "%lld 条与 persona pack 的 key 冲突, 已跳过注入: %@" = "%lld items collide with a persona pack key and were skipped: %@";
 "%lld 条常驻条目被静默丢弃: %@" = "%lld always-on items were silently dropped: %@";
+"%lld 次工具调用" = "%lld tool calls";
 "%lld 秒" = "%llds";
 "%lld 项" = "%lld items";
 "(无注入内容)" = "(no injected content)";
@@ -345,6 +346,7 @@
 "尚未请求通知授权, 打开开关后首次完成时会请求" = "Notification permission has not been requested yet; the first completed turn after you enable this will ask.";
 "尚未配置邮箱。点下方「添加邮箱」开始 —— 建议用一个专用个人邮箱, 不要用企业邮箱。" = "No mailbox configured yet. Start with “Add mailbox” below — a dedicated personal mailbox is recommended, not a work one.";
 "展开侧栏" = "Expand sidebar";
+"展开这一段过程" = "Show these steps";
 "工作区中查找" = "Find in workspace";
 "工作日志" = "Work log";
 "工具执行失败" = "Tool execution failed";
@@ -393,6 +395,7 @@
 "快捷键 %@ 被其他 App 占用, 请在设置中更改捕获热键" = "The hotkey %@ is taken by another app — change the capture hotkey in settings";
 "快速捕获热键" = "Quick capture hotkey";
 "忽略" = "Ignore";
+"思考 %lld" = "thinking %lld";
 "思考中…" = "Thinking…";
 "思考过程" = "Reasoning";
 "我必须怎么做" = "My Rules";
@@ -448,6 +451,7 @@
 "收起" = "Collapse";
 "收起侧栏" = "Collapse sidebar";
 "收起工作区" = "Collapse workspace";
+"收起这一段过程" = "Hide these steps";
 "改动会重置该账号的连接实例 (下次收信生效)" = "Saving resets this account's connection (takes effect on the next check).";
 "改动未生效 · 重启引擎" = "Changes not live · restart the engine";
 "改完要点保存 —— 自动保存会把写了一半的句子也落盘, 还会跟你在外部编辑器里的改动抢。" = "Save explicitly — autosave would persist half-written sentences and race with your edits in an external editor.";
@@ -707,6 +711,7 @@
 "这个目录里没有可读的文档" = "No readable documents in this directory";
 "这个路径不在笔记目录里" = "That path is outside the notes directory";
 "这句话会进每轮 prompt 的索引 —— agent 靠它判断要不要来查这个目录。" = "This sentence goes into the index of every prompt — the agent uses it to decide whether to look into this directory.";
+"这条请求的缓存命中率 = 命中 token ÷ (输入 + 命中)" = "Cache hit rate for this call = cached ÷ (input + cached)";
 "这篇在你编辑期间被外部改过 — 你的改动没有写盘" = "This note was changed externally while you were editing — your changes were not written";
 "这篇已经不在了 — 可能在 App 外被删掉或改名了" = "This note is gone — it may have been deleted or renamed outside the app";
 "连带删除它的邮件线程映射与拒收日志; 已产生的会话保留。" = "Also deletes its thread mappings and rejection log; sessions already created are kept.";

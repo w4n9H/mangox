@@ -52,6 +52,17 @@ struct MessageUsage: Hashable, Codable {
     var model: String?
     /// 本次调用的 call id (pi responseId)。
     var responseId: String?
+
+    /// **单次调用**的缓存命中率 (%), 口径与 `SessionStats.cachePercent` 完全一致:
+    /// `cacheRead / (input + cacheRead)`。
+    /// ⚠️ 分母**不含 output/reasoning** —— 缓存只影响输入侧; 拿 totalTokens 当分母会把
+    /// 输出也算进去, 长回答的命中率会被稀释成看起来"缓存没生效"。
+    /// `nil` = 分子分母都是 0 (没走缓存也没输入, 或旧数据), UI 该整段不显示而不是报 0%。
+    var cachePercent: Double? {
+        let denom = input + cacheRead
+        guard denom > 0 else { return nil }
+        return Double(cacheRead) / Double(denom) * 100
+    }
 }
 
 struct ChatMessage: Identifiable, Hashable, Codable {

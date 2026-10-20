@@ -40,8 +40,11 @@ struct ModelPicker: View {
     /// 滑轨几何 (2026-09-24: 粗胶囊轨 → 再加粗一档): 轨 20px, 把手 26px (上下各外凸 3px)。
     private let trackHeight: CGFloat = 20
     private let knobSize: CGFloat = 26
-    /// 停靠点圆点直径 (轨上每一档都画一颗)。
-    private let stopDotSize: CGFloat = 6
+    /// 刻度竖线尺寸（轨上每一档都画一条）。
+    /// 2026-10-20 由 6pt 圆点改成 2×8 竖线 —— 圆点混在颗粒里会被读成"一颗不亮的颗粒"，
+    /// 用户数不出几档；竖线与圆形颗粒形状不同族，一眼就是刻度。
+    private let tickWidth: CGFloat = 2
+    private let tickHeight: CGFloat = 8
     /// 轨的**全宽**渐变, 颜色本身就在说"越往右想得越多"。
     /// 三段取色与"亮暗共用一套"的理由都在 `CodexTheme` 的「思考强度轨」段 —— 蓝→紫→洋红。
     private let railGradient = LinearGradient(
@@ -226,10 +229,27 @@ struct ModelPicker: View {
                     .frame(width: w, height: trackHeight)
                     .mask(alignment: .leading) { Rectangle().frame(width: x) }
                     .position(x: w / 2, y: mid)
-                // 停靠点**全档都画** (告诉用户"总共几档、有没有被模型剔掉"), 半透明以免与把手抢。
+
+                // 颗粒 (2026-10-20 boss 拍板 ④): 铺满整条、按已达成段裁切 ——
+                // 拖动档位时颗粒**不重排**, 只是逐步露出来（见 `RailParticles` 的 ②③）。
+                RailParticles(width: w, midY: mid)
+                    .mask(alignment: .leading) { Rectangle().frame(width: x) }
+
+                // 刻度: 2026-10-20 由**圆点改为竖线**(boss 拍板 ④)。理由: 颗粒里方圆都有,
+                // 4pt 圆点混在其中会被读成"一颗不亮的颗粒", 用户数不出几档 —— 刻度失去刻度语义;
+                // 竖线与圆形颗粒形状不同族, 一眼就是刻度。仍然**全档都画**
+                // (告诉用户"总共几档、有没有被模型剔掉"), 所以不由把手遮挡的那几档也照画。
+                //
+                // ⚠️ 填充色**不参与观感**: `destinationOut` 把它从下面几层里**挖掉**,
+                //    露出来的是面板底色。这不是绕远 —— 刻度正好横跨两种底色
+                //    (未达成段是 0.28 的淡床、已达成段是饱和渐变), 任何**实色**都只能在一边成立:
+                //    亮色下用 `bgBase`(白) 在淡床上隐形(2026-10-20 实测), 用 `textMuted`(深灰)
+                //    又在深蓝/洋红段上显脏。挖洞与底色无关 ⇒ 两套主题同时成立。
                 ForEach(stops.indices, id: \.self) { i in
-                    Circle().fill(CodexTheme.bgBase.opacity(0.55))
-                        .frame(width: stopDotSize, height: stopDotSize)
+                    RoundedRectangle(cornerRadius: 1)
+                        .fill(Color.black)
+                        .frame(width: tickWidth, height: tickHeight)
+                        .blendMode(.destinationOut)
                         .position(x: stopCenter(i, travel: travel, gaps: gaps), y: mid)
                 }
                 // 把手: 亮色下即参考图那颗白圆; 暗色下 `bgBase` 翻成近黑 —— 纯白在暗色里
@@ -240,6 +260,8 @@ struct ModelPicker: View {
                     .position(x: x, y: mid)
             }
             .frame(height: knobSize)
+            // 刻度的 `destinationOut` 只许在这个组内挖 —— 少了它, 挖洞会穿透到 popover 外面。
+            .compositingGroup()
             .contentShape(Rectangle())
             .gesture(
                 // minimumDistance 0 ⇒ 单击轨道也落档, 不必精确拖拽。

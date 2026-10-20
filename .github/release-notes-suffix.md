@@ -4,11 +4,11 @@ CI 拿不到你的 Apple 开发者证书, 所以这里的 `.app` 是**未签名*
 未签名的 App 从浏览器下载后带 quarantine 标记, 双击会被 Gatekeeper 拦, 报
 「无法打开, 因为无法验证开发者」—— 没有任何可归因的错误信息。
 
-装法 (资产都在同一个目录, 换 `arm64` / `x86_64` 成你机器的架构):
+装法 (资产都在同一个目录):
 
 ```bash
 shasum -a 256 -c checksums.txt                              # 先验完整性
-bash MangoX-<ver>-install.sh MangoX-<ver>-<arch>.zip
+bash MangoX-<ver>-install.sh MangoX-<ver>-arm64.zip
 ```
 
 它会: 解包 → 清隔离属性 → ad-hoc 重签 → 校验 → 启动。脚本用的是绝对路径
@@ -32,4 +32,5 @@ ad-hoc 签名只解除 Gatekeeper 的发布者校验, 不做身份认证、不�
   GUI, 缺 pi 时 App 会显示「引擎不可用」横幅, 不会假装在回复
 - **node** —— pi 是 node 脚本
 - pi 侧配好模型 provider 与 API key (App 内: 设置 → 模型 管理)
-- macOS 14.8+
+- **Apple Silicon (arm64) 的 Mac** —— 自本版起不再提供 Intel 包 (macOS 26 是最后一个支持
+  Intel 的系统, Rosetta 也在 macOS 27 收尾); 历史 Release 里的 Intel 包仍可下载, 但不再更新

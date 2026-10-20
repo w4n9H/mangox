@@ -37,9 +37,18 @@ env:
   TARGET: mangox
 
 jobs:
-  # ── 编包 (双架构并行) ─────────────────────────────────────
-  # 只上传 artifact, 不碰 release —— 两个 job 同时 gh release create 必有一个 409,
+  # ── 编包 (arm64) ──────────────────────────────────────────
+  # 只上传 artifact, 不碰 release —— 多个 job 同时 gh release create 必有一个 409,
   # 那个 409 会把整条 workflow 标红, 看起来像"编译挂了"。发版交给下面的 publish 单 job。
+  #
+  # ⚠️ 2026-10-19 起**只出 arm64**(boss 拍板删掉 Intel 包)。依据: macOS 26 是最后一个
+  # 支持 Intel 的版本 (macOS 27 起 Apple silicon only), Rosetta 也在 macOS 27 收尾 ——
+  # x86_64 包只剩"停在 26 的 Intel 机器"这一小撮人可服务, 而它每次发版要多花约 11 分钟
+  # runner 时间、且常年是拖后腿的那条路。
+  #
+  # matrix 只留一条 include 是**故意**的, 不是漏删: `matrix.arch` 是架构的单一真源
+  # (编译的 ARCHS / 产物名 / artifact 名 / 两道架构断言全从它取)。要重出 Intel 包,
+  # 加回一条 `- arch: x86_64 / runner: macos-15-intel` 即可, 其余一处不用改。
   build:
     name: build (${{ matrix.arch }})
     runs-on: ${{ matrix.runner }}
@@ -49,8 +58,6 @@ jobs:
         include:
           - arch: arm64
             runner: macos-15          # Apple Silicon (M1)
-          - arch: x86_64
-            runner: macos-15-intel   # Intel。注意: macos-15 本身现在是 arm64, Intel 镜像是这个标签
     steps:
       - uses: actions/checkout@v4
 
@@ -108,8 +115,8 @@ jobs:
             exit 1
           fi
 
-      # 797 项语义冒烟。scripts/smoke/run.sh 按 uname -m 推导 target, 两路都能跑;
-      # 它只用 swiftc + SDK, 不需要完整 Xcode, 也不参与签名。
+      # 1351 项语义冒烟。scripts/smoke/run.sh 按 uname -m 推导 target (arm64 / x86_64
+      # 宿主都能跑); 它只用 swiftc + SDK, 不需要完整 Xcode, 也不参与签名。
       - name: 语义冒烟门禁
         run: scripts/smoke/run.sh
 
@@ -120,9 +127,9 @@ jobs:
       #
       # ARCHS 必须显式钉死: 工程只在 Debug 里设了 ONLY_ACTIVE_ARCH = YES, Release 走默认
       # (NO) + ARCHS = $(ARCHS_STANDARD), 而 macOS 的 ARCHS_STANDARD 自 Xcode 12 起就是
-      # arm64 + x86_64 —— 不钉的话**两路 runner 都编出 universal 包**, matrix 白做、
-      # 编译时间翻倍, 还会产出两个内容相同却分别标着 -arm64/-x86_64 的包。显式钉还顺带
-      # 防住 Apple 改默认值的那天。
+      # arm64 + x86_64 —— 不钉的话 runner 会编出一个 **universal 包**, 产物名标着 -arm64
+      # 而里面装着两个架构 (Intel 那半边从没被这道 workflow 验过、也不会再有 Intel 包对账,
+      # 属于"混进来的东西")。显式钉还顺带防住 Apple 改默认值的那天。
       #
       # 关签名: CODE_SIGN_STYLE = Automatic, 无 DEVELOPMENT_TEAM 时 xcodebuild 会报
       # "requires a development team"; 空 DEVELOPMENT_TEAM + 三个 CODE_SIGN* 一起覆盖掉。
@@ -284,10 +291,10 @@ jobs:
           [[ "$before" == "$after" ]] || { echo "::error::诱饵 app 被动过 —— 定址错了"; exit 1; }
           echo "  ✓ 认对了 bundle, 且没碰诱饵"
 
-      # 这里**不**算 sha256: 每架构各出一份的话, 资产就是 2 个 zip + 2 个 .sha256,
-      # 而两份校验和的正文在"哪一个对应哪个架构"这件事上要靠文件名, 读的人得自己配对。
-      # 单个 checksums.txt (两个架构都在里面) 交给下面的 publish job 出 —— 它反正要等
-      # 两路都绿, 顺手就在一处算了。代价是这个 job 的 artifact 里只有裸 zip, 没有校验和。
+      # 这里**不**算 sha256: 每架构各出一份的话, 资产就是 N 个 zip + N 个 .sha256,
+      # 而校验和的正文在"哪一个对应哪个架构"这件事上要靠文件名, 读的人得自己配对。
+      # 单个 checksums.txt 交给下面的 publish job 出 —— 它反正要等所有架构都绿,
+      # 顺手就在一处算了。代价是这个 job 的 artifact 里只有裸 zip, 没有校验和。
       - name: 打包
         run: |
           set -euo pipefail
@@ -315,7 +322,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: 取回两个架构的包
+      - name: 取回编好的包
         uses: actions/download-artifact@v4
         with:
           pattern: bundle-*
@@ -334,10 +341,10 @@ jobs:
           chmod +x "dist/MangoX-$ver-install.sh"
           ls -lh dist/
 
-      # 一份 checksums.txt 覆盖两个架构的 zip, 而不是每包一个 .sha256。
+      # 一份 checksums.txt 覆盖本次所有 zip, 而不是每包一个 .sha256。
       #
-      # 为什么挪到这里而不是各自的 build job: 单文件清单必须等**两个**架构都绿才存在。
-      # 在 build job 里各算各的, 出来的就是 2 个 .sha256 —— 那两份正文要靠文件名去配对
+      # 为什么挪到这里而不是各自的 build job: 单文件清单必须等**所有**架构都绿才存在。
+      # 在 build job 里各算各的, 出来的就是 N 个 .sha256 —— 那几份正文要靠文件名去配对
       # "哪个 hash 属于哪个架构", 而文件名正是最容易在改动里漂掉的那一环。
       #
       # 只覆盖 zip: install.sh 与 entitlements 不进清单。用户跑的**唯一**东西是那个脚本,
@@ -353,10 +360,12 @@ jobs:
           set -euo pipefail
           # 数量对账: 少了说明某个 artifact 传空了 (upload-artifact 在路径全空时是
           # warning 不是 error), 多了说明 dist/ 里混进了别的东西。两样都会让清单
-          # 名不副实 —— 所以在这里钉住, 而不是靠"看起来有两个"。
+          # 名不副实 —— 所以在这里钉住, 而不是靠"看起来有一个"。
+          # ⚠️ 这个数字跟着 matrix 的架构数走 (现在只出 arm64 ⇒ 1)。加回 Intel 那条
+          # include 时**必须一起改**, 否则发版会在最后一步红。
           n="$(ls -1 dist/*.zip | wc -l | tr -d ' ')"
-          if [[ "$n" != 2 ]]; then
-            echo "::error::期望 2 个 zip (arm64 + x86_64), 实际 $n 个 —— dist/ 内容:"
+          if [[ "$n" != 1 ]]; then
+            echo "::error::期望 1 个 zip (arm64), 实际 $n 个 —— dist/ 内容:"
             ls -l dist/
             exit 1
           fi

@@ -323,7 +323,8 @@ enum Tune {
     /// ⚠️ `You` / `MangoX` 是**角色标签, 原样保留英文**（与 Chat / Trace / USER / ASSISTANT 同族）。
     /// ⚠️ **字号不在这里** —— 它住字体段 `CodexTheme.fontAuthor`（字号属于字体系统, 不是布局参数）。
     static let authorLabelSpacing: CGFloat  = 5    // 小标与它下面那个块的间距
-    static let welcomeTopPadding: CGFloat  = 160   // 空态欢迎页距顶
+    /// 空态欢迎页距顶 (**只在侧问空态 `sideEmptyState` 用** —— 主空态已改成整块垂直居中)
+    static let welcomeTopPadding: CGFloat  = 160
     /// 派生: 消息列 frame 宽 = 内容 + 2×水平内边距。
     static var chatColumnWidth: CGFloat { chatContentWidth + chatHPadding * 2 }
 
@@ -427,7 +428,11 @@ enum Tune {
     }
 
     // 欢迎页
-    static let welcomeMarkSize: CGFloat     = 26  // X 字号: 36 是 π 的, X 是 cap-height 须缩到 26
+    /// 字标字号。⚠️ 从 26 降到 18 是**换了东西**：26 是给单个大写 `X` 的 cap-height 对齐值，
+    /// 现在这行是 `MangoX` **字标**（wordmark）—— 字标在标题上方就该小一号 + 加分字距，
+    /// 否则两个 24pt 级别的词挤在一起，读起来像"两个标题"。
+    static let welcomeMarkSize: CGFloat     = 18
+    static let welcomeMarkTracking: CGFloat = 1.5  // 字标分字距 (全大写/品牌名才加; 中文会失真, 但字标是英文)
     static let welcomeQuestionSize: CGFloat = 24  // 问句字号
     static let welcomeStackSpacing: CGFloat = 14
 
@@ -517,7 +522,10 @@ enum Tune {
 enum Copy {
 
     // 欢迎页
-    static let welcomeMark = "X"
+    /// 字标（2026-10-20 boss：「那个 x 改成 mangox 应该能好点」）。
+    /// ⚠️ 原来是单个大写 `X` —— 在空态左上角读起来就是个**关闭按钮**（✕），
+    ///    而且贴左时更像个跑偏的图标。换成品牌名后它自己就是"落款"，不会再被当成控件。
+    static let welcomeMark = "MangoX"
     // **UI 可见文案一律用 `static var`** —— `static let` 是懒加载的一次性求值,
     // 会把 L() 的结果冻结在首次访问, 之后切语言不再跟随。
     static var welcomeQuestion: String { L("今天做点什么？") }

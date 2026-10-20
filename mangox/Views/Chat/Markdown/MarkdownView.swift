@@ -125,7 +125,14 @@ private struct MarkdownTableView: View {
 
     var body: some View {
         ScrollView(.horizontal, showsIndicators: false) {
-            Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 0) {
+            // ⚠️ 2026-10-20 `horizontalSpacing` 16 → **0**（boss：「列之间的间隔过于明显」）。
+            //    间距本来就是**两份内边距 + 一个网格间隙**：`mdTableCellHPadding` 10pt 两侧
+            //    ⇒ 再叠 16pt 间隙, 相邻两列文字之间是 **36pt** 的空白, 比行距(5pt)大七倍,
+            //    读起来是"两坨独立的内容"而不是"一张表"。
+            //    归零之后列间距 = 两侧内边距 = **20pt**, 这才是表格该有的 gutter。
+            //    另一个附带的好处: 表头每格各挂 `bgElevated`, 有间隙时那条灰带会被**切成两段**
+            //    （截图里那道竖直浅条就是它）; 相邻之后自然连成一条整带。
+            Grid(alignment: .leading, horizontalSpacing: 0, verticalSpacing: 0) {
                 GridRow {
                     ForEach(Array(header.enumerated()), id: \.offset) { idx, cell in
                         tableCell(cell, index: idx, isHeader: true)

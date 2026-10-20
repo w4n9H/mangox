@@ -435,8 +435,35 @@ struct TrajectoryView: View {
                         Text(model)
                             .font(CodexTheme.fontMonoXs)
                             .foregroundStyle(CodexTheme.textSecondary)
+                            // 右侧这排状态变多之后, 窄窗口里模型名会被挤 —— 让它截断而不是换行
+                            // (换行会让这一行突然长高一倍, 列表读起来一跳一跳)。
+                            .lineLimit(1)
+                            .truncationMode(.middle)
                     }
                     Spacer()
+                    // ⚠️ 2026-10-20 boss「轨迹-详情 信息展示不全，很多信息需要展开才能看」：
+                    //    折叠态补上**每次调用最该一眼看到的两个状态** —— 时长 + 缓存命中率。
+                    //    它们原来只在展开后的那串原始计数里，等于每次都得点开一次。
+                    //    ⚠️ 判定口径与顶行合计的「缓存」一致 (`cachePercent` 注释里有分母的成因)：
+                    //    口径分叉过一次的话，行加起来会不等于顶行，那才是最难查的。
+                    if let ms = row.heuristicMs {
+                        Text(TrajectoryBuilder.formatDuration(ms))
+                            .font(CodexTheme.fontMonoXs)
+                            .foregroundStyle(CodexTheme.textSecondary)
+                            .fixedSize()
+                    }
+                    if let pct = row.usage.cachePercent {
+                        HStack(spacing: 4) {
+                            Text(String(format: "%.0f%%", pct))
+                                .font(.system(size: 11, weight: .semibold))
+                                .foregroundStyle(CodexTheme.textPrimary)
+                            Text(L("缓存"))
+                                .font(CodexTheme.fontTiny)
+                                .foregroundStyle(CodexTheme.textMuted)
+                        }
+                        .fixedSize()
+                        .help(L("这条请求的缓存命中率 = 命中 token ÷ (输入 + 命中)"))
+                    }
                     Text(TrajectoryBuilder.formatTokens(row.usage.totalTokens) + " tok")
                         .font(CodexTheme.fontMonoXs)
                         .foregroundStyle(CodexTheme.textSecondary)

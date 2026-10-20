@@ -27,6 +27,15 @@ struct ChatView: View {
     private final class FollowThrottle { var lastAt: Date = .distantPast }
     @State private var followThrottle = FollowThrottle()
 
+    /// 已展开的**工具段**（键 = 段首工具消息 id，见 `ToolRun.id`）。
+    ///
+    /// ⚠️ 折叠态必须住在这里，**不许住行内 `@State`**：段里每来一条新工具，
+    ///    收据那一行的 identity 就变（它的 id 是段首消息 id 之外的成员变化），
+    ///    行内 state 会跟着重建 ⇒ 表现为"点开又自己收起"。
+    /// ⚠️ 只活在这个视图实例里，**不入库**：换个会话回来一律回到收起态，
+    ///    与 `UserMessageFold` / `ThinkingCardView` 的取舍一致（"上次点开过"不该变全局默认）。
+    @State private var expandedRuns: Set<UUID> = []
+
     var body: some View {
         VStack(spacing: 0) {
             if let side = store.activeSideChat {
@@ -114,8 +123,12 @@ struct ChatView: View {
     /// ⚠️ 别在三处各写一遍: 流式期的目标是 `streaming-tail` 那个**哨兵**(它挂在流式指示器上,
     /// 比最后一条消息还要靠下), 其余时候才是最后一条消息的 id。分头写迟早分叉 —— 症状是
     /// "自动跟随停在 A、点按钮却跳到 B", 两处单看都对、合起来错。
+    /// ⚠️ 收尾取的是**投影后最后一块的 id**, 不是 `store.messages.last?.id`。
+    /// 理由: 最后一条若是工具行、且被判进某个"已完成组的折叠段", 它的 id **在视图树里不存在**
+    /// ⇒ `scrollTo` 找不到目标, 表现是**静默不动**（不报错、只是不回到底）。
+    /// 现在最后一组永不折叠, 两种写法等价; 但规则一旦放宽, 直写 messages 就会坏 —— 不留这个雷。
     private var scrollTarget: AnyHashable {
-        store.isStreaming ? "streaming-tail" : (store.messages.last?.id ?? UUID())
+        store.isStreaming ? "streaming-tail" : (projectedBlocks.last?.id ?? .row(UUID()))
     }
 
     /// 回到最新 (2026-10-16 boss: "往上翻了记录, 还要再往下翻才能到最底部")。
@@ -194,7 +207,15 @@ struct ChatView: View {
                     sideEmptyState
                 } else {
                     WelcomeView()
-                        .padding(.top, Tune.welcomeTopPadding)
+                        // ⚠️ 2026-10-20 boss「位置可以试试居中」：原来是 `padding(.top, 160)` ——
+                        //    欢迎块钉在距顶 160pt，下面到输入卡之间空出 400pt 以上，整页像"两块
+                        //    互不相干的东西"。改成在**滚动区里垂直居中**，它和输入卡才是一个整体。
+                        // ⚠️ 用 `containerRelativeFrame` 而不是 `frame(minHeight: viewportHeight)`：
+                        //    后者的输入来自 `onAppear` 才赋值的 state ⇒ 首帧是 0、第二帧才跳到
+                        //    中间（可见的跳动）。这个取的是滚动容器自身的尺寸，没有时序问题。
+                        // ⚠️ 横向的居中住在 `WelcomeView` 自己体内（`frame(maxWidth: .infinity)`），
+                        //    别在这里再加一条 —— 一处负责一个轴。
+                        .containerRelativeFrame(.vertical, alignment: .center)
                 }
             } else {
                 messageBlocks
@@ -291,24 +312,145 @@ struct ChatView: View {
         return out
     }
 
+    // MARK: - 投影: 已完成组里「两段正文之间」的工具行 → 一行收据
+
+    /// 一组的**完成**判据 = 后面还有一组（下一句用户消息 / 一个压缩标记）。
+    ///
+    /// ⇒ **最后一组永不折叠**。它要么正在跑、要么刚答完还没被下一句顶走 ——
+    ///   折它有两个病：① 答案刚读完、工具行就地收掉的跳动；
+    ///   ② 要盯的("是不是在刷同一个命令")正是这一组，折了等于把证据收起来。
+    /// `ForEach` 的 id 空间**按块类型分开**。
+    ///
+    /// ⚠️ 必须这样，因为收据的 id 就是**段首消息 id**（`ToolRun.id`），而展开后段首那一行
+    ///    **也会被画出来** ⇒ 用裸 UUID 当 id 会**撞车**（同一 id 两个块）。重复 id 在 SwiftUI 里
+    ///    是**未定义行为**，实测（探针复现）是：段首那条被顶掉、收据画两遍、点击也串在一起
+    ///    （"展开了收不回去"、中间一片空白、收据说 2 段思考却只看见 1 段）。三者同一个根因。
+    /// ⇒ 让撞车在**类型层面**不可能发生，而不是靠"记得别撞"。
+    private enum ChatBlockID: Hashable {
+        case row(UUID)
+        case receipt(UUID)
+    }
+
+    /// `headTaken` = 这一行的**作者小标 / 回合首间距已被收据接管**，渲染时不许再画一次。
+    ///
+    /// ⚠️ 收据是"平移"不是"插入"：它替段首那行挂上 `MangoX` 小标与回合首间距。
+    /// 折叠时那行藏起来了，没问题；**一旦展开**，那行原样回来、又挂一次 ⇒ 同一个 head 画两遍
+    /// （2026-10-20 boss 真机截图：收据上方一个 `MangoX`，展开的 Reasoning 行又一个）。
+    /// ⇒ 展开还原时**只对段首那一行**置 `true`。判据不是"是不是段首"，而是"收据有没有替它画"。
+    private enum ChatBlock: Identifiable {
+        case row(MessageRow, headTaken: Bool)
+        case receipt(ToolRun, authorHead: Bool, turnStart: Bool, isExpanded: Bool)
+        var id: ChatBlockID {
+            switch self {
+            case .row(let r, _): return .row(r.message.id)
+            case .receipt(let run, _, _, _): return .receipt(run.id)
+            }
+        }
+    }
+
+    private var projectedBlocks: [ChatBlock] {
+        let rows = messageRows
+        guard !rows.isEmpty else { return [] }
+
+        // 组边界 = `.user` 开新组；`.system`（压缩标记）自成一组 —— 它本来就不属于任何发言。
+        var groups: [[MessageRow]] = []
+        for row in rows {
+            let role = row.message.role
+            if groups.isEmpty || role == .user || role == .system {
+                groups.append([row])
+            } else {
+                groups[groups.count - 1].append(row)
+            }
+        }
+
+        var out: [ChatBlock] = []
+        out.reserveCapacity(rows.count)
+
+        for (gi, group) in groups.enumerated() {
+            guard gi < groups.count - 1 else {          // 最后一组：原样
+                out.append(contentsOf: group.map { .row($0, headTaken: false) })
+                continue
+            }
+            var runAt: [Int: ToolRun] = [:]
+            // ⚠️ 只登记 `foldable` 的段。不可折的段（1 条 / 含 error 等）走普通行路径,
+            //    于是它们连"收据"都不出现 —— 形态与改前完全一致。
+            // 键用**段首在组内的下标**（不是消息 id）: 遍历是按位置走的, 用位置索引才不会错位。
+            for run in ToolRunBuilder.runs(in: group.map(\.message)) where run.foldable {
+                runAt[run.span.lowerBound] = run
+            }
+
+            var i = 0
+            while i < group.count {
+                if let run = runAt[i] {
+                    let row = group[i]
+                    let isExpanded = expandedRuns.contains(run.id)
+                    out.append(.receipt(run,
+                                        authorHead: row.isAuthorHead,
+                                        turnStart: row.isTurnStart,
+                                        isExpanded: isExpanded))
+                    if isExpanded {
+                        // 还原 = 把这段**真实占的那几行**原样放回去（含中间那条 `.think`）。
+                        // 段首那行的 head 收据已经画过了 ⇒ `headTaken: true`，否则 `MangoX` 出现两次。
+                        for k in run.span {
+                            out.append(.row(group[k], headTaken: k == run.span.lowerBound))
+                        }
+                    }
+                    // ⚠️ 按 `span` 前进, **不是** `memberIds.count` —— 段中间可能夹着 `.think`
+                    //    （它不是边界），成员在组内**不连续**。按条数跳会跳少一格, 于是最后
+                    //    一条工具"既算进收据、又单独画一行"（2026-10-20 boss 截图实测）。
+                    i = run.span.upperBound
+                } else {
+                    out.append(.row(group[i], headTaken: false))
+                    i += 1
+                }
+            }
+        }
+        return out
+    }
+
+    /// `You` / `MangoX` 是**角色标签, 原样保留英文**（与 Chat / Trace 同族，见 `Tune.authorLabelSpacing`）。
+    private func authorLabel(isUser: Bool) -> some View {
+        Text(isUser ? "You" : "MangoX")
+            .font(CodexTheme.fontAuthor)
+            .tracking(0.3)
+            .foregroundStyle(CodexTheme.textTertiary)
+    }
+
     private var messageBlocks: some View {
         LazyVStack(alignment: .leading, spacing: Tune.chatBlockSpacing) {
-            ForEach(messageRows) { row in
-                VStack(alignment: .leading, spacing: Tune.authorLabelSpacing) {
-                    // P16 §03 改动六 · 2026-10-14 boss 拍板: 回合**首行**的作者锚点。
-                    // 参考图的解法正是「每回合一枚小标 + 用户消息一个整栏浅灰块」—— 少了小标,
-                    // 长用户消息下"谁说的"只能靠位置猜（参考图的那条规则在长消息下会失效）。
-                    if row.isAuthorHead {
-                        Text(row.message.role == .user ? "You" : "MangoX")
-                            .font(CodexTheme.fontAuthor)
-                            .tracking(0.3)
-                            .foregroundStyle(CodexTheme.textTertiary)
+            ForEach(projectedBlocks) { block in
+                switch block {
+                case .row(let row, let headTaken):
+                    VStack(alignment: .leading, spacing: Tune.authorLabelSpacing) {
+                        // P16 §03 改动六 · 2026-10-14 boss 拍板: 回合**首行**的作者锚点。
+                        // 参考图的解法正是「每回合一枚小标 + 用户消息一个整栏浅灰块」—— 少了小标,
+                        // 长用户消息下"谁说的"只能靠位置猜（参考图的那条规则在长消息下会失效）。
+                        // ⚠️ `headTaken` 时**不画**：收据已经替这行挂过小标了。
+                        if row.isAuthorHead && !headTaken { authorLabel(isUser: row.message.role == .user) }
+                        MessageBlockView(message: row.message, store: store)
                     }
-                    MessageBlockView(message: row.message, store: store)
+                    // 回合首间距同理：收据那一步已经加过了，这里再加就是双份。
+                    .padding(.top, (row.isTurnStart && !headTaken)
+                             ? Tune.chatMessageSpacing - Tune.chatBlockSpacing : 0)
+                    .id(block.id)
+                    .transition(.opacity.combined(with: .move(edge: .bottom)))
+
+                case .receipt(let run, let head, let turnStart, let isExpanded):
+                    // 收据**接管**这一段的作者小标（段首工具行原本挂着它）——
+                    // 是"平移"不是"插入"：后面正文的 isAuthorHead/isTurnStart 全不用改。
+                    VStack(alignment: .leading, spacing: Tune.authorLabelSpacing) {
+                        if head { authorLabel(isUser: false) }
+                        ToolRunReceiptRow(run: run, isExpanded: isExpanded) {
+                            withAnimation(CodexTheme.animFast) {
+                                if isExpanded { expandedRuns.remove(run.id) }
+                                else { expandedRuns.insert(run.id) }
+                            }
+                        }
+                    }
+                    .padding(.top, turnStart ? Tune.chatMessageSpacing - Tune.chatBlockSpacing : 0)
+                    .id(block.id)
+                    .transition(.opacity.combined(with: .move(edge: .bottom)))
                 }
-                .padding(.top, row.isTurnStart ? Tune.chatMessageSpacing - Tune.chatBlockSpacing : 0)
-                .id(row.message.id)
-                .transition(.opacity.combined(with: .move(edge: .bottom)))
             }
 
             if store.isStreaming {
