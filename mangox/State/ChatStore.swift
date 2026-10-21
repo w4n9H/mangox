@@ -1359,6 +1359,15 @@ final class ChatStore: ObservableObject {
         return FileManager.default.fileExists(atPath: PiRpcTransport.sessionFilePath(for: sid))
     }
 
+    /// 侧问选点的候选（P6.3.3）—— **点了菜单才查**，侧栏悬停/展开不碰它。
+    ///
+    /// 走 `replayMessages` 而不是库里的聚合: 这一屏要的是**每一轮的首句**（人靠它认哪一轮），
+    /// 而首句只存在于消息内容里。代价可接受: 一次点击读一场会话, 与"每次悬停都读"是两件事
+    /// （P15.9 的 `由此 Dream` 当初就是栽在后者上）。
+    func sideChatTurns(for sid: UUID) -> [SideChatTurn] {
+        SideChatTurns.build(from: replayMessages(for: sid))
+    }
+
     /// 派生绑定动作 (beginTurn 下发 + 冒烟断言): 侧问首回合 fork → 后续回合显式文件 → 普通派生。
     enum SideChatBinding: Equatable {
         case fork(sourceFile: String)
@@ -1427,6 +1436,53 @@ final class ChatStore: ObservableObject {
         if let f = persistence?.loadSessionFile(id: sid), !f.isEmpty { return f }
         let derived = PiRpcTransport.sessionFilePath(for: sid)
         return FileManager.default.fileExists(atPath: derived) ? derived : nil
+    }
+
+    // MARK: - 定向 dream (P15.9 `由此 Dream`)
+
+    /// 菜单项可用性 —— **规则在 `SchedulerService.canTargetDream`**, 这里只喂当前状态。
+    /// 侧栏也走同一个静态函数（那边喂的是 `SidebarModel` 的投影）, 于是两处不会漂。
+    func canTargetDream(for sid: UUID) -> Bool {
+        SchedulerService.canTargetDream(sid: sid, running: runningTurns,
+                                        tasks: scheduler.scheduledTasks)
+    }
+
+    /// 二次确认弹窗的数据。**点了才查**（一条聚合, 不解码事件流）；
+    /// 侧栏悬停/展开不碰它 —— 那是 boss 2026-10-21 明确否掉的做法。
+    func dreamPreview(from sid: UUID) -> DreamPreview? {
+        guard let item = allConversations.first(where: { $0.id == sid }),
+              let stats = persistence?.dreamMaterialStats(id: sid) else { return nil }
+        let label = SchedulerService.sessionRootLabels(store: self)[sid]
+            ?? KnowledgeBase.noteGlobalLabel
+        return DreamPreview(id: sid, title: item.displayTitle,
+                            materialChars: stats.chars, turns: stats.turns, lines: stats.lines,
+                            rootLabel: label, budget: Tune.dreamTargetedMaxChars)
+    }
+
+    /// 真正 fire 一次定向 dream。四种结果的**每一种都有话说** —— 静默返回是这里最坏的反馈。
+    func startTargetedDream(from sid: UUID) {
+        guard let item = allConversations.first(where: { $0.id == sid }) else { return }
+        let stats = persistence?.dreamMaterialStats(id: sid) ?? (chars: 0, turns: 0, lines: 0)
+        switch scheduler.runTargetedDream(item, stats: stats) {
+        case .started:
+            setExtensionNotice(String(format: L("已开始 dream：%@"), item.displayTitle), isError: false)
+        case .busy:
+            setExtensionNotice(L("上一场 dream 还在跑，等它结束再试"), isError: true)
+        case .empty:
+            setExtensionNotice(L("这一场没有可提炼的正文（只有工具输出）"), isError: true)
+        case .noTask:
+            setExtensionNotice(L("找不到 dream 任务，去定时页看看"), isError: true)
+        }
+    }
+
+    /// 定向 dream 收口 —— 由 `SchedulerService.finishDreamFireIfNeeded` 调。
+    /// 文案在**这里**成型: `SchedulerService` 在 L10n 的 `EXCLUDE_FILES` 里（恒中文只适用于
+    /// 落库的日志时间线），而横幅是界面文案, 必须过词表。
+    func notifyTargetedDreamFinished(targetId: UUID, kept: Int) {
+        let title = allConversations.first { $0.id == targetId }?.displayTitle ?? L("已删除的会话")
+        // 一个字符串只放一个占位符（本仓 L10n 硬规矩）: 拆两段再拼, 语序不由译文决定。
+        let head = String(format: L("dream 完成：%lld 条提案待审"), kept)
+        setExtensionNotice(head + " · " + title, isError: false)
     }
 
     /// 从源 session 文件截取前 N 轮快照, 写入临时文件供 --fork。

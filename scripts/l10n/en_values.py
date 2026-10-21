@@ -894,4 +894,40 @@ VALUES = {
     #  `.textCase(.uppercase)` 在调用点恢复英文的 USER / ASSISTANT / MODEL 观感;
     #  中文没有大小写 ⇒ no-op。`模型`/`用户` 复用既有 key（同一概念不造第二个词）。
     '助手': 'Assistant',
+    # ── 2026-10-21 定向 dream（侧栏《由此 Dream》+ 二次确认弹窗）──
+    #  `由此 Dream` 与 `由此侧问`: 'Side chat from here' 同族 ⇒ `Dream from here`。
+    #  ⚠️ 一个字符串只放一个占位符（本仓 L10n 硬规矩）⇒ 弹窗里「正文 · 回合」
+    #     「送入 / 预算」都是**两段独立 key 拼起来**的，别在这里合成一条多占位符。
+    '由此 Dream': 'Dream from here',
+    '开始 Dream': 'Start Dream',
+    '这是单独一次，不会移动每日 dream 的时间窗口。': 'One-off run — it will not shift the daily dream window.',
+    '%@ 字': '%@ chars',
+    '%lld 个回合': '%lld turns',
+    '归属': 'Goes to',
+    '产出': 'Output',
+    '只出提案，不改任何文件': 'Proposals only, no files touched',
+    '送入 %@ 字': '%@ chars in',
+    '预算 %@ 字': 'budget %@ chars',
+    '超出预算：只会做最近 %@ 字，前面的回合会被省略。':
+        'Over budget: only the latest %@ chars are used, earlier turns are skipped.',
+    '这一场只有工具输出，没有可提炼的内容。': 'This session has only tool output — nothing to distill.',
+    '这一场没有可提炼的正文（只有工具输出）': 'No text to distill here (tool output only)',
+    '已开始 dream：%@': 'Dream started: %@',
+    '上一场 dream 还在跑，等它结束再试':
+        'Another dream is still running — try again when it finishes',
+    '找不到 dream 任务，去定时页看看': 'No dream task found — check Scheduled',
+    'dream 完成：%lld 条提案待审': 'Dream done: %lld proposals to review',
+    # ── 2026-10-21 侧问选点（P6.3.3，`由此侧问` 的二次确认弹窗）──
+    #  `整场` 是列表第一行（= `upTo: nil`，零拷贝），`零拷贝` 是它右边那句小字。
+    #  `由此处侧问` 与菜单项 `由此侧问` 是两个 key: 标题是**功能名**、按钮是**动作** ——
+    #  中文能靠"处"字分开，英文就别硬凑成一个词组了。
+    '选一轮：那一轮及之前的对话都会带进侧问。':
+        'Pick a turn: it and everything before it is carried into the side chat.',
+    '整场': 'Entire session',
+    '零拷贝': 'No copy',
+    '（只有图片）': '(images only)',
+    '这个会话还没说过话，侧问会带一个空上下文。':
+        'This session has no messages yet — the side chat will start empty.',
+    '将带上 %lld 轮源会话上下文': 'Carries %lld turns of source context',
+    '由此处侧问': 'Start side chat',
 }

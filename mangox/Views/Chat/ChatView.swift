@@ -27,6 +27,10 @@ struct ChatView: View {
     private final class FollowThrottle { var lastAt: Date = .distantPast }
     @State private var followThrottle = FollowThrottle()
 
+    /// 「这一拍跟随」的代号 —— 只为一件事：**补拍时判断有没有更新的一次跟随插进来**。
+    /// 引用语义不需要（它不参与布局），但必须能让补拍的闭包读到最新值 ⇒ 用 `@State`。
+    @State private var followEpoch = 0
+
     /// 已展开的**工具段**（键 = 段首工具消息 id，见 `ToolRun.id`）。
     ///
     /// ⚠️ 折叠态必须住在这里，**不许住行内 `@State`**：段里每来一条新工具，
@@ -154,6 +158,28 @@ struct ChatView: View {
         .transition(.opacity.combined(with: .scale(scale: 0.9)))
     }
 
+    /// 「用户刚提交」这一拍的跟随：**先带补间到底，补间结束后再按新布局瞬移一次**。
+    ///
+    /// 补一拍的理由：折叠（高度骤降）与「滚到底」发生在**同一个事务**里 ⇒ 第一次 `scrollTo`
+    /// 的目标位置是按**折叠前**的布局算的。实测（真 ChatView + boss 那条 794 事件的真实会话，
+    /// 探针 `/tmp/realsess`）：落点确实没到「最后一块的底」，差 85~411pt。`documentView` 的高度
+    /// 是**估算值**、绝对值不能全信，但"落不到最后一块的底"每次都复现。
+    /// 补的那一拍跑在布局落定之后，目标按**新**布局算，落得准。
+    ///
+    /// ⚠️ 补拍要能被两件事否决：① 期间又来了更新的一次跟随（`followEpoch`）；
+    ///    ② 用户自己上滑了（`nearBottom` 转假）—— 那是 P9-#9「上滑阅读不拽回」，不许抢。
+    private func followAfterStructuralChange(_ proxy: ScrollViewProxy) {
+        followEpoch += 1
+        let epoch = followEpoch
+        followThrottle.lastAt = Date()
+        withAnimation(CodexTheme.animMed, completionCriteria: .logicallyComplete) {
+            proxy.scrollTo(scrollTarget, anchor: .bottom)
+        } completion: {
+            guard epoch == followEpoch, nearBottom else { return }
+            proxy.scrollTo(scrollTarget, anchor: .bottom)
+        }
+    }
+
     /// 滚动列 = ScrollView + 摘要胶囊占位行 (拆子表达式, 防 type-check 超时)。
     private func scrollColumn(_ proxy: ScrollViewProxy) -> some View {
         VStack(spacing: 0) {
@@ -246,13 +272,28 @@ struct ChatView: View {
                 }
             }
         }
-        .onChange(of: store.messages) { _, _ in
+        .onChange(of: store.messages) { old, new in
             // 流式 chunk 高频到达, 同帧多次触发会报 "update multiple times per frame";
             // scrollScheduled 同帧合并为一次滚动调度, 双跳异步复位 (滚动执行完的下一拍才放行)。
             // P9-#9: 用户上滑阅读历史时不再强制拽回 (距视口底 <140pt 才跟随)
             // ⚠️ 2026-10-09: 守卫与置位**必须都在 async 块里** —— 在 onChange 的 action 里同步写
-            //    @State 本身就会让 SwiftUI 判成"同帧多次更新", 光靠守卫挡不住警告刷屏 (见 :64 同款教训)。
+            //    @State 本身就会让 SwiftUI 判成"同帧多次更新", 光靠守卫挡不住刷新警告 (见 :64 同款教训)。
+            //
+            // ⚠️ 2026-10-20 **"用户刚提交"是这条守卫唯一的例外**（boss 报「回车后整个界面白掉，
+            //    直到 llm 有返回才正常」）。理由是结构性的，不是为某个症状打的补丁：
+            //    回车 ⇒ 上一组从「最后一组」变成「倒数第二组」⇒ **当场折叠 ⇒ 内容高度骤降**。
+            //    而 `nearBottom` 是**几何判据**，它分不出「高度变了」和「用户上滑了」——
+            //    在这一拍它读到什么都可能，可**语义是确定的**：我刚发了消息，就要看它和回答。
+            //    ⇒ 提交这一拍不吃守卫。其余每一拍（流式 / 工具 / 压缩标记…）照旧吃守卫。
+            let justSent = new.last?.role == .user && old.last?.id != new.last?.id
             DispatchQueue.main.async {
+                if justSent {
+                    guard !scrollScheduled else { return }
+                    scrollScheduled = true
+                    followAfterStructuralChange(proxy)
+                    DispatchQueue.main.async { scrollScheduled = false }
+                    return
+                }
                 guard nearBottom, !scrollScheduled else { return }
                 scrollScheduled = true
                 // ⚠️ 2026-10-19: **连发时不做补间**。一个工具卡从出现到完成要 emit 4 次

@@ -13,6 +13,9 @@ r"""markdown 渲染层出图 —— 把"改完长什么样"变成 PNG, 不靠想
 3. **折行开关** —— 折行态若留在横滚容器里, 开关会"按了没反应"
    (无界宽度提案下永不折行)。折行态是 `@State`, 探针驱动不了它 ⇒
    `CodeBlockView` 留了一个 `initialWrap` 出图缝 (生产恒走默认值)。
+4. **列宽到底分给谁** —— 2026-10-20 boss「第一列只放三个字却占了一半」: 铺满之后余量怎么分,
+   Grid 默认是**均分**(短列空 80%、长列一直折行)。现在按内容比例 (`TableColumnSizing`);
+   因为表格没有竖线、列边界在像素上量不出来, 那段的判据改成**直接断言纯函数读数**(SIZING 行)。
 
 ## ⚠️ 曾经的硬限制 (已绕开): `ImageRenderer` 画不出 `ScrollView` 的内容
 
@@ -24,7 +27,9 @@ r"""markdown 渲染层出图 —— 把"改完长什么样"变成 PNG, 不靠想
   `Tune.chatHPadding`, 期望值**由探针自己打印给 python** —— 2026-09-24 之前这里手填 620 / 16,
   在**错误的列宽**下出了 PASS (620−32=588, 而 App 真值是 800 / 48): 判据把自己证明了。
   期望值也不在 python 里重抄一遍 —— 重抄 = 多一份会悄悄漂移的副本。
-- **宽表**: `wide-420 / wide-900` 两档高度仍应相同 ⇒ 内容没被压进视口、由外层横滚承担。
+- **宽表**: `wide-table-420 / wide-900` 两档高度**必须不同**(窄档更高) ⇒ 内容放不下就**折行**,
+  不是被裁掉。2026-10-20 之前这里断言的是"两档高度相同 ⇒ 说明内容按内容宽撑开、由外层横滚承担" ——
+  boss 报「表格超出的部分看不到了」之后横滚整条拆掉, 这条判据跟着**反向**: 窄档若不更高, 就是又被裁了。
 
 用法: `python3 scripts/diag/md_preview.py`              正常出图 + 机器判据 (退码 0/1)
       `python3 scripts/diag/md_preview.py --counterexample`  造反例: 判据**应当变红**, 见文末
@@ -109,7 +114,7 @@ func render(_ label: String, _ content: some View, width: CGFloat) {
     // 的内容 (高度对、内容空, 当年就是这个现象引出的"高度对照"那招)。`NSHostingView` 会跑
     // 真实的 layout/display ⇒ 表格与代码正文**画得出来**, 布局判据可以从"比高度"升级成"量宽度"。
     let host = NSHostingView(rootView: root)
-    let height = max(host.fittingSize.height, 1)
+    var height = max(host.fittingSize.height, 1)
     host.frame = NSRect(x: 0, y: 0, width: width, height: height)
     let win = NSWindow(contentRect: host.frame, styleMask: [.borderless],
                        backing: .buffered, defer: false)   // 不上屏, 只要 layout/display 通道
@@ -120,6 +125,17 @@ func render(_ label: String, _ content: some View, width: CGFloat) {
     // 这不是 App 的病 —— 屏幕上它照常重排, 只有离屏截图会看到第一趟。
     for _ in 0..<4 {
         RunLoop.current.run(until: Date().addingTimeInterval(0.03))
+        host.layoutSubtreeIfNeeded()
+        host.displayIfNeeded()
+    }
+    // ⚠️ 落定之后**必须重新取一次高度**: 列宽回灌会改变折行行数 ⇒ 内容高度跟着变。位图仍按第一趟
+    // 的高度建 (偏高) 的话, 空出来的那块是**未初始化的黑色**, `table_extent` 会把整幅图判成"非背景"
+    // (2026-10-20 实测: table-shortlong 量出 776 而不是 680, 全是这块黑边闹的)。
+    let settled = max(host.fittingSize.height, 1)
+    if abs(settled - height) > 0.5 {
+        height = settled
+        host.frame = NSRect(x: 0, y: 0, width: width, height: height)
+        win.setContentSize(NSSize(width: width, height: height))
         host.layoutSubtreeIfNeeded()
         host.displayIfNeeded()
     }
@@ -189,6 +205,16 @@ let tinyTable = """
 | 小米 | 96,214 |
 """
 
+/// boss 那张表: 第一列只有"顶部/一～二/十一～十三"这种三五个字, 第二列是一整句 ——
+/// "铺满 + 均分列宽"就是在这里失败的 (三五个字占一半列宽, 一整句被挤成两行)。
+let shortLong = """
+| 节 | 内容 |
+|---|---|
+| 顶部 | 一句话结论 + 6 个 KPI 卡 (170 tok/s、JSON 100%、延迟 P50/P90/max) |
+| 三 | **13 轮实测全表** (你熟悉的那套字段, 异常行标红) |
+| 五 | 延迟 P50/P90/max 分组柱状图 + 建议关 thinking 的对照表 |
+"""
+
 let edges = """
 ![小图不该被放大](\(tiny))
 
@@ -216,17 +242,21 @@ MainActor.assumeIsolated {
         MarkdownView(text: sample).padding(16)
     }, width: 360)
 
+    let widePad: CGFloat = 16
     render("wide-table-420", VStack(alignment: .leading, spacing: 0) {
-        MarkdownView(text: wideTable).padding(16)
+        MarkdownView(text: wideTable).padding(widePad)
     }, width: 420)
+    // 溢出的判据件: 真折行的话表格右缘 = 容器宽; 若又退回"列不折行", 这里量出来会**大于**期望。
+    print("EXPECT wide-table-420 \(420 - 2 * widePad)")
 
-    // 宽度对照 —— 表格那层 `ScrollView(.horizontal)` 的内容在离屏渲染里**画不出来**
-    // (整块空白, 见文末限制), 所以改用**高度**判"有没有被压进视口":
-    // 同一张宽表在 420 与 900 两档宽度下若高度相同 ⇒ 内容按内容宽撑开 (没被夹),
-    // 横滚才滚得动; 若 420 那档更高 ⇒ 被夹窄 ⇒ 单元格在换行 ⇒ 横滚永远不触发。
+    // 宽度对照 —— 判"放不下时是**折行**还是**被裁**":
+    // 同一张宽表在 420 与 900 两档下, **窄档必须更高**(折行) 且两档都**铺满容器**(不溢出)。
+    // ⚠️ 这条判据 2026-10-20 反过来了: 以前是"两档高度相同 ⇒ 由外层横滚承担",
+    //    而横滚在聊天列里等于"右侧被裁"(boss 实机: 字被切一半) ⇒ 横滚拆掉, 判据随之反向。
     render("wide-900", VStack(alignment: .leading, spacing: 0) {
-        MarkdownView(text: wideTable).padding(16)
+        MarkdownView(text: wideTable).padding(widePad)
     }, width: 900)
+    print("EXPECT wide-900 \(900 - 2 * widePad)")
 
     // "铺满"的判据件: 两列短内容 —— 内容宽远小于列宽, 量出来是多少就是多少。
     // ⚠️ 容器宽/内边距**一律取 `Tune.*`, 不许手填**: 手填 620 + 自造 16 那版, PASS 是在**错误的
@@ -251,6 +281,29 @@ MainActor.assumeIsolated {
     }, width: narrowW)
     print("EXPECT table-narrowcol-620 \(narrowW - 2 * colPad)")
 
+    // boss 2026-10-20 报的那张两列表: 第一列三五个字, 第二列一整句。列宽**按内容比例**之后,
+    // 第一列该收到 ~110pt (均分时是 340, 一半空着), 第二列吃掉剩下的 —— 出图看的就是这个。
+    render("table-shortlong", VStack(alignment: .leading, spacing: 0) {
+        MarkdownView(text: shortLong).padding(.horizontal, colPad).padding(.vertical, 16)
+    }, width: colW)
+    print("EXPECT table-shortlong \(Tune.chatContentWidth)")
+
+    // 列宽分配是**纯函数**, 像素看不见列边界(表格没有竖线) ⇒ 直接拿它当判据件, 用真实读数断言。
+    // 参考: 改动前 Grid 的默认行为是"余量均分" ⇒ 80/400 的两列在 680 里各拿 340 (第一列空 80%)。
+    let sizingCases: [([CGFloat], CGFloat)] = [
+        ([80, 400], 680),      // 放得下: 按 need 比例放大 (110.4 / 569.6)
+        ([40, 60, 80], 680),   // 三列: 比例不被列数整除也要保持
+        ([40, 700, 300], 680), // 放不下: 短列保住 40, 只饿死超额的列
+        ([300, 700, 300], 680) // 放不下且每列都超额: 全体按比例缩
+    ]
+    for (need, avail) in sizingCases {
+        let widths = TableColumnSizing.widths(need: need, available: avail)
+        print("SIZING "
+              + need.map { String(format: "%.0f", $0) }.joined(separator: ",")
+              + " @" + String(format: "%.0f", avail) + " -> "
+              + widths.map { String(format: "%.1f", $0) }.joined(separator: ","))
+    }
+
     render("code-wrap", VStack(alignment: .leading, spacing: 14) {
         Text(verbatim: "wrap OFF (default)").foregroundStyle(CodexTheme.textSecondary)
         CodeBlockView(language: "bash", code: longCode)
@@ -267,7 +320,9 @@ MainActor.assumeIsolated {
     print("  md-560 / md-360   数字列右对齐 (末位对齐); 图不溢出列宽; 窄列里同内容自动收紧")
     print("  table-appcol      表格应**铺满消息列宽** (容器 Tune.chatColumnWidth, 期望 Tune.chatContentWidth)")
     print("  table-narrowcol   窗口被挤窄时同样铺满 (`maxWidth` 是上限, 不是定值)")
-    print("  wide-420 vs -900  两档高度**必须相同** ⇒ 表格没被压进视口, 超宽由外层横滚承担")
+    print("  table-shortlong   第一列三五个字 / 第二列一整句 ⇒ 列宽按内容比例 (第一列 ~110pt, 不是均分的 340)")
+    print("  SIZING            列宽算法本身: 和 = 可用宽 · 放得下倍率一致 · 放不下时不压缩短列")
+    print("  wide-420 vs -900  窄档**必须更高**(折行) 且两档都铺满容器(不溢出) ⇒ 超宽不再被裁")
     print("  code-wrap         ON 必须真的折行 (与 OFF 一样 = 折行态还留在横滚容器里)")
     print("  image-edges       小图不被放大 / 缺文件·外链各有说明行 / 相对路径按 basePath 解析")
     print("")
@@ -277,26 +332,25 @@ MainActor.assumeIsolated {
 
 
 def counterexample_source(work):
-    """造反例: 复现 2026-09-24 那个 bug —— 表格那层的 `.overlay(...)` 换成 `.background(...)`。
+    """造反例: 把单元格改回「列不折行」(`fixedSize(horizontal: true)`) —— 那正是 boss 2026-10-20
+    报的那个形态: 内容按自身宽度撑开、右侧被容器裁掉 (探针实测同一条表在 680 与 1000 两档下
+    **总高完全相同**, 一个字都没折行)。
 
-    成因 (真源码里那段注释写了): `.background` 的几何读取与内容宽度被算进同一次主布局 ⇒ 成环
-    ⇒ SwiftUI **静默丢弃那次状态更新**, `viewport` 恒 0、表格永远停在内容宽、零报错。
     判据若在这种情况下**不变红**, 它就是个摆设 —— "门的判据本身可以是错的, 只能靠造反例抓"。
     编译的是**副本**, 产品源码一个字节都不动。
     """
     src = os.path.join(ROOT, 'mangox/Views/Chat/Markdown/MarkdownView.swift')
     with open(src, encoding='utf-8') as handle:
         text = handle.read()
-    needle = ('.overlay(GeometryReader { proxy in\n'
-              '            Color.clear\n'
-              '                .preference(key: TableViewportKey.self, value: proxy.size.width)\n'
-              '                .allowsHitTesting(false)\n'
-              '        })')
+    needle = ('            .foregroundStyle(isHeader ? CodexTheme.textPrimary '
+              ': CodexTheme.textSecondary)\n')
     assert text.count(needle) == 1, \
-        '造反例失配: MarkdownView.swift 的表格几何层改了形态, 请同步本函数'
+        '造反例失配: 表格单元格的修饰链改了形态, 请同步本函数'
     copy = os.path.join(work, 'MarkdownView.swift')
     with open(copy, 'w', encoding='utf-8') as handle:
-        handle.write(text.replace(needle, needle.replace('.overlay(', '.background(', 1)))
+        handle.write(text.replace(needle,
+                                  needle + '            .fixedSize(horizontal: true, vertical: false)\n',
+                                  1))
     return copy
 
 
@@ -349,7 +403,7 @@ def main():
     if counterexample:
         sources = [counterexample_source(WORK) if s.endswith('MarkdownView.swift') else s
                    for s in sources]
-        print('⚠️ 造反例模式: 表格几何层改用 `.background` (应复现 `viewport` 恒 0)')
+        print('⚠️ 造反例模式: 单元格改回"列不折行" (应复现右侧被裁)')
 
     binary = os.path.join(WORK, 'probe')
     cmd = ['xcrun', 'swiftc', '-O', 'main.swift']
@@ -403,20 +457,54 @@ def main():
         print('FAIL - 量宽: 探针没打印任何 EXPECT 行 (判据件丢了?)')
         failures.append('no-expect')
 
-    # ② 宽表两档高度必须相同 —— 表格在横滚容器里按**内容宽**撑开, 与视口宽无关。若 420 那档更高
-    # ⇒ 内容被夹进视口换了行 ⇒ 横滚永远不触发。(注释里声明过这条, 但一直没机器判过。)
+    # ② 列宽分配 = 按内容比例 (`TableColumnSizing` 是纯函数, 直接断言它的读数)。
+    #    像素判据看不见列边界 (表格没有竖线), 但这段算法是确定的 —— 用它自己的读数当判据件,
+    #    "改动前 Grid 均分"这种情况会立刻变红 (80 与 400 各拿 340 ⇒ 放大倍率 4.25 vs 0.85)。
+    print('')
+    sizing = []
+    for line in (ran.stdout or '').splitlines():
+        if not line.startswith('SIZING '):
+            continue
+        head, tail = line[len('SIZING '):].split(' -> ')
+        need_part, avail_part = head.split(' @')
+        sizing.append(([float(v) for v in need_part.split(',')],
+                       float(avail_part),
+                       [float(v) for v in tail.split(',')]))
+    if len(sizing) != 4:
+        print('FAIL - 列宽: SIZING 判据件缺行 (拿到 %d 组, 期望 4)' % len(sizing))
+        failures.append('sizing-missing')
+    for need, avail, widths in sizing:
+        fits = sum(need) <= avail
+        share = avail / len(need)
+        # ① 总和 = 可用宽 (否则表格铺不满 / 溢出); ② 放得下时各列放大倍率**一致** (这才叫按比例);
+        # ③ 放不下时, 没超过均分额的列**不许被压缩** (短列被长列挤到折行就不算"按内容分").
+        ok_sum = abs(sum(widths) - avail) <= 0.6
+        ok_ratio = (not fits) or (max(w / n for w, n in zip(widths, need))
+                                  - min(w / n for w, n in zip(widths, need)) <= 0.02)
+        ok_floor = all(w >= n - 0.01 for w, n in zip(widths, need) if n <= share)
+        bad = not (ok_sum and ok_ratio and ok_floor)
+        if bad:
+            failures.append('sizing')
+        print('%s - 列宽: need[%s] @%.0f -> [%s] (和 %.1f%s)'
+              % ('FAIL' if bad else 'PASS',
+                 ','.join('%.0f' % n for n in need), avail,
+                 ','.join('%.1f' % w for w in widths), sum(widths),
+                 '' if fits else ', 放不下'))
+
+    # ③ 宽表: **窄档必须更高** —— 放不下就该折行。
+    #    2026-10-20 之前这里断言的是"两档高度相同 ⇒ 内容按内容宽撑开、由外层横滚承担";
+    #    横滚整条拆掉之后这条**反向**: 窄档若不高出几十像素, 就是内容又被裁了(那正是 boss 报的病)。
     heights = {}
     for label in ('wide-table-420', 'wide-900'):
         path = os.path.join(OUT, label + '.png')
         if os.path.exists(path):
             heights[label] = png_size(path)[1]
     if len(heights) == 2:
-        lo_h, hi_h = sorted(heights.values())
-        same = (hi_h - lo_h) <= 2      # 容 1pt 的取整误差; "被夹窄换行"会高出几十像素
-        if not same:
-            failures.append('wide-height')
-        print('%s - 宽表: 高度 %s (必须相同 ⇒ 内容按内容宽撑开, 横滚才滚得动)'
-              % ('PASS' if same else 'FAIL',
+        wrapped = (heights['wide-table-420'] - heights['wide-900']) > 2
+        if not wrapped:
+            failures.append('wide-wrap')
+        print('%s - 宽表: 高度 %s (窄档必须更高 ⇒ 折行了; 一样高 = 又被裁)'
+              % ('PASS' if wrapped else 'FAIL',
                  ', '.join('%s=%d' % kv for kv in sorted(heights.items()))))
     else:
         print('FAIL - 宽表: 缺图 %s' % sorted({'wide-table-420', 'wide-900'} - set(heights)))
@@ -426,7 +514,7 @@ def main():
     if counterexample:
         # 造反例下判据**必须变红** —— 变红才说明它真能抓到"没铺满"; 不变红 = 摆设。
         if failures:
-            print('造反例: PASS - 判据成功变红 (%s) ⇒ 它确实能抓到"没铺满"' % ', '.join(failures))
+            print('造反例: PASS - 判据成功变红 (%s) ⇒ 它确实能抓到"超宽被裁"' % ', '.join(failures))
             return 0
         print('造反例: FAIL - 判据没变红, 抓不到这个 bug ⇒ 判据形同摆设')
         return 1

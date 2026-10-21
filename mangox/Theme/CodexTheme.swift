@@ -482,6 +482,14 @@ enum Tune {
     static let dreamDigestMaxCharsPerSession: Int  = 40000   // 单会话上限（超了按**回合整对丢**）
     static let dreamDigestTotalChars: Int          = 100000  // 整段上限（超了从最旧的会话开始丢）
 
+    // 定向 dream（boss 2026-10-21 定：`由此 Dream`）—— 对**一场指定会话**做整场整理。
+    // 与上面三个数**分账**：那些管"最近窗口里的每一场各给多少"，这个只管"单场最多喂多少"。
+    //
+    // 为什么是 256k 而不是"无穷大": 它必须比常规单会话预算（4 万）大一个量级才叫"整场"，而
+    // **又不能超过模型上下文**。256k 与 P17 重拼上下文时用的那个量级同一个来源 ⇒ 不是新拍的数。
+    // 超了仍然是 `trimMaterialByTurns` 那条**按回合整对丢 + 点名**，不静默截断。
+    static let dreamTargetedMaxChars: Int          = 256000  // 定向单场上限（boss 指定 256k）
+
     // P17: dream 的**笔记侧**两个预算 —— 目录 + 正文两层。
     // 目录复用现有的 `indexBlock` 形状（一行一篇），正文是 P17 新开的（省掉模型自己 read 的往返）。
     // ⚠️ 这两段**只在 dream 的 fire 时拼进 prompt**，与常驻的 `[笔记]` 段

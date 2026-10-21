@@ -248,6 +248,7 @@ details.fold[open]>summary{margin-bottom:4px}
   <span class="tag">外部调研 <b>10 家</b></span>
   <span class="tag">现状证据 <b>本地库只读实测 + 12 处源码定位</b></span>
   <span class="tag">本版 <b>批 1~4 + P15.5 已施工</b></span>
+  <span class="tag">后记 <b>P15.9 定向 dream（10-21）</b></span>
   <span class="tag">2026-10-12</span>
 </div>
 
@@ -294,6 +295,7 @@ details.fold[open]>summary{margin-bottom:4px}
   <div class="v"><div class="face">dream 在 Plugins 面板里怎么被看见<span>中 · 它的 .ts 只在 fire 时落盘 ⇒ 纯扫描永远列不出</span></div><span class="chip c-ok">列表投影 + 展开工具名 · ✅ P15.7</span></div>
   <div class="v"><div class="face">dream 的洞见该归到哪个根<span>强 · 空根不进注入段 ⇒ 归属坐标一个都不剩</span></div><span class="chip c-ok">空根进段 + 段头标归属 · 项目优先 · ✅ P15.8</span></div>
   <div class="v"><div class="face">拍过板的提案还要不要留在列表里<span>中 · P15.4 有意留终态、整行降档显示</span></div><span class="chip c-ok">拍过板就删行 · 表 = 待审队列 · ✅ P15.8b</span></div>
+  <div class="v"><div class="face">对<b>某一场</b>会话做整场 dream<span>强 · 36h 窗口 + 4 万字是两道裁剪, 缺哪道都到不了「完整」</span></div><span class="chip c-ok">侧栏入口 + 256k · ✅ P15.9</span></div>
 </div>
 
 <h2><span class="n">01</span>需求说明<span class="en">REQUIREMENT</span></h2>
@@ -862,6 +864,7 @@ note_revisions(id, root_id, path, content, sha256, written_at, origin)   <span c
   <b>判据 16 条</b>（冒烟 P15.8 段）；<b>反例四组，各自单独跑</b>：ⓐ <code>indexBlock</code> 加回 <code>!docs.isEmpty</code> ⇒ <b>7 红</b>（本段 6 + 守卫 16），<b>②③⑤ 仍绿</b>（三条分工不同，不是同一件事的三种写法）· ⓑ <code>sessionRootLabels</code> 自己拼名字 ⇒ <b>3 红</b> · ⓒ <code>noteKnowledgeBases</code> 换回内联拼串 ⇒ <b>5 红</b>（含"同源"那条）· ⓓ 指令删掉归属规则 ⇒ <b>恰好 1 红</b>。⚠️ <b>只改 <code>noteRootLabel</code> 的格式是抓不到的</b>（实测 <b>FAIL 0</b>）—— 两处同源由构造保证（比断言更强），所以 ⓑⓒ 打的是"<b>有人绕过那个函数自己拼</b>"，而不是"有人改了格式"。<br>
   <b>否掉的一条（有意不做）</b>：App 侧硬拦「<code>target</code> 必须落在来源会话所属项目的根」——「这条结论是不是<b>跨项目</b>的」是<b>语义</b>，App 判不了；而规则本身明文给跨项目留了口子（"明确跨项目"也算对）⇒ 硬拦会把<b>合法情况判成错</b>。<b>归属判在 prompt，纠错判在人</b>（每条提案本来就要人采纳，路径就印在那一行上）。</div></div></div>
   <div class="todo done"><div class="tn">5f</div><div class="tbody"><div class="tt">P15.8b · 拍过板的提案 <b>直接删行</b>（提案表 = 待审队列，"终态"这个概念整条取消） <span class="chip c-ok">已施工 10-13</span></div><div class="td"><b>起因</b>：boss 看了左列那张图 —— 提案区里挂着一条「<i>已丢弃 · 全局笔记 / MangoX 三处…</i>」，判据是「<i>还有个点，已经丢弃的提案，直接删除吧，不要留着了</i>」。问"已采纳的要不要一起删"时他的回答把根也说清了：「<i>按理说已经采纳的提案要进入笔记区域啊</i>」—— <b>产出已经变成笔记区里的一篇，提案行就是冗余</b>。<br><b>这条推翻的是 P15.4 的一条拍板</b>，被推翻的原文在 <code>KnowledgeStore.swift</code>：「<i>丢弃同样要落 <code>dismissed</code> 终态与 <code>decided_at</code>, 否则它会永远挂在收件箱里 —— 而"我不想做这个决定"和"我还没做决定"是两件事, 收件箱必须分得清。</i>」当时的解是<b>留在列表里、整行降档、副标换成终态</b>。<b>新的判据</b>：① 丢弃 = 我不想做这个决定 ⇒ 它<b>没有任何后续动作</b> ⇒ 留着就是噪音；② 采纳 = 产出已经落在磁盘上 ⇒ 记录在笔记区里，提案行是冗余。⇒ <b>收件箱只回答一个问题：「还剩几件等我拍」</b>。<br><b>于是「终态」整条取消，四样东西跟着死</b>（生产者没了就不留 —— 同 <code>custom_models</code> 那次的口径）：<code>NoteProposalStatus</code> 收敛成<b>只剩 <code>pending</code></b>（<b>列不删</b>：DB 判据"列只增不删"，旧版打开新库会立刻崩）· <code>decidedAt</code> 字段删 · <code>PersistenceStore.setNoteProposalStatus</code> 删（无调用者）· <code>loadNoteProposals(status:)</code> 去掉过滤参数与 <code>CASE … ORDER BY</code>（只剩"新的在前"）。视图侧删掉 <code>proposalStatusLabel</code> / <code>proposalStatusColor</code> / 审阅面的终态分支 / <code>proposalStampLine</code> 的「拍板于」。<br><b>⚠️ 存量行不能靠"不读它"来解决</b>：<code>NoteProposalStatus</code> 只剩一个值之后，老库里那两条终态行会<b>解析不出状态</b> ⇒ <code>guard let status</code> 直接把它们静默丢掉 —— <b>行还躺在库里、界面上谁也看不见、门禁也不会红</b>。因为 <code>migrate()</code> 是"明确删掉，不让它静默"：<code>DELETE FROM note_proposals WHERE status &lt;&gt; 'pending'</code>（一行，落在 <code>migrate()</code> 里，<b>App 每次启动都跑</b>）。<br><b>⚠️ 那条 DELETE 是带地雷的</b>：将来若重新引入终态行，<b>这一行必须一起删</b> —— 否则它会每次启动静默吃掉新写进去的行。已写进代码注释与本节。<br><b>关键区分：删的只能是"拍过板"，不能是"没拍过板"</b> —— 采纳<b>失败</b>的三条路（<code>nameCollision</code> / <code>baseHashMismatch</code> / <code>noteMissing</code> / <code>writeFailed</code>）<b>一律留在待审</b>（那是 P15.4 那条判据的正面：人得能重试），删掉它等于<b>把一次失败的采纳伪装成一次拍板</b>。<br><b>判据</b>：冒烟 <b>1172 PASS / 0 FAIL</b>（1171 ⇒ <b>+1</b>，含一条新增的<b>存量移除真门禁</b>：照 T22 那套"<code>PersistenceStore(path:)</code> + 底层句柄 <code>Database</code> 写一行老版终态行 + 重开 store"造 —— <b>公开 API 造不出来，那正是本批的正面</b>；断言<b>只删终态行、同库的待审行原样保留</b>，把 <code>DELETE</code> 写宽了立刻红）。三条旧判据重瞄：采纳 ⇒ <b>行不在表里</b>（原来断言 <code>.accepted</code>）· 丢弃 ⇒ <b>行从表里消失</b>（原来断言 <code>.dismissed + decidedAt</code>）· 列表顺序判据<b>整条取消</b>（只剩一种状态，排序无从谈起）。</div></div></div>
+  <div class="todo done"><div class="tn">5g</div><div class="tbody"><div class="tt">P15.9 · 定向 dream：侧栏会话行的《由此 Dream》 <span class="chip c-ok">已施工 10-21</span></div><div class="td"><b>起因</b>：boss「<i>现在的定时任务只能往前回溯 36 小时，如果我想对某个会话的全部内容进行完整 dream 呢</i>」。<b>36h 只是候选范围，真正的瓶颈是单会话的 4 万字预算</b> —— 本机最大一场（794 事件 / 40 回合 / 11.3 万字正文）在 4 万预算下只留得住<b>最后 19 个回合</b>，而丢掉的 21 个回合恰好是"这场到底要解决什么"的开头 ⇒ <b>现行行为对"完整"是反的</b>。<br><b>做法</b>：入口长在那一场上（<code>由此侧问</code> 下面一条）· 点开先看<b>二次确认弹窗</b>（字数 / 回合 / 归属根 / 预算条 / 会不会裁）· 预算 <code>Tune.dreamTargetedMaxChars = 256000</code> · <b>定向 run 不推进 <code>lastRunAt</code></b>（推进 = 吃掉补跑窗口, 那几天没被定向跑过的会话永久掉出 36h, 且零红灯）· 与定时那轮共用同一个 dream 任务与日志会话（档位 / 收口 / spool 全复用, 不写第二套）。<br><b>否掉的一条</b>：菜单项标题直接带规模 —— <code>Menu</code> 的 content 惰性<b>没有保证</b>，而且就算惰性也是在<b>每次悬停展开</b>时算 ⇒ 等于把"扫该会话全部 <code>events</code> 的聚合"绑到了悬停上。boss 的原话：「<i>我觉得不合理，应该是用户点击了《由此Dream》后，有个详细的弹窗二次确定</i>」。<br><b>顺带补的一块</b>：定向让"重复提炼"从罕见变成常态（人点一次 + 当晚定时那轮又吃一遍）⇒ 收口时按「根 + 目标路径 + 标题」<b>在待审队列里去重</b>，并把跳过数单列在日志里。<br><b>顺带补的第二块</b>：两种运行共用同一条日志会话，分隔行原本都写「── HH:mm 运行 ──」⇒ 定向那行改成「── HH:mm 由此 Dream · 「目标标题」 ──」，翻历史时分得出是哪一种、对的是哪一场（boss：「定时和定向还是要区别一下」）。</div></div>
 </div>
 
 <h3>验收项</h3>
@@ -935,6 +938,103 @@ note_revisions(id, root_id, path, content, sha256, written_at, origin)   <span c
   <li><b>扫描器会跟随目录内容的变化</b> —— 本版新增的写入能力意味着索引每轮都在变。注入块的前缀稳定性（守卫 12 的前提）现在<b>取决于用户与 dream 改笔记的频率</b>。这条要盯：易变段本来就是为"会变的东西"设计的，笔记索引段的位置（稳定段之后、易变段之前）不变，但<b>索引段自身的内容会变</b> —— 现有守卫没有断言过这一点，<b>P15.1 已补（冒烟 T-KB 内容层①②）</b>。</li>
   <li><b>外部机制全部来自官方文档与公开报道，未在本机复现过</b> —— 本版没有装 Cursor / Windsurf / Letta / Zep / Mem0 中的任何一个，也没有跑过 Claude Dreams 的 API。§02 A 的依据强度按三档标注（官方文档 = 中，厂商自选基准 = 中并打折，个人经验 = 弱）。<b>这条要一直挂在明处：P15 的方案是从文档推出来的，不是从复现里推出来的。</b></li>
 </ul>
+
+<hr>
+
+<h2><span class="n">06</span>定向 Dream<span class="en">TARGETED DREAM</span></h2>
+<p class="lead">2026-10-21 追加（P15.9）。<b>编号排在这里、不插进 §04 之后</b>是刻意的：正文里有 15 处「§05」的交叉引用，回填编号会让它们<b>全部指错</b> —— 宁可当"后记"读，也不动那 15 处。</p>
+
+<div class="call">
+  <div class="lbl">一句话</div>
+  <p>每日 dream 的两道裁剪（<b>36 小时窗口</b>、<b>单会话 4 万字</b>）都是为"一天里好几场、每场各分一点"设计的；要对<b>一场</b>做完整整理，两道都得松。做法是给会话行多一个入口：<b>点开 → 看清楚 → 确认 → 一次性整场提炼</b>，预算 <b>256k</b>，跑完<b>不动</b>每日那轮的时间窗口。</p>
+</div>
+
+<div class="tldr">
+  <div class="tl"><span class="tln">①</span><div><b>36 小时只是候选范围，真正的瓶颈是那 4 万字。</b>本机最大的一场（<code>A2F7F694…</code>，794 事件 / 40 回合 / <b>11.3 万字</b>正文）在 4 万预算下<b>只留得住最后 19 个回合</b> —— 而丢掉的那 21 个回合恰好是"这场到底要解决什么"的开头。⇒ <b>现行行为对"完整"是反的</b>：它保住尾巴、砍掉来由。所以这件事不能靠"把窗口调大"解决。</div></div>
+  <div class="tl"><span class="tln">②</span><div><b>入口必须长在那一场上，而且点开才能算。</b>菜单在<code>由此侧问</code>下面加一条<code>由此 Dream</code>；<b>菜单标题不带规模</b> —— <code>Menu</code> 的 content 惰性<b>没有保证</b>，即便惰性也是在每次悬停展开时算，等于把"扫该会话全部 <code>events</code> 的聚合"绑到悬停上。⇒ 规模在<b>点击之后</b>查，一条聚合就够（<code>json_extract(payload,'$.content.text._0')</code> + <code>LENGTH</code>），<b>不解码事件流</b>（真实那场 794 个事件里有 616 个解码完就被丢）。</div></div>
+  <div class="tl"><span class="tln">③</span><div><b>定向那一次绝不推进 <code>lastRunAt</code>。</b>它不是"这个定时任务的一次运行"。而 <code>dreamDigestSince</code> 取的是 <code>min(now-36h, lastRunAt)</code>：<b>36 小时是地板、改不动</b>，被吃掉的恰好是"上次真跑在很久以前"那段<b>补跑窗口</b> ⇒ 那几天里没被定向跑过的会话<b>永久掉出窗口，且零红灯</b>。同一个块里 <code>logSessionId</code> 照写 —— 这条也是判据"那一行确实执行过"的唯一证据。</div></div>
+  <div class="tl"><span class="tln">④</span><div><b>预算要松<b>两只手</b>。</b><code>sessionDigest</code> 有单会话与整段两个上限；定向只改前者的话，整段那个 4 万仍在，一场照样被裁。定向把两个都传成 <code>dreamTargetedMaxChars</code>，并在段头把口径换成「整场 · 指定会话」—— 否则段头写着"窗口 36 小时"就是<b>假话</b>，而模型是拿它判时间跨度的。</div></div>
+  <div class="tl"><span class="tln">⑤</span><div><b>段名一个字都不能改。</b>摘录段仍叫<b>【最近会话摘录】</b>：<code>dreamPrompt</code> 的指令正文指着它（"见本消息末尾的【最近会话摘录】段"），改名的效果是告诉模型"没有摘录段"，它会直接收场 —— 而且<b>不报错</b>。定向的范围说明走<b>追加</b>（<code>dreamTargetedScopeNote</code>），落库的常量一个字不动。</div></div>
+  <div class="tl"><span class="tln">⑥</span><div><b>顺带补上"重复"这块。</b>定向让重复提炼从罕见变常态（人点一次 + 当晚定时那轮又吃一遍）⇒ 收口时按<b>根 + 目标路径 + 标题</b>在待审队列里去重，并把跳过数<b>单列</b>进日志。不单列的话，"这条我上次提过"看起来就像"模型这次没提"。</div></div>
+</div>
+
+<h3>禁用的三种状态（规则只写一处：<code>SchedulerService.canTargetDream</code>）</h3>
+<div class="tw">
+<table>
+<tr><th>状态</th><th>为什么必须灰</th><th>漏掉的后果</th></tr>
+<tr><td><b>这一场自己的回合在跑</b></td><td>读到的会是<b>半句话</b></td><td>半句话的摘录比没有摘录更坏 —— 它会当成结论提炼</td></tr>
+<tr><td><b>上一场 dream 还在跑</b></td><td>日志会话撞车，起来也会被跳过</td><td>用户点了却什么都没发生（最坏的反馈）</td></tr>
+<tr><td><b>这条会话本身就是任务日志</b></td><td>那是机器跑出来的运行记录，不是人机对话</td><td>dream 把自己的历次运行当人话提炼 = 自我循环</td></tr>
+</table>
+</div>
+<p class="lead">规则做成 <b>static 纯函数</b>、两个调用点（侧栏置灰 + <code>ChatStore</code> 兜底）都走它：视图层<b>只编译不执行</b>，判据必须有一个不依赖渲染的形状（同 <code>canDelete</code> / <code>rowMarker</code> 那两处的理由）。<b>反向判据同样重要</b>：别的会话在跑<b>不影响</b>（判据是 <code>running.contains(sid)</code>，不是"有任何回合在跑"）。</p>
+
+<h3>二次确认弹窗（点开才查）</h3>
+<pre>┌─ 由此 Dream ──────────────────────────────────┐
+│ MangoX 模型部署测试                           │
+├───────────────────────────────────────────────┤
+│ 正文   113,000 字 · 40 个回合                 │
+│ 归属   笔记                                   │
+│ 产出   只出提案，不改任何文件                 │
+│                                               │
+│ 送入 113,000 字 / 预算 256,000 字             │
+│ ████████████░░░░░░░░░░░░░░░░░░░░░░  44%      │
+│                                               │
+│ 这是单独一次，不会移动每日 dream 的时间窗口。 │
+│                          [取消]  [开始 Dream] │
+└───────────────────────────────────────────────┘</pre>
+<ul class="tight">
+  <li><b>「正文」那个数与真正送进去的材料逐字相等</b>（判据在冒烟里，实测夹具 <code>77070 vs 77070</code>）。口径 = <b>正文总长 + 4×行数 + (行数−1)</b>：每条材料 = 角色前缀（<code>用户: </code>／<code>助手: </code>／<code>系统: </code>，都是 4 个字符）+ 正文，行间一个换行。<b>已知不精确处</b>：SQLite 的 <code>length()</code> 数的是码点、Swift 的 <code>String.count</code> 数的是字形簇 ⇒ 含 ZWJ 的 emoji 会被多算，方向<b>偏大</b>（只让"会不会裁"的提示更保守，不会漏报）。</li>
+  <li><b>超预算只在这一屏说</b>，不弹窗、不阻断：<code>willTruncate</code> 亮那条琥珀提示，说明"只会做最近 N 字、前面的回合会被省略"。判据是 <code>&gt;</code> 不是 <code>&gt;=</code>（正好等于预算不算裁）。</li>
+  <li><b>空会话：按钮置灰 + 一句"没有可提炼的正文"</b>，<b>不叠加</b>"超预算" —— 两句话自相矛盾会让人不敢点。</li>
+  <li><b>一个字符串只放一个占位符</b>（本仓 L10n 硬规矩）："正文 · 回合"与"送入 / 预算"都是两段独立 key 拼起来的，译文各管自己那一小段，语序不由译文决定。</li>
+</ul>
+
+<h3>改动面（逐文件）</h3>
+<div class="tw">
+<table>
+<tr><th>文件</th><th>位置</th><th>做什么</th></tr>
+<tr><td><code>Models/DreamPreview.swift</code></td><td>新增 42 行</td><td>弹窗要摆的事实 + 三个纯计算（<code>isEmpty</code> / <code>willTruncate</code> / <code>budgetRatio</code>）。视图只画，不判。</td></tr>
+<tr><td><code>Views/Sidebar/DreamConfirmSheet.swift</code></td><td>新增 151 行</td><td>460 宽的一屏：标题 / 三行事实 / 预算条 / 两句提示 / 取消 + 开始。</td></tr>
+<tr><td><code>Views/Sidebar/SidebarView.swift</code></td><td><code>:19</code> <code>:389-391</code> <code>:468</code></td><td><code>@State dreamTarget</code> + <code>.sheet(item:)</code>；行菜单在<code>由此侧问</code>之后插一条，<code>.disabled(!canDream)</code>，可用性由调用点喂 <code>canTargetDream</code>。</td></tr>
+<tr><td><code>Persistence/PersistenceStore.swift</code></td><td><code>:533</code></td><td><code>dreamMaterialStats(id:)</code> —— 一条聚合出<b>字数 / 回合 / 行数</b>，不解码事件流。</td></tr>
+<tr><td><code>Theme/CodexTheme.swift</code></td><td><code>:491</code></td><td><code>Tune.dreamTargetedMaxChars = 256000</code>（唯一出处，弹窗与摘要都读它）。</td></tr>
+<tr><td><code>State/SchedulerService.swift</code></td><td><code>:231</code> <code>:339-345</code> <code>:489</code> <code>:647-655</code> <code>:708-715</code> <code>:721-771</code> <code>:1070-1118</code></td><td>范围说明常量 · <code>sessionDigest</code> 三个新参数 · <code>buildDreamDigest(target:)</code> · 分隔行按定向/定时分写 · fire 收尾的 <code>targeted == nil</code> 闸 · <code>DreamStart</code> / <code>dreamIsRunning</code> / <code>canTargetDream</code> / <code>runTargetedDream</code> · 收口去重 + <code>proposalKey</code>。</td></tr>
+<tr><td><code>State/ChatStore.swift</code></td><td><code>:1434-1482</code></td><td><code>canTargetDream(for:)</code> · <code>dreamPreview(from:)</code>（点了才查）· <code>startTargetedDream(from:)</code>（四种结果<b>每种都有话说</b>）· <code>notifyTargetedDreamFinished</code>（横幅文案在<b>这里</b>成型：<code>SchedulerService</code> 在 L10n 的 <code>EXCLUDE_FILES</code> 里，落库日志恒中文，但横幅是界面文案）。</td></tr>
+<tr><td><code>scripts/l10n/en_values.py</code></td><td>尾部新增 17 条</td><td><code>由此 Dream</code> / <code>Start Dream</code> / 四句横幅 / 弹窗各段。<code>由此 Dream</code> 与 <code>由此侧问: Side chat from here</code> 同族 ⇒ <code>Dream from here</code>。</td></tr>
+<tr><td><code>scripts/smoke/cases/CaseTargetedDream.swift</code></td><td>新增 245 行 / 46 条判据</td><td>自带夹具与独立 <code>ChatStore</code>（纪律四则④）。</td></tr>
+<tr><td><code>scripts/smoke/smokeMain.swift</code></td><td><code>调用点</code></td><td><b>与上一句同占一行</b> —— 体量棘轮判的是行数只减不增，新用例调用点各占一行迟早顶破它。</td></tr>
+</table>
+</div>
+
+<h3>判据（每条都能变红；反例各自单独跑）</h3>
+<div class="todos">
+  <div class="todo done"><div class="tn">1</div><div class="tbody"><div class="tt">预算真的换成了 256k —— 走<b>生产路径</b><span class="chip c-ok">实测 PASS</span></div><div class="td">夹具 = 一场 <b>77,070 字 / 80 行 / 40 回合</b>的合成会话（它<b>必须</b>超 4 万，否则"不裁"是空转绿；又<b>必须</b>远低于 256k）。判据读的是 <code>buildDreamDigest(target:)</code> <b>本身</b>，不是"另写一句同样的调用" —— 后者只是复述实现，把预算换回去它照样绿（为此把那个方法从 <code>private</code> 放成 internal，可见性换一条真能红的门）。<b>对照面</b>：同一份材料走定时那轮的 4 万预算 ⇒ <b>必然</b>出现「更早的 N 个回合已省略」。</div></div></div>
+  <div class="todo done"><div class="tn">2</div><div class="tbody"><div class="tt">弹窗那个数与真正喂进去的<b>逐字相等</b><span class="chip c-ok">77070 vs 77070</span></div><div class="td">字数 / 行数 / 回合数三格各一条。<b>非空转的证明</b>在同一个仓库里：行数 80 与消息条数 120 不同（每回合还夹一条工具卡，工具卡不进材料）—— 若把它算成"消息条数"，这条立刻红。多算 ⇒ 弹窗喊超预算而实际没裁；少算 ⇒ 该告警的不告警。</div></div></div>
+  <div class="todo done"><div class="tn">3</div><div class="tbody"><div class="tt">定向 run <b>不推进</b> <code>lastRunAt</code> / <code>runCount</code><span class="chip c-ok">实测 lastRunAt = nil</span></div><div class="td">前置 = 这条任务<b>从没跑过</b>（否则分不清"没写"与"写了同一个值"）。<b>防它变成空转的另一半</b>：同一个 <code>if let idx</code> 块里 <code>logSessionId</code> <b>写了</b> ⇒ 那一行确实执行过，唯一没写 <code>lastRunAt</code> 的原因就是 <code>targeted == nil</code> 那道闸。</div></div></div>
+  <div class="todo done"><div class="tn">4</div><div class="tbody"><div class="tt">禁用三种状态 + 一条反向<span class="chip c-ok">实测 PASS</span></div><div class="td">① 本场在跑 ② dream 在跑 ③ 任务日志会话 ④ <b>反向</b>：什么都不在跑时可点、<b>别的</b>会话在跑不影响。②③ 要看日志会话，所以排在 fire 之后（fire 前它是 <code>nil</code>，那三条会退化成"夹具缺失"）。</div></div></div>
+  <div class="todo done"><div class="tn">5</div><div class="tbody"><div class="tt">收口去重：同一场跑两次，队列表里只有一行<span class="chip c-ok">实测 1 条</span></div><div class="td">两轮真 fire + 两次手动收口。第一次<b>不提</b>重复（那时队列里确实没有）、第二次摘要里出现「跳过 1 条已在待审队列里的重复提案」。外加去重键三段各自一条反例（少任何一段都会把不同的洞见吞成一条）。</div></div></div>
+  <div class="todo done"><div class="tn">6</div><div class="tbody"><div class="tt">空会话在门口挡掉，<b>一个回合都不起</b><span class="chip c-ok">实测 PASS</span></div><div class="td">判据看<b>回合集合</b>而不是返回值：返回值对、但回了"已开始 dream"的横幅，同样是坏反馈。不挡的话会花一次模型调用，只为让它读到"没有摘录段 ⇒ 直接结束"那条硬约束。</div></div></div>
+  <div class="todo done"><div class="tn">7</div><div class="tbody"><div class="tt">指令：常量原样在前，定向段是<b>追加</b><span class="chip c-ok">实测 PASS</span></div><div class="td">四条：常量仍指着【最近会话摘录】· 常量<b>不含</b>"定向整理"（它同时是定时那轮的指令且落库）· 定向那次带范围说明且与段头<b>同一句话</b> · 定时那次<b>不带</b>（<code>scopeNote</code> 缺省 nil）。</div></div></div>
+  <div class="todo done"><div class="tn">8</div><div class="tbody"><div class="tt">共用一条日志会话时，两种运行要<b>分得开</b><span class="chip c-ok">实测 3 定向 + 1 定时</span></div><div class="td">定向与定时共用同一条 dream 日志会话（有意：不然点一次侧栏多一条），代价是分隔行若长得一样，翻历史分不出哪次是《由此 Dream》。⇒ 定向写 <code>── HH:mm 由此 Dream · 「目标标题」 ──</code>，定时仍写 <code>── HH:mm 运行 ──</code>。<b>四条判据</b>：两次定向各留一行 · 括号里有标题 · <b>标题是那一场自己的</b>（换一场有标题的再跑一次 —— 写成常量在那里立刻红）· 定时那行不带定向字样。<br>⚠️ 落库文案读 <code>title</code> 而<b>不读</b> <code>displayTitle</code>：后者会 <code>L("新对话")</code>，而这行是<b>恒中文的时间线</b>（本文件在 <code>EXCLUDE_FILES</code> 里）—— 掺一个可本地化词，同一条记录在不同界面语言下会写出不同字节。默认标题的哨兵在这条路上换成恒中文的「未命名会话」。<br>⚠️ 判据要排掉<b>收口行</b>（<code>── dream 收口… ──</code> 同一个包围格式），否则「两次定向 = 两行」会被收口行凑数，变成恒真的绿。</div></div></div>
+</div>
+
+<div class="call ok">
+  <div class="lbl">P15.9 门禁读数（判据是「能变红」，不是「跑过了」）</div>
+  <p><b>冒烟</b>：<code>bash scripts/smoke/run.sh</code>（前台 + 免沙箱）→ <b>1440 PASS / 0 FAIL / ALL PASS</b>（P15.9 新增 <b>56</b> 条），swiftc 全量 0 warning。<b>反例共两轮</b>：① <code>buildDreamDigest(target:)</code> 的 <code>budget</code> 换回默认 + <code>if targeted == nil</code> 改成 <code>if true</code>（同跑）→ <b>恰好 4 红</b>（④ 两条 "整场都在" / "一句省略都没有" + ⑦ 两条 <code>lastRunAt</code> / <code>runCount</code>），其余 <b>1426 条不动</b>；② 分隔行的标题写成常量「未命名会话」→ <b>恰好 1 红</b>（"括号里是那一场自己的标题"），<b>1439 条不动</b>。两轮退码均 <b>1</b>。<b>还原后不重跑正例</b>（正例已在前）。<br>
+  <b>构建</b>：<code>xcodebuild … -derivedDataPath /tmp/mangox-dd build</code> → <b>BUILD SUCCEEDED</b> / 71 <code>SwiftCompile</code> / <b>0 warning / 0 error</b>。<br>
+  <b>本地化</b>：<code>gen_strings --write</code> → <b>774/774</b>；<code>gen_strings --check</code> 未翻译 <b>0</b> / 已废弃 <b>0</b>；<code>scan_english</code> 可疑硬编码 <b>0</b>；<code>scan_wiring --check</code> 未接线 <b>0</b> / 冻结取词 <b>0</b>。</p>
+</div>
+
+<h3>风险与已知缺口</h3>
+<div class="tw">
+<table>
+<tr><th>风险</th><th>现象</th><th>结法 / 状态</th></tr>
+<tr><td><b>定向跑完，当晚定时那轮又把同一场吃一遍</b></td><td>两批提案指向同一件事；人只能靠肉眼认出"这条我见过"</td><td>收口按「根 + 目标路径 + 标题」<b>在待审队列里去重</b>，跳过数单列进日志。<b>有意不做</b>"把这场从定时那轮的候选里排掉"：那需要一份"这场被定向跑过"的账，而重复只是多两条待审（人一看就丢），漏提炼却是永久损失 —— 同 P17「重复可接受，丢失不行」。</td></tr>
+<tr><td><b>256k 是这套产品里最贵的一次调用</b></td><td>一次定向 ≈ 6 倍单场上限；上下文窗口不够的模型会直接拒</td><td>弹窗把<b>字数与占比</b>摆在按钮上面，并按 <code>willTruncate</code> 提示；预算只有 <code>Tune</code> 一处出处。⚠️ <b>不拦</b>：拦在哪一档由用户决定（同 P13 不替他改档）。</td></tr>
+<tr><td><b><code>dreamTargets</code> 是内存映射</b></td><td>进程在 fire 与收口之间被杀 ⇒ 收口横幅不会响（提案照样落表）</td><td><b>已知缺口，不假装盖住了</b>：收口本身靠 spool 文件兜底（下次 fire 开头清掉并说明），横幅只是"多说一句"。冒烟造不出"进程被杀"，这条只能在真机复现。</td></tr>
+</table>
+</div>
 
 <div class="foot">
   P15 · 2026-10-12 · <b>设计定稿（五门全定 · 三处悬空已收口）· 批 1~4 + P15.5 全部已施工（本版收口）</b>。现状数字全部为 2026-10-12 本地只读实测（§02 D）—— ⚠️ 其中 ③ 自 11:00 存量移除后已不可复现。<b>三处悬空项全部定下</b>：A = 存量直接移除 · B = 区名与 prompt token 都改「笔记」 · C = 项目笔记根不进 git（App 不代改 <code>.gitignore</code>）· <b>A 已执行</b>；P15.3 的两处（触发 = <code>cron</code> + 手动带开关 · <code>cwd</code> = home）与 P15.4 的三处（来源判据 / diff 粒度 / 拍完板留终态）<b>均已按此施工</b>。<b>P15.5（内置库退休 · 收尾批）</b>：左列那三行「按需知识」的来源已整条移除（依据 = 破门 1 + 空转）、代价 = P11.4 那批 ondemand 条目重新隐形（挂 P11.3 解冻时重建路标）。⚠️ <b>唯一未落地的是 <code>note_search</code></b>（未列入任何批次，见 §05 边界）。<br>

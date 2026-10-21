@@ -516,6 +516,41 @@ final class PersistenceStore {
         return (sideOf, src, turns, at)
     }
 
+    /// 一场会话的**正文规模**（定向 dream 的确认弹窗用，`由此 Dream`）。
+    ///
+    /// 为什么是一条聚合而不是 `replayMessages` 之后再数: 后者会把整条事件流解码成
+    /// `ChatMessage`（实测 794 个事件里 616 个解码完就被丢弃），只为显示一个字数——而且这段
+    /// 代码是**点了菜单项才跑**，用户会直接感到那一下的卡顿。
+    ///
+    /// **`chars` 的定义必须与 `KnowledgeStore.sessionMaterial` 拼出来的长度一致**，否则弹窗
+    /// 说"送入 11.3 万字"、实际送进去 11.7 万，就是"标记比事实说得少"。口径:
+    /// 每条 = 角色前缀（`用户: ` / `助手: ` / `系统: ` 都是 4 字符）+ 正文，行间一个换行
+    /// ⇒ n 行合计 `正文总长 + 4n + (n - 1)`。空正文不计数（`sessionMaterial` 同样跳过）。
+    ///
+    /// ⚠️ 已知的一处**不精确**: SQLite `length()` 数的是**码点**，Swift `String.count` 数的是
+    /// **字形簇**。含 ZWJ 的 emoji（一个字形簇 4 个码点）会被这里多算 ⇒ 这个数**偏大**。
+    /// 偏大的方向是安全的（只影响显示与"会不会截断"的保守判断），且只在 emoji 密集时才有感。
+    func dreamMaterialStats(id: UUID) -> (chars: Int, turns: Int, lines: Int) {
+        let rows = (try? db.query("""
+            SELECT
+              COALESCE(SUM(LENGTH(json_extract(payload, '$.content.text._0'))), 0) AS text_len,
+              COALESCE(SUM(CASE WHEN json_extract(payload, '$.role') = 'user'
+                                 AND LENGTH(json_extract(payload, '$.content.text._0')) > 0
+                                THEN 1 ELSE 0 END), 0) AS turns,
+              COALESCE(SUM(CASE WHEN LENGTH(json_extract(payload, '$.content.text._0')) > 0
+                                THEN 1 ELSE 0 END), 0) AS lines
+            FROM events
+            WHERE session_id = ? AND type = 'message'
+              AND json_extract(payload, '$.content.text._0') IS NOT NULL
+            """, [.text(id.uuidString)])) ?? []
+        let row = rows.first ?? [:]
+        let textLen = Int(int(row["text_len"] ?? .null))
+        let lines = Int(int(row["lines"] ?? .null))
+        let turns = Int(int(row["turns"] ?? .null))
+        let chars = lines > 0 ? textLen + 4 * lines + (lines - 1) : 0
+        return (chars, turns, lines)
+    }
+
     // MARK: - Events (append-only trajectory)
 
     private func appendEvent(_ sessionId: UUID, type: String, payload: Data) throws {

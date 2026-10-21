@@ -7,15 +7,17 @@
    **本文件由 scripts/l10n/gen_strings.py --write 生成, 别手改** ——
    译文改 scripts/l10n/en_values.py 的 VALUES, 再跑 --write。
 
-   条数: 757
+   条数: 781
 */
 
 " [附件: %@]" = " [Attachment: %@]";
 " 待重启" = " Restart required";
+"%@ 字" = "%@ chars";
 "%@ 拷贝失败: %@" = "Failed to copy %@: %@";
 "%lld 个人格文件 frontmatter 破损, 未注入且已禁止新建 key: %@" = "%lld persona files have broken frontmatter — not injected, and creating keys is blocked: %@";
 "%lld 个人格文件是「按需」的, 模型不知道它们存在: %@" = "%lld persona files are “on demand” — the model does not know they exist: %@";
 "%lld 个人格文件读不出来 (权限或编码), 内容未进 prompt: %@" = "%lld persona files cannot be read (permissions or encoding) — their content is not in the prompt: %@";
+"%lld 个回合" = "%lld turns";
 "%lld 个来源" = "%lld sources";
 "%lld 个模型因缺元数据未列出: %@" = "%lld models not listed — no metadata available: %@";
 "%lld 分 %lld 秒" = "%lldm %llds";
@@ -86,6 +88,7 @@
 "cron 无效" = "Invalid cron expression";
 "curl 退出码 %d" = "curl exit code %d";
 "curl 退出码 %lld" = "curl exit code %lld";
+"dream 完成：%lld 条提案待审" = "Dream done: %lld proposals to review";
 "env 执行程序" = "env runs a program";
 "find 执行命令/改文件" = "find executes commands / edits files";
 "fire 回合恒不经确认执行工具调用 (含 bash)——后台任务无审批入口, 关闭会卡死任务; 执行过程见任务日志" = "Fire turns always run tool calls (including bash) without confirmation — background tasks have no approval UI, and turning this off would deadlock them. See the task log for what ran.";
@@ -119,6 +122,7 @@
 "一" = "Mon";
 "一行一个地址; 名单外的信静默丢弃并移入 Trash" = "One address per line; mail from anyone else is silently dropped and moved to Trash.";
 "三" = "Wed";
+"上一场 dream 还在跑，等它结束再试" = "Another dream is still running — try again when it finishes";
 "上下文" = "Context";
 "上下文 %@" = "Context %@";
 "上下文 %@ / 压缩线 %@" = "Context %@ / compaction line %@";
@@ -147,6 +151,7 @@
 "二" = "Tue";
 "五" = "Fri";
 "交互" = "Interactive";
+"产出" = "Output";
 "人格" = "Persona";
 "人格文件 frontmatter 破损 — 修好开头的 --- 收尾后再建带 key 的条目" = "Persona file frontmatter is broken — close the opening --- before creating items with a key";
 "人格文件是只读真源, 去 Finder 打开编辑" = "Persona files are the read-only source of truth — open in Finder to edit";
@@ -276,6 +281,7 @@
 "取消" = "Cancel";
 "变更史 · %lld 条" = "History · %lld";
 "只作用于这个 Inbox 起的会话, 不改变你当前会话的模型与档位" = "Applies only to sessions started by this Inbox; your current session's model and mode are untouched.";
+"只出提案，不改任何文件" = "Proposals only, no files touched";
 "只收 .md (大小写敏感); 若你刚要删或改名, 这条就是唯一的线索" = "Only .md is picked up (case-sensitive); if you just deleted or renamed something, this line is the only trace of it";
 "只是不再挂载, 目录与里面的文件一个都不动。" = "It is only unmounted — the directory and every file inside stay untouched.";
 "只读命令静默放行, 其余弹审批卡等待点击。" = "Read-only commands pass silently; anything else raises an approval card and waits for a click.";
@@ -340,6 +346,7 @@
 "导出 HTML 并在 Finder 显示" = "Export HTML and reveal it in Finder";
 "导出失败" = "Export failed";
 "导出超时" = "Export timed out";
+"将带上 %lld 轮源会话上下文" = "Carries %lld turns of source context";
 "小时" = "Hours";
 "尚未备份" = "No backup yet";
 "尚未收信" = "No mail received yet";
@@ -363,6 +370,7 @@
 "已删除的任务" = "Deleted task";
 "已删除的会话" = "Deleted session";
 "已复制" = "Copied";
+"已开始 dream：%@" = "Dream started: %@";
 "已拒绝" = "Denied";
 "已挂载的知识库 %lld 个没进索引: %@" = "%lld mounted knowledge bases did not make it into the index: %@";
 "已暂停" = "Paused";
@@ -381,9 +389,11 @@
 "并发回合上限" = "Concurrent turn limit";
 "并发已达上限 (%lld), 捕获未发送" = "Concurrency limit reached (%lld); capture not sent";
 "并发已达上限 (%lld), 请等待任务结束或在设置中调高" = "Concurrency limit reached (%lld) — wait for a task to finish or raise the limit in settings";
+"开始 Dream" = "Start Dream";
 "引擎 stderr 末尾几行:" = "Last lines of engine stderr:";
 "引擎没有输出任何 stderr。" = "The engine wrote nothing to stderr.";
 "引用工作区文件" = "Reference a workspace file";
+"归属" = "Goes to";
 "当前" = "Current";
 "当前会话 %lld 轮" = "Current session: %lld turns";
 "当前会话未绑定项目目录" = "This session has no project directory";
@@ -409,6 +419,7 @@
 "扩展 %@ 在处理 %@ 时出错: %@" = "Extension %@ failed while handling %@: %@";
 "扩展请求了 MangoX 不处理的「%@」界面, 已按「取消」应答。" = "Extension requested a \"%@\" prompt the app does not handle; answered \"Cancel\".";
 "扫到 %lld 个文档 (md / txt / html, 深度 ≤ 3)" = "%lld documents found (md / txt / html, depth ≤ 3)";
+"找不到 dream 任务，去定时页看看" = "No dream task found — check Scheduled";
 "把会话数据库 (含知识库) 与图片附件、会话记录完整拷贝到目标目录的 mangox-backup-<时间戳>/ 子目录, 供人工保管" = "Copies the session database (including the knowledge base), image attachments and session logs into a mangox-backup-<timestamp>/ folder in the target directory for safekeeping.";
 "把这一份整篇写进上面那条目标; 被顶掉的那一版会进变更史" = "Write this whole text into the target above; the version it replaces goes to the history";
 "把这一篇移进系统废纸篓; 旧内容会先进变更史" = "Move this note to the system Trash; its old content is recorded in the change history first";
@@ -459,6 +470,7 @@
 "教训" = "Lesson";
 "数据库拷贝失败: %@" = "Copying the database failed: %@";
 "数据库文件缺失: %@" = "Database file missing: %@";
+"整场" = "Entire session";
 "整篇拿走 —— markdown 预览里的选中是逐块的, 没有一次选完整篇的选法" = "Take the whole thing — selection in the markdown preview is per block, so there is no way to select it all in one go";
 "文件" = "File";
 "文件将从托管区移除, 此操作不可撤销。" = "The file will be removed from the managed area; this cannot be undone.";
@@ -595,8 +607,10 @@
 "现在" = "Now";
 "生成中…" = "Generating…";
 "用户" = "User";
+"由此 Dream" = "Dream from here";
 "由此侧问" = "Side chat from here";
 "由此侧问 (含 Turn %lld 及之前)" = "Side chat from here (up to and including turn %lld)";
+"由此处侧问" = "Start side chat";
 "白名单 %lld 条" = "%lld on the allowlist";
 "白名单至少一个发件人地址" = "Add at least one sender address to the allowlist";
 "目录: %lld 家 / %lld 条" = "Catalog: %lld providers / %lld models";
@@ -684,6 +698,7 @@
 "账号不存在" = "Account does not exist";
 "账号已删除" = "Account deleted";
 "账号缺授权码" = "Account has no app password";
+"超出预算：只会做最近 %@ 字，前面的回合会被省略。" = "Over budget: only the latest %@ chars are used, earlier turns are skipped.";
 "超过上限时: 会话发送被拒绝并提示; 定时任务到点会跳过并在日志会话记录原因。" = "When over the limit: sends in sessions are refused with a message, and scheduled tasks skip that run and record the reason in the log session.";
 "超高" = "Extra High";
 "跟随系统" = "Follow system";
@@ -706,11 +721,15 @@
 "还有 %lld 行 · 展开" = "%lld more lines · Expand";
 "还没有可用的邮箱账号" = "No usable mailbox account yet";
 "还没有常驻内容\n点右上角 + 新建条目, 或用常驻区与笔记区的入口放入文件" = "Nothing always-on yet\nUse + in the top right to add an entry, or use the resident and notes section entries to put files in place";
+"这一场只有工具输出，没有可提炼的内容。" = "This session has only tool output — nothing to distill.";
+"这一场没有可提炼的正文（只有工具输出）" = "No text to distill here (tool output only)";
 "这一段会进每轮 prompt 的索引段, 逐字就是 agent 收到的" = "This section goes into the index of every prompt, word for word as the agent receives it";
 "这一篇还是空的…" = "This note is still empty…";
+"这个会话还没说过话，侧问会带一个空上下文。" = "This session has no messages yet — the side chat will start empty.";
 "这个目录里没有可读的文档" = "No readable documents in this directory";
 "这个路径不在笔记目录里" = "That path is outside the notes directory";
 "这句话会进每轮 prompt 的索引 —— agent 靠它判断要不要来查这个目录。" = "This sentence goes into the index of every prompt — the agent uses it to decide whether to look into this directory.";
+"这是单独一次，不会移动每日 dream 的时间窗口。" = "One-off run — it will not shift the daily dream window.";
 "这条请求的缓存命中率 = 命中 token ÷ (输入 + 命中)" = "Cache hit rate for this call = cached ÷ (input + cached)";
 "这篇在你编辑期间被外部改过 — 你的改动没有写盘" = "This note was changed externally while you were editing — your changes were not written";
 "这篇已经不在了 — 可能在 App 外被删掉或改名了" = "This note is gone — it may have been deleted or renamed outside the app";
@@ -720,6 +739,8 @@
 "连接超时" = "Connection timed out";
 "追加-" = "Append-";
 "追加-%@" = "Append-%@";
+"送入 %@ 字" = "%@ chars in";
+"选一轮：那一轮及之前的对话都会带进侧问。" = "Pick a turn: it and everything before it is carried into the side chat.";
 "选择" = "Choose";
 "选择或导入一个插件" = "Choose or import an extension";
 "选择收信用的邮箱账号" = "Choose the mailbox account to receive mail";
@@ -754,6 +775,7 @@
 "间隔" = "Interval";
 "阿里云邮箱" = "Alibaba Cloud Mail";
 "附加文件…" = "Attach files…";
+"零拷贝" = "No copy";
 "需要审批" = "Ask for approval";
 "需要时才查" = "On demand";
 "需要时才查 %lld 条 · 不占预算" = "%lld on demand · off budget";
@@ -761,9 +783,11 @@
 "项目" = "Project";
 "项目操作" = "Project actions";
 "项目目录不存在: %@" = "Project directory does not exist: %@";
+"预算 %@ 字" = "budget %@ chars";
 "预设" = "Preset";
 "首封主题里必须带这串密钥 (清洗剥掉后不落库)" = "The first message's subject must carry this secret (stripped during cleanup and never stored)";
 "首次运行前为空; agent 运行后会把关键进展写在这里, 也可手动编辑干预任务方向…" = "Empty before the first run; the agent writes key progress here and you can edit it by hand to steer the task…";
 "高" = "High";
 "高 · 每 5 分钟" = "High · every 5 minutes";
 "高级" = "Advanced";
+"（只有图片）" = "(images only)";

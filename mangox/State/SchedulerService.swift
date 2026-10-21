@@ -32,6 +32,10 @@ final class SchedulerService: ObservableObject {
     // 与 `fireTurnTask` 分开: 那个只在**等待型**任务上有值（`condition` 非空）, 而 dream 是普通
     // cron 任务 ⇒ 复用那个字典会让 dream 的收口被"等待型"的判据顺手漏掉。
     private var dreamFires: [UUID: String] = [:]
+    /// 定向 dream（`由此 Dream`）在途的日志会话 -> 目标会话 id。**只服务两件事**:
+    /// ① 收口时发一句「dream 完成: N 条待审」到会话横幅（否则用户在侧栏看着自己那场会话，
+    ///    永远不知道后台已经跑完）；② 完成后从字典里清掉，免得下次定时那轮被当成定向。
+    private var dreamTargets: [UUID: UUID] = [:]
 
     private weak var store: ChatStore?
     func attach(_ store: ChatStore) { self.store = store }
@@ -210,14 +214,26 @@ final class SchedulerService: ObservableObject {
     ///
     /// 抽成 internal static 还为了让冒烟能造一条"存量旧行"来断言它 —— 今天之前, 这条路径
     /// **一条判据都没有**（夹具里的 dream 任务都是新种的, 永远走不到"存量"）。
-    static func dreamFirePrompt(digest: String, notes: String) -> String {
+    static func dreamFirePrompt(digest: String, notes: String, scopeNote: String? = nil) -> String {
         var parts = [dreamPrompt]
+        if let scopeNote { parts.append(scopeNote) }
         if !notes.isEmpty { parts.append(notes) }
         if !digest.isEmpty { parts.append(digest) }
         return parts.joined(separator: "\n\n")
     }
 
     /// 这一条任务是不是 dream。判据只看 id（见 `dreamTaskID`）。
+    /// 定向 dream（`由此 Dream`）追加在常量之后的那一段 —— 说清这次的范围与定时那轮不同。
+    ///
+    /// 为什么不直接改 `dreamPrompt` 常量: 它同时是定时那轮的指令，而且**落库**成任务行的
+    /// `prompt`（`seedDreamTaskIfNeeded`）。改常量会让"定时 = 窗口 / 定向 = 整场"里必有一边
+    /// 变成假话。于是"范围"这件事走**追加**：常量管"怎么干"，这一段只管"这次喂的是什么"。
+    static let dreamTargetedScopeNote = """
+    本次范围是**定向整理**：只针对**一场指定会话**的整段过程（不是最近 36 小时的窗口）。
+    段头写着「整场 · 指定会话」—— 把它当成一次完整的经历来提炼，不必顾虑"同一件事是否已经在
+    别的会话里出现过"。其余规则不变。
+    """
+
     static func isDreamTask(_ task: ScheduledTask) -> Bool { task.id == dreamTaskID }
 
     /// 这条任务**允许被删吗**。**规则只写在这里**, 两处消费:
@@ -311,10 +327,22 @@ final class SchedulerService: ObservableObject {
     /// - Parameter since: **窗口起点**（P17 起由调用方给, 不再是"now 减固定天数"）——
     ///   它 = `max(now - 36h, 上次 fire 真跑起来的那一刻)`, 见 `dreamDigestSince`。
     ///   把窗口的**来历**留在调用方, 这个纯函数只管"按给定起点筛"。
+    /// - Parameter budget: **单会话**预算。默认 = 定时 dream 的 4 万字；定向 dream（`由此 Dream`）
+    ///   传 `dreamTargetedMaxChars`（256k）。两条路共用同一个裁剪器 ⇒ "按回合整对丢 + 点名"
+    ///   这条语义不需要写第二遍。
+    /// - Parameter totalBudget: **整段**预算。定向时传 `dreamTargetedMaxChars` —— 那一段里只有
+    ///   一场会话, 而这个循环**不会把最后一场丢掉**（丢光 = 没有料可提炼）, 于是"整段上限"
+    ///   在定向路径上实际不参与裁剪；显式传它只是不让读代码的人以为 100k 仍然管着。
+    /// - Parameter scopeSuffix: 段头第几格的口径。定时 = `窗口 36 小时`；定向 = 整场。
+    ///   ⚠️ **【最近会话摘录】这个名字不许按定向改名** —— `dreamPrompt` 的指令正文指着它
+    ///   （"见本消息末尾的【最近会话摘录】段"），改名等于告诉模型"没有摘录段", 它会直接收场。
     static func sessionDigest(_ sessions: [DreamDigestInput],
                               since: Date,
                               excludeIds: Set<UUID> = [],
-                              priorOmitted: Int = 0) -> String {
+                              priorOmitted: Int = 0,
+                              budget: Int = Tune.dreamDigestMaxCharsPerSession,
+                              totalBudget: Int = Tune.dreamDigestTotalChars,
+                              scopeSuffix: String = "窗口 \(Tune.dreamDigestWindowHours) 小时") -> String {
         let candidates = sessions
             .filter { !excludeIds.contains($0.id) && $0.updatedAt >= since }
             .sorted { $0.updatedAt > $1.updatedAt }        // 新的在前 ⇒ 下面从**尾部**丢最旧的
@@ -328,9 +356,8 @@ final class SchedulerService: ObservableObject {
             var body = lines.joined(separator: "\n")
             // P17: 单会话超长 ⇒ **按回合整对丢**（原来是 `suffix` 切字符串: ① 开头的用户提问
             // 整段消失 ② 切点落在半句话中间 ⇒ 喂进去的是"没有提问的回答"）。
-            if body.count > Tune.dreamDigestMaxCharsPerSession {
-                body = KnowledgeStore.trimMaterialByTurns(lines,
-                                                          budget: Tune.dreamDigestMaxCharsPerSession)
+            if body.count > budget {
+                body = KnowledgeStore.trimMaterialByTurns(lines, budget: budget)
             }
             // 段头 **4 格**: 会话 id · 标题 · 日期 · **归属**(P15.8)。
             //
@@ -346,16 +373,16 @@ final class SchedulerService: ObservableObject {
         // 段头/段尾的数字自身也占字符, 丢一个会话会让它们少一位 —— 用近似值会写出超限的段。
         var kept = entries
         var omitted = priorOmitted + sessions.count - kept.count
-        while kept.count > 1, assemble(kept, omitted: omitted).count > Tune.dreamDigestTotalChars {
+        while kept.count > 1, assemble(kept, omitted: omitted, scope: scopeSuffix).count > totalBudget {
             kept.removeLast()
             omitted += 1
         }
-        return assemble(kept, omitted: omitted)
+        return assemble(kept, omitted: omitted, scope: scopeSuffix)
     }
 
     /// 摘要的组装 —— 段头 + 会话段 + （有的话）点名行。抽出来是因为上面的循环要反复算长度。
-    private static func assemble(_ kept: [String], omitted: Int) -> String {
-        var parts = ["【最近会话摘录 · \(kept.count) 个会话, 窗口 \(Tune.dreamDigestWindowHours) 小时】"]
+    private static func assemble(_ kept: [String], omitted: Int, scope: String) -> String {
+        var parts = ["【最近会话摘录 · \(kept.count) 个会话, \(scope)】"]
         parts.append(contentsOf: kept)
         if omitted > 0 { parts.append("（另有 \(omitted) 个会话未列出: 更早的 / 超出预算的 / 没有正文的）") }
         return parts.joined(separator: "\n")
@@ -442,6 +469,33 @@ final class SchedulerService: ObservableObject {
         }
         return Self.sessionDigest(inputs, since: since, excludeIds: exclude,
                                   priorOmitted: all.count - pass.count)
+    }
+
+    /// **定向**取料：只编**这一场**，走整场预算（`由此 Dream`，boss 2026-10-21）。
+    ///
+    /// 与上面那个的三个差别，每一条都是必要的：
+    ///   ① `since: .distantPast` —— 目标是**指定的这一场**，不是"最近 36 小时里有哪些"。窗口在
+    ///      这条路上没有意义（一场三天前的会话照样该能被完整整理）；
+    ///   ② `budget = dreamTargetedMaxChars`（256k）—— 常规 4 万是"一天里每一场各分一点"的口径，
+    ///      对"整场"等于砍掉 2/3（实测：11.3 万字 / 40 回合的会话只留得下 19 个回合）；
+    ///   ③ `scopeSuffix` 换成整场 —— 段头必须如实说这是整场，否则「窗口 36 小时」就是假话。
+    ///
+    /// 不做"要不要把它从定时那轮的候选里排掉"的处理: 排掉需要一份"这场被定向跑过"的账，
+    /// 而重复提炼只是多两条待审提案（人一看就丢），漏提炼却是永久损失 —— 判据同 P17
+    /// 「重复可接受, 丢失不行」。
+    /// ⚠️ **不是 `private`**：冒烟要断言"生产路径真的用了 256k"。留成 private 的话，判据只能
+    /// 另写一句 `sessionDigest(budget: Tune.dreamTargetedMaxChars)` —— 那是**复述实现**，
+    /// 把这里的预算换回默认值它照样绿。可见性放宽一格，换的是一条真能红的门。
+    func buildDreamDigest(target: ConversationItem) -> String {
+        guard let store else { return "" }
+        let labels = Self.sessionRootLabels(store: store)
+        let input = DreamDigestInput(id: target.id, title: target.title, updatedAt: target.updatedAt,
+                                     messages: store.replayMessages(for: target.id),
+                                     noteRootLabel: labels[target.id] ?? KnowledgeBase.noteGlobalLabel)
+        return Self.sessionDigest([input], since: .distantPast,
+                                  budget: Tune.dreamTargetedMaxChars,
+                                  totalBudget: Tune.dreamTargetedMaxChars,
+                                  scopeSuffix: "整场 · 指定会话, 不受窗口限制")
     }
 
     /// dream 的**笔记段** = 【笔记目录】+【笔记正文】（P17）。
@@ -545,7 +599,8 @@ final class SchedulerService: ObservableObject {
     /// 该任务日志会话已有回合在途则跳过 (cron 到期不重排)。
     /// 持续模式 (continuous): 注入交接文件 (工作日志, agent 写用户可改) + 近期运行摘录,
     /// 并指令 agent 把关键进展写回交接文件——连续性靠文件携带, 磁盘为准零缓存。
-    func runScheduledFire(_ task: ScheduledTask, at now: Date = Date()) {
+    func runScheduledFire(_ task: ScheduledTask, at now: Date = Date(),
+                          targeted: ConversationItem? = nil) {
         guard let store else { return }
         if let pid = task.projectId {
             guard store.projects.contains(where: { $0.id == pid }) else {
@@ -583,10 +638,24 @@ final class SchedulerService: ObservableObject {
         }
         // 时间线锚点 + prompt 落库 (用户正看着日志会话则同步上屏)
         let viewing = store.selectedConversationId == logId
-        let sep = ChatMessage(role: .user, content: .text("── \(fmt.string(from: now)) 运行 ──"))
+        // P15.9: 定时与定向**共用这一条**日志会话 ⇒ 分隔行必须当场分得开。两种运行长得一模一样的
+        // 话, 三个月后翻这条 dream 记录, 没人看得出哪一次是《由此 Dream》、目标又是哪一场。
+        //
+        // ⚠️ 标题读 `title` 而**不是** `displayTitle`: 后者会 `L("新对话")`, 而这一行是**落库的
+        // 时间线**, 恒中文（本文件在 L10n 的 `EXCLUDE_FILES` 里）—— 掺一个可本地化词会让同一条
+        // 记录在不同界面语言下写出不同字节。默认标题的哨兵在这条路上换成恒中文的说法。
+        let sepLabel: String
+        if let targeted {
+            let raw = targeted.title
+            let name = raw == ConversationTitle.defaultValue ? "未命名会话" : raw
+            sepLabel = "由此 Dream · 「" + (name.count > 40 ? String(name.prefix(40)) + "…" : name) + "」"
+        } else {
+            sepLabel = "运行"
+        }
+        let sep = ChatMessage(role: .user, content: .text("── \(fmt.string(from: now)) \(sepLabel) ──"))
         store.persistMessage(sep, sid: logId)
         if viewing { store.messages.append(sep) }
-        let prompt = buildScheduledPrompt(task)
+        let prompt = buildScheduledPrompt(task, targeted: targeted)
         let promptMsg = ChatMessage(role: .user, content: .text(prompt))
         store.persistMessage(promptMsg, sid: logId)
         if viewing { store.messages.append(promptMsg) }
@@ -615,6 +684,7 @@ final class SchedulerService: ObservableObject {
                                + "这次调不到 note_proposal（换 standard / full 档可解）──", to: logId)
             }
             dreamFires[logId] = spool
+            if let targeted { dreamTargets[logId] = targeted.id }
             fireSpool = spool
         }
         store.beginTurn(sid: logId, prompt: prompt, ephemeral: true,
@@ -629,12 +699,75 @@ final class SchedulerService: ObservableObject {
         if let c = task.condition, !c.isEmpty {
             fireTurnTask[logId] = task.id   // 等待型: 本回合结束扫 done 标记
         }
+        // P15.9: 定向 fire **不推进 `lastRunAt` / `runCount`** —— 它不是"这个定时任务的一次运行"。
+        // `lastRunAt` 一被推到现在, 就吃掉"上次真跑在很久以前"的那段**补跑窗口**：
+        // `dreamDigestSince` 取 `max(now - 36h, lastRunAt)`，36 小时是**地板**、改不动, 被吃掉的
+        // 是**超出 36 小时的那部分** ⇒ 那段时间里没被定向跑过的会话**永久掉出窗口**, 且零红灯。
+        // `runCount` 同理: 它是"定时跑了几次", 定向跑一次不该让它涨。
         if let idx = scheduledTasks.firstIndex(where: { $0.id == task.id }) {
-            scheduledTasks[idx].lastRunAt = now
+            if targeted == nil {
+                scheduledTasks[idx].lastRunAt = now
+                scheduledTasks[idx].runCount += 1   // P3.10: 执行次数
+            }
             scheduledTasks[idx].logSessionId = logId
-            scheduledTasks[idx].runCount += 1   // P3.10: 执行次数
             try? store.persistence?.upsertScheduled(scheduledTasks[idx])
         }
+    }
+
+    // MARK: - P15.9 定向 dream（`由此 Dream`）
+
+    /// 定向 dream 的启动结果 —— **每一种都要有话说**（`ChatStore` 负责翻成人话横幅）。
+    /// 前三种在同一处判完再 fire, 所以它们不是"事后才知道", 而是"点了就知道"。
+    enum DreamStart: Equatable {
+        case started
+        /// 这一场自己的回合在跑 / 上一场 dream 还在跑 / 并发已满
+        case busy
+        /// 这一场只有工具输出, 没有可提炼的正文
+        case empty
+        /// 库里没有 dream 任务（理论上删不掉, 兜底）
+        case noTask
+    }
+
+    /// dream 的日志会话 —— 定时与定向**共用同一个**（用户的"dream 运行记录"只有一处），
+    /// 取法见 `dreamIsRunning`（判据只在那里写一遍）。
+    private var dreamTask: ScheduledTask? { scheduledTasks.first { Self.isDreamTask($0) } }
+
+    /// 有没有一次 dream 正在跑。**判据只此一处**（纯函数，参数是"在途集合"与"任务表"）：
+    /// 侧栏据此置灰菜单项、`startTargetedDream` 据此回 `.busy` —— 两处各写一遍
+    /// `runningTurns.contains(log)` 迟早会漂。
+    static func dreamIsRunning(_ running: Set<UUID>, tasks: [ScheduledTask]) -> Bool {
+        guard let log = tasks.first(where: { isDreamTask($0) })?.logSessionId else { return false }
+        return running.contains(log)
+    }
+
+    /// 「由此 Dream」能不能点 —— **一条规则, 两个调用点**（侧栏置灰 + `ChatStore` 兜底）。
+    /// 三条禁用各有各的不可挽回性:
+    ///   ① 这一场自己的回合在跑 ⇒ 读到的会是**半句话**；
+    ///   ② 上一场 dream 还在跑 ⇒ 日志会话撞车, 起来也会被跳过（用户点了却没反应是最坏的反馈）；
+    ///   ③ 任务日志会话 ⇒ 那是**机器跑出来的日志**, dream 自己那轮的候选也排除它们（自我循环）。
+    static func canTargetDream(sid: UUID, running: Set<UUID>, tasks: [ScheduledTask]) -> Bool {
+        if running.contains(sid) { return false }
+        if dreamIsRunning(running, tasks: tasks) { return false }
+        return !tasks.contains { $0.logSessionId == sid }
+    }
+
+    /// 对**指定的一场会话**做一次整场 dream（boss 2026-10-21：会话行菜单「由此 Dream」）。
+    ///
+    /// 与定时那轮的关系只有两条: ① 用同一个 dream 任务与同一个日志会话（于是档位/收口/spool
+    /// 全部复用, 不需要第二套）；② **不推进 `lastRunAt`**（见 `runScheduledFire` 里那段注释）。
+    @discardableResult
+    func runTargetedDream(_ target: ConversationItem,
+                          stats: (chars: Int, turns: Int, lines: Int)) -> DreamStart {
+        guard let store else { return .noTask }
+        guard let task = dreamTask else { return .noTask }
+        // 空正文在这里挡掉: 否则会 fire 一个"没有【最近会话摘录】段"的回合, 让模型自己
+        // 读到那条硬约束再空转结束 —— 花一次调用只为了说"没料"。
+        guard stats.chars > 0 else { return .empty }
+        if store.runningTurns.contains(target.id) { return .busy }
+        if Self.dreamIsRunning(store.runningTurns, tasks: scheduledTasks) { return .busy }
+        if store.runningTurns.count >= store.maxConcurrentTurns { return .busy }
+        runScheduledFire(task, targeted: target)
+        return .started
     }
 
     /// fire 被跳过时往日志会话追加一条时间线记录 (只落库, 不动 UI 状态——
@@ -823,7 +956,7 @@ final class SchedulerService: ObservableObject {
     /// + 本次指令 + 写回指令。文件丢失时从日志会话 (run-log) 静默重建。
     /// 等待型 (condition 非空) 走等待协议; 普通 prompt 原样返回。
     /// P9.1b 惯例: **internal** —— 冒烟要断言"存量旧行不影响 dream"（那个失效模式在别处零红灯）。
-    func buildScheduledPrompt(_ task: ScheduledTask) -> String {
+    func buildScheduledPrompt(_ task: ScheduledTask, targeted: ConversationItem? = nil) -> String {
         if let c = task.condition, !c.isEmpty {
             return buildWaitingPrompt(task, condition: c)
         }
@@ -835,6 +968,13 @@ final class SchedulerService: ObservableObject {
         // 负责让它体面收场, 不需要在这里造一个空段。
         // P15.6b: 指令正文取 `dreamFirePrompt`（= **常量**）, **不是** `task.prompt`。
         if Self.isDreamTask(task) {
+            // P15.9 定向: 只编这一场 + 追加一段范围说明。指令常量**一个字不动**
+            // （它同时是定时那轮的指令，也是落库成任务行的 `prompt`）。
+            if let targeted {
+                return Self.dreamFirePrompt(digest: buildDreamDigest(target: targeted),
+                                            notes: buildDreamNotes(),
+                                            scopeNote: Self.dreamTargetedScopeNote)
+            }
             return Self.dreamFirePrompt(digest: buildDreamDigest(), notes: buildDreamNotes())
         }
         guard task.continuous else { return task.prompt }
@@ -929,14 +1069,27 @@ final class SchedulerService: ObservableObject {
     /// 两条路都要收: **落定**（`agentSettled`）与**手动停**（`stopTurn`）——「跑不完不算失败」。
     func finishDreamFireIfNeeded(sid: UUID) {
         guard let spool = dreamFires.removeValue(forKey: sid) else { return }
+        let target = dreamTargets.removeValue(forKey: sid)
         guard let store, let p = store.persistence else { return }
         // 顺序 = 读 → 解析 → 落表 → 删。**删在最后**: 落表失败时 spool 还在,
         // 而它在下次 fire 开头会被清掉（那时这批也真的没别的出路了）。
         guard let text = try? String(contentsOfFile: spool, encoding: .utf8) else { return }
         let roots = store.knowledge.allKnowledgeBases.map { (id: $0.id, path: $0.path) }
         let parsed = NoteProposalSpool.parse(text, roots: roots)
+        // P15.9 去重: 同一场会话被定向跑两次（或定向跑完又被定时那轮吃一遍）⇒ 待审队列里会躺
+        // 两行一模一样的（同根 + 同目标路径 + 同标题）。判据只认这三样 —— 内容是整篇、标题相同
+        // 就够说明"这是同一条洞见"。**只在待审队列里去重**: 人已经丢弃过的再来一次是正常的新提议。
+        var seen: Set<String> = []
+        for existing in (try? p.loadNoteProposals()) ?? [] {
+            seen.insert(Self.proposalKey(rootId: existing.rootId, path: existing.targetPath,
+                                        title: existing.title))
+        }
         var kept = 0
+        var duplicates = 0
         for d in parsed.items {
+            let key = Self.proposalKey(rootId: d.rootId, path: d.targetPath, title: d.title)
+            if seen.contains(key) { duplicates += 1; continue }
+            seen.insert(key)
             let proposal = NoteProposal(
                 id: UUID(), rootId: d.rootId, kind: d.kind, targetPath: d.targetPath,
                 baseHash: d.baseHash, title: d.title, content: d.content, reason: d.reason,
@@ -946,14 +1099,30 @@ final class SchedulerService: ObservableObject {
         store.knowledge.reloadProposals()
         // ⚠️ 这话必须说 —— 尤其是被拒的那几条。spool 马上就删了, 现在不写,
         //    用户只会看到"这次怎么才出两条", 而不知道另外三条死在了路上。
-        appendTimeline(Self.dreamSummary(kept: kept, rejects: parsed.rejects), to: sid)
+        appendTimeline(Self.dreamSummary(kept: kept, rejects: parsed.rejects, duplicates: duplicates),
+                       to: sid)
+        // P15.9: 定向跑完要**在用户看得见的地方**说一声 —— 他多半正看着自己那一场会话,
+        // 不会去翻 dream 的日志会话。文案在 `ChatStore` 里成型（本文件在 L10n 的
+        // `EXCLUDE_FILES` 里, 恒中文只对"落库的时间线"成立, 横幅是界面文案）。
+        if let target, kept > 0 || duplicates > 0 {
+            store.notifyTargetedDreamFinished(targetId: target, kept: kept)
+        }
         try? FileManager.default.removeItem(atPath: spool)
+    }
+
+    /// 提案的身份 = **根 + 目标路径 + 标题**（去重用；三样都是 dream 自己在提案里写的，
+    /// 不掺 `base_hash` —— 那份指纹每次现取, 同一条洞见两次跑必然不同）。
+    /// `rootId` 是 `NoteProposal` 里的那一份（String，不是 UUID）。
+    static func proposalKey(rootId: String, path: String, title: String) -> String {
+        "\(rootId)|\(path)|\(title)"
     }
 
     /// 收口那句话。**恒中文**（本文件在 `EXCLUDE_FILES` 里, 且它与 `recordFireSkip` 同性质:
     /// 是一行**日志时间线**, 不是界面文案）。
-    static func dreamSummary(kept: Int, rejects: [SpoolRejection]) -> String {
-        let s = "── dream 收口: \(kept) 条提案待审 ──"
+    static func dreamSummary(kept: Int, rejects: [SpoolRejection], duplicates: Int = 0) -> String {
+        var s = "── dream 收口: \(kept) 条提案待审 ──"
+        // 去重数必须单列: 否则"这条我上次提过"看起来就像"模型这次没提"。
+        if duplicates > 0 { s += "\n      跳过 \(duplicates) 条已在待审队列里的重复提案" }
         guard !rejects.isEmpty else { return s }
         let detail = rejects.prefix(5).map { "第 \($0.line) 行 \(rejectText($0.reason))" }
             .joined(separator: "; ")

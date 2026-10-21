@@ -5979,7 +5979,7 @@ struct SmokeMain {
         // ⚠️ **只改 `noteRootLabel` 的格式是抓不到的**（实测 FAIL 0）: 两处同源**由构造保证**
         //    （段头那格读的就是根自己的 `displayName`), 比断言更强的性质 —— 所以 ⓑⓒ 打的是
         //    "有人绕过那个函数自己拼", 而不是"有人改了格式"。
-        await caseDreamPromptBuild()
+        await caseDreamPromptBuild(); await caseTargetedDream(); await caseSideChatPicker()   // P15.9 定向 dream / P6.3.3 侧问选点
 
         // ===== T-MD (2026-09-24): markdown 块级解析 (表格列对齐 / 图片块) =====
         // 这层此前**零覆盖** —— `MarkdownBlock.table` 加了关联值也不会红。补上是为了让

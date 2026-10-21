@@ -16,6 +16,13 @@ struct SidebarView: View {
     @State private var query: String = ""
     // 删除会话二次确认 (两种粒度: 仅 db / db+pi 记忆文件)
     @State private var confirmDeleteTarget: ConversationItem?
+    /// P15.9 定向 dream 的二次确认目标（点击「由此 Dream」时现场查出来的一份 `DreamPreview`）。
+    /// **点了才算** —— 侧栏悬停/展开不碰这条查询（boss 2026-10-21 明确否掉"菜单标题带规模"）。
+    @State private var dreamTarget: DreamPreview?
+
+    /// P6.3.3 侧问选点（点击「由此侧问」时现场查出来的一份候选）。
+    /// 与 `dreamTarget` 同一套节奏: **点了才查**，且默认选"整场"⇒ 老手感不变。
+    @State private var sideChatPick: SideChatPick?
 
     init(store: ChatStore) {
         self.store = store
@@ -52,6 +59,14 @@ struct SidebarView: View {
             Button("取消", role: .cancel) { confirmDeleteTarget = nil }
         } message: {
             Text("AI 记忆文件 = 该会话的对话上下文 (<uuid>.jsonl); 误删不可恢复。")
+        }
+        .sheet(item: $dreamTarget) { target in
+            DreamConfirmSheet(preview: target) { store.startTargetedDream(from: target.id) }
+        }
+        .sheet(item: $sideChatPick) { pick in
+            SideChatStartSheet(pick: pick) { upTo in
+                store.startSideChat(from: pick.sid, upTo: upTo)
+            }
         }
         .onAppear {
             // 默认展开全部项目
@@ -379,7 +394,20 @@ struct SidebarView: View {
                         onRename: { store.renameConversation(item.id, to: $0) },
                         onDelete: { confirmDeleteTarget = item },
                         canSideChat: store.canStartSideChat(for: item.id),
-                        onSideChat: { store.startSideChat(from: item.id) })
+                        // P6.3.3: 侧问不再"点了就 fork 整场" —— 先出一屏选起点（默认整场）。
+                        // 候选**在这里现查**: 点了菜单才走 `replayMessages`，悬停一律不碰。
+                        onSideChat: {
+                            sideChatPick = SideChatPick(
+                                sid: item.id,
+                                sourceTitle: item.displayTitle,
+                                turns: store.sideChatTurns(for: item.id))
+                        },
+                        // P15.9: 规则在 `SchedulerService.canTargetDream`（与 `ChatStore` 同源），
+                        // 这里只喂 `SidebarModel` 的投影 —— 那个是 @Published, 状态一变侧栏就重绘。
+                        canDream: SchedulerService.canTargetDream(sid: item.id,
+                                                                  running: model.runningTurns,
+                                                                  tasks: model.scheduledTasks),
+                        onDream: { dreamTarget = store.dreamPreview(from: item.id) })
     }
 }
 
@@ -402,6 +430,9 @@ struct ConversationRow: View {
     /// P6.3.1: "..." 菜单里的侧问入口 (无持久记忆/侧问自身时禁用)
     var canSideChat: Bool = false
     var onSideChat: () -> Void = {}
+    /// P15.9: "..." 菜单里的定向 dream 入口（任务日志会话 / 本场在跑 / dream 在跑时禁用）
+    var canDream: Bool = false
+    var onDream: () -> Void = {}
     @State private var hovering: Bool = false
     @State private var isEditing: Bool = false
     @State private var editTitle: String = ""
@@ -447,6 +478,11 @@ struct ConversationRow: View {
                     Button("重命名") { startRename() }
                     Button("由此侧问") { onSideChat() }
                         .disabled(!canSideChat)
+                    // P15.9: 紧挨着"由此侧问"—— 同一个"以这一场为起点"的动作族。
+                    // 不复用侧问的可用性判据: 侧问要**持久 transcript 文件**才能 fork,
+                    // 而 dream 只读库里的正文, 两者门槛本来就不同。
+                    Button("由此 Dream") { onDream() }
+                        .disabled(!canDream)
                     Divider()
                     Button("删除会话…", role: .destructive) { onDelete() }
                 } label: {
