@@ -140,6 +140,14 @@ EXCLUDE_FILES = {
     #    代价 (同上面那行, 实测过): 在此文件里写 `L()` 的 key 永远进不了词表, 三道门全都看不见。
     #    ⇒ **要加 UI 文案请写在 View 侧** (拒绝原因的人话就归 `KnowledgeView`)。
     'mangox/Models/KnowledgeBase.swift',           # 注入 pi 的索引段字节 (无 UI 文案)
+    # ⚠️ P18 (2026-10-22): 本文件产出的是**落到用户磁盘的笔记正文**（时间线那篇）与
+    #    **注入 pi 的段头字节**（`[流水]`）。两者都必须恒中文, 三条理由:
+    #      ① 落盘内容是**用户的数据**, 不是界面 —— 切语言不该改写他磁盘上的历史;
+    #      ② 段头进 prompt, 本地化 = 让界面语言改掉注入字节（同 `KnowledgeBaseScan.token`);
+    #      ③ 它同时是 `upsert` 的**匹配键**（`会话「X」`）—— 键随语言漂 = 同一场会话每轮
+    #         换一个 key ⇒ 流水里堆出十几行同一个标题, 而且**零红灯**。
+    #    代价同上面几行: 在此文件里写 `L()` 的 key 永远进不了词表。**UI 文案请写在 View 侧**。
+    'mangox/Models/TimelineDoc.swift',             # 时间线落盘字节 + 注入段头 (无 UI 文案)
     'mangox/State/SchedulerService.swift',         # 注入 pi 的指令文本
     'mangox/mangoxApp.swift',                      # 不参与冒烟编译, 无文案
     # 语言名自带 (中文 / English 必须原样), 故整体跳过。**但其 `AppLanguage.label` 里的 `L("跟随系统")`

@@ -179,6 +179,14 @@ final class SchedulerService: ObservableObject {
       delete  —— 这一篇整条不再有用（注意它不是"该改"的另一面: "改"要求还有要说的,
                  "删"要求没有了）。目标是那一篇, 采纳后它进系统废纸篓
 
+    粒度（P18: 这一条比下面所有格式要求都重要 —— 它是"人要不要看"的判据）:
+      · **一次运行最多 \(Tune.dreamMaxProposals) 条提案。**常规是 1~2 条
+      · **同一来源会话里的相关事实, 合成一篇**（用 `##` 小节分开）, 不要一件事一篇。
+        判据: 三个月后翻这一篇, 它能不能独立说清"当时在做什么、定了什么、为什么"
+      · 只有当一个会话里确实放着**互不相干**的几件事时, 才拆成多篇
+      · 拿不准就并进同一篇: 多一篇的成本是**人的审核**, 多一节几乎不花钱
+      · 宁可一篇写全, 不要几篇各写一半 —— 半篇笔记比没有更坏, 它看起来像结论
+
     硬约束:
       · 提案只是提交给人看的, 他采纳了才会落盘 —— 你不需要也不应该写任何文件
       · 每条提案必须有 sources: 会话来源的 ref 填段头那串会话 id, 笔记来源填根内相对路径
@@ -1152,6 +1160,12 @@ final class SchedulerService: ObservableObject {
     /// 是一行**日志时间线**, 不是界面文案）。
     static func dreamSummary(kept: Int, rejects: [SpoolRejection], duplicates: Int = 0) -> String {
         var s = "── dream 收口: \(kept) 条提案待审 ──"
+        // P18: 超出约定粒度的**必须说出来**。`Tune.dreamMaxProposals` 是 prompt 里的软约束,
+        // 而软约束唯一的执法方式就是"没守住时看得见" —— 收口这一行是它唯一的着落点。
+        // ⚠️ 不在这里截断: 砍掉的可能是这批里最值钱的一条, 那比"多两条要审"坏得多。
+        if kept > Tune.dreamMaxProposals {
+            s += "\n      超出约定粒度 \(Tune.dreamMaxProposals) 条 —— 这批偏碎, 可留意是否该并成一篇"
+        }
         // 去重数必须单列: 否则"这条我上次提过"看起来就像"模型这次没提"。
         if duplicates > 0 { s += "\n      跳过 \(duplicates) 条已在待审队列里的重复提案" }
         guard !rejects.isEmpty else { return s }

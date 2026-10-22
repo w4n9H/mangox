@@ -334,6 +334,15 @@ final class KnowledgeStore: ObservableObject {
         var stableChars: Int = 0
         var volatileCount: Int = 0
         var volatileChars: Int = 0
+        /// 时间线段（P18）—— 排在**所有段之后**（易变段后面）。
+        ///
+        /// 为什么放最末：它每轮都可能变（一轮结束就多一行），压在中间会把后面所有内容
+        /// 一起推离"稳定前缀"，缓存一个都命中不了。**空串 = 本段缺席**（没有流水，
+        /// 或预算装不下 `timelineSkipped`）。
+        var timelineText: String = ""
+        var timelineChars: Int = 0
+        /// 预算装不下 ⇒ 整段缺席。不参与 priority 降级（它与索引段同性质: 是地图，不是条目）。
+        var timelineSkipped: Bool = false
         var onDemandCount: Int = 0
         /// 索引段 (P11.4) —— 排在稳定段之后、易变段之前。**空串 = 本段缺席**。
         /// 缺席有两个正当理由: 没有可注入的库, 或预算装不下 (后者必同时有 `indexSkipped`)。
@@ -581,6 +590,21 @@ final class KnowledgeStore: ObservableObject {
             budget -= cost
         }
         if !volatileLines.isEmpty { blocks.append(volatileLines.joined(separator: "\n")) }
+        // ---- 时间线段（P18）----
+        // 放在**最末**：它是这批里唯一"每轮都可能变"的段（一轮结束就多一行）。
+        // 压在中间会把后面所有内容一起推离稳定前缀，缓存一个都命中不了。
+        // 与索引段同一档待遇：装不下就**整段缺席**并留 `timelineSkipped`，不参与 priority 降级
+        //（它是地图，不是"可丢的条目"—— 局部地图比没有地图更坏）。
+        if let seg = timelineRecentSegment(), !seg.isEmpty {
+            if seg.count <= budget {
+                blocks.append(seg)
+                out.timelineText = seg
+                out.timelineChars = seg.count
+                budget -= seg.count
+            } else {
+                out.timelineSkipped = true
+            }
+        }
         // 尾巴 = 被降级的(priority 升序 = 先掉的在前)
         if cut < volatile.count { out.degraded = Array(volatile[cut...]) }
         out.degraded.sort { $0.priority < $1.priority }
@@ -1449,6 +1473,85 @@ final class KnowledgeStore: ObservableObject {
         return abs
     }
 
+    // MARK: - P18 时间线（App 侧自动记账 —— 本仓第三段会改用户磁盘的路径）
+
+    /// 把一行流水写进当月的 `timeline/YYYY-MM.md`。
+    ///
+    /// ⚠️ **这是第三段会改用户磁盘的路径**（前两段：人写笔记 `saveNote` / 采纳提案
+    /// `adoptProposal`）。它与那两段是**分工**，不是绕过：
+    ///   · 那两段写的是**结论**，必须经人拍板（P15 门 2）；
+    ///   · 这一段写的是**客观发生过的事**（几点、哪一场、几轮、几次失败），模型不参与
+    ///     ⇒ 它不会编 ⇒ 也就不该再给 boss 造一个"审流水"的队列。
+    /// 它只写 `timeline/` 一个子目录，且**永远不推翻已有内容**（只 upsert 自己那一行）。
+    ///
+    /// 落点必须走 `noteAbsPath`（越界一律拒）—— 同 `saveNote`：绕过校验 = 可能写进用户
+    /// 任意目录，而且**零红灯**（守卫 24/25 那两回实测）。
+    @discardableResult
+    func appendTimeline(rootId: String, row: TimelineDoc.Row) -> Bool {
+        let rel = TimelineDoc.relativePath(for: row.day)
+        guard let abs = noteAbsPath(rootId: rootId, relativePath: rel) else { return false }
+        let label = knowledgeBase(id: rootId)?.displayName ?? rootId
+        let existing = (try? String(contentsOfFile: abs, encoding: .utf8)) ?? ""
+        let next: String
+        if existing.isEmpty {
+            // 目录可能还不存在（这个根刚建 / 第一次记账）—— 就地建，与 `createNote` 同口径。
+            try? FileManager.default.createDirectory(
+                atPath: (abs as NSString).deletingLastPathComponent,
+                withIntermediateDirectories: true)
+            next = TimelineDoc.newDocument(
+                monthHeading: TimelineDoc.monthHeading(for: row.day, rootLabel: label), row: row)
+        } else {
+            next = TimelineDoc.upsert(existing, row: row)
+        }
+        // 一个字节都没变就不写：重写只会改 mtime，而 mtime 正是"陈旧度"的唯一依据。
+        guard next != existing else { return true }
+        guard (try? next.write(toFile: abs, atomically: true, encoding: .utf8)) != nil else { return false }
+        // ⚠️ **重算注入块快照** —— 不重算这个功能等于没接上。
+        // `currentKnowledgeBlock` 是**快照**，只在「知识变动 / 启动」时刷新；而流水是
+        // "一轮结束写一行"，**没有任何别的知识变动会顺带把它带进 prompt**。
+        // 漏了的症状是"时间线文件天天在长，而 agent 永远看不见它"，且零红灯
+        //（文件在、断言全绿、只是没进 prompt —— 与 P11 要根除的那类隐形缺陷同形）。
+        refreshInjectionOnly()
+        return true
+    }
+
+    /// 只重建注入块快照（并推给在途实例），**不做 L1 对账**。
+    ///
+    /// 与 `applyKnowledgeChange` 的差别只有一条：不动 L1 目录。用于**只改笔记区**的写入
+    ///（P18 时间线）—— 那些写入不产生 L1 文件，而 L1 对账是整目录读写，陪跑一次不便宜。
+    private func refreshInjectionOnly() {
+        let injection = buildInjection()
+        lastInjection = injection
+        currentKnowledgeBlock = injection.text
+        store?.pushKnowledgeContext(currentKnowledgeBlock)
+    }
+
+    /// 注入用的「最近流水」段（P18）。
+    ///
+    /// 只读**当月 + 上月**两个文件：`timelineRecentDays = 7` 最多跨一个月界，多读的是白付
+    /// （而这一段每轮对话都在）。更早的流水仍在磁盘上，agent 按路径 read。
+    ///
+    /// ⚠️ 停用的根**不读**（`enabled`）—— 停用是对模型说的"别看这里"，而注入段是给模型看的，
+    /// 与"记账还记不记"是两件事（记账照记，见 `appendTimeline` 不判 enabled）。
+    func timelineRecentSegment(now: Date = .now) -> String? {
+        let cal = Calendar.current
+        let lastMonth = cal.date(byAdding: .month, value: -1, to: now) ?? now
+        let paths = [TimelineDoc.relativePath(for: now, calendar: cal),
+                     TimelineDoc.relativePath(for: lastMonth, calendar: cal)]
+        var docs: [String] = []
+        for base in allKnowledgeBases where base.enabled {
+            for rel in paths {
+                if let t = readNote(rootId: base.id, relativePath: rel) { docs.append(t) }
+            }
+        }
+        guard !docs.isEmpty else { return nil }
+        let seg = TimelineDoc.recentSegment(docs, now: now,
+                                            days: Tune.timelineRecentDays,
+                                            rowsPerDay: Tune.timelineInjectRowsPerDay,
+                                            charLimit: Tune.timelineInjectChars)
+        return seg.isEmpty ? nil : seg
+    }
+
     /// 内容指纹 —— 整篇的 sha256 hex。与 `ModelMaterializer` 那条指纹同一种写法:
     /// 同一件事（"这份字节是不是那一份"）不该有两种指纹。
     static func noteHash(_ text: String) -> String {
@@ -1736,6 +1839,18 @@ final class KnowledgeStore: ObservableObject {
         recordNoteRevision(rootId: p.rootId, relativePath: p.targetPath,
                            content: p.content, origin: .dream, sources: p.sources)
         applyKnowledgeChange()
+        // P18: 流水里补一行 —— 时间线上**唯一带主观内容**的那一行。
+        // 内容不是模型现编的: `reason` 是提案里那句「为什么提」，人拍板前看过它，
+        // 按下采纳 = 认了这句话。
+        //
+        // ⚠️ `delete` 那条路**不记**（它在上面的分支里直接返回）: 那一条的产出是
+        // "一篇进了废纸篓"，没有新内容可写，而它的痕迹在 `note_revisions` 里查得到。
+        // 硬记会让 `采纳「X」` 这个 key 与真正的采纳撞车（同一个标题）。
+        if let store {
+            let name = p.title.isEmpty ? KnowledgeBaseScan.fileStem(p.targetPath) : p.title
+            TimelineJournal.recordAdoption(store: store, rootId: p.rootId,
+                                           noteTitle: name, reason: p.reason)
+        }
         return removeProposal(p)
     }
 
@@ -1749,6 +1864,41 @@ final class KnowledgeStore: ObservableObject {
     @discardableResult
     func discardProposal(_ p: NoteProposal) -> NoteWriteRejection? {
         removeProposal(p)
+    }
+
+    /// 批量采纳 —— **逐条走同一个 `adoptProposal`**, 不另写一套判据。
+    ///
+    /// ⚠️ 刻意**不是事务**: 几条提案指向的文件彼此独立（甚至可能分属不同根）, 一条撞上
+    /// 「目标被外部改过」不该拖着其余几条一起失败 —— 那会让一次批量操作变成"一个坏苹果
+    /// 毁掉一整批", 而人还得重新逐条点一遍。
+    ///
+    /// ⚠️ 也刻意**不写"先全部校验、再统一写"**: 校验那套判据（指纹 / 名称冲突 / delete 的目标
+    /// 必须存在）每个分支都对应一次真实的坏结局, 抄一份就等于养两个真源 —— 抄出来的那份
+    /// 迟早与 `adoptProposal` 分叉, 而分叉的表现是"批量采纳放过了单条采纳会拦的东西",
+    /// 且**零红灯**（两边各测各的）。
+    ///
+    /// - Returns: 成功条数 + 每条失败的原因（顺序与入参一致, 供界面点名）。
+    @discardableResult
+    func adoptProposals(_ list: [NoteProposal])
+        -> (adopted: Int, failures: [(proposal: NoteProposal, error: NoteWriteRejection)]) {
+        var adopted = 0
+        var failures: [(proposal: NoteProposal, error: NoteWriteRejection)] = []
+        for p in list {
+            if let err = adoptProposal(p) {
+                failures.append((p, err))
+            } else {
+                adopted += 1
+            }
+        }
+        return (adopted, failures)
+    }
+
+    /// 批量丢弃 —— **丢弃不碰磁盘**, 所以恒成功; 返回值只为让界面能说"清了几条"。
+    @discardableResult
+    func discardProposals(_ list: [NoteProposal]) -> Int {
+        var n = 0
+        for p in list where discardProposal(p) == nil { n += 1 }
+        return n
     }
 
     /// 把一条提案从表里删掉 + 刷新列表。

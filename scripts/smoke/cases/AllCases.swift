@@ -33,6 +33,7 @@ extension SmokeMain {
             caseModelPin,
             caseFollowBeats,
             caseFoldRule,
+            caseTimeline,
         ]
     }
 

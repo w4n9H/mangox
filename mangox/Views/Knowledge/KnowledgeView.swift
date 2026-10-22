@@ -97,6 +97,13 @@ struct KnowledgeView: View {
     /// 提案的"现在"（磁盘上目标那一篇的原文）。`nil` = 还没读到; insight 恒 `""`（目标还不存在）。
     /// **随选中项缓存**, 不在 `body` 里现读文件（同 `noteDraftTrigger` 那条判据）。
     @State private var proposalBase: String?
+    /// 批量采纳 / 丢弃的**结果**（P18）。`nil` = 还没做过。
+    ///
+    /// 为什么需要它: 批量动作一次改好几篇文件, 而界面上的反馈只有"那几行消失了" ——
+    /// 人不点开任何一条就无从知道"是 3 条全成了, 还是成了 1 条失败 2 条"。
+    /// **失败的那几条会留在待审队列里**（`adoptProposal` 的判据: 只有成功才删行）,
+    /// 所以这句话只需说清"成几条、剩几条", 具体原因仍归每条的审阅面。
+    @State private var proposalBulkMessage: String?
 
     /// 新建笔记的表单。
     @State private var showNewNoteSheet: Bool = false
@@ -538,8 +545,17 @@ struct KnowledgeView: View {
                     //    判据 = 这一段里有没有"用户在这个界面里能发起的动作"。
                     if !store.noteProposals.isEmpty {
                         sectionHeader(L("提案"), count: store.noteProposals.count,
-                                      tint: CodexTheme.accent)
+                                      tint: CodexTheme.accent,
+                                      accessory: { proposalBulkActions })
                         ForEach(store.noteProposals) { p in proposalRow(p) }
+                        if let msg = proposalBulkMessage {
+                            Text(msg)
+                                .font(CodexTheme.fontTiny)
+                                .foregroundStyle(CodexTheme.textMuted)
+                                .fixedSize(horizontal: false, vertical: true)
+                                .padding(.horizontal, 10)
+                                .padding(.top, 4)
+                        }
                     }
 
                     if store.knowledgeItems.isEmpty && pack.isEmpty {
@@ -852,6 +868,52 @@ struct KnowledgeView: View {
     private func proposalTargetLabel(_ p: NoteProposal) -> String {
         let root = store.knowledgeBase(id: p.rootId)?.displayName ?? p.rootId
         return root + " / " + p.targetPath
+    }
+
+    /// 批量的两个动作（P18）。**只在两条以上时出现** —— 一条的时候, 行内那个审阅面本来
+    /// 就有采纳 / 丢弃两个按钮, 再挂一组等于把同一件事说两遍, 而侧栏本来就窄。
+    ///
+    /// 位置是区头右侧（`sectionHeader` 的 accessory）而不是列表底部: 区头挨着"提案 · 6",
+    /// 数量就在旁边, 而"这批要一起处理"这句话正是那个数字在说的。
+    private var proposalBulkActions: some View {
+        HStack(spacing: 7) {
+            if store.noteProposals.count > 1 {
+                Button(action: adoptAllProposals) {
+                    Text(L("全部采纳")).font(.system(size: 10))
+                        .foregroundStyle(CodexTheme.textSecondary)
+                }
+                .buttonStyle(.plain)
+                .help(L("把这批提案逐条落盘; 没成的会留在队列里"))
+                Text("·").font(.system(size: 10)).foregroundStyle(CodexTheme.textTertiary)
+                Button(action: discardAllProposals) {
+                    Text(L("全部丢弃")).font(.system(size: 10))
+                        .foregroundStyle(CodexTheme.textTertiary)
+                }
+                .buttonStyle(.plain)
+                .help(L("清空这批提案; 磁盘上的笔记一个字节都不会动"))
+            }
+        }
+    }
+
+    /// 全部采纳。**逐条各自判定**（判据只有 `adoptProposals` 一处）, 所以结果必须按
+    /// 成功 / 失败分开说 —— "一次改了好几篇"的动作, 含糊的成功提示比没有提示更坏。
+    private func adoptAllProposals() {
+        let batch = store.noteProposals
+        let result = store.knowledge.adoptProposals(batch)
+        proposalBulkMessage = result.failures.isEmpty
+            ? String(format: L("已采纳 %lld 条"), result.adopted)
+            : String(format: L("已采纳 %lld 条，%lld 条没成，仍留在队列里"),
+                     result.adopted, result.failures.count)
+        proposalReject = nil
+        // 磁盘变了 ⇒ 左列的陈旧度 / 摘要要重扫（与单条采纳同一条理由）。
+        Task { await reloadRootScan() }
+    }
+
+    /// 全部丢弃 = 清空待审队列。**不碰磁盘**（`discardProposal` 只删表里那一行）。
+    private func discardAllProposals() {
+        let n = store.knowledge.discardProposals(store.noteProposals)
+        proposalBulkMessage = String(format: L("已清空 %lld 条提案"), n)
+        proposalReject = nil
     }
 
     /// 一条提案行: 两行 —— 动作 + 一句话 / 目标 + 来源条数。

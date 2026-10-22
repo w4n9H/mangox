@@ -1750,6 +1750,10 @@ final class ChatStore: ObservableObject {
         // P15.3: dream 的收口挂在**与等待型同一个位置** —— 两者都是"这次 fire 到此为止"的落点。
         // 手动停（本处）也要收: 「跑不完不算失败」, 已经产出的提案照样进表。
         scheduler.finishDreamFireIfNeeded(sid: sid)
+        // P18: 这一轮到此为止 ⇒ 把这场会话在**今天**的流水刷新一次。
+        // 放在 dream 收口之后（那之后 spool 已变成提案，流水里那一行才说得出"几轮"）。
+        // 节流在 `TimelineJournal` 里（3 秒），所以同一轮漏出的多个落定事件不会重写三遍。
+        TimelineJournal.recordSession(store: self, sessionId: sid)
         mailbox.noteTurnFinished(sid: sid, blocks: transportFor(sid).autoJudgeBlocks)
     }
 
@@ -2280,6 +2284,10 @@ extension ChatStore: AgentTransportDelegate {
             if injectedTurnSid == sid { injectedTurnSid = nil }
             finishWaitingFireIfNeeded(sid: sid)
             scheduler.finishDreamFireIfNeeded(sid: sid)   // P15.3: 正常落定的那条路
+            // P18: 同上（`stopTurn` 那处也有一份）—— 两个落定点记的是同一件事。
+            // 分两处而不是抽一个"回合结束"统一入口: 现在没有这样一个入口, 而造一个
+            // 要动整条事件分发的形状（那远超"记一行流水"该动的范围）。
+            TimelineJournal.recordSession(store: self, sessionId: sid)
             // P10.2a/b: 释放远程回合串行位 + 结算回执 (blocks = 本回合 autoJudge 拦下的命令;
             // 事件归并没有 transport 参数, 用 sid 反查池实例 —— 与 stopTurn 同一写法)
             mailbox.noteTurnFinished(sid: sid, blocks: transportFor(sid).autoJudgeBlocks)

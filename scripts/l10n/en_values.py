@@ -13,6 +13,13 @@ key 的形态必须与 `gen_strings.source_keys()` 的产出**逐字节一致**:
 """
 
 VALUES = {
+    '全部丢弃': 'Discard all',
+    '全部采纳': 'Accept all',
+    '已清空 %lld 条提案': 'Cleared %lld proposals',
+    '已采纳 %lld 条': 'Accepted %lld',
+    '已采纳 %lld 条，%lld 条没成，仍留在队列里': 'Accepted %lld, %lld failed and stayed in the queue',
+    '把这批提案逐条落盘; 没成的会留在队列里': 'Write every proposal in this batch to disk; any that fail stay in the queue',
+    '清空这批提案; 磁盘上的笔记一个字节都不会动': 'Clear this batch; no note on disk is touched',
     ' [附件: %@]': ' [Attachment: %@]',
     ' 待重启': ' Restart required',
     '%@ 拷贝失败: %@': 'Failed to copy %@: %@',

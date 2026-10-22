@@ -7,7 +7,7 @@
    **本文件由 scripts/l10n/gen_strings.py --write 生成, 别手改** ——
    译文改 scripts/l10n/en_values.py 的 VALUES, 再跑 --write。
 
-   条数: 788
+   条数: 795
 */
 
 " [附件: %@]" = " [Attachment: %@]";
@@ -203,6 +203,8 @@
 "全局" = "Global";
 "全局串行 (同一时刻只跑一个远程任务)" = "Global serial (only one remote task runs at a time)";
 "全局唤起捕获输入条: 输入后回车即以无人值守模式开跑 (关审批 + Minimal 档); Esc 或点击外部关闭" = "Global hotkey opens the capture bar: type and press Enter to run unattended (approval off, Minimal mode); Esc or clicking outside closes it.";
+"全部丢弃" = "Discard all";
+"全部采纳" = "Accept all";
 "六" = "Sat";
 "共享密钥" = "Shared secret";
 "关" = "Off";
@@ -379,11 +381,14 @@
 "已挂载的知识库 %lld 个没进索引: %@" = "%lld mounted knowledge bases did not make it into the index: %@";
 "已暂停" = "Paused";
 "已更新: %lld 家 / %lld 条" = "Updated: %lld providers / %lld models";
+"已清空 %lld 条提案" = "Cleared %lld proposals";
 "已经有同名笔记了" = "A note with that name already exists";
 "已绑定" = "Bound";
 "已触发 · %@" = "Triggered · %@";
 "已设置 (留空不修改)" = "Already set (leave blank to keep)";
 "已跑 %lld 次" = "Ran %lld times";
+"已采纳 %lld 条" = "Accepted %lld";
+"已采纳 %lld 条，%lld 条没成，仍留在队列里" = "Accepted %lld, %lld failed and stayed in the queue";
 "帮助" = "Help";
 "常规模式" = "Standard mode";
 "常驻" = "Always on";
@@ -429,6 +434,7 @@
 "把会话数据库 (含知识库) 与图片附件、会话记录完整拷贝到目标目录的 mangox-backup-<时间戳>/ 子目录, 供人工保管" = "Copies the session database (including the knowledge base), image attachments and session logs into a mangox-backup-<timestamp>/ folder in the target directory for safekeeping.";
 "把这一份整篇写进上面那条目标; 被顶掉的那一版会进变更史" = "Write this whole text into the target above; the version it replaces goes to the history";
 "把这一篇移进系统废纸篓; 旧内容会先进变更史" = "Move this note to the system Trash; its old content is recorded in the change history first";
+"把这批提案逐条落盘; 没成的会留在队列里" = "Write every proposal in this batch to disk; any that fail stay in the queue";
 "把这条回复存成图片放进剪贴板" = "Save this reply as an image on the clipboard";
 "拉取失败 (%@), 已回落预设清单" = "Fetch failed (%@); fell back to the built-in preset list";
 "拒绝" = "Deny";
@@ -603,6 +609,7 @@
 "深色" = "Dark";
 "添加邮箱" = "Add mailbox";
 "添加附件" = "Add attachment";
+"清空这批提案; 磁盘上的笔记一个字节都不会动" = "Clear this batch; no note on disk is touched";
 "清除" = "Clear";
 "源会话回合进行中，结束后再发起侧问" = "A turn is running in the source session; wait for it to finish before starting a side chat";
 "源会话快照 · 含 %lld 轮上下文 · %@ fork · 主线新消息不同步" = "Source session snapshot · %lld turns of context · forked %@ · new messages in the main line do not sync";

@@ -520,6 +520,26 @@ enum Tune {
     static let dreamNoteIndexChars: Int            = 20000   // 目录（兜底：2~3 个根实际远不到）
     static let dreamNoteBodyChars: Int             = 120000  // 正文（超了从最旧的丢 + 点名）
 
+    // P18（2026-10-22 boss 拍板）: dream 的**提案粒度**上限。
+    //
+    // 起因是一份真实的坏结果: 一次定向 dream 对着一场会话出了 8 条提案, 而这 8 条其实是
+    // 「27b 模型部署」这一个项目的一件事的 6 个侧面（服务暴露 / 模型事实卡 / 云平台 / 选型 /
+    // 基准方法 / vLLM 版本）。boss 的原话是「人的审核成本太高」。
+    //
+    // ⚠️ 它是 prompt 里的**软约束**（指令正文原样引用这个数），**不是收口时的硬砍** ——
+    //    硬砍砍掉的可能是那批里最值钱的一条, 而"少提了几条"这件事在日志里是看得见的
+    //    （`dreamSummary` 会点名）。同源同改: `dreamPrompt` 与 `note_proposal` 的工具描述。
+    static let dreamMaxProposals: Int              = 3
+
+    // P18: 时间线（App 侧自动记账, 不经过模型也不进审核队列）。
+    // 落点 = `<笔记根>/timeline/YYYY-MM.md`（归属仍走「位置即归属」, 不新开一套目录概念）。
+    //
+    // ⚠️ 注入面这三个数**每一轮普通对话都要付**（它进常驻段）⇒ 刻意压得很小:
+    //    真正的时间线是磁盘上那篇笔记（需要时 read），常驻段只给"最近几天发生了什么"的引子。
+    static let timelineRecentDays: Int             = 7      // 注入最近几天
+    static let timelineInjectChars: Int            = 1200   // 注入段字数上限
+    static let timelineInjectRowsPerDay: Int       = 6      // 每天最多几行（多的折成「另 N 条」）
+
     // P17 · 运行可靠性: 漏跑清单的回溯上限。
     // 它兜的是「任务从没跑过 / 新建后一直没跑」这一档 —— 窗口不能从 `createdAt` 无限往前拉。
     // 7 天 = 10080 分钟 ⇒ 单任务最坏一万次 cron 匹配（微秒级, 且先在分钟位上筛一道）。
