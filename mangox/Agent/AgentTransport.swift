@@ -46,6 +46,21 @@ enum AgentEvent {
     /// 把整条事实丢掉, 要么得写自定义容错; 而 UI 只需要分辨「用户手动」与「引擎自动」两档 ——
     /// 把判据放在渲染期, 不认识的原因也能照实保留下来。
     case contextCompacted(tokensBefore: Int, tokensAfter: Int, reason: String)
+    /// 引擎**正常收尾却一个字节都没产出** —— 一整个回合没有正文 / 思考 / 工具卡。
+    ///
+    /// 2026-10-21 实测（不是推断）: 定时任务 pin 的模型已从模型表下线 ⇒ pi 只 warn 一句
+    /// `Using custom model id` 照旧把请求发出去 ⇒ API 回 `404 page not found` ⇒ pi 把这个
+    /// 错误**吃成一个空回合**（`agent_start` → 一条 content 为空的 assistant `message_end`
+    /// → `agent_settled(aborted:false)`）。进程不退出、不报错、`sawAnyRPC` 为真 ⇒
+    /// 启动失败那条判据（`reportEngineSilence`）**完全管不着**。用户看到的就是"点了没反应"。
+    ///
+    /// 判据为什么在传输层而不是 Store 层: "这一回合产出过什么"**只有引擎侧知道** ——
+    /// 会话被切走之后，已落定的块不会搬进 `liveTurns` 镜像（`selectConversation` 只搬
+    /// 未落定的流式块 / 非终态工具卡），所以 Store 侧无论数 `messages` 还是数镜像，
+    /// 都会把"有产出但用户不在场"误判成空回合。
+    ///
+    /// `model` = 本回合真正下发给 pi 的 `provider/modelId`（nil = 没下发过，用的是 pi 自带缺省）。
+    case emptyTurn(model: String?)
     case streamEnded
 }
 

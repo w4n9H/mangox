@@ -250,27 +250,28 @@ struct TrajectoryView: View {
             Button {
                 withAnimation(CodexTheme.animFast) { toggle(group.id) }
             } label: {
-                HStack(spacing: 10) {
+                HStack(spacing: Tune.traceGutter) {
                     kindChip(group.kind.label, group.kind.defaultColor)
-                    Text("\(group.kind.label) × \(group.count)")
+                    // 标签列已经写了 kind, 这里只留计数 —— 否则一行读作 `bash  bash × 5`。
+                    Text("× \(group.count)")
                         .font(CodexTheme.fontMonoSm)
                         .foregroundStyle(CodexTheme.textPrimary)
-                    if let ms = group.totalDurationMs {
-                        Text(TrajectoryBuilder.formatDuration(ms))
-                            .font(CodexTheme.fontMonoXs)
-                            .foregroundStyle(CodexTheme.textMuted)
-                            .fixedSize()
-                    }
                     if group.hasError {
                         Text("error")
                             .font(CodexTheme.fontTiny)
                             .foregroundStyle(CodexTheme.toolError)
                     }
                     Spacer()
+                    Text(group.totalDurationMs.map(TrajectoryBuilder.formatDuration) ?? "—")
+                        .font(CodexTheme.fontMonoXs)
+                        .foregroundStyle(CodexTheme.textMuted)
+                        .lineLimit(1)
+                        .frame(minWidth: Tune.traceDurationWidth, alignment: .trailing)
                     Image(systemName: "chevron.right")
                         .font(.system(size: 9, weight: .semibold))
                         .foregroundStyle(CodexTheme.textMuted)
                         .rotationEffect(isExpanded ? .degrees(90) : .zero)
+                        .frame(width: 10)
                 }
                 .contentShape(Rectangle())
             }
@@ -426,7 +427,7 @@ struct TrajectoryView: View {
             Button {
                 withAnimation(CodexTheme.animFast) { toggle(row.id) }
             } label: {
-                HStack(spacing: 10) {
+                HStack(spacing: Tune.traceGutter) {
                     kindChip(L("模型"), CodexTheme.info).textCase(.uppercase)
                     Text(row.timestamp.formatted(date: .omitted, time: .standard))
                         .font(CodexTheme.fontMonoXs)
@@ -482,7 +483,7 @@ struct TrajectoryView: View {
                     .font(CodexTheme.fontMonoXs)
                     .foregroundStyle(CodexTheme.textMuted)
                     .textSelection(.enabled)
-                    .padding(.leading, 30)
+                    .padding(.leading, Tune.traceBodyInset)
             }
         }
         .padding(.vertical, 7)
@@ -494,20 +495,108 @@ struct TrajectoryView: View {
     private func eventRow(_ event: TrajectoryEvent) -> some View {
         switch event.kind {
         case .user:
-            HStack(alignment: .top, spacing: 10) {
-                kindChip(L("用户"), CodexTheme.accent, prominent: true).textCase(.uppercase)
-                Text(event.prompt)
-                    .font(.system(size: 12))   // 正文降档: 事件线是主线, 正文退居次要
-                    .foregroundStyle(CodexTheme.textSecondary)
-                    .textSelection(.enabled)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            }
-            .padding(.vertical, 7)
+            userEventRow(event)
         case .assistant:
             assistantRow(event)
         case .tool:
             toolRow(event)
         }
+    }
+
+    /// USER 行。⚠️ 正文**必须能折叠** —— 这一格是"长度由用户数据决定"的典型。
+    ///
+    /// 2026-10-21 boss「dream 会话点轨迹 tab 直接卡死, 程序无响应」: 那一轮的用户消息是
+    /// **115,315 字符 / 2,817 行 / 最长一行 3,389 字符**, 而这里原来是 `Text(event.prompt)`
+    /// 一整块 —— 单个 `Text` 承载整块文本的布局是**平方级**的。用这条真实语料实测:
+    ///   · 整块 `Text`      **20,925 ms**（主线程, 就是那十几秒无响应）
+    ///   · 按行切块             342 ms
+    ///   · 折叠预览 6 行          0.7 ms
+    /// 判据与切分都在 `UserMessageFold`（与聊天侧 `ChatView.userBody` **共用一份**,
+    /// 两处各写一遍迟早分叉 —— 表现是"聊天里折了、轨迹里没折"这种没人测得到的偏差）。
+    private func userEventRow(_ event: TrajectoryEvent) -> some View {
+        HStack(alignment: .top, spacing: Tune.traceGutter) {
+            kindChip(L("用户"), CodexTheme.accent, prominent: true).textCase(.uppercase)
+            collapsibleTraceText(event.prompt, id: event.id,
+                                 font: .system(size: 12), color: CodexTheme.textSecondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .padding(.vertical, 7)
+    }
+
+    /// 可折叠长文本: 折叠态 = 预览 6 行 + 「还有 N 行 · 展开」; 展开态 = **固定高滚动区 + 按行渲染**。
+    /// 展开态按行（`LazyVStack`）而不是 `Text(全文)`, 且高度与内容长度脱钩 —— 只实例化可见行,
+    /// 所以 1 万行和 100 行的展开代价一样。
+    @ViewBuilder
+    private func collapsibleTraceText(_ s: String, id: UUID, font: Font, color: Color) -> some View {
+        if UserMessageFold.shouldFold(s) {
+            let isExpanded = expanded.contains(id)
+            VStack(alignment: .leading, spacing: 6) {
+                if isExpanded {
+                    ScrollView(.vertical, showsIndicators: true) {
+                        LazyVStack(alignment: .leading, spacing: 2) {
+                            ForEach(Array(s.components(separatedBy: "\n").enumerated()),
+                                    id: \.offset) { _, line in
+                                traceLine(line, font: font, color: color)
+                            }
+                        }
+                    }
+                    .frame(maxHeight: UserMessageFold.expandedMaxHeight)
+                } else {
+                    VStack(alignment: .leading, spacing: 2) {
+                        ForEach(Array(UserMessageFold.preview(s).components(separatedBy: "\n").enumerated()),
+                                id: \.offset) { _, line in
+                            traceLine(line, font: font, color: color)
+                        }
+                    }
+                }
+                Button {
+                    withAnimation(CodexTheme.animFast) { toggle(id) }
+                } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
+                            .font(.system(size: 8, weight: .semibold))
+                        Text(isExpanded
+                             ? Copy.userMessageCollapse
+                             : Copy.userMessageExpand(hiddenLines: UserMessageFold.hiddenLineCount(s)))
+                            .font(CodexTheme.fontTiny)
+                    }
+                    .foregroundStyle(CodexTheme.textTertiary)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+            }
+        } else {
+            traceLine(s, font: font, color: color)
+        }
+    }
+
+    /// 展开态里的整段正文: 超阈值同样**按行切块**放进固定高滚动区。
+    /// 不在这里再加一个折叠按钮 —— 行本身已经是"点开"的动作, 让他再点第二次很荒唐。
+    @ViewBuilder
+    private func boundedTraceText(_ s: String, font: Font, color: Color) -> some View {
+        if UserMessageFold.shouldFold(s) {
+            ScrollView(.vertical, showsIndicators: true) {
+                LazyVStack(alignment: .leading, spacing: 2) {
+                    ForEach(Array(s.components(separatedBy: "\n").enumerated()),
+                            id: \.offset) { _, line in
+                        traceLine(line, font: font, color: color)
+                    }
+                }
+            }
+            .frame(maxHeight: UserMessageFold.expandedMaxHeight)
+        } else {
+            traceLine(s, font: font, color: color)
+        }
+    }
+
+    /// 一行。**空行写成一个空格** —— `Text("")` 高度为 0, 空行会被吃掉, 与原文不符。
+    private func traceLine(_ line: String, font: Font, color: Color) -> some View {
+        Text(line.isEmpty ? " " : line)
+            .font(font)
+            .foregroundStyle(color)
+            .textSelection(.enabled)
+            .fixedSize(horizontal: false, vertical: true)
+            .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     /// ASSISTANT 行: 折叠 = 首句 + 元数据 (tokens · model · 时长估计); 点击展开全文 + think + usage。
@@ -518,7 +607,7 @@ struct TrajectoryView: View {
             Button {
                 withAnimation(CodexTheme.animFast) { toggle(event.id) }
             } label: {
-                HStack(alignment: .firstTextBaseline, spacing: 10) {
+                HStack(alignment: .firstTextBaseline, spacing: Tune.traceGutter) {
                     kindChip(L("助手"), CodexTheme.info).textCase(.uppercase)
                     Text(TrajectoryBuilder.firstSentence(event.fullText))
                         .font(.system(size: 12))   // 正文降档 (同 USER: 一个字号一个色号)
@@ -554,16 +643,11 @@ struct TrajectoryView: View {
                     Rectangle()
                         .fill(CodexTheme.thinking)
                         .frame(width: 2)
-                    Text(think)
-                        .font(.system(size: 12))
-                        .foregroundStyle(CodexTheme.textTertiary)   // 思考比正文再淡一档
-                        .textSelection(.enabled)
+                    // 思考与正文同一条判据 (长文本按块) —— 一回合能想几千行
+                    boundedTraceText(think, font: .system(size: 12), color: CodexTheme.textTertiary)
                 }
             }
-            Text(event.fullText)
-                .font(.system(size: 12))   // 展开全文与折叠预览同档 (正文统一)
-                .foregroundStyle(CodexTheme.textSecondary)
-                .textSelection(.enabled)
+            boundedTraceText(event.fullText, font: .system(size: 12), color: CodexTheme.textSecondary)
             if let usage = event.usage {
                 Text(usageDetail(usage))
                     .font(CodexTheme.fontMonoXs)
@@ -571,7 +655,7 @@ struct TrajectoryView: View {
                     .textSelection(.enabled)
             }
         }
-        .padding(.leading, 30)   // 对齐 chip 后内容
+        .padding(.leading, Tune.traceBodyInset)   // 续行对齐正文列 (不是对齐标签)
     }
 
     /// TOOL 行: 工具名 + 参数摘要 + 时长 + 状态徽章 (实时翻转); 展开看 details/diff/错误。
@@ -582,7 +666,7 @@ struct TrajectoryView: View {
             Button {
                 withAnimation(CodexTheme.animFast) { toggle(event.id) }
             } label: {
-                HStack(spacing: 10) {
+                HStack(spacing: Tune.traceGutter) {
                     kindChip(tool.kind.label, tool.kind.defaultColor)
                     Text(tool.command ?? tool.title)
                         .font(CodexTheme.fontMonoSm)
@@ -590,17 +674,19 @@ struct TrajectoryView: View {
                         .lineLimit(1)
                         .truncationMode(.middle)
                         .frame(maxWidth: .infinity, alignment: .leading)
-                    if let ms = tool.durationMs {
-                        Text(TrajectoryBuilder.formatDuration(ms))
-                            .font(CodexTheme.fontMonoXs)
-                            .foregroundStyle(CodexTheme.textMuted)
-                            .fixedSize()
-                    }
                     phaseBadge(tool.phase)
+                    // 耗时列**永远占位** (未知就写 "—", 同摘要头的空值口径), 且右对齐:
+                    // 数字右边缘成列才比得出长短, 空着的那一格也不会把相态列拽歪。
+                    Text(tool.durationMs.map(TrajectoryBuilder.formatDuration) ?? "—")
+                        .font(CodexTheme.fontMonoXs)
+                        .foregroundStyle(CodexTheme.textMuted)
+                        .lineLimit(1)
+                        .frame(minWidth: Tune.traceDurationWidth, alignment: .trailing)
                     Image(systemName: "chevron.right")
                         .font(.system(size: 9, weight: .semibold))
                         .foregroundStyle(CodexTheme.textMuted)
                         .rotationEffect(isExpanded ? .degrees(90) : .zero)
+                        .frame(width: 10)
                 }
                 .contentShape(Rectangle())
             }
@@ -621,9 +707,7 @@ struct TrajectoryView: View {
                 detailLine(d.key, d.value)
             }
             if let diff = tool.diffText, !diff.isEmpty {
-                Text(diff)
-                    .font(CodexTheme.fontMonoXs)
-                    .foregroundStyle(CodexTheme.textSecondary)
+                boundedTraceText(diff, font: CodexTheme.fontMonoXs, color: CodexTheme.textSecondary)
                     .padding(8)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .background(CodexTheme.bgCard)
@@ -635,7 +719,7 @@ struct TrajectoryView: View {
                     .foregroundStyle(CodexTheme.toolError)
             }
         }
-        .padding(.leading, 30)
+        .padding(.leading, Tune.traceBodyInset)
     }
 
     private func detailLine(_ key: String, _ value: String) -> some View {
@@ -644,36 +728,52 @@ struct TrajectoryView: View {
                 .font(CodexTheme.fontMonoXs)
                 .foregroundStyle(CodexTheme.textMuted)
                 .fixedSize()
-            Text(value)
-                .font(CodexTheme.fontMonoXs)
-                .foregroundStyle(CodexTheme.textSecondary)
-                .textSelection(.enabled)
+            // 工具 details 的值**不做任何截断**（传输层刻意不砍结果, 见 `flattenDetails`），
+            // 所以一段大 stdout 就是几十万字符 ⇒ 同一条判据: 超阈值按行切块。
+            boundedTraceText(value, font: CodexTheme.fontMonoXs, color: CodexTheme.textSecondary)
         }
     }
 
     // MARK: - 碎片
 
-    /// 类型徽章 (USER 用 prominent 放大字号与色框, 用户拍板)。
+    /// 类型徽章 —— **定宽一列** (宽度归 `Tune.traceRailWidth`, 与标签内容无关)。
+    ///
+    /// 2026-10-21 boss「左边的小框没对齐」: 原来这里是 `frame(minWidth:)` + 随文字走的背景,
+    /// 于是框宽 19pt(`ls`) … 70pt(英文 `ASSISTANT`) 各有各的宽, 右侧正文的起点也随之漂。
+    /// 现在**框永远填满这一列**, 正文起点因此只有一个值 —— 见 `Tune.traceBodyInset`。
+    /// 标签**居中** (2026-10-22 boss「文字要居中啊, 全部靠左的话右边显得很空」): 定宽之后
+    /// `ls` / `用户` 这种短标签靠左会留出一大块空框, 居中才像一格一格的标签, 而不是"框没填满"。
+    /// ⚠️ `.frame(width:)` 必须写在 `.background` **之前**: 写在后面只会移动整个框, 背景仍是文字宽。
     private func kindChip(_ label: String, _ color: Color, prominent: Bool = false) -> some View {
         Text(label)
             .font(.system(size: prominent ? 10 : 9, weight: .bold))
             .tracking(0.5)
+            .lineLimit(1)
+            .minimumScaleFactor(0.85)   // 兜底: 新增长标签时缩 15% 也不截断
             .foregroundStyle(color)
-            .padding(.horizontal, prominent ? 7 : 5)
+            .padding(.horizontal, 6)
+            .frame(width: Tune.traceRailWidth, alignment: .center)
             .padding(.vertical, prominent ? 3 : 2)
             .background(color.opacity(0.12))
             .cornerRadius(prominent ? 5 : 4)
-            .frame(minWidth: prominent ? 38 : 30)
     }
 
+    /// 相态 = 文字 + 圆点, **文字在前**。
+    ///
+    /// 2026-10-21 boss「右边的显示看上去挺混乱的」: 行的右侧是一个**右锚定**的簇, 一个元素
+    /// 的位置稳不稳, 只看"它右边的东西是不是定宽"。原来圆点在前 ⇒ 圆点右边是宽度随语言变的
+    /// 标签 ⇒ 三种相态三个不同的 x, 整列圆点看着乱跳 (`Needs approval` 比 `Done` 左 60pt)。
+    /// 换成"文字在前 + 圆点在后", 圆点与定宽的耗时列/箭头之间没有任何变宽的东西 ⇒
+    /// **圆点成一条竖线, 标签的右边缘也成一条竖线**。
     private func phaseBadge(_ phase: ToolPhase) -> some View {
         HStack(spacing: 4) {
-            Circle()
-                .fill(phase.color)
-                .frame(width: 6, height: 6)
             Text(phase.label)
                 .font(CodexTheme.fontTiny)
                 .foregroundStyle(CodexTheme.textSecondary)
+                .lineLimit(1)
+            Circle()
+                .fill(phase.color)
+                .frame(width: 6, height: 6)
         }
         .fixedSize()
     }
@@ -705,7 +805,7 @@ struct TrajectoryView: View {
 
     /// 实时占位行: 会话在途且无新落定事件 → 旋转弧 + 「生成中」(同侧栏弧样式)。
     private var liveRow: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: Tune.traceGutter) {
             kindChip(L("助手"), CodexTheme.info).textCase(.uppercase)
             CodexSpinner()
             Text("AI 回复生成中…")

@@ -27,7 +27,9 @@ struct ThinkingCardView: View {
         // 轻量行内样式: 左侧琥珀竖条 + 折叠行, 不再用整卡灰底 (Codex 风格)
         HStack(alignment: .top, spacing: 0) {
             Rectangle()
-                .fill(CodexTheme.thinking.opacity(0.7))
+                // 2026-10-21：与工具行**同一个中性装饰色**（改前是琥珀 @0.7 = 亮色 2.31:1，
+                // 太响）。详见 `CodexTheme.railNeutral` 那段：颜色只给状态，类别一律中性。
+                .fill(CodexTheme.railNeutral)
                 .frame(width: 2)
                 .padding(.vertical, 3)
 
@@ -38,7 +40,8 @@ struct ThinkingCardView: View {
                     HStack(spacing: 6) {
                         Image(systemName: expanded ? "chevron.down" : "chevron.right")
                             .font(.system(size: 9, weight: .semibold))
-                            .foregroundStyle(CodexTheme.thinking)
+                            // 可点控件 ⇒ 守图形元素 3:1（亮 3.21），所以**不跟竖条**降到 1.46
+                            .foregroundStyle(CodexTheme.textMuted)
                             .frame(width: 12)
                         Text("思考过程")
                             .font(CodexTheme.fontSmall)

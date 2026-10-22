@@ -7,7 +7,7 @@
    **本文件由 scripts/l10n/gen_strings.py --write 生成, 别手改** ——
    译文改 scripts/l10n/en_values.py 的 VALUES, 再跑 --write。
 
-   条数: 781
+   条数: 788
 */
 
 " [附件: %@]" = " [Attachment: %@]";
@@ -224,8 +224,10 @@
 "写道:" = "wrote:";
 "写道：" = "wrote:";
 "出厂指令 · 随版本更新；本任务能改的是档期、开关与执行配置" = "Factory instruction · ships with the app version; what you can change for this task is its schedule, toggle and run configuration";
+"出图失败" = "Could not create the image";
 "分" = "Min";
 "分 时 日 月 周" = "min hour day month weekday";
+"分享" = "Share";
 "分钟" = "Minutes";
 "刚刚" = "now";
 "创建" = "Create";
@@ -322,6 +324,7 @@
 "外链图片不在应用内加载" = "Remote images are not loaded in the app";
 "多久看一次收件箱 (全局串行: 同一时刻只跑一个远程任务)" = "How often to check the inbox (global serial: only one remote task runs at a time)";
 "大小" = "Size";
+"太长 · 改用复制" = "Too long · copy text";
 "好" = "OK";
 "好的,先记下「%@」的需求,我会在下一轮把上下文喂给模型,再回执计划。" = "Got it. Noting the \"%@\" request; I will feed the context to the model on the next turn and reply with a plan.";
 "如 家里那台 / 任务专用" = "e.g. Home box / tasks only";
@@ -370,6 +373,7 @@
 "已删除的任务" = "Deleted task";
 "已删除的会话" = "Deleted session";
 "已复制" = "Copied";
+"已复制图片" = "Image copied";
 "已开始 dream：%@" = "Dream started: %@";
 "已拒绝" = "Denied";
 "已挂载的知识库 %lld 个没进索引: %@" = "%lld mounted knowledge bases did not make it into the index: %@";
@@ -392,6 +396,8 @@
 "开始 Dream" = "Start Dream";
 "引擎 stderr 末尾几行:" = "Last lines of engine stderr:";
 "引擎没有输出任何 stderr。" = "The engine wrote nothing to stderr.";
+"引擎返回了空回合 · 引擎没有返回任何内容, 请检查模型与凭据" = "The engine returned an empty turn — nothing came back; check the model and credentials";
+"引擎返回了空回合 · 模型 %@ 可能不存在或已下线" = "The engine returned an empty turn · model %@ may not exist or is no longer available";
 "引用工作区文件" = "Reference a workspace file";
 "归属" = "Goes to";
 "当前" = "Current";
@@ -423,6 +429,7 @@
 "把会话数据库 (含知识库) 与图片附件、会话记录完整拷贝到目标目录的 mangox-backup-<时间戳>/ 子目录, 供人工保管" = "Copies the session database (including the knowledge base), image attachments and session logs into a mangox-backup-<timestamp>/ folder in the target directory for safekeeping.";
 "把这一份整篇写进上面那条目标; 被顶掉的那一版会进变更史" = "Write this whole text into the target above; the version it replaces goes to the history";
 "把这一篇移进系统废纸篓; 旧内容会先进变更史" = "Move this note to the system Trash; its old content is recorded in the change history first";
+"把这条回复存成图片放进剪贴板" = "Save this reply as an image on the clipboard";
 "拉取失败 (%@), 已回落预设清单" = "Fetch failed (%@); fell back to the built-in preset list";
 "拒绝" = "Deny";
 "拷贝到 ~/.mangox/extensions (默认停用)" = "Copied to ~/.mangox/extensions (disabled by default)";

@@ -72,6 +72,42 @@ if grep -rn '^[[:space:]]*\.defaultScrollAnchor(' mangox/Views/ ; then
     exit 1
 fi
 
+# ③b 轨迹视图的**单块 Text 禁令** (2026-10-21 boss「dream 会话点轨迹 tab 直接卡死, 程序无响应」)。
+#     根因: 那一轮的用户消息 **115,315 字符 / 2,817 行**(最长一行 3,389 字符), 而 `.user` 行写的是
+#     `Text(event.prompt)` 一整块 —— 单个 `Text` 承载整块文本的布局是**平方级**的。同一条语料实测
+#     **20,925 ms**(主线程 = 那十几秒无响应) vs 按行切块 **342 ms** vs 折叠预览 **0.7 ms**。
+#     ⚠️ 它编译得过、没有任何数值会变、也没有任何断言会红 ⇒ 只有**源码事实**能守。
+#     正文一律走 `collapsibleTraceText` / `boundedTraceText`(判据在 `UserMessageFold`,
+#     与聊天侧 `ChatView.userBody` 共用一份)。
+#     ⚠️ 这条是**绊线不是证明**: 只认"行首就是这个 Text"的写法(上面 ③ 同款取舍);
+#        `detailLine` 里的工具 `value` 故意不在名单里 —— `statCell(value:)` 也叫 value, 会误伤。
+if grep -nE '^[[:space:]]*Text\((event\.prompt|event\.fullText|think|diff)\)' \
+        mangox/Views/Trajectory/TrajectoryView.swift; then
+    echo "FAIL - 轨迹视图里又出现单块 Text 渲染的用户/模型正文 (平方级: 实测 21 秒)" >&2
+    echo "       长度由数据决定的只读面必须按块渲染 (见 TrajectoryView.collapsibleTraceText)" >&2
+    exit 1
+fi
+
+# ③c 「滚到底」**只许有一个实现**，且不许带补间 (2026-10-21 boss 第三次报「回车后白屏」)。
+#     实测: `scrollTo(anchor: .bottom)` 的目标位置按 `LazyVStack` 的**估算**文档高算 —— 同一份
+#     794 事件的真实会话读出过 32,547 / 68,924 两种值（6 次里 5 次是翻倍那个）；落在那个位置上
+#     视口**一帧都没画**（逐帧取像素：100% 纯底色 / 0% 墨迹，滚动条却在轨道底），紧跟一拍就恢复。
+#     ⇒ 四个入口（初屏 / 换会话 / 提交跟随 / 回到最新）必须共用 `ChatView.scrollToTail`
+#       —— 它带着复核拍。**分头写就会分头漏掉复核**（这个 bug 已经这样活了两个版本）。
+#     ⚠️ 同时禁 `withAnimation` 包 scrollTo: 补间的中间态按动画插值的布局算（实测落点差 100~260pt），
+#        而且"动画结束"≠"布局落定"，复核等于白做。
+#     两条都编译得过、没有任何数值会变 ⇒ 只能扫**源码事实**（与上面 ③ 同一类取舍）。
+SCROLL_N=$(grep -cE 'proxy\.scrollTo\(' mangox/Views/Chat/ChatView.swift || true)
+if [[ "$SCROLL_N" -ne 1 ]]; then
+    echo "FAIL - 「滚到底」的实现分支了: ChatView 里 proxy.scrollTo( 出现 $SCROLL_N 处 (期望 1)" >&2
+    echo "       四个入口请一律走 scrollToTail —— 它带复核拍, 漏了它 = 回车后白屏会一直亮着" >&2
+    exit 1
+fi
+if grep -nE 'withAnimation' -A2 mangox/Views/Chat/ChatView.swift | grep -qE 'scrollTo'; then
+    echo "FAIL - 滚到底又带上补间了 (补间按动画插值的布局算落点, 实测差 100~260pt, 且没法复核)" >&2
+    exit 1
+fi
+
 # ④ 冒烟主文件的**体量棘轮** (2026-10-19) —— 判据 = 行数**只减不增**。
 #    为什么要有这条: 冒烟已长到 7000+ 行, 而且几乎全在**一个函数 `run()`** 里
 #    (Swift 函数体不能跨文件 ⇒ 只要它还是一个大函数, 就必然是一个大文件)。

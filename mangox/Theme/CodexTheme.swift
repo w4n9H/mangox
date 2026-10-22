@@ -99,13 +99,31 @@ enum CodexTheme {
     // MARK: - Accent
     static let accent       = adaptive(light: 0xDD5742, dark: 0xDD5742) // warm orange-red (brand primary)
     static let accentSoft   = accent.opacity(0.18)
-    static let thinking     = adaptive(light: 0xB07A12, dark: Dark.thinking) // amber/orange left bar
+    /// ⚠️ 2026-10-21 起**不再是思考竖条的色**（竖条改用 `railNeutral`）—— 它现在只用于
+    /// 「思考中…」状态字与图片工具：**都还是"状态/相态"，符合"颜色只给状态"**。
+    static let thinking     = adaptive(light: 0xB07A12, dark: Dark.thinking) // amber: 进行中 / 图片工具
     static let toolRunning  = adaptive(light: 0xB07A12, dark: Dark.toolRunning) // amber when running
     static let toolDone     = adaptive(light: 0x1A7F37, dark: Dark.toolDone) // green when done
     static let toolError    = adaptive(light: 0xD1242F, dark: Dark.toolError) // red
     static let toolQueued   = adaptive(light: 0x6B6B78, dark: Dark.toolQueued) // gray-blue for queued
+    /// ⚠️ 2026-10-21 起**不再是工具行的类别色**（竖条 → `railNeutral`，`kind` 标签 → `textTertiary`）。
+    /// 现在只剩代码高亮的关键字色。**别拿它去当"工具行"**：那会让代码块的关键字跟着变色。
     static let info         = adaptive(light: 0x0969DA, dark: Dark.info)
     static let blocked      = adaptive(light: 0xB07A12, dark: Dark.blocked) // amber awaiting-approval (P8-T26)
+
+    // MARK: - 工具行 / 思考行的竖条（2026-10-21 boss：左侧配色太鲜艳）
+    //
+    // 判据：**颜色只给状态，不给类别**。
+    //   · 类别（read / edit / bash、思考）**一律中性** —— 它是什么，`bash` 那两个字已经说了；
+    //     再上一遍色是**同一信息说两次**，而"一屏 6 行彩色"正是"鲜艳"的来源。
+    //   · 颜色留给真正的状态：出错红、待审批琥珀、运行中/思考中琥珀。
+    //
+    // ⚠️ 竖条与 chevron **不是同一个档**，别合并：
+    //   竖条是**装饰**（不承载信息）⇒ 落在 1.15~2.2 的装饰带（亮 1.46 / 暗 1.60）。
+    //   chevron 是**可点控件**（"这行能展开"）⇒ 归 WCAG 1.4.11 图形元素，必须 ≥3.0，
+    //   所以它跟着 `textMuted`（亮 3.21）走，**不能**跟着竖条一起降到 1.5。
+    //   ⚠️ 旧值：工具条 = `info`（亮 4.89）、思考条 = `thinking`@0.7（亮 2.31）—— 都太响。
+    static let railNeutral  = adaptive(light: 0xCFCFD6, dark: Dark.railNeutral)
 
     // MARK: - 思考强度轨 (2026-09-24 boss 拍板: 蓝→紫→洋红, **亮暗共用一套**)
     // 判据 = 这段色**从色相环的冷端跨到暖端** (227°→306°), 两种底色都托得住; 实测最紧 2.8:1
@@ -252,6 +270,10 @@ enum CodexTheme {
         static let toolDone: UInt32   = 0x3FB950
         static let toolError: UInt32  = 0xE5484D
         static let blocked: UInt32    = 0xE0A030
+        /// 工具行 / 思考行的竖条（**装饰档**，2026-10-21 起）。判据是"看得见但不抢"：
+        /// 亮 1.46 / 暗 1.60 —— 与 `guide` 同族偏实一档，远低于旧值（亮 `info` 4.89）。
+        /// ⚠️ 别把它抬过 2.2：那正是 boss 说的"太鲜艳"的区间。
+        static let railNeutral: UInt32 = 0x43434F
         // 交互态叠加 alpha（暗色加白）。也放这里 —— 冒烟要断言"选中比悬停实"。
         static let hoverAlpha: Double    = 0.06
         static let selectedAlpha: Double = 0.10
@@ -515,6 +537,44 @@ enum Tune {
     /// 跳变压进几十毫秒, 看着就是闪; 慢工具那三次隔了几秒, 感知不到。定宽 + 右对齐 ⇒
     /// 命令的可用宽度从头到尾不变。取 64 = `999ms 完成` (5 字符 mono 11pt + 6 间距 + 2 汉字)。
     static let toolPhaseBadgeWidth: CGFloat = 64
+
+    // 轨迹页行布局 (2026-10-21 boss「左边的小框没对齐 / 右边的显示看上去挺混乱的」)。
+    //
+    // 病根是**没有列**：左标签框宽度随标签走 (实测 `ls` 19pt / `bash` 35pt / `codemode` 65pt /
+    // 英文 `ASSISTANT` 70pt), 于是右侧正文的起点跟着漂 4 个位置; 展开区又各自写死 30pt,
+    // **比任何一个正文列都靠左** ⇒ "框和内容各说各话"。同理右侧: 耗时是 `fixedSize()` 自然宽,
+    // 相态徽章紧跟在后面 ⇒ 有耗时的行和没耗时的行, 圆点相差 30pt。
+    //
+    // 判据: **一行里所有"列"的位置只能由这几个常量决定, 不能由内容长度决定。**
+    /// 左标签列定宽 —— 取 72 = 最宽标签 (英文 `ASSISTANT` 58.4 + 12 内边距) 且留 1.6 余量,
+    /// 所以四个 kind 标签**一列同宽**, 不做缩放也不截断 (标签是 `rawValue`, 截一半就没法 grep 了)。
+    static let traceRailWidth: CGFloat = 72
+    /// 标签列与正文列之间的缝 (也是行内 `HStack` 的 spacing, 两处必须同一个数)。
+    static let traceGutter: CGFloat = 10
+    /// 正文列起点 = 标签列 + 缝。**展开区 (diff/输出/usage) 用它缩进** —— 展开内容是行的
+    /// 续行, 续行对齐正文, 不对齐标签。
+    static var traceBodyInset: CGFloat { traceRailWidth + traceGutter }
+    /// 右侧耗时列。**永远占位** (没耗时就渲染空串) —— 否则"运行中"的行会顶到耗时列里,
+    /// 圆点列当场断一截。右对齐: 数字的右边缘成列, 扫一眼就能比长短。
+    static let traceDurationWidth: CGFloat = 40
+
+    // 分享成图片 (P19, 2026-10-22)。三个数就够了 —— 渲染宽、卡片内边距、长度上限。
+    /// 出图宽度 (pt)。720 = 「知识库注入面板」同宽 (那里也是 markdown 预览, 窄了层级全挤一起)。
+    static let shareWidth: CGFloat = 720
+    /// 卡片内边距 (pt)。比正文栏的 `chatHPadding` 大: 图是要**单独看**的, 留白不足会显得挤。
+    static let sharePadding: CGFloat = 26
+    /// 长图上限 (pt): **3 屏封顶, 超了就不出图** (2026-10-22 boss 拍板)。
+    ///
+    /// ⚠️ **「一屏」= 聊天窗口正文的可见高度, 不是"一条回复的高度"** —— 初版把这两个混了,
+    ///    按 250pt/屏 推出 750, 而 250 只是"一条普通回复占多高"(实测 252/328/453),
+    ///    跟屏幕毫无关系 ⇒ 750 实际只有 **0.86 屏**, 把 boss 一条 1324pt 的正常长回复判成了"太长"。
+    ///    实测口径 (同一台机): 屏幕 1920×1080@2x · 窗口 **1280×872pt** · 扣掉底栏输入区(~151)
+    ///    与顶栏 ⇒ **正文可见 ≈ 700pt** ⇒ 3 屏 = 2100pt。
+    /// ⚠️ 这是**唯一**的长度判据: 没有"降 1x 凑一张"的分支 —— 要么出 2x, 要么不出。
+    /// ⚠️ 判据在**布局之后**用 (高度只有真排版才准; 按字符数预估会说谎)。
+    /// ⚠️ 2100pt @2x = 1440×4200px, 远在 IM 长图上限之内 —— 再抬上去也不会被压, 但**可读性**会掉
+    ///    (缩到屏宽后字变小), 所以别顺手往 3000+ 抬。
+    static let shareMaxHeight: CGFloat = 2100
 
     // 回到最新 (2026-10-16 boss: "往上翻了记录, 还要再往下翻才能到最底部")。
     // 它是挂在消息列底缘的**浮层** —— 不占布局流, 所以整件事只有这两个数。

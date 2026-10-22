@@ -51,6 +51,13 @@ extension SmokeMain {
     }
     @MainActor
     static func report() -> Never {
+        // 登记表被截断 = 一条**悄悄卸掉的门**：某个 case 结尾调了 `report()`（它 exit），
+        // 后面的用例一条没跑，而日志照样 "ALL PASS"（2026-10-21 实测，1498 条全绿、T-FOLD 缺席）。
+        // ⇒ 这里把"还没跑完"变成红灯，而不是让它看起来像全过。
+        if casesRemaining > 0 {
+            failures.append("还有 \(casesRemaining) 个用例没跑 —— 某个 case 结尾调了 report() "
+                            + "（report = 收尾 + exit，不许当用例结尾；见 scripts/smoke/cases/AllCases.swift）")
+        }
         print(failures.isEmpty ? "\nALL PASS" : "\nFAILURES: \(failures.count)")
         failures.forEach { print(" - " + $0) }
         // 夹具清理 (2026-09-22): **只在全绿时清** —— 失败时留下现场供排查 (那正是最需要它的时刻)。

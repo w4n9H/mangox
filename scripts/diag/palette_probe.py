@@ -156,10 +156,21 @@ PLATE_TOKENS = ['info', 'thinking', 'toolRunning',
 GRAPHIC_FLOOR = 3.0
 TEXT_FLOOR = 4.5
 
-# **政策**：kind 标签"当文字用"的色 —— 真源 = `ToolCallCardView.kindColor`（P16 起恒冷蓝）。
-# 往这个名单里加色 = 声明"它要当文字读" ⇒ 它必须同时过 4.5。名单与数值必须一致：
-# 名单里有谁、谁就必须过线；不在名单里的色**不许**被当作文字用（那就是本守卫要抓的事）。
-KIND_TEXT_TOKENS = ['info']
+# **政策**：kind 标签"当文字用"的色 —— 真源 = `ToolCallCardView.kindColor`。
+# 往这个名单里加色 = 声明"它要当文字读" ⇒ 它必须过 4.5。
+#
+# ⚠️ 2026-10-21 换过一次人：`info` → `textTertiary`。boss「工具和思考这个左侧配色太鲜艳」
+#    ⇒ 类别不再上色（竖条 → `railNeutral`、标签 → `textTertiary`），**颜色只给状态**。
+#    `info` 退出这个名单，但它仍在 `PLATE_TOKENS` 里（代码块关键字色还在用它）。
+KIND_TEXT_TOKENS = ['textTertiary']
+
+# 工具行 / 思考行的**竖条**（2026-10-21 新立）。它**不是**图形元素 ——
+# 竖条不承载信息（"这是什么"由 `bash` 那两个字说），所以既不该按 3.0 守，也不该无限淡下去。
+# 判据 = **装饰带 [1.15, 2.2]**：
+#   · 下限 1.15 —— 再淡就等于没画（参照 `guide` 亮色 1.29）；
+#   · **上限 2.2 —— 这才是本次要立的半边**：旧值亮色 `thinking`@0.7 = 2.31、`info` = 4.89，
+#     都在带外。"太鲜艳"这件事以前在亮色侧**一条数值都拦不住**（P16 §3：亮色只有地板）。
+RAIL_BAND = [('railNeutral', 'contentPanel', 1.15, 2.2)]
 
 # 聊天流内嵌面（输出区 / diff 预览）用的底色 —— 真源 = `ToolCallCardView` / `DiffPreviewView`。
 # 铁律（P10.8b）：**内嵌面必须与它所在的正文面可分辨，且方向跟着该主题的模型走** ——
@@ -249,9 +260,13 @@ def report_dark(colors, alphas, argv):
 # ---------------------------------------------------------------- 板块色 / 内嵌面
 
 def report_plate(theme_name, colors, bad):
-    """板块色：同一个色，两种角色两条线。"""
+    """板块色：**剩下的彩色面**（代码块关键字 / 进行中 / 出错 / 待审批）。
+
+    ⚠️ 2026-10-21 起 `info` 与 `thinking` **不再是竖条色**（竖条 → `railNeutral`，见 `RAIL_BAND`）。
+    它们留在这里是因为还有别的用法，而那用法同样是"状态/相态"，照样该守 3.0。
+    """
     panel = colors['contentPanel']
-    print(f'  板块色（{theme_name}）—— 竖条走图形线 3.0 / kind 标签走文字线 4.5:')
+    print(f'  板块色（{theme_name}）—— 剩下的彩色面，图形线 {GRAPHIC_FLOOR}:')
     for name in PLATE_TOKENS:
         if name not in colors:
             continue
@@ -259,15 +274,41 @@ def report_plate(theme_name, colors, bad):
         g_ok = g >= GRAPHIC_FLOOR
         if not g_ok:
             bad.append(f'{theme_name} 板块色 {name}: 图形对比度 {g:.2f}:1 < {GRAPHIC_FLOOR}')
-        if name in KIND_TEXT_TOKENS:
-            t = g  # 同一个色对同一个底
-            t_ok = t >= TEXT_FLOOR
-            if not t_ok:
-                bad.append(f'{theme_name} 板块色 {name}: 当**文字**用只有 {t:.2f}:1 < {TEXT_FLOOR}')
-            role = f'图形 {g:.2f} {"OK" if g_ok else "越界"} · 文字 {t:.2f} {"OK" if t_ok else "越界"}'
-        else:
-            role = f'图形 {g:.2f} {"OK" if g_ok else "越界"} · **不当文字用**'
-        print(f'    {name:12s} #{colors[name]:06X}   {role}')
+        print(f'    {name:12s} #{colors[name]:06X}   图形 {g:.2f} {"OK" if g_ok else "越界"}')
+    print()
+
+
+def report_rail(theme_name, colors, bad):
+    """竖条 = **装饰档**。上下两条线都要守 —— 上界那半边是新立的。"""
+    print(f'  竖条（{theme_name}，装饰档 {RAIL_BAND[0][2]}~{RAIL_BAND[0][3]}）:')
+    for name, base, lo, hi in RAIL_BAND:
+        if name not in colors or base not in colors:
+            bad.append(f'{theme_name} 竖条 {name} / 基准 {base} 解析不到')
+            continue
+        c = contrast(colors[name], colors[base])
+        ok = lo <= c <= hi
+        if not ok:
+            bad.append(f'{theme_name} 竖条 {name} 落在装饰带外: {c:.2f}:1 不在 '
+                       f'[{fmt_band(lo, hi)}] —— 太淡等于没画 / 太响就是"鲜艳"')
+        print(f'    {name:12s} #{colors[name]:06X} ← {base:13s} {c:6.2f}:1   '
+              f'[{fmt_band(lo, hi)}]  {"OK" if ok else "带外"}')
+    print()
+
+
+def report_kind_text(theme_name, colors, bad):
+    """kind 标签**当文字读** —— 真源 = `ToolCallCardView.kindColor`。"""
+    panel = colors['contentPanel']
+    print(f'  kind 标签（{theme_name}，当文字读 ⇒ 必须 ≥{TEXT_FLOOR}）:')
+    for name in KIND_TEXT_TOKENS:
+        if name not in colors:
+            bad.append(f'{theme_name} kind 标签色 {name} 在主题里解析不到')
+            continue
+        c = contrast(colors[name], panel)
+        ok = c >= TEXT_FLOOR
+        if not ok:
+            bad.append(f'{theme_name} kind 标签 {name}: 只有 {c:.2f}:1 < {TEXT_FLOOR}')
+        print(f'    {name:12s} #{colors[name]:06X}   {c:6.2f}:1   '
+              f'[≥{TEXT_FLOOR}]  {"OK" if ok else "跌破"}')
     print()
 
 
@@ -316,6 +357,8 @@ def main(argv):
         print('  聊天流内嵌面 —— 亮色："纸 + 灰块" ⇒ 必须**严格暗于**正文面:')
         report_inline_face('亮色', light_colors, 'below', bad)
         report_plate('亮色', light_colors, bad)
+        report_rail('亮色', light_colors, bad)
+        report_kind_text('亮色', light_colors, bad)
 
     if want_dark:
         b, _ = report_dark(dark_colors, dark_alphas, argv)
@@ -323,6 +366,8 @@ def main(argv):
         print('  聊天流内嵌面 —— 暗色："面越高越亮" ⇒ 必须**严格亮于**正文面:')
         report_inline_face('暗色', dark_colors, 'above', bad)
         report_plate('暗色', dark_colors, bad)
+        report_rail('暗色', dark_colors, bad)
+        report_kind_text('暗色', dark_colors, bad)
 
     if bad:
         print('不变量破了:')

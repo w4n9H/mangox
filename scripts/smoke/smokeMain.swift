@@ -2107,23 +2107,23 @@ struct SmokeMain {
                 check(false, "T-P10.4 前置: 任务已建立")
                 return
             }
-            task10b.config = SessionConfig(provider: "prov-x", modelId: "model-y",
+            task10b.config = SessionConfig(provider: "openai", modelId: "o4-mini",
                                            thinkingLevel: ThinkingLevel.low.rawValue,
                                            agentMode: AgentMode.minimal.rawValue, askApproval: false)
             store10b.updateScheduled(task10b)
             let loaded10b = store10b.scheduledTasks.first { $0.name == "P10.4" }
-            check(loaded10b?.config?.modelId == "model-y" && loaded10b?.config?.agentMode == AgentMode.minimal.rawValue,
+            check(loaded10b?.config?.modelId == "o4-mini" && loaded10b?.config?.agentMode == AgentMode.minimal.rawValue,
                   "T-P10.4 任务配置落库 roundtrip")
             store10b.runScheduledFire(loaded10b!)
             check(mock10b.lastMode == .minimal, "T-P10.4 fire 应用任务档位")
-            check(mock10b.lastSetModel?.provider == "prov-x" && mock10b.lastSetModel?.modelId == "model-y",
+            check(mock10b.lastSetModel?.provider == "openai" && mock10b.lastSetModel?.modelId == "o4-mini",
                   "T-P10.4 fire 应用任务模型")
             check(mock10b.lastThinking == ThinkingLevel.low.rawValue, "T-P10.4 fire 应用任务思考级别")
             check(await waitUntil { store10b.runningTurns.isEmpty }, "T-P10.4 fire 收尾")
             // 全局零污染 + 日志会话行带任务配置 (P10.3 联动)
             check(store10b.agentMode == .standard, "T-P10.4 fire 不污染全局档位")
             if let fireLog = store10b.scheduledTasks.first(where: { $0.name == "P10.4" })?.logSessionId {
-                check(store10b.persistenceDebug?.loadSessionConfig(id: fireLog)?.modelId == "model-y",
+                check(store10b.persistenceDebug?.loadSessionConfig(id: fireLog)?.modelId == "o4-mini",
                       "T-P10.4 日志会话行带任务配置 (P10.3 联动)")
             } else {
                 check(false, "T-P10.4 日志会话已建立")
@@ -3414,8 +3414,8 @@ struct SmokeMain {
                   "T-COLOR 暗色板块色 \(name) 达图形元素下限 3.0 (竖条/图标; 实测 \(String(format: "%.2f", c)):1)")
         }
         // kind 标签**当文字**用的色 —— 这个名单就是政策: 往里加色 = 声明"它要当文字读" ⇒ 必须过 4.5。
-        // ⚠️ 真源 = `ToolCallCardView.kindColor` (P16 起恒冷蓝, 与相态脱钩)。
-        for (name, hex) in [("info", CodexTheme.Dark.info)] {
+        // ⚠️ 真源 = `ToolCallCardView.kindColor`（2026-10-21 起 = `textTertiary`：类别不上色，标签靠字形/字距）。
+        for (name, hex) in [("textTertiary", CodexTheme.Dark.textTertiary)] {
             let c = CodexTheme.WCAG.contrast(hex, darkPanel)
             check(c >= textFloor,
                   "T-COLOR 暗色 kind 标签当文字用达 AA 4.5 (\(name); 实测 \(String(format: "%.2f", c)):1)")
@@ -5650,7 +5650,7 @@ struct SmokeMain {
                 guard var dmNarrowed = dmRun.scheduledTasks.first(where: { SchedulerService.isDreamTask($0) })
                 else { report() }
                 let dmLogBefore = dmNarrowed.logSessionId
-                dmNarrowed.config = SessionConfig(provider: "p", modelId: "m", thinkingLevel: nil,
+                dmNarrowed.config = SessionConfig(provider: "openai", modelId: "o4-mini", thinkingLevel: nil,
                                                   agentMode: AgentMode.minimal.rawValue, askApproval: false)
                 dmRun.updateScheduled(dmNarrowed)
                 dmRun.runScheduledFire(dmNarrowed)

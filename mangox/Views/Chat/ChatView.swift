@@ -12,6 +12,60 @@ private struct ChatContentBottomKey: PreferenceKey {
     static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
 }
 
+// MARK: - 「滚到底」的节拍计划
+
+/// 「滚到底」的**节拍**（秒，相对提交那一拍）—— 第一拍立刻落，后面几拍是**复核**。
+///
+/// 为什么必须多于一拍（2026-10-21 实测，`/tmp/blank-probe`：真 `ChatView` + 794 事件的真实会话 +
+/// 一个"收到 prompt 就沉默"的 transport，逐帧取 `CGWindowListCreateImage` 的像素分布）：
+///
+/// - `scrollTo(anchor: .bottom)` 的目标位置是按 `LazyVStack` 的**估算**文档高算的。同一份数据
+///   实测读出过 **32,547** 和 **68,924**（≈2 倍）两种值，**6 次里 5 次是翻倍那个**。
+/// - 翻倍那几次，跟随落地的那几帧视口**什么都没画**：像素 **100% 纯底色 / 0% 墨迹**（整片白），
+///   而滚动条在轨道底 —— 正是 boss 报的「回车后整个对话区白掉」（10-20 他那张截图的实测
+///   底色 247 / 最暗 224 也是同一件事，当时被我读成"这块视图一帧都没画"）。
+/// - 紧跟一拍（哪怕还是同一个 `scrollTo`）就会重排一遍，内容立刻回来
+///   （实测 +0.05s 全白 → +0.08s 恢复）。⇒ **"落一次就算完" 是错的，落完必须复核**。
+///   0.1.27 只补了一拍、而且挂在补间结束回调上（那时布局还没落定），所以白屏照旧。
+///
+/// ⚠️ 别退回 `withAnimation`：补间的中间态按**动画插值**的布局算，实测落点差 100~260pt，
+///    且"动画结束"≠"布局落定"（复核等于白做）。瞬移 + 复核实测落点误差 **0.0pt**（改前 118~189pt）。
+///
+/// ⚠️ 独立成类型是为了**能被冒烟断言**（`CaseFollowBeats`）：退回 `[0]` 就是白屏会一直亮着。
+enum ChatFollowBeats {
+    static let plan: [Double] = [0, 0.04, 0.12, 0.30]
+}
+
+// MARK: - 折叠时机
+
+/// 一组的工具行**什么时候**折成一行收据 —— 纯函数，判据只住这里。
+///
+/// 折叠的触发本来是"后面又出现了一组"，也就是**用户回车的那一刻**。0.1.28 起把这一拍
+/// 让开：最后一组还是**光秃秃一条用户消息**（首 token 还没回来）时，上一组先保持展开。
+/// 两个理由（实测见 `/tmp/blank-probe`，`--w=760 --noforce`）：
+///
+/// ① 体感：折叠 = 把用户刚读完的那份答案当场收走，而他一回车正要拿新问题和旧答案对照。
+/// ② 白屏：折叠与"插入一条新用户消息"落在**同一拍**时，内容高度骤降，而同一拍的
+///    `scrollTo(anchor: .bottom)` 正拿 `LazyVStack` 的**估算**文档高定位 —— 估算当场放大
+///    到 3 倍（实测 `documentView` 32,389 → 93,333），视口落到内容之外，整屏只剩底色
+///    （像素：主色 #EEEEEE 95~100%、暗像素 0.00%、底空 538.5pt = 整个视口）。窄栏下不复原。
+///    把折叠推迟到"第一段正文回来"那一拍，同样的滚动就落得稳（实测 10 次 0 白屏，
+///    旧行为 4 次里 2 次白）。
+///
+/// ⚠️ 独立成类型是为了**能被冒烟断言**（`CaseFoldRule`）：判据散在 `projectedBlocks` 里
+///    就只能靠像素探针守，而探针不进仓库。
+enum ChatFoldRule {
+    /// - Parameters:
+    ///   - index: 组下标（0 起）
+    ///   - count: 组总数
+    ///   - tailIsLoneUserRow: 最后一组是不是**只有一条** `.user` 消息（还没长出任何回答）
+    static func keepOpen(index: Int, count: Int, tailIsLoneUserRow: Bool) -> Bool {
+        if index == count - 1 { return true }                       // 最后一组永不折叠
+        if tailIsLoneUserRow && index == count - 2 { return true }  // 等回答那一拍：上一组也先原样
+        return false
+    }
+}
+
 struct ChatView: View {
     @ObservedObject var store: ChatStore
     @State private var viewportHeight: CGFloat = 0
@@ -21,13 +75,7 @@ struct ChatView: View {
     /// 自动滚动同帧合并标记: 流式期同帧多个 chunk 只调度一次滚动 (防 "update multiple times per frame")。
     @State private var scrollScheduled = false
 
-    /// 自动跟随的**节流盒** (2026-10-19)。故意用引用类型: 写 `lastAt` 不该让 ChatView 重渲染 ——
-    /// 换成 `@State var lastAt: Date` 的话, 每次滚动都重算 body + 重建 `messageRows`(O(n)),
-    /// 而这条路径本来就是"高频工具连发"时最热的, 等于用一个抖动换一个卡顿。
-    private final class FollowThrottle { var lastAt: Date = .distantPast }
-    @State private var followThrottle = FollowThrottle()
-
-    /// 「这一拍跟随」的代号 —— 只为一件事：**补拍时判断有没有更新的一次跟随插进来**。
+    /// 「这一拍跟随」的代号 —— 只为一件事：**复核拍判断有没有更新的一次跟随插进来**。
     /// 引用语义不需要（它不参与布局），但必须能让补拍的闭包读到最新值 ⇒ 用 `@State`。
     @State private var followEpoch = 0
 
@@ -142,7 +190,7 @@ struct ChatView: View {
     ///    变成第二个自动跟随。
     private func jumpToLatestButton(_ proxy: ScrollViewProxy) -> some View {
         Button {
-            withAnimation(CodexTheme.animMed) { proxy.scrollTo(scrollTarget, anchor: .bottom) }
+            scrollToTail(proxy)
         } label: {
             Image(systemName: "arrow.down")
                 .font(.system(size: 13, weight: .semibold))
@@ -158,25 +206,26 @@ struct ChatView: View {
         .transition(.opacity.combined(with: .scale(scale: 0.9)))
     }
 
-    /// 「用户刚提交」这一拍的跟随：**先带补间到底，补间结束后再按新布局瞬移一次**。
+    /// 「滚到底」的**节拍** —— 第一拍立刻落，后面几拍是**复核**（实测依据见 `ChatFollowBeats`）。
+    private static var followBeats: [Double] { ChatFollowBeats.plan }
+
+    /// **「滚到底」的唯一实现** —— 初屏定位 / 换会话 / 提交跟随 / 回到最新 全走这里。
     ///
-    /// 补一拍的理由：折叠（高度骤降）与「滚到底」发生在**同一个事务**里 ⇒ 第一次 `scrollTo`
-    /// 的目标位置是按**折叠前**的布局算的。实测（真 ChatView + boss 那条 794 事件的真实会话，
-    /// 探针 `/tmp/realsess`）：落点确实没到「最后一块的底」，差 85~411pt。`documentView` 的高度
-    /// 是**估算值**、绝对值不能全信，但"落不到最后一块的底"每次都复现。
-    /// 补的那一拍跑在布局落定之后，目标按**新**布局算，落得准。
-    ///
-    /// ⚠️ 补拍要能被两件事否决：① 期间又来了更新的一次跟随（`followEpoch`）；
-    ///    ② 用户自己上滑了（`nearBottom` 转假）—— 那是 P9-#9「上滑阅读不拽回」，不许抢。
-    private func followAfterStructuralChange(_ proxy: ScrollViewProxy) {
+    /// ⚠️ 别在入口处各写一遍 `scrollTo`: 分头写就会分头漏掉复核（这个 bug 已经这样活了两个版本）。
+    /// - Parameter veto: 每一拍落之前问一句"还要不要落"。`followEpoch` 变化（有更新的一次跟随）
+    ///   永远是否决项；调用方再按语义追加：流式跟随要追加 `nearBottom`（P9-#9 上滑阅读不拽回），
+    ///   提交那一拍**不加**（我发了消息就要看它和回答，见 `onChange(of: store.messages)`）。
+    private func scrollToTail(_ proxy: ScrollViewProxy, veto: @escaping () -> Bool = { true }) {
         followEpoch += 1
         let epoch = followEpoch
-        followThrottle.lastAt = Date()
-        withAnimation(CodexTheme.animMed, completionCriteria: .logicallyComplete) {
-            proxy.scrollTo(scrollTarget, anchor: .bottom)
-        } completion: {
-            guard epoch == followEpoch, nearBottom else { return }
-            proxy.scrollTo(scrollTarget, anchor: .bottom)
+        for delay in Self.followBeats {
+            // 同一次调用里的每一拍是**同一件事**，所以只认 epoch 与本拍的 veto
+            let tap = {
+                guard epoch == followEpoch, veto() else { return }
+                proxy.scrollTo(scrollTarget, anchor: .bottom)
+            }
+            if delay == 0 { tap() }
+            else { DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: tap) }
         }
     }
 
@@ -209,9 +258,7 @@ struct ChatView: View {
                             preview: away.preview,
                             onJump: {
                                 store.dismissAwaySummary()
-                                withAnimation(CodexTheme.animMed) {
-                                    proxy.scrollTo(scrollTarget, anchor: .bottom)
-                                }
+                                scrollToTail(proxy)
                             },
                             onDismiss: { store.dismissAwaySummary() })
                             .frame(maxWidth: Tune.chatColumnWidth)
@@ -260,17 +307,11 @@ struct ChatView: View {
         //    同一个坑, 那次只修了 Trace, 漏了这里)。改 onAppear 定位; 流式跟随由下面
         //    onChange(of: store.messages) 管。
         .onAppear {
-            DispatchQueue.main.async {
-                proxy.scrollTo(scrollTarget, anchor: .bottom)
-            }
+            DispatchQueue.main.async { scrollToTail(proxy) }
         }
         .onChange(of: store.selectedConversationId) { _, _ in
             // 换会话: replay 内容整批替换, 兜底滚到最新 (首帧 onAppear 之外的双保险)
-            DispatchQueue.main.async {
-                withAnimation(nil) {
-                    proxy.scrollTo(scrollTarget, anchor: .bottom)
-                }
-            }
+            DispatchQueue.main.async { scrollToTail(proxy) }
         }
         .onChange(of: store.messages) { old, new in
             // 流式 chunk 高频到达, 同帧多次触发会报 "update multiple times per frame";
@@ -280,37 +321,22 @@ struct ChatView: View {
             //    @State 本身就会让 SwiftUI 判成"同帧多次更新", 光靠守卫挡不住刷新警告 (见 :64 同款教训)。
             //
             // ⚠️ 2026-10-20 **"用户刚提交"是这条守卫唯一的例外**（boss 报「回车后整个界面白掉，
-            //    直到 llm 有返回才正常」）。理由是结构性的，不是为某个症状打的补丁：
-            //    回车 ⇒ 上一组从「最后一组」变成「倒数第二组」⇒ **当场折叠 ⇒ 内容高度骤降**。
-            //    而 `nearBottom` 是**几何判据**，它分不出「高度变了」和「用户上滑了」——
-            //    在这一拍它读到什么都可能，可**语义是确定的**：我刚发了消息，就要看它和回答。
-            //    ⇒ 提交这一拍不吃守卫。其余每一拍（流式 / 工具 / 压缩标记…）照旧吃守卫。
+            //    直到 llm 有返回才正常」理由另有一条，见 `scrollToTail` 的实测注释：落点会落进
+            //    "什么都没画"的区域）。`nearBottom` 是**几何判据**，它分不出「高度变了」和
+            //    「用户上滑了」—— 在这一拍它读到什么都可能，可**语义是确定的**：我刚发了消息，
+            //    就要看它和回答。⇒ 提交这一拍不吃守卫，其余每一拍（流式 / 工具 / 压缩标记…）照旧吃。
             let justSent = new.last?.role == .user && old.last?.id != new.last?.id
             DispatchQueue.main.async {
-                if justSent {
-                    guard !scrollScheduled else { return }
-                    scrollScheduled = true
-                    followAfterStructuralChange(proxy)
-                    DispatchQueue.main.async { scrollScheduled = false }
-                    return
-                }
-                guard nearBottom, !scrollScheduled else { return }
+                guard !scrollScheduled else { return }
                 scrollScheduled = true
-                // ⚠️ 2026-10-19: **连发时不做补间**。一个工具卡从出现到完成要 emit 4 次
-                //    (`toolcall_start` / `toolcall_end` / `tool_execution_start` / 结束), 快速
-                //    工具把这 4 次压进几十毫秒 ⇒ 0.25s 的补间互相打断 ⇒ 整屏内容来回抖, 看着
-                //    就是"闪烁"。判据 = 距上次自动跟随不足一个补间时长 ⇒ 这一拍直接瞬移
-                //    (高频位移下人眼分辨不出补间, 只看得出"抖"; 瞬移反而干净)。
-                //    慢工具间隔够长, 仍走补间 ⇒ 手感一字不变。
-                let now = Date()
-                let burst = now.timeIntervalSince(followThrottle.lastAt) < 0.3
-                followThrottle.lastAt = now
-                if burst {
-                    proxy.scrollTo(scrollTarget, anchor: .bottom)
+                // ⚠️ 2026-10-19 起这里**不再做补间**（原先连发时降级瞬移、慢工具走 0.25s 补间）。
+                //    两个理由，都是实测：① 补间的中间态按**动画插值**的布局算 ⇒ 落点差 100~260pt；
+                //    ② 带补间的落点**没法复核**（复核那一拍会打断补间）。现在统一走 `scrollToTail`
+                //    的"瞬移 + 复核"，高频位移下人眼分辨不出补间丢失的那点顺滑。
+                if justSent {
+                    scrollToTail(proxy)
                 } else {
-                    withAnimation(CodexTheme.animMed) {
-                        proxy.scrollTo(scrollTarget, anchor: .bottom)
-                    }
+                    scrollToTail(proxy, veto: { nearBottom })   // P9-#9: 用户上滑了就停手
                 }
                 DispatchQueue.main.async { scrollScheduled = false }
             }
@@ -355,7 +381,9 @@ struct ChatView: View {
 
     // MARK: - 投影: 已完成组里「两段正文之间」的工具行 → 一行收据
 
-    /// 一组的**完成**判据 = 后面还有一组（下一句用户消息 / 一个压缩标记）。
+    /// 一组的**完成**判据 = 后面还有一组（下一句用户消息 / 一个压缩标记），**且后面那组已经长出行来**
+    /// （0.1.28: 只剩一句孤零零的用户消息不算"完成"，那一拍先不折 —— 理由见 `projectedBlocks` 里
+    /// `awaitingReply` 的注释：体感 + 白屏引信）。
     ///
     /// ⇒ **最后一组永不折叠**。它要么正在跑、要么刚答完还没被下一句顶走 ——
     ///   折它有两个病：① 答案刚读完、工具行就地收掉的跳动；
@@ -404,11 +432,21 @@ struct ChatView: View {
             }
         }
 
+        // 最后一组是不是**光秃秃一条用户消息**（刚回车、首 token 还没回来）——
+        // 是的话，上一组这一拍先别折（判据与实测理由都在 `ChatFoldRule`）。
+        // ⚠️ 只认"最后一组没有属于它自己的行", 不认 `isStreaming`: 后者要等 `beginTurn` 才为真，
+        //    而 `streamStarted` 之前那一小段同样是"只有一句新话"。残缺状态（回合失败 / 中断）下
+        //    这一组会一直停在"一条用户消息", 上一组也就一直展开 —— 宁可多露一段答案, 也不白屏。
+        let tail = groups[groups.count - 1]
+        let awaitingReply = groups.count > 1 && tail.count == 1 && tail[0].message.role == .user
+
         var out: [ChatBlock] = []
         out.reserveCapacity(rows.count)
 
         for (gi, group) in groups.enumerated() {
-            guard gi < groups.count - 1 else {          // 最后一组：原样
+            let keepOpen = ChatFoldRule.keepOpen(index: gi, count: groups.count,
+                                                 tailIsLoneUserRow: awaitingReply)
+            guard !keepOpen else {
                 out.append(contentsOf: group.map { .row($0, headTaken: false) })
                 continue
             }
@@ -669,6 +707,11 @@ struct MessageBlockView: View {
     /// 滚出屏再滚回来、或换会话, 都回到折叠态。有意如此 —— 同 `ThinkingCardView` 的取舍,
     /// "上次点开过"不该变成全局默认。
     @State private var userExpanded = false
+    /// P19 「分享」按钮的四态 —— 点了立刻回报, **失败不许静默** (失败是一个词, 不是没反应)。
+    private enum ShareState { case idle, copied, tooLong, failed }
+    @State private var shareState: ShareState = .idle
+    /// 分享图的配色跟随当前外观 (`adaptive()` 是动态色, 离屏渲染必须显式给环境)。
+    @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
         VStack(alignment: .leading, spacing: 3) {
@@ -829,6 +872,14 @@ struct MessageBlockView: View {
         HStack(spacing: 10) {
             footerButton("doc.on.doc", "复制", label: "复制") { copyToPasteboard(raw) }
 
+            // P19: 分享 = 这条正文渲染成图片进剪贴板 (不弹窗、不落盘、不发任何对外请求)。
+            // 只给助手消息 —— 用户消息的内容本来就在他手上, 要分享也是转发截图。
+            if message.role == .assistant {
+                footerButton(shareIcon, "把这条回复存成图片放进剪贴板", label: LK(shareLabel)) {
+                    shareAsImage(raw)
+                }
+            }
+
             // P3.7: 保存为记忆 (沉淀为全局知识条目, 带会话溯源)
             footerButton("bookmark", "保存为记忆", label: "记忆") {
                 store.saveAsMemory(raw, sessionId: store.selectedConversationId)
@@ -881,6 +932,46 @@ struct MessageBlockView: View {
     private func copyToPasteboard(_ s: String) {
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(s, forType: .string)
+    }
+
+    // MARK: - 分享成图片 (P19)
+
+    /// 图标先变 (一眼看出"成了/没成"), 文字再说清是哪一种。
+    private var shareIcon: String {
+        switch shareState {
+        case .idle:                    return "photo.on.rectangle"
+        case .copied:                  return "checkmark"
+        case .tooLong, .failed:        return "exclamationmark.triangle"
+        }
+    }
+
+    /// ⚠️ 用 `L()` 取词 + 调用处 `LK()` 包一层 —— 与 `ToolPhase.label` 同款。
+    /// 直接把中文塞进 `LocalizedStringKey` 属性也能工作, 但会落进接线门的"未接线"一类
+    /// (它只看字面量开引号前的前缀), 白白多一条要人分诊的假阳性。
+    private var shareLabel: String {
+        switch shareState {
+        case .idle:      return L("分享")
+        case .copied:    return L("已复制图片")
+        case .tooLong:   return L("太长 · 改用复制")
+        case .failed:    return L("出图失败")
+        }
+    }
+
+    /// 出图 + 进剪贴板。实测同步 **180ms(短回复) ~ 460ms(顶到 2100pt 上限)** —— **不拆 async**:
+    /// 拆了只是把卡顿藏到下一帧, 这段时间里 UI 一行都不变; 真嫌顿再加"生成中"态 (代价是多一条文案)。
+    /// ⚠️ 上限从 750 抬到 2100 之后, 最坏耗时翻了一倍多 —— 上面这行数字要跟着 `shareMaxHeight` 走。
+    private func shareAsImage(_ raw: String) {
+        switch MessageImageShare.copyImage(
+            text: raw,
+            basePath: store.activeProjectPath,
+            caption: message.timestamp.formatted(date: .numeric, time: .shortened),
+            dark: colorScheme == .dark) {
+        case .copied:   shareState = .copied
+        case .tooLong:  shareState = .tooLong
+        case .failed:   shareState = .failed
+        }
+        // 1.8 秒回常态 —— 按钮 hover 才现, 不回落的话下次 hover 还挂着上一句话
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.8) { shareState = .idle }
     }
 
     // MARK: - 用户消息块

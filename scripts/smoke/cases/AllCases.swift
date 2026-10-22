@@ -16,17 +16,33 @@ import Foundation
 extension SmokeMain {
     /// 登记表: 顺序即执行顺序。每个 case **必须自带夹具**（用 `fixtureDir`），
     /// 不得依赖 `run()` 里的任何局部变量 —— 那些变量不属于你。
+    ///
+    /// ⚠️ 用例内部**不许**调 `report()` —— 它是"收尾 + exit"，只属于整个 run 的末尾。
+    /// 写在某个 case 结尾，`registeredCases` 就从那一条起**被静默截断**，而日志照样 "ALL PASS"
+    /// （2026-10-21 实测：`caseFollowBeats` 结尾那句 `report()` 让后面登记的 T-FOLD 一条没跑、
+    /// 1498 条 PASS 全绿）。⇒ `casesRemaining` 会在 `report()` 里把这件事变成红灯。
+    static var casesRemaining = 0
+
     @MainActor
     static var registeredCases: [@MainActor () async -> Void] {
         [
             caseUserMessageFold,
             caseToolRun,
             caseSessionTitlePersist,
+            caseEmptyTurn,
+            caseModelPin,
+            caseFollowBeats,
+            caseFoldRule,
         ]
     }
 
     @MainActor
     static func runRegisteredCases() async {
-        for one in registeredCases { await one() }
+        let all = registeredCases
+        casesRemaining = all.count
+        for one in all {
+            await one()
+            casesRemaining -= 1
+        }
     }
 }

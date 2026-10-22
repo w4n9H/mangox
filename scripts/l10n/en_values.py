@@ -930,4 +930,20 @@ VALUES = {
         'This session has no messages yet — the side chat will start empty.',
     '将带上 %lld 轮源会话上下文': 'Carries %lld turns of source context',
     '由此处侧问': 'Start side chat',
+    # ── 2026-10-21 空回合 (P18: 引擎正常收尾却零产出) ──
+    #  ⚠️ 两条**分开写**而不是一条带可选占位符: 一个字符串只放一个占位符 (本仓 L10n 硬规矩)。
+    #  第一句点名模型 (它才是"为什么空"的答案), 第二句只能给下一步线索 —— 没有名字可点。
+    '引擎返回了空回合 · 模型 %@ 可能不存在或已下线':
+        'The engine returned an empty turn · model %@ may not exist or is no longer available',
+    '引擎返回了空回合 · 引擎没有返回任何内容, 请检查模型与凭据':
+        'The engine returned an empty turn — nothing came back; check the model and credentials',
+    # ── 2026-10-22 分享成图片 (P19: 正文 → 图片 → 剪贴板) ──
+    #  ⚠️ 三条**分开写**: 按钮的四态各是一句话 (分享 / 已复制图片 / 太长 / 出图失败),
+    #     不拼成一条带占位符的 —— 状态词不该靠插值拼出来, 拼出来就没法各语言分别措辞。
+    #  `太长 · 改用复制` 里的"复制"指的是**左边那个「复制」按钮** (分享不出来时它是出口)。
+    '分享': 'Share',
+    '已复制图片': 'Image copied',
+    '太长 · 改用复制': 'Too long · copy text',
+    '出图失败': 'Could not create the image',
+    '把这条回复存成图片放进剪贴板': 'Save this reply as an image on the clipboard',
 }

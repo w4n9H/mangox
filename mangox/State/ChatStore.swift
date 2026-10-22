@@ -1022,8 +1022,7 @@ final class ChatStore: ObservableObject {
         }
         suppressConfigStamp = true
         defer { suppressConfigStamp = false }
-        let known = model.menuModels.isEmpty ||
-            model.menuModels.contains { $0.provider == cfg.provider && $0.id == cfg.modelId }
+        let known = isKnownModel(provider: cfg.provider, modelId: cfg.modelId)
         if known {
             currentProvider = cfg.provider
             currentModelId = cfg.modelId
@@ -1778,6 +1777,17 @@ final class ChatStore: ObservableObject {
     /// 菜单全集 (自管优先, 回落 pi 上报目录; 纯模型列表 —— 级别的笛卡尔积展开已删)。
     var menuModels: [AgentModelInfo] { model.menuModels }
 
+    /// 「这个 provider/id 还在不在模型清单里」—— **判据只此一处**, 两个消费点:
+    ///   ① `applySessionConfig` —— 会话恢复时模型已被删 ⇒ 只恢复其余项, 不动当前模型;
+    ///   ② `SchedulerService.runScheduledFire` —— fire 前拦下已经下线的 pinned 模型。
+    ///
+    /// **清单为空 = 无从判断 ⇒ 一律放行**: 探针还没回报时把所有定时任务一起拦掉,
+    /// 是比"放过去"更坏的 bug（拦了不 fire, 用户还不知道为什么）。
+    func isKnownModel(provider: String, modelId: String) -> Bool {
+        let known = model.menuModels
+        return known.isEmpty || known.contains { $0.provider == provider && $0.id == modelId }
+    }
+
     /// 当前选中组合 (composer 药丸初值)。
     var currentChoice: ModelChoice { model.currentChoice }
 
@@ -2210,6 +2220,25 @@ extension ChatStore: AgentTransportDelegate {
             // P6.1.2: 过程态胶囊 (仅前台会话; 切会话由 selectConversation 重置)
             guard inView else { break }
             runtimePhase = phase
+
+        case .emptyTurn(let model):
+            // 2026-10-21 (空回合): 引擎正常收尾却零产出 —— 生产上这曾经**完全静默**（实测:
+            // 模型下线 ⇒ API 404 ⇒ pi 把它吃成空回合）。这里落一条**持久化**的事实行:
+            // 这条会话回看时必须看得见"这一回合跑过、什么都没回"，否则它就等于没发生过。
+            //
+            // ⚠️ 文案取词在**写入时**（同 `setTurnLimitNotice`），不另造 `MessageContent` case:
+            //    这是一条诊断记录，不是用户要拿来对账的字段（对照 P6 的压缩标记 —— 那个存的是
+            //    tokensBefore/After 这类**证据数字**，所以它必须结构化）。
+            let text = model.map {
+                String(format: L("引擎返回了空回合 · 模型 %@ 可能不存在或已下线"), $0)
+            } ?? L("引擎返回了空回合 · 引擎没有返回任何内容, 请检查模型与凭据")
+            let msg = ChatMessage(role: .system, content: .text(text))
+            if inView {
+                messages.append(msg)
+            } else {
+                liveTurns[sid, default: []].append(msg)   // 后台会话: 随镜像迁移并入 (库为准)
+            }
+            persistMessage(msg, sid: sid)
 
         case .streamEnded:
             runningTurns.remove(sid)

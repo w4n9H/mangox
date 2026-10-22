@@ -45,6 +45,14 @@ final class PiRpcTransport: AgentTransport {
 
     // 回合状态
     private var turnActive = false
+    /// 本回合是否产出过内容（正文 / 思考 / 工具卡）。**在 `emit` 里置位** ⇒ 漏不掉任何一种
+    /// （`.toolUpdated` 一个事件就有五处 emit，逐处置位迟早漏一个）。
+    private var turnProducedOutput = false
+    /// 本回合有没有真的 `agent_start`。`prompt` 响应的 `handled` disposition 会**直接落定**
+    /// 且根本没有 run（见 `settleTurn` 注释）—— 那种零产出是正常语义，不是引擎出错。
+    private var turnSawAgentStart = false
+    /// 本回合是不是用户自己按了停。停了之后零产出是**预期**，不该报"空回合"。
+    private var turnUserAborted = false
     /// P6.0①: 最近一次 agent_end 的 willRetry (P6.1.2 过程态消费; 冒烟断言用 internal)。
     internal private(set) var lastWillRetry = false
     /// P6.0②冒烟: sendCommand 副本 (无进程时 sendCommand 为 no-op, 日志即可断言"未回 response")。
@@ -990,6 +998,9 @@ final class PiRpcTransport: AgentTransport {
         ensureProcessForCwd()
         guard process != nil else { return } // 启动失败: 本回合静默, UI 由 ChatStore 层守卫
         turnActive = true
+        turnProducedOutput = false
+        turnSawAgentStart = false
+        turnUserAborted = false
         textMessageID = nil
         thinkMessageID = nil
         toolCards.removeAll()
@@ -1008,6 +1019,8 @@ final class PiRpcTransport: AgentTransport {
     }
 
     func cancel() {
+        // 用户停 = 零产出是预期的 ⇒ 不许被空回合判据算成"引擎出错"（同 Store 侧 elapsed==nil 的语义）
+        turnUserAborted = true
         sendCommand(["type": "abort"])
     }
 
@@ -1572,6 +1585,7 @@ final class PiRpcTransport: AgentTransport {
         switch dict["type"] as? String {
         case "agent_start":
             turnActive = true
+            turnSawAgentStart = true
             emit(.phaseChanged(.streaming))   // P6.1.2: 过程态胶囊
             emit(.streamStarted)
 
@@ -1720,6 +1734,14 @@ final class PiRpcTransport: AgentTransport {
         case "agent_settled":
             // P6.0①: 会话级彻底落定 (无重试/压缩重试/排队后续) — 唯一拆进程点。
             guard turnActive else { return }
+            // 2026-10-21 (空回合): 零产出判据**只挂在这条路上**。`settleTurn` 的另一个调用点是 `prompt` 的
+            // `handled` disposition —— 那一路"根本没有 run"（扩展就地吃掉了输入），
+            // 零产出是**正常语义**，挂在那里会把它误报成引擎出错。
+            // 顺序在 `settleTurn` 之前 = 在 `streamEnded` 之前: 落定之后 Store 已丢弃本回合的
+            // 镜像容器, 后台会话（fire / dream）那条提示就无处可去（只有库里有, 界面要等重放）。
+            if turnSawAgentStart, !turnProducedOutput, !turnUserAborted {
+                emit(.emptyTurn(model: desiredModel))
+            }
             settleTurn()
 
         // ---- P6.1.2: 过程态事件 (rpc.md §auto_retry/compaction/queue/summarization) ----
@@ -2134,7 +2156,15 @@ final class PiRpcTransport: AgentTransport {
             costUSD: (data["cost"] as? [String: Any]).flatMap { dbl($0["total"]) })
     }
 
+    /// ⚠️ 这里是"本回合有没有产出"的**唯一定义处**。判据挂在事件上、不挂在各个解析分支上 ——
+    /// 否则迟早有一个分支忘了置位（`.toolUpdated` 就有五处 emit）。
     private func emit(_ event: AgentEvent) {
+        switch event {
+        case .textChunk, .thoughtChunk, .toolUpdated, .toolPhaseChanged:
+            turnProducedOutput = true
+        default:
+            break
+        }
         delegate?.transport(self, didEmit: event)
     }
 

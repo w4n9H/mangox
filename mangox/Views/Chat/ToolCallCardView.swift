@@ -50,19 +50,25 @@ struct ToolCallCardView: View {
         return tool.phase == .awaitingApproval && !decided
     }
 
-    /// **类别色**（回答"这是什么"）：恒冷蓝。
+    /// **类别色**（回答"这是什么"）：**中性**（2026-10-21 boss：「左侧配色太鲜艳」）。
     ///
-    /// ⚠️ 有意**不随相态变** —— 一变，「蓝 = 工具行」这条一眼可辨的规则就废了；而且相态已经由
-    /// 右侧 badge 说清楚了，颜色再说一遍是**同一信息说两次**。改前按相态取色（`.done` 一律
-    /// `textSecondary` 灰）会把"跑完了"读成"这条不重要"。
-    private var kindColor: Color { CodexTheme.info }
+    /// 改前是冷蓝 `info`（亮色 S92% / 4.89:1），一屏 6 行就是 6 组彩色文字 —— 那才是"鲜艳"的主因,
+    /// 2pt 竖条只是配角。现在它只是**标签**：`textTertiary`（亮 4.86 / 卡 4.57，仍过 AA 4.5）
+    /// + 等宽小字 + 字距，靠**字形差**而不是色相说"我是个标签"。
+    /// ⚠️ 判据是 **颜色只给状态**：类别不上色，出错/待审批/运行中才上色（见 `railColor` / `phaseBadge`）。
+    private var kindColor: Color { CodexTheme.textTertiary }
 
     /// **竖条 / chevron 的色**（回答"到了哪一步"）：只有"出事了"才破例转红。
     ///
+    /// 竖条是**装饰**（`railNeutral`，亮 1.46）—— 它不承载信息，所以也不该抢眼。
+    /// chevron 是**可点控件**，归 WCAG 图形元素 3:1，跟 `textMuted`（亮 3.21）走，不跟竖条。
+    /// ⚠️ 两者**不是同一档**，别合并成一个常量。
     /// ⚠️ 破例**只给图形元素**：`toolError` 在暗色下只有 3.98:1 —— 过得了图形元素的 3:1，
     /// **过不了文字的 4.5:1**。所以红色**不许**上 `kind` 文字（那会跌 AA）。
     /// 由 `palette_probe.py` 与冒烟 T-COLOR 两份实现分别守着这条线。
-    private var railColor: Color { needsAttention || denied ? CodexTheme.toolError : kindColor }
+    private var isAlert: Bool { needsAttention || denied }
+    private var railColor: Color { isAlert ? CodexTheme.toolError : CodexTheme.railNeutral }
+    private var glyphColor: Color { isAlert ? CodexTheme.toolError : CodexTheme.textMuted }
 
     /// 展开规则（2026-10-13 boss 定）：**只有两件事值得自动展开 —— 出错、以及"需要你拍板"**。
     ///
@@ -78,8 +84,9 @@ struct ToolCallCardView: View {
     var body: some View {
         HStack(alignment: .top, spacing: 0) {
             // 100% 不透明（暗色下 0.85 会把冷蓝从 6.21 压到 4.91，没必要）。
-            // 与思考竖条的 `thinking.opacity(0.7)` **有意不同**：工具行承担"我干了什么"，
-            // 比"我想了什么"更该看清。
+            // 2026-10-21: 与思考竖条**同色同透明度**了（都是 `railNeutral`）—— 改前工具条比
+            // 思考条实一档，是因为它们曾经是两种彩色（蓝 / 琥珀），要靠明度再分一次"谁更重要"。
+            // 现在两者都是中性装饰，再分就是无缘无故的差别。
             Rectangle()
                 .fill(railColor)
                 .frame(width: 2)
@@ -105,11 +112,15 @@ struct ToolCallCardView: View {
             HStack(spacing: 6) {
                 Image(systemName: expanded ? "chevron.down" : "chevron.right")
                     .font(.system(size: 9, weight: .semibold))
-                    .foregroundStyle(railColor)
+                    .foregroundStyle(glyphColor)
                     .frame(width: 12)
 
+                // 等宽小字 + 字距 = **标签感**（不用中文小标，也不上色）。
+                // ⚠️ 别改成大写 (`BASH`): `kind.label` 是 `rawValue`（`ToolCall.swift:51`），
+                //    轨迹视图那边仍按原样显示 —— 大写化会让两个视图分叉。
                 Text(tool.kind.label)
-                    .font(.system(size: 12, weight: .semibold))
+                    .font(CodexTheme.fontMonoXs)
+                    .tracking(0.4)
                     .foregroundStyle(kindColor)
 
                 Text(tool.title)
@@ -301,32 +312,38 @@ struct ToolCallCardView: View {
     private var phaseBadge: some View {
         switch tool.phase {
         case .running:
-            // 运行中的圈与字**都用冷蓝**（类别色）—— 改前用琥珀 `toolRunning`, 那与思考行
-            // 撞色; 「琥珀垄断给思考」是 P16 定的分工。
+            // ⚠️ 2026-10-21 修订 P16：**琥珀回来了**。当年定「冷蓝」是因为工具行整体是冷蓝、
+            // 思考行是琥珀 —— 琥珀上工具行就是"两个类别撞色"。现在两边的类别色都撤成中性灰,
+            // 琥珀只剩一个意思：**在跑**（工具行「运行中」/ 思考行「思考中…」同一语义）。
+            // ⇒ 颜色只给状态, 这里正是状态, 而冷蓝已不再是任何东西的颜色。
             HStack(spacing: 4) {
                 ProgressView()
                     .controlSize(.mini)
                     .scaleEffect(0.55)
-                    .tint(CodexTheme.info)
+                    .tint(CodexTheme.toolRunning)
                 Text(tool.phase.label)
                     .font(CodexTheme.fontMonoXs)
-                    .foregroundStyle(CodexTheme.info)
+                    .foregroundStyle(CodexTheme.toolRunning)
             }
         case .done:
-            HStack(spacing: 6) {
-                if let ms = tool.durationMs {
-                    // verbatim: Text 字符串插值走 LocalizedStringKey 会给 Int 加千位分隔符
-                    // (6533 → "6,533ms"); ≥1s 换算成 x.xs 更易读
-                    Text(verbatim: ms >= 1000 ? String(format: "%.1fs", Double(ms) / 1000) : "\(ms)ms")
-                        .font(CodexTheme.fontMonoXs)
-                        .foregroundStyle(CodexTheme.textTertiary)
-                        // 数字等宽: `16ms` / `999ms` / `1.2s` 逐字宽度一致 ⇒ 耗时出现与变化
-                        // 都不会改变徽标的内容宽 (定宽只是兜底, 这条让数字本身不抖)
-                        .monospacedDigit()
-                }
+            // ⚠️ 2026-10-21：**完成态不再写「完成」**，右端只留耗时。
+            // 理由：它是右对齐定宽列，只有数字才对齐成一条竖线 —— 那一列就是行的骨架
+            // （"不加小标就太单薄"的解药）。字与数字混排时，长短不一的词会把列读成一堆碎块。
+            // 判据没丢：转圈消失、耗时出现 = 跑完了；出错/待审/运行中各有自己的字与色。
+            // ⚠️ 没有耗时（旧数据 / 引擎没回）时**退回**「完成」—— 否则那一格是空的，什么也没说。
+            if let ms = tool.durationMs {
+                // verbatim: Text 字符串插值走 LocalizedStringKey 会给 Int 加千位分隔符
+                // (6533 → "6,533ms"); ≥1s 换算成 x.xs 更易读
+                Text(verbatim: ms >= 1000 ? String(format: "%.1fs", Double(ms) / 1000) : "\(ms)ms")
+                    .font(CodexTheme.fontMonoXs)
+                    .foregroundStyle(CodexTheme.textTertiary)
+                    // 数字等宽: `16ms` / `999ms` / `1.2s` 逐字宽度一致 ⇒ 耗时出现与变化
+                    // 都不会改变徽标的内容宽 (定宽只是兜底, 这条让数字本身不抖)
+                    .monospacedDigit()
+            } else {
                 Text(tool.phase.label)
                     .font(CodexTheme.fontMonoXs)
-                    .foregroundStyle(CodexTheme.toolDone)
+                    .foregroundStyle(CodexTheme.textTertiary)
             }
         case .awaitingApproval:
             // 本地已表态 ⇒ **不再写「待审批」**（agent 那边可能还没回，但用户已经拍过板了）

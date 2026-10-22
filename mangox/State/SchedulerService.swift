@@ -36,6 +36,11 @@ final class SchedulerService: ObservableObject {
     /// ① 收口时发一句「dream 完成: N 条待审」到会话横幅（否则用户在侧栏看着自己那场会话，
     ///    永远不知道后台已经跑完）；② 完成后从字典里清掉，免得下次定时那轮被当成定向。
     private var dreamTargets: [UUID: UUID] = [:]
+    /// 2026-10-21 (空回合): 「这个任务的 pin 模型已经不在清单里」这条事实**上次是为哪个 pin 记的**。
+    /// 任务 id -> `provider/modelId`。作用只有一个: 断掉的 pin 是**常态**（模型下线后不会自己
+    /// 回来）, 每个 cron 点都往日志里写同一行会让那场会话被刷成一片同样的字。
+    /// 值变了才再记一笔 ⇒ 改过模型又坏掉时仍然看得见（不会因为"记过"而永久闭嘴）。
+    private var modelBlockNoted: [UUID: String] = [:]
 
     private weak var store: ChatStore?
     func attach(_ store: ChatStore) { self.store = store }
@@ -636,6 +641,32 @@ final class SchedulerService: ObservableObject {
             recordFireSkip(task, at: now, reason: "并发已满 (\(store.maxConcurrentTurns))")
             return
         }
+        // 2026-10-21 (空回合): fire 前校验 pinned 模型还在不在清单里 —— **不在就不 fire**。
+        // 为什么非拦不可（2026-10-21 实测，不是推断）: 这条路的后半段是**彻底静默**的。
+        // 模型下线后 pi 只 warn 一句 `Using custom model id` 照旧发请求, API 打回 404,
+        // 而 pi 把这个 404 **吃成一个空回合**（`agent_settled` 且 assistant content 为空）⇒
+        // 日志会话里只有那一大段 prompt, 之后一个字都没有、一条错都没有。用户看到的就是
+        // "点了 dream, 之后没任何反应"。拦在这里至少留下**名字**: 哪一次、pin 的是哪个模型。
+        // 清单为空 = 无从判断 ⇒ 放行（判据见 `ChatStore.isKnownModel`）。
+        if let cfg = task.config, !cfg.modelId.isEmpty,
+           !store.isKnownModel(provider: cfg.provider, modelId: cfg.modelId) {
+            let pin = cfg.provider + "/" + cfg.modelId
+            // 同一个断掉的 pin 每个 cron 点都会走到这里 ⇒ 只在**换了 pin** 时再记一笔
+            if modelBlockNoted[task.id] != pin {
+                modelBlockNoted[task.id] = pin
+                appendTimeline("── \(fmt.string(from: now)) 未运行 (模型 \(pin) 不在模型清单里, 去定时页重选模型) ──", to: logId)
+            }
+            // 日志会话要**当场绑给任务**: 这条路径 return 在下面那段"推进 lastRunAt / 绑日志会话"
+            // 之前, 不绑的话每个 cron 点都会新建一场会话再往里写同一行 —— 那条记录会被撒进
+            // 一堆互不相干的会话里, 而任务自己永远指向 nil（下次照样新建）。
+            if let i = scheduledTasks.firstIndex(where: { $0.id == task.id }),
+               scheduledTasks[i].logSessionId != logId {
+                scheduledTasks[i].logSessionId = logId
+                try? store.persistence?.upsertScheduled(scheduledTasks[i])
+            }
+            return
+        }
+        modelBlockNoted.removeValue(forKey: task.id)   // 跑得起来了: 下次再断要重新留痕
         // 时间线锚点 + prompt 落库 (用户正看着日志会话则同步上屏)
         let viewing = store.selectedConversationId == logId
         // P15.9: 定时与定向**共用这一条**日志会话 ⇒ 分隔行必须当场分得开。两种运行长得一模一样的
