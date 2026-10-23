@@ -138,10 +138,36 @@ if ! grep -qE 'projectedChat\.blocks\.last\.map \{ AnyHashable' mangox/Views/Cha
     echo "       只锚末尾哨兵会在切换后落进估算出来的空尾 = 白屏 (实测 y=50719 纯白)" >&2
     exit 1
 fi
-if ! grep -A4 -E 'for \(i, delay\) in Self\.followBeats\.enumerated\(\)' mangox/Views/Chat/ChatView.swift \
+if ! grep -A9 -E 'for \(i, delay\) in Self\.followBeats\.enumerated\(\)' mangox/Views/Chat/ChatView.swift \
         | grep -qE 'if i == 0'; then
     echo "FAIL - 「滚到底」的节拍没有分两段 (followBeats 循环里第一拍 i == 0 必须锚 materializeTarget)" >&2
     echo "       顺序反了 = 每一拍都按虚高文档落点 = 白屏; 只改注释不算, 这门看的是真源码" >&2
+    exit 1
+fi
+# ③f 流式期的锚点必须是**懒栈的孩子**（流式指示器），不能是末尾哨兵。
+#     哨兵 `tailAnchor` 是 `LazyVStack` 的**兄弟** ⇒ `scrollTo` 只能吃"整条懒栈的总高估算"；
+#     指示器在懒栈**里面** ⇒ `scrollTo` 会为它把前面的行实例化出来，落点用的是**量出来的**高度。
+#     0.1.30 实测（真机 · 长回复）：流式期估算 doc=**22263** / 落定后真实 **13245**，差 **9018pt**
+#     ⇒ 视口停在内容**下方** = 整片白，而且视口下方没有行被实例化，这个估算**永远不会自我纠正**
+#     （boss 报「回车后白屏，连对话完成后都不显示，切一次会话才好」）。
+#     ⚠️ 两条写法都编译得过、没有任何数值会变、也没有断言会红 ⇒ 只能扫源码事实。
+FOLLOW_LOOP=$(grep -A20 'for (i, delay) in Self.followBeats.enumerated()' mangox/Views/Chat/ChatView.swift)
+if ! echo "$FOLLOW_LOOP" | grep -qE 'target = Self\.streamingAnchor'; then
+    echo "FAIL - 流式期的锚点不是 Self.streamingAnchor (锚哨兵 = 吃总高估算 = 白屏, 实测差 9018pt)" >&2
+    echo "       指示器是懒栈的孩子才量得出真实落点; 只改注释不算, 这门看的是真源码" >&2
+    exit 1
+fi
+if ! grep -qE '\.id\(Self\.streamingAnchor\)' mangox/Views/Chat/ChatView.swift; then
+    echo "FAIL - 流式指示器上没有 .id(Self.streamingAnchor) (锚一个不存在的 id = 静默不滚 = 白屏)" >&2
+    exit 1
+fi
+# ③g 静止态那一拍必须先锚尾块，而且判据是**尾块身份**（`materialize != materializedTail`），
+#     不是"要不要量"的布尔开关 —— 开关在回车那一刻早就 false 了，尾块却换了（多一条用户消息）
+#     ⇒ 只锚哨兵 ⇒ 落进估算出来的空尾。0.1.30 实测：改成身份判据前，回车必白。
+#     反过来的写法（无判据、每拍都先锚尾行）会让流式期每个 token 都 28pt 来回弹 = **刷屏**。
+if ! echo "$FOLLOW_LOOP" | grep -qE 'materialize != materializedTail'; then
+    echo "FAIL - 静止态第一拍缺尾块身份判据 (应为 `materialize != materializedTail`)" >&2
+    echo "       少了它 = 每拍都先锚尾行再锚哨兵, 28pt 来回弹 = 刷屏 (0.1.30 实测)" >&2
     exit 1
 fi
 

@@ -79,6 +79,19 @@ struct ChatView: View {
     /// 引用语义不需要（它不参与布局），但必须能让补拍的闭包读到最新值 ⇒ 用 `@State`。
     @State private var followEpoch = 0
 
+    /// **上一次已经把哪个尾块量过** —— 判据是"尾块 id 变了没有"，不是"要不要量"的开关。
+    ///
+    /// ⚠️ 0.1.30 第一版把「先锚最后一块」写成**每一拍无条件**：流式期每来一个 token 都走一次
+    ///    跟随 ⇒ 每 token 先锚**最后一行**（落点离真底差 `chatVPadding 18 + 块距 10` = 28pt）、
+    ///    再锚哨兵 ⇒ 内容在两个位置之间来回弹 ⇒ **整片对话区在闪**（boss：「模型回复的时候刷屏」）。
+    /// ⚠️ 第二版改成"只在初屏 / 换会话时量一次"的布尔开关 ⇒ **回车后白屏**（boss 当天报）：
+    ///    提交那一刻尾块换了（多了一条用户消息），文档高又变成估的了，可开关早就 false
+    ///    ⇒ 只锚哨兵 ⇒ 落进"估算出来的空尾"。
+    /// ⇒ 判据只能是**尾块身份**：静止态下 id 变了就量一次（初屏 / 换会话 / 回车），
+    ///    id 没变就直接锚哨兵。流式期另走一支（锚 `streamingAnchor`，见那里）——
+    ///    因为流式期尾行本身在长高、懒栈不肯量它，锚哨兵吃的是总量估算（实测虚高 9018pt = 白屏）。
+    @State private var materializedTail: AnyHashable?
+
     /// 已展开的**工具段**（键 = 段首工具消息 id，见 `ToolRun.id`）。
     ///
     /// ⚠️ 折叠态必须住在这里，**不许住行内 `@State`**：段里每来一条新工具，
@@ -196,6 +209,13 @@ struct ChatView: View {
     /// 内容末尾哨兵的 id —— ⚠️ 必须挂在**恒实例化**的视图上（理由见 `scrollTarget`）。
     static let tailAnchor = "chat-tail-anchor"
 
+    /// 流式指示器（`生成中…`）的 id —— **流式期专用锚点**。
+    ///
+    /// ⚠️ 它和 `tailAnchor` 不是一回事，也不能互相替代：指示器是 `LazyVStack` 的**孩子**
+    ///    （`scrollTo` 会为了它把前面的行实例化出来，落点是真的），哨兵是它的**兄弟**
+    ///    （锚它只能吃整条懒栈的总高估算）。实测差 **9018pt**（估算 22263 / 真实 13245）。
+    static let streamingAnchor = "chat-streaming-tail"
+
     /// **先把尾块量出来**的那个锚点 = 投影后最后一块（真实行）。
     ///
     /// ⚠️ 为什么需要两个锚点（2026-10-23 实测，真 `ChatView` + 1014 条消息 + 1280×872，
@@ -250,8 +270,15 @@ struct ChatView: View {
             // 第一拍锚**最后一块**（把它量出来），其余各拍锚**末尾哨兵**（真底）——
             // 顺序反了就会落进"估算出来的空尾"里，那是白屏（见 `materializeTarget`）。
             var target: AnyHashable = Self.tailAnchor
-            if i == 0, let materialize = materializeTarget {
+            if store.isStreaming {
+                // 流式期：**每一拍都锚流式指示器**（懒栈的孩子 ⇒ 落点是量出来的）。
+                target = Self.streamingAnchor
+            } else if i == 0, let materialize = materializeTarget,
+                      materialize != materializedTail {
+                // 静止态（初屏 / 换会话 / 回合落定）：先锚真实行把高度量出来，
+                // 其余各拍锚哨兵落到真底。顺序反了 = 白屏（0.1.30 实测 y=50719 纯白）。
                 target = materialize
+                materializedTail = materialize
             }
             // 同一次调用里的每一拍是**同一件事**，所以只认 epoch 与本拍的 veto
             let tap = {
@@ -353,6 +380,7 @@ struct ChatView: View {
         }
         .onChange(of: store.selectedConversationId) { _, _ in
             // 换会话: replay 内容整批替换, 兜底滚到最新 (首帧 onAppear 之外的双保险)
+            // ⚠️ 这里**不用**手工置位"要量"—— 尾块 id 变了，`scrollToTail` 自己会认（见 `materializedTail`）
             DispatchQueue.main.async { scrollToTail(proxy) }
         }
         .onChange(of: store.messages) { old, new in
@@ -622,6 +650,13 @@ struct ChatView: View {
                         .foregroundStyle(CodexTheme.textTertiary)
                 }
                 .padding(.leading, 4)
+                // ⚠️ 流式期的**唯一锚点**。它是 `LazyVStack` 的**孩子** ⇒ `scrollTo` 会为了它
+                //    把前面的行实例化出来，落点用的是**量出来的**高度；而末尾哨兵是 `LazyVStack`
+                //    的**兄弟**，锚它只能吃"整条懒栈的总高估算" —— 估算偏大时视口停到内容之下 = 白屏。
+                //    实测（真机、长回复、2026-10-23）：流式期估算 **22263pt**，落定后真实 **13245pt**，
+                //    差 9018pt ⇒ 整片空白，且因为视口下方没有行被实例化，这个估算**永远不会自我纠正**
+                //    （boss 报「回车后白屏，连对话完成后都不显示」，切一次会话才好）。
+                .id(Self.streamingAnchor)
             }
 
             // P9-#9: 内容底部探针。⚠️ 必须是**内容树里的真实子视图** —— 它原来挂在
