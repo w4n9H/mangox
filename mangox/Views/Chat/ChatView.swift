@@ -170,17 +170,45 @@ struct ChatView: View {
         }
     }
 
-    /// 滚动锚点 —— **自动跟随 / 初屏定位 / "回到最新"按钮共用同一个目标**。
+    /// 滚动锚点 —— **自动跟随 / 初屏定位 / "回到最新"按钮共用同一个目标**：
+    /// **内容末尾那枚恒实例化的哨兵**（见 `tailAnchor`）。
     ///
-    /// ⚠️ 别在三处各写一遍: 流式期的目标是 `streaming-tail` 那个**哨兵**(它挂在流式指示器上,
-    /// 比最后一条消息还要靠下), 其余时候才是最后一条消息的 id。分头写迟早分叉 —— 症状是
-    /// "自动跟随停在 A、点按钮却跳到 B", 两处单看都对、合起来错。
-    /// ⚠️ 收尾取的是**投影后最后一块的 id**, 不是 `store.messages.last?.id`。
-    /// 理由: 最后一条若是工具行、且被判进某个"已完成组的折叠段", 它的 id **在视图树里不存在**
-    /// ⇒ `scrollTo` 找不到目标, 表现是**静默不动**（不报错、只是不回到底）。
-    /// 现在最后一组永不折叠, 两种写法等价; 但规则一旦放宽, 直写 messages 就会坏 —— 不留这个雷。
-    private var scrollTarget: AnyHashable {
-        store.isStreaming ? "streaming-tail" : (projectedBlocks.last?.id ?? .row(UUID()))
+    /// ⚠️ 2026-10-23 之前这里取的是「投影后最后一块的 id」（流式期则是 `streaming-tail`），
+    ///    那是个**静默失效**的锚点：`LazyVStack` 只实例化**可见**行 ⇒ 初屏时最后一块
+    ///    **根本不在视图树里** ⇒ `scrollTo` 只能按**估算**的文档高落点，而且**重复调用不再
+    ///    重新锚定**（同一 id 再点一次什么都不发生）。
+    ///    实测（真 `ChatView` + 1014 条消息 + 1280×800 窗口，AppKit 侧读 `documentVisibleRect`）：
+    ///    落点距真底 **240 / 1947 / 2701 / 2898pt** 不等（同一份代码不同次跑就不一样 ——
+    ///    因为文档高在 1.1s 内还在长：39730 → 40503，长的速度取决于哪几行先被实例化），
+    ///    而 0.04/0.12/0.30 这三拍**一次都没把它推到底**。
+    ///    连锁症状正是 boss 报的那两条：① 打开不在最底 ② 没有「回到最新」按钮 ——
+    ///    内容底探针住在最后一块**下面**（末尾 `chatVPadding 18 + 块距 10`），视口够不到它
+    ///    就永不实例化 ⇒ 永远不报数 ⇒ `nearBottom` 停在初始的 `true`（那是"还没量到"的兜底）。
+    /// ⇒ 现在锚 `tailAnchor`：`scrollContent` 里紧贴内容末尾的 0 高哨兵，**非 lazy ⇒ 恒实例化**。
+    ///    同样条件实测 **gap = 0.0pt**（`doc - y - viewport`），探针 0.6s 内即报数。
+    ///    教训一句话：**滚到底要锚在一个"此刻一定存在"的视图上**，不能锚在懒加载行的 id 上。
+    /// ⚠️ 别把它当成「白屏」（0.1.27，见 `ChatFollowBeats`）的修复 —— 那条是**过冲**（估算翻倍
+    ///    ⇒ 视口落到内容之外 ⇒ 整屏纯底色），这条是**欠冲**（估算偏小 ⇒ 差几百到两千多 pt 到底）。
+    ///    同源不同向。A/B 实测（真 ChatView + 1014 条消息 + 1280×800，折叠 + 流式 + 再折叠，85 帧）：
+    ///    贴底帧 **0 → 80**、最终 gap **264 → 0.0pt**；而越界帧**两边都是 0** ⇒ 白屏这条**没有**被证实治好。
+    private var scrollTarget: AnyHashable { Self.tailAnchor }
+
+    /// 内容末尾哨兵的 id —— ⚠️ 必须挂在**恒实例化**的视图上（理由见 `scrollTarget`）。
+    static let tailAnchor = "chat-tail-anchor"
+
+    /// **先把尾块量出来**的那个锚点 = 投影后最后一块（真实行）。
+    ///
+    /// ⚠️ 为什么需要两个锚点（2026-10-23 实测，真 `ChatView` + 1014 条消息 + 1280×872，
+    ///    `dream → 模型部署测试` 切换后**逐帧取画面**判白）：
+    ///    **只锚末尾哨兵会在切换后落进空洞**。因为 `LazyVStack` 只量过可见行，切过来的下一秒
+    ///    文档高是**估的**：同一会话实测出现过 **39695 / 49203 / 50599 / 51437** 四种值，
+    ///    最大值比真实内容底多了约 **840pt**（≈ 一屏高），而「锚到末尾哨兵」按那个虚高值落点
+    ///    ⇒ 视口停真实内容**之下**的空白区 ⇒ **整片白**（画面实测：侧栏正常、消息列 0 墨迹，
+    ///    而几何判据 gap=0 竟然成立 —— 所以在虚高文档上 `gap=0` 不代表在白处）。
+    ///    ⇒ 顺序换成「**先锚最后一块，再锚哨兵**」：锚一个真实行会把它实例化、把真实高度量出来，
+    ///    之后的各拍锚哨兵就落在真底（实测同一个白屏场景：`y=50719 白` → `y=49881 有内容`）。
+    private var materializeTarget: AnyHashable? {
+        projectedChat.blocks.last.map { AnyHashable($0.id) }
     }
 
     /// 回到最新 (2026-10-16 boss: "往上翻了记录, 还要再往下翻才能到最底部")。
@@ -218,11 +246,17 @@ struct ChatView: View {
     private func scrollToTail(_ proxy: ScrollViewProxy, veto: @escaping () -> Bool = { true }) {
         followEpoch += 1
         let epoch = followEpoch
-        for delay in Self.followBeats {
+        for (i, delay) in Self.followBeats.enumerated() {
+            // 第一拍锚**最后一块**（把它量出来），其余各拍锚**末尾哨兵**（真底）——
+            // 顺序反了就会落进"估算出来的空尾"里，那是白屏（见 `materializeTarget`）。
+            var target: AnyHashable = Self.tailAnchor
+            if i == 0, let materialize = materializeTarget {
+                target = materialize
+            }
             // 同一次调用里的每一拍是**同一件事**，所以只认 epoch 与本拍的 veto
             let tap = {
                 guard epoch == followEpoch, veto() else { return }
-                proxy.scrollTo(scrollTarget, anchor: .bottom)
+                proxy.scrollTo(target, anchor: .bottom)
             }
             if delay == 0 { tap() }
             else { DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: tap) }
@@ -299,6 +333,14 @@ struct ChatView: View {
                     //    默认值 ⇒ 判"贴底"恒真 ⇒ **「回到最新」按钮永不出现**（boss 报了三次）。
                     //    坐标空间 `.named("chatScroll")` 仍在 ScrollView 上，探针照样读得到。
                     .onPreferenceChange(ChatContentBottomKey.self) { handleContentBottom($0) }
+                // 内容**末尾哨兵** —— 「滚到底」的唯一锚点（见 `scrollTarget` 的实测记录）。
+                // ⚠️ 三条约束，缺一条就退回到"初屏落短几千 pt + 按钮永不出现"：
+                //    ① 必须**在这一层**（`ScrollView` 的直接内容里）：`LazyVStack` **内部**的行
+                //       只有可见时才会被实例化 ⇒ 锚在那些 id 上等于锚在一个不存在的视图上。
+                //    ② 必须**紧贴内容末尾**（`messageBlocks` 之后、没有任何额外间距）：它下面
+                //       多一档留白，落点就离真底远那一档。
+                //    ③ 必须 `height: 0`：它是锚点不是留白 —— 底部 18pt 是 `chatVPadding` 给的。
+                Color.clear.frame(height: 0).id(Self.tailAnchor)
             }
         }
         .coordinateSpace(name: "chatScroll")
@@ -417,9 +459,20 @@ struct ChatView: View {
         }
     }
 
-    private var projectedBlocks: [ChatBlock] {
+    /// 一次投影的产物：**行** + **轮末账单**。
+    ///
+    /// ⚠️ 两者必须是**同一次分组**的两个产物。账单要回答"这一轮改了哪些文件"，判据就是
+    ///    「这一组有哪些消息」—— 若在别处再写一遍"怎么分组"，两份判据迟早漂移，
+    ///    表现是"账单说 5 个文件、收据说 4 个工具"，而两边都不报错。
+    private struct ProjectedChat {
+        let blocks: [ChatBlock]
+        /// 宿主消息 id（该轮**末条 assistant 正文**）→ 那一轮的账。
+        let bills: [UUID: TurnBill]
+    }
+
+    private var projectedChat: ProjectedChat {
         let rows = messageRows
-        guard !rows.isEmpty else { return [] }
+        guard !rows.isEmpty else { return ProjectedChat(blocks: [], bills: [:]) }
 
         // 组边界 = `.user` 开新组；`.system`（压缩标记）自成一组 —— 它本来就不属于任何发言。
         var groups: [[MessageRow]] = []
@@ -484,7 +537,32 @@ struct ChatView: View {
                 }
             }
         }
-        return out
+
+        // ── 轮末的账 ───────────────────────────────────────────────
+        // 宿主 = 该组**最后一条 assistant 正文**（不是"最后一条消息"）：账单要贴在
+        // "讲完的那段话"下面，而那段话才是 footer 工具条的主人。
+        // 组末若是工具卡（模型崩在工具后面、没有收尾正文）⇒ 这一组没有宿主 ⇒ 没有账单。
+        // 一处残缺好过一处撒谎。
+        var bills: [UUID: TurnBill] = [:]
+        let sid = store.selectedConversationId
+        let lastGroup = groups.count - 1
+        for (gi, group) in groups.enumerated() {
+            guard let host = group.last(where: { row in
+                guard row.message.role == .assistant,
+                      case .text = row.message.content else { return false }
+                return true
+            }) else { continue }
+            // 还在流式的那段不结账；**整个会话在跑时最后一组也不结** ——
+            // 工具在跑的间隙里没有正文在流（`isStreaming` 是假的），只看上一条会把半轮当成讲完了。
+            if host.message.isStreaming { continue }
+            if gi == lastGroup && store.isStreaming { continue }
+            let elapsed = sid.flatMap { store.turnElapsed(sid: $0, messageId: host.message.id) }
+            let bill = TurnBillBuilder.bill(group: group.map(\.message),
+                                            elapsed: elapsed,
+                                            root: store.activeProjectPath)
+            if !bill.isEmpty { bills[host.message.id] = bill }
+        }
+        return ProjectedChat(blocks: out, bills: bills)
     }
 
     /// `You` / `MangoX` 是**角色标签, 原样保留英文**（与 Chat / Trace 同族，见 `Tune.authorLabelSpacing`）。
@@ -496,8 +574,10 @@ struct ChatView: View {
     }
 
     private var messageBlocks: some View {
-        LazyVStack(alignment: .leading, spacing: Tune.chatBlockSpacing) {
-            ForEach(projectedBlocks) { block in
+        // 投影**只算一次**：行与轮末账单是它同一趟分组的两个产物（见 `ProjectedChat`）。
+        let proj = projectedChat
+        return LazyVStack(alignment: .leading, spacing: Tune.chatBlockSpacing) {
+            ForEach(proj.blocks) { block in
                 switch block {
                 case .row(let row, let headTaken):
                     VStack(alignment: .leading, spacing: Tune.authorLabelSpacing) {
@@ -506,7 +586,8 @@ struct ChatView: View {
                         // 长用户消息下"谁说的"只能靠位置猜（参考图的那条规则在长消息下会失效）。
                         // ⚠️ `headTaken` 时**不画**：收据已经替这行挂过小标了。
                         if row.isAuthorHead && !headTaken { authorLabel(isUser: row.message.role == .user) }
-                        MessageBlockView(message: row.message, store: store)
+                        MessageBlockView(message: row.message, store: store,
+                                         bill: proj.bills[row.message.id])
                     }
                     // 回合首间距同理：收据那一步已经加过了，这里再加就是双份。
                     .padding(.top, (row.isTurnStart && !headTaken)
@@ -541,7 +622,6 @@ struct ChatView: View {
                         .foregroundStyle(CodexTheme.textTertiary)
                 }
                 .padding(.leading, 4)
-                .id("streaming-tail")
             }
 
             // P9-#9: 内容底部探针。⚠️ 必须是**内容树里的真实子视图** —— 它原来挂在
@@ -700,6 +780,9 @@ extension ChatView {
 struct MessageBlockView: View {
     let message: ChatMessage
     @ObservedObject var store: ChatStore
+    /// 这一轮的账 —— **只在该轮末条正文上非 nil**（见 `ChatView.projectedChat`）。
+    /// 账号宿主是消息而不是轮，所以它跟着这一行走：换会话 / 重排 / 懒加载都不需要额外的账本。
+    var bill: TurnBill? = nil
     @State private var hovering: Bool = false
     /// P7-M6c: 大图预览 (sheet, 不开独立 NSWindow — P4.2 尺寸控制坑)。
     @State private var previewAttachment: Attachment?
@@ -707,7 +790,7 @@ struct MessageBlockView: View {
     /// 滚出屏再滚回来、或换会话, 都回到折叠态。有意如此 —— 同 `ThinkingCardView` 的取舍,
     /// "上次点开过"不该变成全局默认。
     @State private var userExpanded = false
-    /// P19 「分享」按钮的四态 —— 点了立刻回报, **失败不许静默** (失败是一个词, 不是没反应)。
+    /// 「分享」按钮的四态 —— 点了立刻回报, **失败不许静默** (失败是一个词, 不是没反应)。
     private enum ShareState { case idle, copied, tooLong, failed }
     @State private var shareState: ShareState = .idle
     /// 分享图的配色跟随当前外观 (`adaptive()` 是动态色, 离屏渲染必须显式给环境)。
@@ -722,17 +805,30 @@ struct MessageBlockView: View {
             }
             content
             if let raw = rawText {
-                footerToolbar(raw: raw)
-                    // 0.5 → 0 (2026-10-14 review): 常驻半亮的按钮从第二条消息起就成第二层噪点,
-                    // 与正文抢注意力。改 hover 才现。
-                    // ⚠️ `opacity(0)` **不摘除命中测试** ⇒ 必须同时关 hitTest, 否则成了
-                    //    "看不见但能点到" —— 在消息下方那片空白里点一下就会复制/重新生成。
-                    //    用 `opacity` 而非 `.hidden()` / 条件渲染: 18pt 高度照留, hover 时不跳。
-                    .opacity(hovering ? 1 : 0)
-                    .allowsHitTesting(hovering)
-                    .animation(.easeInOut(duration: 0.15), value: hovering)
-                    .frame(maxWidth: .infinity,
-                           alignment: message.role == .user ? .trailing : .leading)
+                // 这一行**同时**装两样东西 —— 左：「复制 / 分享 / 记忆 / 重新生成」（hover 才现）,
+                // 右：这一轮的账（常驻）。
+                //
+                // 为什么不给账另起一行（2026-10-22 贴截图拍下的）: 另起一行会让两排小字
+                // 同基线 / 同字号 / 同灰度, 读起来像同一组东西的下半截 —— 分不出哪排是动作。
+                // 而**本行的高度本来就在文档流里常驻**（`footerToolbar` 的注释）, 于是塞进去
+                // 一分版面都不多占, 悬停长按钮时右侧也不动。
+                HStack(spacing: 8) {
+                    if message.role == .user { Spacer(minLength: 0) }
+                    footerToolbar(raw: raw)
+                        // 0.5 → 0 (2026-10-14 review): 常驻半亮的按钮从第二条消息起就成第二层噪点,
+                        // 与正文抢注意力。改 hover 才现。
+                        // ⚠️ `opacity(0)` **不摘除命中测试** ⇒ 必须同时关 hitTest, 否则成了
+                        //    "看不见但能点到" —— 在消息下方那片空白里点一下就会复制/重新生成。
+                        //    用 `opacity` 而非 `.hidden()` / 条件渲染: 18pt 高度照留, hover 时不跳。
+                        .opacity(hovering ? 1 : 0)
+                        .allowsHitTesting(hovering)
+                        .animation(.easeInOut(duration: 0.15), value: hovering)
+                    if let bill {
+                        Spacer(minLength: 8)
+                        TurnBillChip(bill: bill, root: store.activeProjectPath, store: store)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
         .onHover { hovering = $0 }
@@ -872,7 +968,7 @@ struct MessageBlockView: View {
         HStack(spacing: 10) {
             footerButton("doc.on.doc", "复制", label: "复制") { copyToPasteboard(raw) }
 
-            // P19: 分享 = 这条正文渲染成图片进剪贴板 (不弹窗、不落盘、不发任何对外请求)。
+            // 分享 = 这条正文渲染成图片进剪贴板 (不弹窗、不落盘、不发任何对外请求)。
             // 只给助手消息 —— 用户消息的内容本来就在他手上, 要分享也是转发截图。
             if message.role == .assistant {
                 footerButton(shareIcon, "把这条回复存成图片放进剪贴板", label: LK(shareLabel)) {
@@ -934,7 +1030,7 @@ struct MessageBlockView: View {
         NSPasteboard.general.setString(s, forType: .string)
     }
 
-    // MARK: - 分享成图片 (P19)
+    // MARK: - 分享成图片 
 
     /// 图标先变 (一眼看出"成了/没成"), 文字再说清是哪一种。
     private var shareIcon: String {

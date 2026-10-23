@@ -34,6 +34,8 @@ extension SmokeMain {
             caseFollowBeats,
             caseFoldRule,
             caseTimeline,
+            caseTurnBill,
+            caseWindowFit,
         ]
     }
 

@@ -37,6 +37,14 @@ struct ContentView: View {
         }
         .onAppear {
             // P4.2: mini 台窗口挂接; P4.1: 开关已开时启动期请求通知授权
+            // 开工作区那一下把窗口按缺口补宽 —— 让正文的可用宽不变（治标；理由与读数见
+            // `WorkspaceWindowFit` 文件头）。挂在 **willSet** 上：要早于状态落地那一版布局。
+            store.willSetWorkspaceVisible = { open in
+                WorkspaceWindowFit.apply(open: open,
+                                         chatIsMainArea: isChatMainArea,
+                                         canUseWorkspace: store.canUseWorkspace,
+                                         miniMode: store.miniMode)
+            }
             MiniWindowController.shared.attach(store: store)
             QuickCaptureController.shared.install(store: store)   // P8-T27: 全局热键 + 捕获条
             CompletionNotifier.shared.onOpen = { sid in
@@ -117,6 +125,13 @@ struct ContentView: View {
         }
         // P14: 把当前窗口的 store 递给菜单命令 —— AppCommands 用 @FocusedValue(\.chatStore) 取它
         .focusedSceneValue(\.chatStore, store)
+    }
+
+    /// 正文此刻是不是主区 —— **只有聊天那条列有 680 上限**（`Tune.chatColumnWidth`），
+    /// 也只有它需要为开面板补宽；知识 / 定时 / 插件面板与轨迹视图占了主区时补宽毫无意义。
+    private var isChatMainArea: Bool {
+        !store.showKnowledgePanel && !store.showScheduledPanel
+            && !store.showExtensionsPanel && store.capsuleMode == .chat
     }
 
     // MARK: - 主布局 (normal 形态)

@@ -334,7 +334,7 @@ final class KnowledgeStore: ObservableObject {
         var stableChars: Int = 0
         var volatileCount: Int = 0
         var volatileChars: Int = 0
-        /// 时间线段（P18）—— 排在**所有段之后**（易变段后面）。
+        /// 时间线段 —— 排在**所有段之后**（易变段后面）。
         ///
         /// 为什么放最末：它每轮都可能变（一轮结束就多一行），压在中间会把后面所有内容
         /// 一起推离"稳定前缀"，缓存一个都命中不了。**空串 = 本段缺席**（没有流水，
@@ -590,7 +590,7 @@ final class KnowledgeStore: ObservableObject {
             budget -= cost
         }
         if !volatileLines.isEmpty { blocks.append(volatileLines.joined(separator: "\n")) }
-        // ---- 时间线段（P18）----
+        // ---- 时间线段 ----
         // 放在**最末**：它是这批里唯一"每轮都可能变"的段（一轮结束就多一行）。
         // 压在中间会把后面所有内容一起推离稳定前缀，缓存一个都命中不了。
         // 与索引段同一档待遇：装不下就**整段缺席**并留 `timelineSkipped`，不参与 priority 降级
@@ -1473,7 +1473,7 @@ final class KnowledgeStore: ObservableObject {
         return abs
     }
 
-    // MARK: - P18 时间线（App 侧自动记账 —— 本仓第三段会改用户磁盘的路径）
+    // MARK: - 时间线（App 侧自动记账 —— 本仓第三段会改用户磁盘的路径）
 
     /// 把一行流水写进当月的 `timeline/YYYY-MM.md`。
     ///
@@ -1518,7 +1518,7 @@ final class KnowledgeStore: ObservableObject {
     /// 只重建注入块快照（并推给在途实例），**不做 L1 对账**。
     ///
     /// 与 `applyKnowledgeChange` 的差别只有一条：不动 L1 目录。用于**只改笔记区**的写入
-    ///（P18 时间线）—— 那些写入不产生 L1 文件，而 L1 对账是整目录读写，陪跑一次不便宜。
+    /// 时间线那几笔写入 —— 它们不产生 L1 文件，而 L1 对账是整目录读写，陪跑一次不便宜。
     private func refreshInjectionOnly() {
         let injection = buildInjection()
         lastInjection = injection
@@ -1526,7 +1526,7 @@ final class KnowledgeStore: ObservableObject {
         store?.pushKnowledgeContext(currentKnowledgeBlock)
     }
 
-    /// 注入用的「最近流水」段（P18）。
+    /// 注入用的「最近流水」段。
     ///
     /// 只读**当月 + 上月**两个文件：`timelineRecentDays = 7` 最多跨一个月界，多读的是白付
     /// （而这一段每轮对话都在）。更早的流水仍在磁盘上，agent 按路径 read。
@@ -1839,7 +1839,7 @@ final class KnowledgeStore: ObservableObject {
         recordNoteRevision(rootId: p.rootId, relativePath: p.targetPath,
                            content: p.content, origin: .dream, sources: p.sources)
         applyKnowledgeChange()
-        // P18: 流水里补一行 —— 时间线上**唯一带主观内容**的那一行。
+        // 流水里补一行 —— 时间线上**唯一带主观内容**的那一行。
         // 内容不是模型现编的: `reason` 是提案里那句「为什么提」，人拍板前看过它，
         // 按下采纳 = 认了这句话。
         //

@@ -1,6 +1,6 @@
 //
 //  MessageImageShare.swift
-//  P19: 「分享」—— 把一条正文渲染成图片放进剪贴板。
+//  「分享」—— 把一条正文渲染成图片放进剪贴板。
 //
 //  ⚠️ **不能用 `ImageRenderer`**: 它画不出 `ScrollView` 的内容 (代码块/表格「高度对、内容空」)。
 //     这条路走 `NSHostingView` + 离屏 borderless 窗口 + `cacheDisplay` —— 与

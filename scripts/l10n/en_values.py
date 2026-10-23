@@ -485,7 +485,6 @@ VALUES = {
     '运行中': 'Running',
     '运行中…': 'Running…',
     '运行状态': 'Run status',
-    '返回文件树': 'Back to file tree',
     '还原主窗口': 'Restore main window',
     '还差: %@': 'Still missing: %@',
     '还没有可用的邮箱账号': 'No usable mailbox account yet',
@@ -937,14 +936,14 @@ VALUES = {
         'This session has no messages yet — the side chat will start empty.',
     '将带上 %lld 轮源会话上下文': 'Carries %lld turns of source context',
     '由此处侧问': 'Start side chat',
-    # ── 2026-10-21 空回合 (P18: 引擎正常收尾却零产出) ──
+    # ── 2026-10-21 空回合 (引擎正常收尾却零产出) ──
     #  ⚠️ 两条**分开写**而不是一条带可选占位符: 一个字符串只放一个占位符 (本仓 L10n 硬规矩)。
     #  第一句点名模型 (它才是"为什么空"的答案), 第二句只能给下一步线索 —— 没有名字可点。
     '引擎返回了空回合 · 模型 %@ 可能不存在或已下线':
         'The engine returned an empty turn · model %@ may not exist or is no longer available',
     '引擎返回了空回合 · 引擎没有返回任何内容, 请检查模型与凭据':
         'The engine returned an empty turn — nothing came back; check the model and credentials',
-    # ── 2026-10-22 分享成图片 (P19: 正文 → 图片 → 剪贴板) ──
+    # ── 2026-10-22 分享成图片 (正文 → 图片 → 剪贴板) ──
     #  ⚠️ 三条**分开写**: 按钮的四态各是一句话 (分享 / 已复制图片 / 太长 / 出图失败),
     #     不拼成一条带占位符的 —— 状态词不该靠插值拼出来, 拼出来就没法各语言分别措辞。
     #  `太长 · 改用复制` 里的"复制"指的是**左边那个「复制」按钮** (分享不出来时它是出口)。
@@ -953,4 +952,40 @@ VALUES = {
     '太长 · 改用复制': 'Too long · copy text',
     '出图失败': 'Could not create the image',
     '把这条回复存成图片放进剪贴板': 'Save this reply as an image on the clipboard',
+
+    # ── 2026-10-22 工作区重设计 (文件 / 改动 / 预览 三个固定 tab) ──
+    #  tab 名**独立取词**: `文件` 复用既有 key (那里是"这行是个文件"的名词标记,
+    #  与这里的"文件列表"是同一个概念, 不造第二个词); 改动/预览是新的。
+    #  `本会话改动` 与 `工作区改动` 是**两个不同的小节** —— 前者按 agent 触达算、后者按
+    #  git 算, 同屏并排, 英文不能都叫 Changes, 否则看不出它们是两笔账。
+    '改动': 'Changes',
+    '预览': 'Preview',
+    '工作区改动': 'Working tree',
+    #  两段是**不重叠**的两笔账: 上段是 agent 这轮碰过的, 下段是"其余的脏文件"。
+    #  所以英文不能也叫 Changes —— 并列时看不出它们是两笔账。
+    '其它改动': 'Other changes',
+    '本会话还没有改动': 'No changes in this session yet',
+    'agent 每改一个文件, 这里就会多一行': 'Every file the agent touches adds a row here',
+    #  逐行渲染之后跨行拖选没了 ⇒ 整篇复制的出口是这个按钮, 它得在标题栏上说得清。
+    '复制全文': 'Copy all',
+    '已复制': 'Copied',
+    '还没有打开文件': 'No file open',
+    '在「文件」或「改动」里点一行': 'Pick a row under File or Changes',
+
+    # ── 2026-10-22 轮末的账 ──
+    #  一轮讲完记一次账。**没有成功/失败** —— 那是工具行的语法, 一轮对话没有退出码。
+    #  单复数分开取词 (1 file / N files): 一个数字套一句英文在 n=1 时就是错的。
+    '本轮': 'This turn',
+    '1 个文件': '1 file',
+    '%lld 个文件': '%lld files',
+    '1 次调用': '1 call',
+    '%lld 次调用': '%lld calls',
+    #  `token` 中文界面里也照写英文 —— 它是这个领域的通用词, 硬翻反而要多解释一次。
+    'tokens': 'tokens',
+    '还有 %lld 个': '%lld more',
+    #  这一行要能区分"没改"和"不知道" —— 只在弹窗里说, 行上不占位。
+    '本次没有改动文件': 'No files changed this turn',
+    #  落点是工作区的**改动 tab** (账单说的就是改动), 所以不能只说"打开工作区"。
+    '在工作区打开': 'Open in workspace',
+    '这一轮花了什么': 'What this turn cost',
 }

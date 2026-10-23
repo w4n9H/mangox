@@ -1,54 +1,92 @@
 //
 //  WorkspaceView.swift
-//  Workspace column (hidden by default): file tree + git status + agent-touched
-//  files + language bar + filter + file preview.
+//  Workspace column (hidden by default).
+//
+//  工作区重设计 —— 结构从「一个滚动区塞四件事」改成**三个固定 tab**:
+//
+//      [项目名 · 分支 · 项数 · ⟳]      ← 恒在 (与 tab 无关)
+//      [文件 | 改动 3 | 预览]          ← 一级导航, 文字 + 2px 底线
+//      ─────────────────────────────
+//      tab 内容
+//
+//  三条判据 (不是审美):
+//   ① 「本会话改动」原来挂在文件树上方, 会话跑起来能长到二三十行, 把树挤到屏幕外 ——
+//      而它恰恰是"这个会话动了什么"最该一眼看到的东西 ⇒ 升格成一级 tab。
+//   ② 点文件原来是**替换整块面板** (树消失 + 出现「←」返回箭头), 现在是把内容送进
+//      第三个 tab 并激活它 ⇒ 一步操作, 没有回程路要走。
+//   ③ git 改动原来只能靠树上的 `M`/`A` 徽标反推 ⇒ 改动 tab 里有一张自己的清单。
+//
+//  本文件只留外壳: header / tab 条 / 过滤框 / 语言条 / 分发。
+//  树 → `WorkspaceFileTree.swift` · 改动 → `WorkspaceChanges.swift` · 预览 → `FilePreviewView.swift`。
 //
 
 import AppKit
 import SwiftUI
 
+/// 工作区的一级导航。**顺序即渲染顺序**, 文件在最左 (默认)。
+private enum WorkspaceTab: Hashable, CaseIterable, Identifiable {
+    case files, changes, preview
+
+    var id: Self { self }
+
+    /// ⚠️ 每次现取词。**不许落进 `static let`** —— 那会冻结成启动时那门语言的词 (本地化坑 ⑨)。
+    var title: String {
+        switch self {
+        case .files:   return L("文件")
+        case .changes: return L("改动")
+        case .preview: return L("预览")
+        }
+    }
+}
+
 struct WorkspaceView: View {
     @ObservedObject var store: ChatStore
+
+    @State private var tab: WorkspaceTab = .files
     @State private var previewRelative: String? = nil
     @State private var gitStatus: WorkspaceGit.Status? = nil
+    /// 「之下有 git 改动」的目录集 —— 一次算好, 树里直接查。见 `hasChangedInside`。
+    @State private var changedFolders: Set<String> = []
     @State private var filterText: String = ""
     // 语言构成/文件总数走后台全量扫描 (懒加载树只含已展开部分, 不能作为统计源)
     @State private var langs: [WorkspaceStats.Lang] = []
     @State private var totalFiles: Int? = nil
     @State private var recentCommits: [WorkspaceGit.Commit] = []
-    @State private var showCommits: Bool = true
+    /// agent 触达集 (新→旧, 相对项目根) 及其派生集 —— 三者同源, 一次算好。
+    /// 原先这三个值都是 computed: 每个 body 遍历全部 messages, 而打开工作区时 body 会被调
+    /// 三次 (header / 树 / 改动区各一次) ⇒ 三遍。缓存键 = `root#messages.count`。
+    @State private var touched: [String] = []
+    @State private var touchedSet: Set<String> = []
+    @State private var touchedFolders: Set<String> = []
+    @State private var touchedKey: String = ""
     /// P14 ⌘F: 文件过滤框的焦点。菜单命令够不到视图 @State ⇒ 由 store 的 tick 转成事件驱动它。
     @FocusState private var filterFocused: Bool
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             if let root = store.activeProjectPath {
-                if let rel = previewRelative {
-                    FilePreviewView(rootPath: root, relativePath: rel, onBack: {
-                        withAnimation(CodexTheme.animFast) { previewRelative = nil }
-                    })
-                } else {
-                    header
-                    statsBar
-                    filterField
-                    ScrollView {
-                        workspaceContent(root: root)
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 6)
-                    }
-                    .frame(maxHeight: .infinity, alignment: .top)
-                }
+                header
+                tabBar
+                content(root: root)
             } else {
                 emptyState
             }
         }
         .task(id: store.activeProjectPath) {
+            // 换项目 ⇒ 上一个项目的预览没有意义
+            previewRelative = nil
+            if tab == .preview { tab = .files }
+            refreshTouched(root: store.activeProjectPath ?? "")
             reloadGit()
             reloadStats()
         }
         // P14 自动刷新: agent 每新触达一个文件就重扫一次 ——
         // 走合并式刷新, 所以展开的目录**保持展开** (整体替换会把用户的树收起来)。
-        .onChange(of: touchedPaths) { _, _ in
+        // ⚠️ 判据仍是「触达集真的变了」: 用户消息也会让 count 变, 但那不该触发重扫。
+        .onChange(of: store.messages.count) { _, _ in
+            let before = touched
+            refreshTouched(root: store.activeProjectPath ?? "")
+            guard touched != before else { return }
             store.refreshFileTree()
             reloadGit()
         }
@@ -57,17 +95,128 @@ struct WorkspaceView: View {
             reloadGit()
             reloadStats()
         }
-        // P14 ⌘F: 把焦点送进过滤框。
+        // P14 ⌘F: 把焦点送进过滤框 (它住在「文件」tab 里)。
         .onChange(of: store.workspaceFilterFocusTick) { _, _ in
+            tab = .files
             filterFocused = true
+        }
+        // 轮末账单的小弹窗里那个「在工作区打开」—— 落点是**改动 tab**,
+        // 因为账单列表的就是改动。只切 tab 不动过滤框: 用户自己敲的过滤词不该被这一跳清掉。
+        .onChange(of: store.workspaceChangesTick) { _, _ in
+            tab = .changes
+            reloadGit()   // 账单是刚跑完那一刻算的, git 状态可能已经又变了
         }
     }
 
-    /// agent 触达文件集 (与 `agentTouchedPaths` 同源; 供 `onChange` 观察变化)。
-    private var touchedPaths: [String] {
-        guard let root = store.activeProjectPath else { return [] }
-        return agentTouchedPaths(root: root)
+    // MARK: - Tab 内容分发
+
+    @ViewBuilder
+    private func content(root: String) -> some View {
+        switch tab {
+        case .files:
+            statsBar
+            filterField
+            ScrollView {
+                Group {
+                    if filterText.isEmpty {
+                        FileTreeView(nodes: store.fileTree,
+                                     changed: gitStatus?.changes ?? [:],
+                                     stats: gitStatus?.stats ?? [:],
+                                     touched: touchedSet,
+                                     changedFolders: changedFolders,
+                                     touchedFolders: touchedFolders,
+                                     onExpandFolder: { rel in
+                                         store.loadDirectory(relPath: rel)
+                                     },
+                                     onOpenFile: { open($0) })
+                    } else {
+                        filteredList
+                    }
+                }
+                .padding(.horizontal, 8)
+                .padding(.vertical, 6)
+            }
+            .frame(maxHeight: .infinity, alignment: .top)
+
+        case .changes:
+            ScrollView {
+                WorkspaceChangesList(touched: touched,
+                                     changedRows: (gitStatus?.changes ?? [:]).keys.sorted(),
+                                     changes: gitStatus?.changes ?? [:],
+                                     stats: gitStatus?.stats ?? [:],
+                                     commits: recentCommits,
+                                     onOpen: { open($0) })
+                    .padding(.horizontal, 4)
+                    .padding(.bottom, 8)
+            }
+            .frame(maxHeight: .infinity, alignment: .top)
+
+        case .preview:
+            if let rel = previewRelative {
+                FilePreviewView(rootPath: root, relativePath: rel)
+            } else {
+                previewEmptyState
+            }
+        }
     }
+
+    /// 打开一个文件 = 送进预览 tab 并激活。**没有「返回」这一步**。
+    private func open(_ rel: String) {
+        previewRelative = rel
+        tab = .preview
+    }
+
+    // MARK: - Tab 条 (文字 + 底部 2px 线; 不用胶囊)
+
+    private var tabBar: some View {
+        HStack(spacing: 0) {
+            ForEach(WorkspaceTab.allCases) { t in
+                tabItem(t)
+            }
+            Spacer(minLength: 0)
+        }
+        .overlay(
+            Rectangle().frame(height: 1).foregroundStyle(CodexTheme.divider),
+            alignment: .bottom
+        )
+    }
+
+    private func tabItem(_ t: WorkspaceTab) -> some View {
+        let active = tab == t
+        return Button {
+            tab = t
+        } label: {
+            VStack(spacing: 0) {
+                HStack(spacing: 4) {
+                    Text(t.title)
+                        .font(.system(size: 11, weight: active ? .semibold : .regular))
+                        .foregroundStyle(active ? CodexTheme.textPrimary : CodexTheme.textTertiary)
+                    if let n = badge(t), n > 0 {
+                        // 琥珀只给"有事在发生"; 完成的东西是绿的, 所以在别处
+                        Text("\(n)")
+                            .font(CodexFonts.monoFont(9))
+                            .foregroundStyle(CodexTheme.toolRunning)
+                    }
+                }
+                .padding(.horizontal, 12)
+                .frame(height: Tune.workspaceTabHeight)
+                Rectangle()
+                    .fill(active ? CodexTheme.textPrimary : Color.clear)
+                    .frame(height: 2)
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
+    /// tab 上的计数。**只给「改动」**: 本会话 agent 触达了几个文件。
+    /// 工作区脏数不在这里重复 —— 它在 header 的分支 chip 上, 两个数字各管一件事。
+    private func badge(_ t: WorkspaceTab) -> Int? {
+        t == .changes ? touched.count : nil
+    }
+
+    // MARK: - Empty states
+
     // P3.4: 无目录 (Work 理论上进不来, 兜底)
     private var emptyState: some View {
         VStack(spacing: 8) {
@@ -77,6 +226,21 @@ struct WorkspaceView: View {
             Text("当前会话未绑定项目目录")
                 .font(CodexTheme.fontSmall)
                 .foregroundStyle(CodexTheme.textTertiary)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private var previewEmptyState: some View {
+        VStack(spacing: 6) {
+            Image(systemName: "doc.text.magnifyingglass")
+                .font(.system(size: 22))
+                .foregroundStyle(CodexTheme.textMuted)
+            Text("还没有打开文件")
+                .font(CodexTheme.fontSmall)
+                .foregroundStyle(CodexTheme.textTertiary)
+            Text("在「文件」或「改动」里点一行")
+                .font(.system(size: 9.5))
+                .foregroundStyle(CodexTheme.textMuted)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
@@ -144,7 +308,7 @@ struct WorkspaceView: View {
             .padding(.horizontal, 6)
             .padding(.vertical, 2)
             .background(Capsule().fill(CodexTheme.bgPill.opacity(0.6)))
-            .help("git 分支 · \(git.dirtyCount) 个改动")
+            .help(String(format: L("git 分支 · %lld 个改动"), git.dirtyCount))
         }
     }
 
@@ -183,7 +347,7 @@ struct WorkspaceView: View {
             .padding(.horizontal, 12)
             .padding(.top, 8)
             .padding(.bottom, 2)
-            .help("文件类型构成 (共 \(total) 个已识别文件)")
+            .help(String(format: L("文件类型构成 (共 %lld 个已识别文件)"), total))
         }
     }
 
@@ -224,163 +388,6 @@ struct WorkspaceView: View {
         .padding(.vertical, 6)
     }
 
-    // MARK: - Content (过滤列表 / 改动区 + 文件树)
-
-    @ViewBuilder
-    private func workspaceContent(root: String) -> some View {
-        if filterText.isEmpty {
-            VStack(alignment: .leading, spacing: 4) {
-                commitsSection
-                touchedSection(root: root)
-                FileTreeView(nodes: store.fileTree,
-                             changed: gitStatus?.changes ?? [:],
-                             stats: gitStatus?.stats ?? [:],
-                             touched: Set(agentTouchedPaths(root: root)),
-                             onExpandFolder: { rel in
-                                 store.loadDirectory(relPath: rel)
-                             }) { path in
-                    withAnimation(CodexTheme.animFast) { previewRelative = path }
-                }
-            }
-        } else {
-            filteredList
-        }
-    }
-
-    // MARK: - 最近提交 (git log -5, 可折叠)
-
-    @ViewBuilder
-    private var commitsSection: some View {
-        if !recentCommits.isEmpty {
-            VStack(alignment: .leading, spacing: 1) {
-                Button {
-                    withAnimation(CodexTheme.animFast) { showCommits.toggle() }
-                } label: {
-                    HStack(spacing: 4) {
-                        Image(systemName: showCommits ? "chevron.down" : "chevron.right")
-                            .font(.system(size: 8, weight: .semibold))
-                            .foregroundStyle(CodexTheme.textTertiary)
-                            .frame(width: 10)
-                        Text("最近提交")
-                            .font(.system(size: 9.5, weight: .semibold))
-                            .tracking(0.5)
-                            .foregroundStyle(CodexTheme.textTertiary)
-                        Text("\(recentCommits.count)")
-                            .font(CodexFonts.monoFont(9))
-                            .foregroundStyle(CodexTheme.textMuted)
-                        Spacer()
-                    }
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-
-                if showCommits {
-                    ForEach(recentCommits, id: \.hash) { c in
-                        VStack(alignment: .leading, spacing: 1) {
-                            Text(c.subject)
-                                .font(CodexTheme.fontTiny)
-                                .foregroundStyle(CodexTheme.textSecondary)
-                                .lineLimit(1)
-                            HStack(spacing: 4) {
-                                Text(c.hash)
-                                    .font(CodexFonts.monoFont(9))
-                                    .foregroundStyle(CodexTheme.info)
-                                Text(c.author)
-                                    .font(.system(size: 9))
-                                    .foregroundStyle(CodexTheme.textTertiary)
-                                    .lineLimit(1)
-                                Text(WorkspaceGit.relativeTime(c.timestamp))
-                                    .font(.system(size: 9))
-                                    .foregroundStyle(CodexTheme.textMuted)
-                                Spacer()
-                            }
-                        }
-                        .padding(.leading, 10)
-                        .padding(.vertical, 2)
-                        .contentShape(Rectangle())
-                        .onTapGesture {
-                            NSPasteboard.general.clearContents()
-                            NSPasteboard.general.setString(c.hash, forType: .string)
-                        }
-                        .help("点击复制 hash: \(c.hash)")
-                    }
-                    Divider()
-                        .padding(.vertical, 4)
-                }
-            }
-        }
-    }
-
-    // MARK: - Agent 改动区 (本会话 edit/write 触达的文件)
-
-    private func touchedSection(root: String) -> some View {
-        let paths = agentTouchedPaths(root: root)
-        return Group {
-            if !paths.isEmpty {
-                VStack(alignment: .leading, spacing: 1) {
-                    HStack(spacing: 4) {
-                        Text("本会话改动")
-                            .font(.system(size: 9.5, weight: .semibold))
-                            .tracking(0.5)
-                            .foregroundStyle(CodexTheme.textTertiary)
-                        Text("\(paths.count)")
-                            .font(CodexFonts.monoFont(9))
-                            .foregroundStyle(CodexTheme.textMuted)
-                        Spacer()
-                    }
-                    .padding(.leading, 8)
-                    .padding(.bottom, 2)
-                    ForEach(paths, id: \.self) { rel in
-                        HStack(spacing: 5) {
-                            Circle()
-                                .fill(CodexTheme.toolDone)
-                                .frame(width: 4, height: 4)
-                            Image(systemName: "doc")
-                                .font(.system(size: 9))
-                                .foregroundStyle(CodexTheme.textTertiary)
-                            Text(rel)
-                                .font(CodexFonts.monoFont(10.5))
-                                .foregroundStyle(CodexTheme.textSecondary)
-                                .lineLimit(1)
-                                .truncationMode(.head)
-                            Spacer()
-                        }
-                        .padding(.leading, 8)
-                        .padding(.vertical, 2)
-                        .contentShape(Rectangle())
-                        .onTapGesture {
-                            withAnimation(CodexTheme.animFast) { previewRelative = rel }
-                        }
-                    }
-                    Divider()
-                        .padding(.vertical, 4)
-                }
-            }
-        }
-    }
-
-    /// 本会话 agent 触达的文件 (edit/write 工具, 新→旧去重), 相对项目根。
-    private func agentTouchedPaths(root: String) -> [String] {
-        var seen: Set<String> = []
-        var order: [String] = []
-        for msg in store.messages.reversed() {
-            guard case .tool(let t) = msg.content,
-                  t.kind == .edit || t.kind == .write else { continue }
-            let rel = Self.relativePath(t.title, root: root)
-            guard !rel.isEmpty, seen.insert(rel).inserted else { continue }
-            order.append(rel)
-        }
-        return order
-    }
-
-    /// 绝对路径剥 root 前缀; 相对路径原样返回。
-    private static func relativePath(_ path: String, root: String) -> String {
-        if path.hasPrefix(root) {
-            return String(path.dropFirst(root.count)).trimmingCharacters(in: CharacterSet(charactersIn: "/"))
-        }
-        return path.hasPrefix("/") ? "" : path
-    }
-
     // MARK: - Filtered flat list
 
     private var filteredList: some View {
@@ -411,15 +418,13 @@ struct WorkspaceView: View {
                             } else if let letter = gitStatus?.changes[rel] {
                                 Text(letter)
                                     .font(CodexFonts.monoFont(9))
-                                    .foregroundStyle(gitColor(letter))
+                                    .foregroundStyle(workspaceGitLetterColor(letter))
                             }
                         }
                         .padding(.horizontal, 8)
                         .padding(.vertical, 2.5)
                         .contentShape(Rectangle())
-                        .onTapGesture {
-                            withAnimation(CodexTheme.animFast) { previewRelative = rel }
-                        }
+                        .onTapGesture { open(rel) }
                     }
                     if matches.count > 80 {
                         Text("仅显示前 80 条, 继续输入缩小范围")
@@ -446,18 +451,41 @@ struct WorkspaceView: View {
         return out
     }
 
+    // MARK: - 数据
+
+    /// agent 触达集: 只在 `root#messages.count` 变了才重算 (见 `touched` 的注释)。
+    private func refreshTouched(root: String) {
+        let key = "\(root)#\(store.messages.count)"
+        guard key != touchedKey else { return }
+        touchedKey = key
+        touched = agentTouchedPaths(root: root)
+        touchedSet = Set(touched)
+        touchedFolders = workspaceFolderPrefixes(of: touched)
+    }
+
+    /// 本会话 agent 触达的文件 (edit/write 工具, 新→旧去重), 相对项目根。
+    ///
+    /// ⚠️ 实现搬到 `TurnBill.swift` 的 `AgentTouched.paths(in:root:)` 了 —— **两处共用一份**：
+    ///    这里数的是"本会话", 轮末账单数的是"本轮", 范围不同但**成员判据必须同源**。
+    private func agentTouchedPaths(root: String) -> [String] {
+        AgentTouched.paths(in: store.messages, root: root)
+    }
+
     private func reloadGit() {
         guard let root = store.activeProjectPath else {
             gitStatus = nil
+            changedFolders = []
             recentCommits = []
             return
         }
         Task.detached {
             let st = WorkspaceGit.status(root: root)
             let log = WorkspaceGit.recentCommits(root: root)
+            let folders = workspaceFolderPrefixes(of: Array((st?.changes ?? [:]).keys))
             await MainActor.run {
                 gitStatus = st
                 recentCommits = log
+                changedFolders = folders
             }
         }
     }
@@ -476,324 +504,6 @@ struct WorkspaceView: View {
             await MainActor.run {
                 langs = l
                 totalFiles = n
-            }
-        }
-    }
-
-    fileprivate func gitColor(_ letter: String) -> Color {
-        switch letter {
-        case "D":            return CodexTheme.toolError
-        case "A", "U":       return CodexTheme.toolDone
-        default:             return CodexTheme.toolRunning   // M
-        }
-    }
-}
-
-// MARK: - Diff stat display (+234 -98, 行数单位, 千位缩写)
-
-fileprivate struct DiffStatView: View {
-    let stat: WorkspaceGit.DiffStat
-
-    var body: some View {
-        HStack(spacing: 3) {
-            if stat.added > 0 {
-                Text("+\(Self.short(stat.added))")
-                    .font(CodexFonts.monoFont(9))
-                    .foregroundStyle(CodexTheme.toolDone)
-            }
-            if stat.deleted > 0 {
-                Text("-\(Self.short(stat.deleted))")
-                    .font(CodexFonts.monoFont(9))
-                    .foregroundStyle(CodexTheme.toolError)
-            }
-        }
-        .help(String(format: L("+%lld / -%lld 行"), stat.added, stat.deleted))
-    }
-
-    static func short(_ n: Int) -> String {
-        if n >= 10_000 { return String(format: "%.0fk", Double(n) / 1000) }
-        if n >= 1_000  { return String(format: "%.1fk", Double(n) / 1000) }
-        return "\(n)"
-    }
-}
-
-// MARK: - File tree (recursive, flattened render)
-
-struct FileTreeView: View {
-    let nodes: [FileNode]
-    var changed: [String: String] = [:]
-    var stats: [String: WorkspaceGit.DiffStat] = [:]
-    var touched: Set<String> = []
-    var onExpandFolder: (String) -> Void = { _ in }
-    var onOpenFile: (String) -> Void = { _ in }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 1) {
-            ForEach(nodes) { node in
-                FileTreeNodeView(node: node, path: node.name,
-                                 changed: changed, stats: stats, touched: touched,
-                                 onExpandFolder: onExpandFolder,
-                                 onOpenFile: onOpenFile)
-            }
-        }
-    }
-}
-
-struct FileTreeNodeView: View {
-    let node: FileNode
-    let path: String
-    var changed: [String: String] = [:]
-    var stats: [String: WorkspaceGit.DiffStat] = [:]
-    var touched: Set<String> = []
-    var onExpandFolder: (String) -> Void = { _ in }
-    var onOpenFile: (String) -> Void
-    @State private var isExpanded: Bool = false
-
-    private var hasChangedInside: Bool {
-        node.isFolder && changed.keys.contains { $0.hasPrefix(path + "/") }
-    }
-    private var hasTouchedInside: Bool {
-        node.isFolder && touched.contains { $0.hasPrefix(path + "/") }
-    }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 1) {
-            HStack(spacing: 4) {
-                if node.isFolder {
-                    Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
-                        .font(.system(size: 8, weight: .semibold))
-                        .foregroundStyle(CodexTheme.textTertiary)
-                        .frame(width: 10)
-                } else {
-                    Spacer().frame(width: 10)
-                }
-                Image(systemName: node.isFolder ? "folder" : "doc")
-                    .font(.system(size: 10))
-                    .foregroundStyle(node.isFolder ? CodexTheme.textSecondary : CodexTheme.textTertiary)
-                Text(node.name)
-                    .font(CodexTheme.fontSmall)
-                    .foregroundStyle(node.isFolder ? CodexTheme.textPrimary : CodexTheme.textSecondary)
-                    .lineLimit(1)
-                Spacer()
-                // agent 触达标记 (绿点)
-                if !node.isFolder && touched.contains(path) {
-                    Circle()
-                        .fill(CodexTheme.toolDone)
-                        .frame(width: 4, height: 4)
-                }
-                // git 状态徽标 (文件行) / 改动标点 (目录行)
-                if !node.isFolder {
-                    if let stat = stats[path] {
-                        DiffStatView(stat: stat)
-                    } else if let letter = changed[path] {
-                        Text(letter)
-                            .font(CodexFonts.monoFont(9))
-                            .foregroundStyle(gitBadgeColor(letter))
-                    }
-                } else if node.isFolder && (hasChangedInside || hasTouchedInside) {
-                    Circle()
-                        .fill(hasChangedInside ? CodexTheme.toolRunning : CodexTheme.toolDone)
-                        .frame(width: 4, height: 4)
-                }
-            }
-            .padding(.leading, CGFloat(8 + node.depth * 12))
-            .padding(.vertical, 2)
-            .contentShape(Rectangle())
-            .onAppear {
-                if node.isFolder { isExpanded = node.isExpanded }
-            }
-            .onTapGesture {
-                if node.isFolder {
-                    withAnimation(CodexTheme.animFast) { isExpanded.toggle() }
-                    // lazy: 首次展开触发按需加载 (后台扫描, 回来原位插入)
-                    if isExpanded && !node.childrenLoaded {
-                        onExpandFolder(path)
-                    }
-                } else {
-                    onOpenFile(path)
-                }
-            }
-
-            if isExpanded && !node.childrenLoaded {
-                // 已展开但子级未到: 占位行 (后台扫描通常 <50ms)
-                HStack(spacing: 4) {
-                    Image(systemName: "ellipsis")
-                        .font(.system(size: 8, weight: .semibold))
-                        .foregroundStyle(CodexTheme.textMuted)
-                    Text("加载中…")
-                        .font(CodexTheme.fontTiny)
-                        .foregroundStyle(CodexTheme.textMuted)
-                }
-                .padding(.leading, CGFloat(8 + (node.depth + 1) * 12))
-                .padding(.vertical, 2)
-            } else if isExpanded && !node.children.isEmpty {
-                ForEach(node.children) { child in
-                    FileTreeNodeView(node: child,
-                                     path: path.isEmpty ? child.name : "\(path)/\(child.name)",
-                                     changed: changed,
-                                     stats: stats,
-                                     touched: touched,
-                                     onExpandFolder: onExpandFolder,
-                                     onOpenFile: onOpenFile)
-                }
-            }
-        }
-    }
-
-    private func gitBadgeColor(_ letter: String) -> Color {
-        switch letter {
-        case "D":      return CodexTheme.toolError
-        case "A", "U": return CodexTheme.toolDone
-        default:       return CodexTheme.toolRunning   // M
-        }
-    }
-}
-
-// MARK: - File preview (P3.4: 读磁盘真实内容)
-
-struct FilePreviewView: View {
-    let rootPath: String
-    let relativePath: String
-    let onBack: () -> Void
-
-    private var absolutePath: String {
-        URL(fileURLWithPath: rootPath).appendingPathComponent(relativePath).path
-    }
-
-    private var fileName: String {
-        relativePath.components(separatedBy: "/").last ?? relativePath
-    }
-
-    private var language: String? {
-        let ext = (fileName as NSString).pathExtension.lowercased()
-        switch ext {
-        case "glsl", "frag", "vert": return "glsl"
-        case "js", "mjs": return "javascript"
-        case "ts": return "typescript"
-        case "json": return "json"
-        case "py": return "python"
-        case "sh": return "bash"
-        case "swift": return "swift"
-        default: return nil
-        }
-    }
-
-    /// 文件元信息: 大小 + 修改时间 (预览头右侧弱化显示)。
-    private var fileMeta: String? {
-        guard let attr = try? FileManager.default.attributesOfItem(atPath: absolutePath) else { return nil }
-        var parts: [String] = []
-        if let size = attr[.size] as? Int {
-            if size >= 1_048_576 {
-                parts.append(String(format: "%.1f MB", Double(size) / 1_048_576))
-            } else if size >= 1_024 {
-                parts.append(String(format: "%.1f KB", Double(size) / 1_024))
-            } else {
-                parts.append("\(size) B")
-            }
-        }
-        if let date = attr[.modificationDate] as? Date {
-            let fmt = DateFormatter()
-            fmt.dateFormat = "MM-dd HH:mm"
-            parts.append(fmt.string(from: date))
-        }
-        return parts.isEmpty ? nil : parts.joined(separator: " · ")
-    }
-
-    /// 能直接按图片渲染的扩展名 (与 `fileContent` 的回落判据同源, 免得两处清单漂移)。
-    private static let imageExts: Set<String> = [
-        "png", "jpg", "jpeg", "gif", "webp", "bmp", "tiff", "tif", "heic", "icns",
-    ]
-
-    private var fileExt: String { (fileName as NSString).pathExtension.lowercased() }
-
-    /// P14: 能按图片渲染时给出 `NSImage`; 非图片 / 超过 40 MB / 读不出来 → nil, 回落文本占位。
-    private var previewImage: NSImage? {
-        guard Self.imageExts.contains(fileExt) else { return nil }
-        guard let attr = try? FileManager.default.attributesOfItem(atPath: absolutePath),
-              let size = attr[.size] as? Int, size <= 40_000_000 else { return nil }
-        return NSImage(contentsOfFile: absolutePath)
-    }
-
-    /// 真实文件内容; 二进制/超大文件给占位文案 (图片正常时走 `previewImage`, 这里只兜失败)。
-    private var fileContent: String {
-        let fm = FileManager.default
-        guard let attr = try? fm.attributesOfItem(atPath: absolutePath),
-              let size = attr[.size] as? Int, size <= 1_000_000
-        else { return L("// 文件过大 (>1 MB), 暂不支持预览") }
-        if Self.imageExts.contains(fileExt) {
-            return String(format: L("// 图片 (%@) 读取失败或超过 40 MB"), fileExt)
-        }
-        if fileExt == "pdf" { return L("// PDF 暂不支持预览") }
-        guard let s = try? String(contentsOfFile: absolutePath, encoding: .utf8) else {
-            return L("// 二进制文件或暂不支持的编码")
-        }
-        if s.isEmpty { return L("// 空文件") }
-        return s
-    }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            // Preview header: back + file identity
-            HStack(spacing: 8) {
-                Button(action: onBack) {
-                    Image(systemName: "chevron.left")
-                        .font(.system(size: 11, weight: .semibold))
-                        .foregroundStyle(CodexTheme.textTertiary)
-                }
-                .buttonStyle(.plain)
-                .help("返回文件树")
-
-                VStack(alignment: .leading, spacing: 1) {
-                    Text(fileName)
-                        .font(CodexTheme.fontMonoSm)
-                        .foregroundStyle(CodexTheme.textPrimary)
-                        .lineLimit(1)
-                    Text(absolutePath)
-                        .font(CodexTheme.fontTiny)
-                        .foregroundStyle(CodexTheme.textMuted)
-                        .lineLimit(1)
-                        .truncationMode(.head)
-                }
-                Spacer()
-                VStack(alignment: .trailing, spacing: 1) {
-                    Text(Self.imageExts.contains(fileExt) ? fileExt : (language ?? "text"))
-                        .font(CodexTheme.fontMonoXs)
-                        .foregroundStyle(CodexTheme.textTertiary)
-                    if let meta = fileMeta {
-                        Text(meta)
-                            .font(.system(size: 9))
-                            .foregroundStyle(CodexTheme.textMuted)
-                    }
-                }
-            }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
-            .overlay(
-                Rectangle().frame(height: 1).foregroundStyle(CodexTheme.divider),
-                alignment: .bottom
-            )
-
-            if let image = previewImage {
-                // P14: 图片直接渲染 (原先是「图片预览将在后续版本提供」的占位文案)
-                ScrollView([.horizontal, .vertical], showsIndicators: true) {
-                    Image(nsImage: image)
-                        .resizable()
-                        .scaledToFit()
-                        .frame(maxWidth: Tune.workspacePreviewImageMaxSide,
-                               maxHeight: Tune.workspacePreviewImageMaxSide)
-                        .padding(12)
-                }
-                .frame(maxHeight: .infinity)
-            } else {
-                ScrollView([.horizontal, .vertical], showsIndicators: true) {
-                    Text(CodeHighlighter.highlight(fileContent, language: language))
-                        .font(CodexTheme.fontMonoXs)
-                        .foregroundStyle(CodexTheme.textPrimary)
-                        .textSelection(.enabled)
-                        .fixedSize(horizontal: true, vertical: true)
-                        .padding(12)
-                }
-                .frame(maxHeight: .infinity)
             }
         }
     }

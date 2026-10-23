@@ -7,7 +7,7 @@
    **本文件由 scripts/l10n/gen_strings.py --write 生成, 别手改** ——
    译文改 scripts/l10n/en_values.py 的 VALUES, 再跑 --write。
 
-   条数: 795
+   条数: 812
 */
 
 " [附件: %@]" = " [Attachment: %@]";
@@ -18,6 +18,7 @@
 "%lld 个人格文件是「按需」的, 模型不知道它们存在: %@" = "%lld persona files are “on demand” — the model does not know they exist: %@";
 "%lld 个人格文件读不出来 (权限或编码), 内容未进 prompt: %@" = "%lld persona files cannot be read (permissions or encoding) — their content is not in the prompt: %@";
 "%lld 个回合" = "%lld turns";
+"%lld 个文件" = "%lld files";
 "%lld 个来源" = "%lld sources";
 "%lld 个模型因缺元数据未列出: %@" = "%lld models not listed — no metadata available: %@";
 "%lld 分 %lld 秒" = "%lldm %llds";
@@ -32,6 +33,7 @@
 "%lld 条与 persona pack 的 key 冲突, 已跳过注入: %@" = "%lld items collide with a persona pack key and were skipped: %@";
 "%lld 条常驻条目被静默丢弃: %@" = "%lld always-on items were silently dropped: %@";
 "%lld 次工具调用" = "%lld tool calls";
+"%lld 次调用" = "%lld calls";
 "%lld 秒" = "%llds";
 "%lld 项" = "%lld items";
 "(无注入内容)" = "(no injected content)";
@@ -44,6 +46,8 @@
 "// 文件过大 (>1 MB), 暂不支持预览" = "// File too large (>1 MB) — preview not supported yet";
 "// 无法读取源码" = "// Cannot read the source";
 "// 空文件" = "// Empty file";
+"1 个文件" = "1 file";
+"1 次调用" = "1 call";
 "<1 秒" = "<1s";
 "= 检查频率 (条件可能成立后按此间隔值守)" = " = check interval (poll at this rate once the condition may hold)";
 "AI 回复生成中…" = "Generating reply…";
@@ -84,6 +88,7 @@
 "UID %lld 未取到邮件正文" = "No message body returned for UID %lld";
 "agent 在这个目录里干活; 选「无项目」时按 home 执行 (请看管好白名单)" = "The agent works inside this directory; with “no project” it runs in your home directory (keep the allowlist tight).";
 "agent 未配密钥" = "Agent has no shared secret";
+"agent 每改一个文件, 这里就会多一行" = "Every file the agent touches adds a row here";
 "base URL 无效" = "Invalid base URL";
 "cron 无效" = "Invalid cron expression";
 "curl 退出码 %d" = "curl exit code %d";
@@ -103,6 +108,7 @@
 "prompt 与 cron 为必填" = "prompt and cron are required";
 "provider (自定义)" = "provider (custom)";
 "sort 写文件" = "sort writes a file";
+"tokens" = "tokens";
 "txt / html 没有 frontmatter — 标题就是文件名" = "txt / html have no frontmatter — the filename is the title";
 "· %lld 个在途" = "· %lld in flight";
 "· 最近：" = "· Latest: ";
@@ -211,6 +217,7 @@
 "关闭" = "Close";
 "关闭提示" = "Dismiss";
 "其他…" = "Other…";
+"其它改动" = "Other changes";
 "具备标准模式全部能力, 并挂载全部业务扩展, 扩展注册的工具一并进入工具池。" = "Everything Standard offers, plus every business extension mounted — tools they register join the tool pool.";
 "内容没变时不会写盘, 也不会留下一条变更记录" = "Nothing is written when the content is unchanged, and no revision is recorded";
 "内容较长 · 展开" = "Long content · Expand";
@@ -313,6 +320,8 @@
 "在 App 外改完文件后点这里; 已开着的会话仍需重启引擎才生效" = "Click here after editing files outside the app; running sessions still need an engine restart";
 "在 Finder 中显示" = "Reveal in Finder";
 "在 Finder 打开" = "Open in Finder";
+"在「文件」或「改动」里点一行" = "Pick a row under File or Changes";
+"在工作区打开" = "Open in workspace";
 "在这里输入该做什么…" = "Type what to do…";
 "在途: %@" = "In flight: %@";
 "增" = "New";
@@ -320,7 +329,7 @@
 "备份失败" = "Backup failed";
 "备份已在进行中" = "A backup is already running";
 "复制" = "Copy";
-"复制全文" = "Copy full text";
+"复制全文" = "Copy all";
 "复制全部输出" = "Copy all output";
 "外观" = "Appearance";
 "外链图片不在应用内加载" = "Remote images are not loaded in the app";
@@ -360,6 +369,7 @@
 "展开侧栏" = "Expand sidebar";
 "展开这一段过程" = "Show these steps";
 "工作区中查找" = "Find in workspace";
+"工作区改动" = "Working tree";
 "工作日志" = "Work log";
 "工具执行失败" = "Tool execution failed";
 "工具相位落库" = "Persist tool phases";
@@ -476,6 +486,7 @@
 "收起侧栏" = "Collapse sidebar";
 "收起工作区" = "Collapse workspace";
 "收起这一段过程" = "Hide these steps";
+"改动" = "Changes";
 "改动会重置该账号的连接实例 (下次收信生效)" = "Saving resets this account's connection (takes effect on the next check).";
 "改动未生效 · 重启引擎" = "Changes not live · restart the engine";
 "改完要点保存 —— 自动保存会把写了一半的句子也落盘, 还会跟你在外部编辑器里的改动抢。" = "Save explicitly — autosave would persist half-written sentences and race with your edits in an external editor.";
@@ -556,9 +567,12 @@
 "未配置: %@" = "Not configured: %@";
 "未验证 — 拉取失败, 使用预设清单兜底" = "Not verified — fetch failed, using the built-in preset list";
 "本会话改动" = "Changes in this session";
+"本会话还没有改动" = "No changes in this session yet";
 "本周" = "This week";
 "本地" = "Local";
+"本次没有改动文件" = "No files changed this turn";
 "本次注入 (只读)" = "This turn's injection (read-only)";
+"本轮" = "This turn";
 "条件触发后要执行的动作…" = "The action to run once the condition holds…";
 "来信驱动的无人值守 agent: 按间隔收信, 过鉴权四道闸后起会话执行" = "A mail-driven unattended agent: checks the inbox on an interval and starts a session once the mail passes the four gates";
 "来源" = "Origin";
@@ -729,16 +743,18 @@
 "运行中…" = "Running…";
 "运行状态" = "Run status";
 "近 %lld 天内" = "within the last %lld days";
-"返回文件树" = "Back to file tree";
 "还原主窗口" = "Restore main window";
 "还差: %@" = "Still missing: %@";
+"还有 %lld 个" = "%lld more";
 "还有 %lld 行 · 展开" = "%lld more lines · Expand";
 "还没有可用的邮箱账号" = "No usable mailbox account yet";
 "还没有常驻内容\n点右上角 + 新建条目, 或用常驻区与笔记区的入口放入文件" = "Nothing always-on yet\nUse + in the top right to add an entry, or use the resident and notes section entries to put files in place";
+"还没有打开文件" = "No file open";
 "这一场只有工具输出，没有可提炼的内容。" = "This session has only tool output — nothing to distill.";
 "这一场没有可提炼的正文（只有工具输出）" = "No text to distill here (tool output only)";
 "这一段会进每轮 prompt 的索引段, 逐字就是 agent 收到的" = "This section goes into the index of every prompt, word for word as the agent receives it";
 "这一篇还是空的…" = "This note is still empty…";
+"这一轮花了什么" = "What this turn cost";
 "这个会话还没说过话，侧问会带一个空上下文。" = "This session has no messages yet — the side chat will start empty.";
 "这个目录里没有可读的文档" = "No readable documents in this directory";
 "这个路径不在笔记目录里" = "That path is outside the notes directory";
@@ -798,6 +814,7 @@
 "项目操作" = "Project actions";
 "项目目录不存在: %@" = "Project directory does not exist: %@";
 "预算 %@ 字" = "budget %@ chars";
+"预览" = "Preview";
 "预设" = "Preset";
 "首封主题里必须带这串密钥 (清洗剥掉后不落库)" = "The first message's subject must carry this secret (stripped during cleanup and never stored)";
 "首次运行前为空; agent 运行后会把关键进展写在这里, 也可手动编辑干预任务方向…" = "Empty before the first run; the agent writes key progress here and you can edit it by hand to steer the task…";

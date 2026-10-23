@@ -115,5 +115,16 @@ extension SmokeMain {
         ws15Store.refreshWorkspace()
         check(ws15Store.fileTree.map(\.id) == idsBefore15,
               "P14 信号: ⌘R 重扫后顶层节点身份不变 (走合并; 回退成整体替换 ⇒ 这里立刻红)")
+
+        // ---- 树上的"目录有改动"标点由**预计算**的目录集驱动 ----
+        // 原先每个目录行自己去扫全部 changed 判前缀 (O(目录 × 改动)); 现在一次算好。
+        // 这笔账的语义要害是**每一级祖先**: `a/b/c.swift` 变动时 a 和 a/b 都得亮点,
+        // 只点亮直接父级 ⇒ 折叠着的 a 看起来干净, 展开才发现在下层 (安静的错误)。
+        check(workspaceFolderPrefixes(of: ["a/b/c.swift"]) == ["a", "a/b"],
+              "目录改动集: 每个文件的**每一级祖先**都进集合, 不只直接父级")
+        check(workspaceFolderPrefixes(of: ["top.txt"]).isEmpty,
+              "目录改动集: 根下的文件不产生任何目录 (顶层没有可以点的目录行)")
+        check(workspaceFolderPrefixes(of: ["a/b/c.swift", "a/b/d.swift", "a/x"]) == ["a", "a/b"],
+              "目录改动集: 同一目录的多个文件不重复计 (Set 去重, 计数不会虚高)")
     }
 }

@@ -108,6 +108,43 @@ if grep -nE 'withAnimation' -A2 mangox/Views/Chat/ChatView.swift | grep -qE 'scr
     exit 1
 fi
 
+# ③d 「滚到底」的锚点必须是**恒实例化**的末尾哨兵 (2026-10-23 boss 报「打开后默认会话不在最底、
+#     ｜也没有《跳转最新》按钮，切一次会话才正常」)。
+#     锚在 `LazyVStack` 的行 id 上时，那个行在初屏**还没实例化** ⇒ `scrollTo` 只能按**估算**的
+#     文档高落点，而且同一 id 重复调用**不再重新锚定**。用 AppKit 侧 `documentVisibleRect` 实测
+#     （真 ChatView + 1014 条消息 + 1280×800）：落点距真底 **240 / 1947 / 2701 / 2898pt** 不等；
+#     更坏的是内容底探针住在最后一块**下面**，视口够不到 ⇒ 永不实例化 ⇒ 永不报数 ⇒
+#     `nearBottom` 停在初始 `true` ⇒ 按钮永不出现。换成末尾哨兵后 gap = **0.0pt**（三次跑全 0）。
+#     ⚠️ 两条都编译得过、没有任何数值会变、也没有断言会红 ⇒ 只能扫**源码事实**。
+if ! grep -qE 'private var scrollTarget: AnyHashable \{ Self\.tailAnchor \}' \
+        mangox/Views/Chat/ChatView.swift; then
+    echo "FAIL - 「滚到底」的锚点不是内容末尾哨兵 (scrollTarget 必须返回 Self.tailAnchor)" >&2
+    echo "       锚在 LazyVStack 的行 id 上 = 按估算落点, 实测距真底 240~2900pt 且按钮永不出现" >&2
+    exit 1
+fi
+if ! grep -qE '\.id\(Self\.tailAnchor\)' mangox/Views/Chat/ChatView.swift; then
+    echo "FAIL - 内容末尾哨兵不见了 (`.id(Self.tailAnchor)` 必须在 ScrollView 的内容里)" >&2
+    exit 1
+fi
+
+# ③e 第一拍必须先锚**真实行**、其余才锚哨兵 —— 顺序反了就是**白屏**。
+#     只锚哨兵时，切过来的那一秒文档高还是**估的**（同一会话实测 39695 / 49203 / 50599 / 51437，
+#     最大值比真实内容底多约 840pt ≈ 一屏），锚到哨兵就按虚高值落进**内容之下的空白区** ⇒ 整片白。
+#     实测同一白屏场景（dream → 模型部署测试）：只锚哨兵 `y=50719` 白 → 先锚最后一块 `y=49881` 有内容。
+#     ⚠️ 这次最狠的教训：**虚高文档上 `gap=0` 照样成立** —— 几何判据判不出白屏，只有画面能判。
+#     ⇒ 源码事实门（两条写法都编译得过、数值也不变，没有断言会红）。
+if ! grep -qE 'projectedChat\.blocks\.last\.map \{ AnyHashable' mangox/Views/Chat/ChatView.swift; then
+    echo "FAIL - 找不到「先把尾块量出来」的锚点 (materializeTarget 必须取 projectedChat.blocks.last)" >&2
+    echo "       只锚末尾哨兵会在切换后落进估算出来的空尾 = 白屏 (实测 y=50719 纯白)" >&2
+    exit 1
+fi
+if ! grep -A4 -E 'for \(i, delay\) in Self\.followBeats\.enumerated\(\)' mangox/Views/Chat/ChatView.swift \
+        | grep -qE 'if i == 0'; then
+    echo "FAIL - 「滚到底」的节拍没有分两段 (followBeats 循环里第一拍 i == 0 必须锚 materializeTarget)" >&2
+    echo "       顺序反了 = 每一拍都按虚高文档落点 = 白屏; 只改注释不算, 这门看的是真源码" >&2
+    exit 1
+fi
+
 # ④ 冒烟主文件的**体量棘轮** (2026-10-19) —— 判据 = 行数**只减不增**。
 #    为什么要有这条: 冒烟已长到 7000+ 行, 而且几乎全在**一个函数 `run()`** 里
 #    (Swift 函数体不能跨文件 ⇒ 只要它还是一个大函数, 就必然是一个大文件)。

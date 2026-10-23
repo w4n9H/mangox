@@ -97,7 +97,7 @@ struct KnowledgeView: View {
     /// 提案的"现在"（磁盘上目标那一篇的原文）。`nil` = 还没读到; insight 恒 `""`（目标还不存在）。
     /// **随选中项缓存**, 不在 `body` 里现读文件（同 `noteDraftTrigger` 那条判据）。
     @State private var proposalBase: String?
-    /// 批量采纳 / 丢弃的**结果**（P18）。`nil` = 还没做过。
+    /// 批量采纳 / 丢弃的**结果**。`nil` = 还没做过。
     ///
     /// 为什么需要它: 批量动作一次改好几篇文件, 而界面上的反馈只有"那几行消失了" ——
     /// 人不点开任何一条就无从知道"是 3 条全成了, 还是成了 1 条失败 2 条"。
@@ -122,10 +122,19 @@ struct KnowledgeView: View {
     }
 
     /// 选中的那一篇笔记（根 + 文档）。找不到 = 文件在 App 外被删了 ⇒ 回落显示根的信息面。
+    ///
+    /// ⚠️ **`baseDocs` 里没有就退到 `rootScan`**（2026-10-22 修「首次点开笔记正文是空的」）。
+    /// 两者都是 `KnowledgeBaseScan.docs(root:)` 的产物, 差别只在**什么时候扫的**:
+    /// `baseDocs` 只服务当前选中、随每次换选中重扫（**更新鲜**）; `rootScan` 喂左列,
+    /// 面板一打开就有、但只在根集合变化时重扫（**更早到**）。
+    /// 先前只认 `baseDocs` ⇒ 首次点开那一瞬间它还空着（`reloadBaseDocs` 是异步的）,
+    /// 于是右栏先闪一下"库信息面", 而 `loadNoteDraft` 更是当场把"还没扫完"当成"这篇不存在"。
     private var editingNote: (base: KnowledgeBase, doc: KnowledgeBaseDoc)? {
         guard case .note(let bid, let rel) = selection,
-              let base = store.knowledgeBase(id: bid),
-              let doc = baseDocs.first(where: { $0.relativePath == rel }) else { return nil }
+              let base = store.knowledgeBase(id: bid) else { return nil }
+        let fallback = rootScan.first { $0.base.id == bid }?.docs ?? []
+        guard let doc = baseDocs.first(where: { $0.relativePath == rel })
+                        ?? fallback.first(where: { $0.relativePath == rel }) else { return nil }
         return (base, doc)
     }
 
@@ -870,7 +879,7 @@ struct KnowledgeView: View {
         return root + " / " + p.targetPath
     }
 
-    /// 批量的两个动作（P18）。**只在两条以上时出现** —— 一条的时候, 行内那个审阅面本来
+    /// 批量的两个动作。**只在两条以上时出现** —— 一条的时候, 行内那个审阅面本来
     /// 就有采纳 / 丢弃两个按钮, 再挂一组等于把同一件事说两遍, 而侧栏本来就窄。
     ///
     /// 位置是区头右侧（`sectionHeader` 的 accessory）而不是列表底部: 区头挨着"提案 · 6",
@@ -1936,9 +1945,17 @@ struct KnowledgeView: View {
     /// 保存后**不能**只改 `noteDraftHash` 了事: 那样"编辑器里显示的内容"就永远只是我们的记忆,
     /// 而磁盘的真源再没被核对过（`composeNote` 一旦有偏差, 界面会一直显示一份不存在的文本）。
     private func loadNoteDraft() {
-        guard let note = editingNote,
-              let draft = store.knowledge.noteDraft(rootId: note.base.id,
-                                                    relativePath: note.doc.relativePath) else {
+        // ⚠️ **判据是 `selection` 本身, 不是"扫描结果里有这篇"**（2026-10-22 修 bug）。
+        //
+        // 曾经写成 `guard let note = editingNote`，而 `editingNote` 那时只查 `baseDocs` ——
+        // 一份**异步**的扫描结果。首次点开一篇笔记时它还没回来 ⇒ 把"还没扫完"当成"这篇
+        // 不存在" ⇒ 标题空、正文空、只显示"这一篇还是空的…", 而磁盘上明明有内容。
+        // 而且**零红灯**: `.task(id: noteDraftTrigger)` 的键没变, 它不会再跑一次; 换一篇
+        // 再换回来才正常 —— 这正是"首次点击不显示、实际有"的形状。
+        //
+        // 读一份草稿本来只需要 (rootId, 相对路径), 两样都在 `selection` 里 ⇒ 不必等扫描。
+        guard case .note(let bid, let rel) = selection,
+              let draft = store.knowledge.noteDraft(rootId: bid, relativePath: rel) else {
             noteDraftTitle = ""
             noteDraftBody = ""
             noteDraftHash = ""
@@ -1955,8 +1972,7 @@ struct KnowledgeView: View {
         noteTitleEditable = draft.titleEditable
         noteReject = nil
         // 版本史跟着一起读 —— 判「来源」要拿它比指纹, 画「变更史」要它的全文。
-        noteRevisions = store.knowledge.noteRevisions(rootId: note.base.id,
-                                                      relativePath: note.doc.relativePath)
+        noteRevisions = store.knowledge.noteRevisions(rootId: bid, relativePath: rel)
     }
 
     /// 改过没有 —— **与写盘共用 `composeNoteEdit`**（编辑面和写盘各算一份的话,
@@ -2041,12 +2057,14 @@ struct KnowledgeView: View {
             newNoteTitle = ""
             newNoteReject = nil
             selection = .note(rootId, rel)
-            // 顺序不能反: `loadNoteDraft` 靠 `editingNote` 找到那篇, 而它读的是 `baseDocs` ——
-            // 不先把新文件扫进来, 打开的就是一片空白（而且**没有红灯**: 看起来像"新建了个空笔记"）。
+            // 左列要出现新那一行（`reloadRootScan`）, 右栏的文档信息（大小/摘要）要它
+            // （`reloadBaseDocs`）。**草稿不在这里读** —— `.task(id: noteDraftTrigger)` 随
+            // selection 变化自己会跑, 而它只认 selection + 磁盘。
+            // （早先这里得手工按顺序补一次 `loadNoteDraft()`，因为那时它把"扫描结果里有这篇"
+            //   当门槛 —— 顺序一反就是一片空白。门槛已经拆掉, 那种顺序依赖不复存在。）
             Task {
                 await reloadRootScan()
                 await reloadBaseDocs()
-                loadNoteDraft()
             }
         }
     }
@@ -2353,7 +2371,11 @@ struct KnowledgeView: View {
             return
         }
         let root = base.path
-        baseDocs = await Task.detached { KnowledgeBaseScan.docs(root: root) }.value
+        let docs = await Task.detached { KnowledgeBaseScan.docs(root: root) }.value
+        // 扫的这一会儿用户可能已经换了库 ⇒ 别把上一份塞进当前面板
+        // （`.task(id:)` 能取消任务, 但 `Task.detached` 的 await 不抛取消, 结果照样会到）
+        guard editingBase?.id == base.id else { return }
+        baseDocs = docs
     }
 
     // MARK: - 提炼候选审核 (待审核条目)

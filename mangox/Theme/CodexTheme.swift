@@ -426,6 +426,12 @@ enum Tune {
 
     // 工作区
     static let workspaceWidth: CGFloat = 360
+    /// 工作区 tab 条的文字区高度 (不含下面那条 2px 选中线)。
+    static let workspaceTabHeight: CGFloat = 30
+    /// 文件预览正文字号。**与 `CodexTheme.fontMonoXs` 是同一个数, 留一份是因为要把这个数字
+    /// 交给 `NSFont` 去预量最长行的宽度** —— 不预量的话 `LazyVStack` 会退化成全量布局
+    /// (实测 4K→115K 文件从 8 ms 变回 35 s)。两处要一起改。
+    static let workspacePreviewFontSize: CGFloat = 11
 
     // 顶栏
     // 顶栏
@@ -520,7 +526,7 @@ enum Tune {
     static let dreamNoteIndexChars: Int            = 20000   // 目录（兜底：2~3 个根实际远不到）
     static let dreamNoteBodyChars: Int             = 120000  // 正文（超了从最旧的丢 + 点名）
 
-    // P18（2026-10-22 boss 拍板）: dream 的**提案粒度**上限。
+    // dream 的**提案粒度**上限（2026-10-22）。
     //
     // 起因是一份真实的坏结果: 一次定向 dream 对着一场会话出了 8 条提案, 而这 8 条其实是
     // 「27b 模型部署」这一个项目的一件事的 6 个侧面（服务暴露 / 模型事实卡 / 云平台 / 选型 /
@@ -531,7 +537,7 @@ enum Tune {
     //    （`dreamSummary` 会点名）。同源同改: `dreamPrompt` 与 `note_proposal` 的工具描述。
     static let dreamMaxProposals: Int              = 3
 
-    // P18: 时间线（App 侧自动记账, 不经过模型也不进审核队列）。
+    // 时间线（App 侧自动记账, 不经过模型也不进审核队列）。
     // 落点 = `<笔记根>/timeline/YYYY-MM.md`（归属仍走「位置即归属」, 不新开一套目录概念）。
     //
     // ⚠️ 注入面这三个数**每一轮普通对话都要付**（它进常驻段）⇒ 刻意压得很小:
@@ -578,7 +584,7 @@ enum Tune {
     /// 圆点列当场断一截。右对齐: 数字的右边缘成列, 扫一眼就能比长短。
     static let traceDurationWidth: CGFloat = 40
 
-    // 分享成图片 (P19, 2026-10-22)。三个数就够了 —— 渲染宽、卡片内边距、长度上限。
+    // 分享成图片（2026-10-22）。三个数就够了 —— 渲染宽、卡片内边距、长度上限。
     /// 出图宽度 (pt)。720 = 「知识库注入面板」同宽 (那里也是 markdown 预览, 窄了层级全挤一起)。
     static let shareWidth: CGFloat = 720
     /// 卡片内边距 (pt)。比正文栏的 `chatHPadding` 大: 图是要**单独看**的, 留白不足会显得挤。

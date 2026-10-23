@@ -194,18 +194,62 @@ final class ChatStore: ObservableObject {
     var canUseWorkspace: Bool { activeProjectPath != nil }
 
     /// 第三栏工作区: 默认隐藏, Chat/Work 段控件切换 (对齐 Codex)。
+    ///
+    /// ⚠️ `willSet` 那个回调**不是可选项**：开面板要把窗口按缺口补宽，而补宽必须发生在
+    ///    SwiftUI 按新状态布局**之前** —— 挂在 `.onChange` 上就已经晚了一版，会先按旧窗口宽
+    ///    排一次（正文整条重排 200~800ms），补宽后又排一次。见 `WorkspaceWindowFit` 文件头 ②。
     @Published var workspaceVisible: Bool = false {
+        willSet {
+            if newValue != workspaceVisible { willSetWorkspaceVisible?(newValue) }
+        }
         didSet {
             // 无工作目录时强制回 Chat (切换到普通 chat 会话的场景)
             if workspaceVisible, !canUseWorkspace { workspaceVisible = false }
         }
     }
 
+    /// 工作区开关的**前置**回调（窗口层用，视图层装）。非 `@Published`：它不该引起重渲染。
+    var willSetWorkspaceVisible: (@MainActor (Bool) -> Void)?
+
     /// P14: 菜单命令 → 工作区视图的一次性信号。**序号自增 = 新的一次请求**;
     /// 视图只观察变化、不回写清零 (清零会让「连按两次 ⌘R」退化成一 次)。
     /// 存在的理由: git 状态 / 语言构成是视图侧 `@State`, 命令层够不到 ⇒ 把命令转成视图能观察的事件。
     @Published var workspaceRefreshTick = 0
     @Published var workspaceFilterFocusTick = 0
+    /// 同上一种信号 —— 「跳到工作区的改动 tab」。轮末账单的小弹窗里有入口。
+    /// 同样用**自增**而不是布尔: 连点两次要生效两次。
+    @Published private(set) var workspaceChangesTick = 0
+
+    /// 从轮末账单的口子进工作区改动 tab。
+    /// 无工作目录时**什么都不做**（也不要 `workspaceVisible = true` —— 那会被 didSet 打回来,
+    /// 但先置真再被打回来会闪一下半截布局）。
+    func openWorkspaceChanges() {
+        guard canUseWorkspace else { return }
+        workspaceVisible = true
+        workspaceChangesTick &+= 1
+    }
+
+    /// 每轮**实测耗时** — sessionId → 该轮**末条正文**的消息 id → 秒。
+    ///
+    /// ⚠️ 只活在内存里, **不落库**: 重启后重放出来的历史轮次没有这个数, 轮末账单里那一格
+    ///    就整段不显示。这是**有意的取舍**, 不是遗漏 —— 落库要么加一张表, 要么把
+    ///    "开始流式"的时间戳当成"结束"(见 `TurnBill.elapsed` 的注释: 那会算出一个
+    ///    看起来合理的错数, 比没有更糟)。
+    @Published private(set) var turnElapsed: [UUID: [UUID: TimeInterval]] = [:]
+
+    func turnElapsed(sid: UUID, messageId: UUID) -> TimeInterval? {
+        turnElapsed[sid]?[messageId]
+    }
+
+    /// 落定点记一笔耗时。挂载点是「该轮最后一条 assistant 正文」——判据与视图侧**同源**
+    /// （`ChatView.projectedChat` 里挑账单宿主用的是同一条件），否则账会挂在一条看不见的行上。
+    private func noteTurnElapsed(sid: UUID, projection: [ChatMessage], seconds: TimeInterval) {
+        guard let host = projection.last(where: { m in
+            guard m.role == .assistant, case .text = m.content else { return false }
+            return true
+        }) else { return }
+        turnElapsed[sid, default: [:]][host.id] = seconds
+    }
 
     /// 全部会话（跨 projects + chats）。
     var allConversations: [ConversationItem] {
@@ -1750,7 +1794,7 @@ final class ChatStore: ObservableObject {
         // P15.3: dream 的收口挂在**与等待型同一个位置** —— 两者都是"这次 fire 到此为止"的落点。
         // 手动停（本处）也要收: 「跑不完不算失败」, 已经产出的提案照样进表。
         scheduler.finishDreamFireIfNeeded(sid: sid)
-        // P18: 这一轮到此为止 ⇒ 把这场会话在**今天**的流水刷新一次。
+        // 这一轮到此为止 ⇒ 把这场会话在**今天**的流水刷新一次。
         // 放在 dream 收口之后（那之后 spool 已变成提案，流水里那一行才说得出"几轮"）。
         // 节流在 `TimelineJournal` 里（3 秒），所以同一轮漏出的多个落定事件不会重写三遍。
         TimelineJournal.recordSession(store: self, sessionId: sid)
@@ -2259,6 +2303,9 @@ extension ChatStore: AgentTransportDelegate {
             if let elapsed {
                 // 回复预览须在镜像清除前取
                 let proj = sid == selectedConversationId ? messages : (liveTurns[sid] ?? [])
+                // 轮末账单的耗时记账 —— 必须赶在 `liveTurns[sid] = nil` 之前（下面几行就地清镜像）。
+                // 只记实测值；手动停止那条路 `elapsed` 是 nil（turnStartAt 已被清）⇒ 不记，账单少一格。
+                noteTurnElapsed(sid: sid, projection: proj, seconds: elapsed)
                 // P6.3.2: 不在场完成 → 积累 (手动停止 elapsed=nil 已被排除; 摘要独立于通知,
                 // 已发系统通知的完成回到前台仍会出横幅 —— 拍板 2026-09-14)
                 if sid != selectedConversationId || !appIsActive {
@@ -2284,7 +2331,7 @@ extension ChatStore: AgentTransportDelegate {
             if injectedTurnSid == sid { injectedTurnSid = nil }
             finishWaitingFireIfNeeded(sid: sid)
             scheduler.finishDreamFireIfNeeded(sid: sid)   // P15.3: 正常落定的那条路
-            // P18: 同上（`stopTurn` 那处也有一份）—— 两个落定点记的是同一件事。
+            // 同上（`stopTurn` 那处也有一份）—— 两个落定点记的是同一件事。
             // 分两处而不是抽一个"回合结束"统一入口: 现在没有这样一个入口, 而造一个
             // 要动整条事件分发的形状（那远超"记一行流水"该动的范围）。
             TimelineJournal.recordSession(store: self, sessionId: sid)
