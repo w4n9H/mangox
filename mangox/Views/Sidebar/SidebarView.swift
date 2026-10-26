@@ -12,7 +12,7 @@ struct SidebarView: View {
     @StateObject private var model: SidebarModel
     @State private var expandedProjects: Set<UUID> = []
     /// P14 (2026-10-10): 侧栏搜索串 —— 只过滤 Projects / Chats 两区,
-    /// 导航 5 项是**固定的应用入口**, 不是可搜索内容。
+    /// 导航项是**固定的应用入口**, 不是可搜索内容（底部那行「设置」同理）。
     @State private var query: String = ""
     // 删除会话二次确认 (两种粒度: 仅 db / db+pi 记忆文件)
     @State private var confirmDeleteTarget: ConversationItem?
@@ -30,18 +30,28 @@ struct SidebarView: View {
     }
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 2) {
-                brandHeader
-                searchField
-                navSection
-                if noMatches { noMatchNote }
-                projectsSection
-                chatsSection
+        // 上下两段：**可滚的内容** + **钉在底部的设置行**。
+        //
+        // ⚠️ 设置必须在 `ScrollView` **外面**（2026-10-26 boss 定）：它是唯一一个开**独立窗口**
+        //    的入口（`SettingsWindowController`，P14），而其余四项都是在主窗口里换面板。
+        //    把它留在导航列表里 = 一个"看起来和邻居一样、行为却不一样"的行；会话一多，
+        //    它还会被滚到看不见 —— 应用级入口不该跟着列表走。
+        //    取舍：**钉底**而不是"放在滚动内容末尾"（后者滚上去就没了，等于没入口）。
+        VStack(spacing: 0) {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 2) {
+                    brandHeader
+                    searchField
+                    navSection
+                    if noMatches { noMatchNote }
+                    projectsSection
+                    chatsSection
+                }
+                .padding(.horizontal, Tune.sidebarContentInset)
+                .padding(.top, 10)
+                .padding(.bottom, 16)
             }
-            .padding(.horizontal, Tune.sidebarContentInset)
-            .padding(.top, 10)
-            .padding(.bottom, 16)
+            settingsFooter
         }
         .background(CodexTheme.bgSidebar)
         .confirmationDialog("删除会话「\(confirmDeleteTarget?.title ?? "")」？",
@@ -148,7 +158,7 @@ struct SidebarView: View {
             .padding(.bottom, 4)
     }
 
-    // MARK: - 全局导航 (Codex: New chat / Plugins / Scheduled)
+    // MARK: - 全局导航 (新对话 / 知识库 / 定时任务 / 插件 —— 全是主窗口内的面板切换)
 
     private var navSection: some View {
         VStack(alignment: .leading, spacing: 1) {
@@ -172,14 +182,25 @@ struct SidebarView: View {
                    active: model.showExtensionsPanel) {
                 store.toggleExtensionsPanel()
             }
-            // P14: 设置改成**独立窗口** —— 这里只是入口, 开关由 SettingsWindowController 持有
-            // (active 读 store.showSettingsPanel: 它是窗口可见性的镜像, 由控制器写入)
-            navRow(icon: "gearshape", title: L("设置"),
-                   active: model.showSettingsPanel) {
-                SettingsWindowController.shared.toggle(store: store)
-            }
+            // ⚠️ 设置**不在这里**了（2026-10-26 boss: "settings 已经调整为一个单独的小弹窗,
+            //    和其他的几个栏目不一样了, 我觉得移到底部会比较好"）——
+            //    它是唯一开独立窗口的入口，行为和邻居不同就不该长得一样。见 `settingsFooter`。
         }
         .padding(.bottom, 6)
+    }
+
+    // MARK: - 设置（钉在侧栏底部，只有图标）
+
+    /// 2026-10-26 boss 三轮定形：先从导航列表移到底部（它是唯一开独立窗口的入口），
+    /// 再「不需要"设置"两个字, 一个图标足以, 并且移动到靠右」，
+    /// 最后从七格里挑了 **A2：静息常驻一枚极淡底**（"那个图标处稍显单调"）。
+    ///
+    /// 形态本身搬去了 `SidebarFooter` —— 那个类型只吃 `(active, onTap)`，
+    /// 出图脚本编得动它，所以文档里的效果图是**产品源码跑出来的**，不是照着搭的仿制品。
+    /// 这里只负责接线：真源 = `SidebarModel.showSettingsPanel`（窗口可见性的镜像）。
+    private var settingsFooter: some View {
+        SidebarFooter(active: model.showSettingsPanel,
+                      onTap: { SettingsWindowController.shared.toggle(store: store) })
     }
 
     private func navRow(icon: String, title: String,

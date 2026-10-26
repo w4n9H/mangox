@@ -57,6 +57,7 @@ SOURCES = [
     'mangox/Models/MessageModels.swift',
     'mangox/Views/Chat/ToolRunReceipt.swift',
     'mangox/Views/Chat/ThinkingCardView.swift',
+    'mangox/Views/Sidebar/SidebarFooter.swift',
 ]
 
 MAIN = r'''
@@ -133,13 +134,14 @@ func save(_ img: NSImage, _ path: String) {
 
 @MainActor
 func render(_ label: String, _ content: some View, width: CGFloat,
-            extraHeight: CGFloat = 0) {
+            extraHeight: CGFloat = 0, scheme: ColorScheme = .dark) {
     let root = content
         .frame(width: width, alignment: .topLeading)
         .background(CodexTheme.bgChat)
         // 暗色板: `adaptive()` 是 NSColor 动态色, 但离屏渲染时按**环境**的 colorScheme 解析它
         // —— 必须走 environment (`NSAppearance` 那招实测不生效)。
-        .environment(\.colorScheme, .dark)
+        // `scheme` 参数是 2026-10-26 加的: boss 用的是**亮色**主题, 只出暗色图等于没给他看。
+        .environment(\.colorScheme, scheme)
 
     // `NSHostingView` + 离屏窗口, **不用** `ImageRenderer` —— 后者画不出 `ScrollView` 的内容。
     let host = NSHostingView(rootView: root)
@@ -459,6 +461,36 @@ MainActor.assumeIsolated {
         .background(CodexTheme.bgCard)
     }, width: 620)
 
+    // ── G. 侧栏底部的设置入口 —— 2026-10-26 定形（boss 从七格里挑的 A2）
+    // 形态: 只有齿轮 · 靠右 · **静息常驻一枚极淡底**（bgPill），悬停/选中再叠一层 selected。
+    // 每一格都是**真的 `SidebarFooter`**（产品源码），悬停态靠 `hoverOverride` 指定
+    // （离屏渲染没有鼠标）。淘汰掉的方案（裸图标 / 悬停才出底 / 左端版本号）已整条删除 ——
+    // 方案对比图是决策用品，不是文档；留着就是四个分支抢同一件事。
+    func footerCase(_ title: String, _ sub: String,
+                    active: Bool = false, hover: Bool = false) -> some View {
+        VStack(alignment: .leading, spacing: 5) {
+            caption(title, sub)
+            SidebarFooter(active: active, onTap: {}, hoverOverride: hover)
+                .frame(width: Tune.sidebarWidth)
+        }
+    }
+    func footerStrip() -> some View {
+        VStack(alignment: .leading, spacing: 20) {
+            footerCase("静息", "常驻极淡底（bgPill）—— 图标有「容身处」，不再像悬在角落的装饰")
+            footerCase("悬停", "同一个底再叠一层 selected（亮暗两套主题都只是「加深一点」）", hover: true)
+            footerCase("选中（设置窗口开着）", "齿轮转 accent + 选中底 —— 与导航行同一套表达",
+                       active: true)
+        }
+    }
+    // 亮色一份、暗色一份：boss 用亮色主题，但暗色下"悬停没变化"正是这条最容易翻的车。
+    // ⚠️ 画布只给 320pt（= 侧栏 256 + 留白）：这条东西就在侧栏里，画成 620 会留一大片空白，
+    //    看图的人得自己找哪个是"底部那一角"。
+    render("sidebar-footer", footerStrip(), width: 320, scheme: .light)
+    render("sidebar-footer-dark", footerStrip(), width: 320, scheme: .dark)
+
+
+
+
     print("")
     print("判据:")
     print("  kind-compare   旧组三张读作 read; 新组读作 other 且标题是真名、command 是首参。")
@@ -481,6 +513,10 @@ MainActor.assumeIsolated {
     print("                 下面三张被塞进 240pt 定高容器 (底下那层浅色 = 容器范围)。")
     print("                 ✅ 对的样子: 三行各自 23pt 贴在容器顶部, 竖条只有行那么高。")
     print("                 ❌ 错的样子: 竖条一路画到底、每行之间大段空白 (形状在撑高)。")
+    print("")
+    print("  sidebar-footer 每一格都是真的 `SidebarFooter`（产品源码），悬停靠 `hoverOverride` 指定。")
+    print("                 定形 = 只有齿轮 · 靠右 · **静息常驻 bgPill 底** · 悬停/选中叠 selected。")
+    print("                 ⚠️ 暗色那张请重点看「悬停」有没有变化 —— 那是这条路最容易翻的地方。")
     print("")
     print("⚠️ 限制: `running` 的转圈 (`ProgressView` 这类动画件) 在离屏渲染里画不出来 ——")
     print("   那不是 App 的病。缩略条本身走 `NSHostingView`, 画得出来 (见文末)。")
