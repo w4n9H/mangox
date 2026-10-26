@@ -99,6 +99,16 @@ struct ToolCall: Identifiable, Hashable, Codable {
     /// 可带 base64 `image` 块 —— 读图工具走的就是这条)。**存路径不存 base64**:
     /// 整个 `ToolCall` 会被 JSON 编进事件载荷落库, 内嵌 base64 会让 payload 膨胀到 MB 级。
     var imagePaths: [String]
+    /// 父工具卡的 id —— **只有嵌套调用有**（codemode 脚本里的 `tools.bash(...)`）。
+    ///
+    /// pi 的 `tool_execution_*` 事件带 `parentToolCallId`（= 父调用的 callId，形如 `<父>/<n>`）。
+    /// 子调用**不出自己的行**：渲染在父卡里面（与 pi 官方 TUI 同一口径 ——
+    /// `interactive-mode.js` 里 `if (event.parentToolCallId) break;`）。
+    /// `nil` = 模型直接调的工具 = 顶层行。
+    ///
+    /// ⚠️ 存的是**父卡的 UUID**（不是 pi 的 callId 字符串）：callId 只在进程内有效、不落库,
+    ///    而这条字段要跟着卡片一起进 `events` 表, 重放时才认得回自己的父。
+    var parentId: UUID?
 
     init(id: UUID = UUID(),
          kind: ToolKind,
@@ -108,7 +118,8 @@ struct ToolCall: Identifiable, Hashable, Codable {
          phase: ToolPhase = .queued,
          durationMs: Int? = nil,
          diffText: String? = nil,
-         imagePaths: [String] = []) {
+         imagePaths: [String] = [],
+         parentId: UUID? = nil) {
         self.id = id
         self.kind = kind
         self.title = title
@@ -118,6 +129,7 @@ struct ToolCall: Identifiable, Hashable, Codable {
         self.durationMs = durationMs
         self.diffText = diffText
         self.imagePaths = imagePaths
+        self.parentId = parentId
     }
 
     /// Copy with a new phase (used when the user approves / denies a request).
@@ -158,5 +170,8 @@ extension ToolCall {
         durationMs = try c.decodeIfPresent(Int.self, forKey: .durationMs)
         diffText = try c.decodeIfPresent(String.self, forKey: .diffText)
         imagePaths = try c.decodeIfPresent([String].self, forKey: .imagePaths) ?? []
+        // 旧事件数据没有这一列（嵌套调用的父子关系是 2026-10-26 才落库的）⇒ 缺省 nil = 顶层行,
+        // 老会话原样重放, 不会被"猜"成某个别条的子行。
+        parentId = try c.decodeIfPresent(UUID.self, forKey: .parentId)
     }
 }

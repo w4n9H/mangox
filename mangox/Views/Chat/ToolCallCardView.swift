@@ -10,6 +10,19 @@
 import SwiftUI
 
 struct ToolCallCardView: View {
+    /// 一条**嵌套调用**（codemode 脚本里的 `tools.bash(...)`）。
+    ///
+    /// 为什么把它包一层而不是直接塞 `ToolCall`: 子卡有自己的审批状态与三个回调。
+    /// 用父卡的 `decision` 顶替 = 让"批准了外壳"顺带批准了里面那条 bash。
+    struct Nested: Identifiable {
+        let tool: ToolCall
+        let decision: PermissionDecision?
+        let onApprove: (() -> Void)?
+        let onDeny: (() -> Void)?
+        let onAlwaysAllow: (() -> Void)?
+        var id: UUID { tool.id }
+    }
+
     let tool: ToolCall
     /// 用户已就这张审批卡做过的选择（真源 = `ChatStore.toolDecisions`）。
     ///
@@ -20,6 +33,20 @@ struct ToolCallCardView: View {
     var onApprove: (() -> Void)? = nil
     var onDeny: (() -> Void)? = nil
     var onAlwaysAllow: (() -> Void)? = nil
+    /// 这一行的**嵌套调用**（只在 `codemode` 这类"工具里再调工具"的卡上有）。
+    ///
+    /// ⚠️ 它们**不在聊天流里单独占行**（顶层投影按 `parentId` 把它们摘掉了）:
+    ///    一次 codemode 调用显示成 `bash` + `codemode` 两行，既重复又会在重放时颠倒
+    ///    （子调用先完成 ⇒ 先落库 ⇒ 先被画出来）。口径与 pi 官方 TUI 一致：
+    ///    `interactive-mode.js` 里 `if (event.parentToolCallId) break;` —— 画在父行里面。
+    var children: [Nested] = []
+
+    /// 出图用：强行指定初始展开态（**产品里永远不传**，`nil` = 按相位走）。
+    ///
+    /// 存在的唯一理由：`expanded` 依赖 `@State userOverride`，而 `@State` 从外面设不了 ⇒
+    /// `scripts/diag/toolcard_preview.py` 画不出"正常的展开态"（只能拿待审批的行凑，那会带红）。
+    /// ⚠️ 别把它接到任何产品逻辑上 —— 要改默认展开规则，改 `expanded` 计算属性。
+    var initialExpanded: Bool? = nil
 
     /// 用户手动拨过折叠开关 ⇒ 一切默认规则让位（`nil` = 没拨过，按相位走）。
     ///
@@ -44,9 +71,20 @@ struct ToolCallCardView: View {
         }
     }
 
+    /// 子调用里有没有「出事了」（失败 / 还没被拍板）。
+    ///
+    /// 父行要替它亮：**内层那条 bash 的待审批如果藏在收起来的父卡里，就等于没有入口**。
+    private var childNeedsAttention: Bool {
+        children.contains { c in
+            if case .error = c.tool.phase { return true }
+            return c.tool.phase == .awaitingApproval && c.decision == nil
+        }
+    }
+
     /// 「出事了」的两个来源 —— 失败，以及**还没被拍板**的审批请求。
     private var needsAttention: Bool {
         if case .error = tool.phase { return true }
+        if childNeedsAttention { return true }
         return tool.phase == .awaitingApproval && !decided
     }
 
@@ -76,13 +114,28 @@ struct ToolCallCardView: View {
     /// 那不是爆炸了」⇒ 运行中只在右侧留「⟳ 运行中」，要看就自己点开。用户拨过就全让位。
     private var expanded: Bool {
         if let userOverride { return userOverride }
+        if let initialExpanded { return initialExpanded }  // 出图缝；产品传的是 nil
         if case .error = tool.phase { return true }   // 失败不许自己缩回
+        if childNeedsAttention { return true }        // 子调用出事/待审 ⇒ 父卡必须露出来
         if decided { return false }                   // 选过了 ⇒ 收起
         return tool.phase == .awaitingApproval        // 只剩"需要你拍板"展开
     }
 
     var body: some View {
-        HStack(alignment: .top, spacing: 0) {
+        VStack(alignment: .leading, spacing: 0) {
+            header
+            if expanded { expandedBody }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        // 竖条走 `overlay`：**它绝不许参与尺寸计算**。
+        //
+        // ⚠️ 原来是 `HStack` 里的 `Rectangle().frame(width: 2)`。形状**可伸缩**（高度没有内在值），
+        //    所以外层一旦递来一个**确定高度**，它就把整张卡拉成那个高度 —— 文字顶在上面、
+        //    下面一大片空白。父卡的竖条再把同样的确定高度传给旁边的 VStack，于是**内层子卡
+        //    一起被拉开**（2026-10-26 boss 截图：两张未展开的子卡之间空了一大截）。
+        //    overlay 只是贴在上面画，撑不动卡片，也不会把高度传给兄弟。
+        .padding(.leading, 2)   // 给竖条留出 2pt 的位置（原来由 HStack 自然占位）
+        .overlay(alignment: .topLeading) {
             // 100% 不透明（暗色下 0.85 会把冷蓝从 6.21 压到 4.91，没必要）。
             // 2026-10-21: 与思考竖条**同色同透明度**了（都是 `railNeutral`）—— 改前工具条比
             // 思考条实一档，是因为它们曾经是两种彩色（蓝 / 琥珀），要靠明度再分一次"谁更重要"。
@@ -91,13 +144,7 @@ struct ToolCallCardView: View {
                 .fill(railColor)
                 .frame(width: 2)
                 .padding(.vertical, 3)
-
-            VStack(alignment: .leading, spacing: 0) {
-                header
-                if expanded { expandedBody }
-            }
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
         // ⚠️ 这里**没有** `.background(bgCard)` / `clipShape` —— 行是行，不是卡。
         //    ⚠️ 底色的**源码事实**（内嵌面只能比正文面亮一档）由 `scripts/smoke/run.sh`
         //    直接扫本文件守 —— 数值守卫看不见"视图用了哪个 token"（值本身没变）。
@@ -109,62 +156,94 @@ struct ToolCallCardView: View {
         Button {
             withAnimation(CodexTheme.animFast) { userOverride = !expanded }
         } label: {
-            HStack(spacing: 6) {
-                Image(systemName: expanded ? "chevron.down" : "chevron.right")
-                    .font(.system(size: 9, weight: .semibold))
-                    .foregroundStyle(glyphColor)
-                    .frame(width: 12)
-
-                // 等宽小字 + 字距 = **标签感**（不用中文小标，也不上色）。
-                // ⚠️ 别改成大写 (`BASH`): `kind.label` 是 `rawValue`（`ToolCall.swift:51`），
-                //    轨迹视图那边仍按原样显示 —— 大写化会让两个视图分叉。
-                Text(tool.kind.label)
-                    .font(CodexTheme.fontMonoXs)
-                    .tracking(0.4)
-                    .foregroundStyle(kindColor)
-
-                Text(tool.title)
-                    .font(CodexTheme.fontMonoSm)
-                    .foregroundStyle(CodexTheme.textPrimary)
-                    .lineLimit(1)
-
-                if let cmd = tool.command {
-                    Text(cmd)
-                        .font(CodexTheme.fontMonoXs)
-                        .foregroundStyle(CodexTheme.textTertiary)
-                        .lineLimit(1)
-                        .truncationMode(.tail)
-                }
-
-                if !tool.imagePaths.isEmpty {
-                    HStack(spacing: 3) {
-                        Image(systemName: "photo")
-                            .font(.system(size: 9))
-                        Text(verbatim: "\(tool.imagePaths.count)")
-                            .font(.system(size: 9))
-                    }
-                    .foregroundStyle(CodexTheme.textMuted)
-                }
-
-                Spacer(minLength: 8)
-
-                phaseBadge
-                    // 定宽 + 右对齐: 三态徽标宽度不同 (`等待` / 圈+`运行中` / 耗时+`完成`),
-                    // 不定宽的话左边命令会被反复挤窄、截断位置跟着跳 —— 连发快工具时就是
-                    // "整行在闪"。见 `Tune.toolPhaseBadgeWidth` 的账。
-                    .frame(minWidth: Tune.toolPhaseBadgeWidth, alignment: .trailing)
-            }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 4)
-            .contentShape(Rectangle())
+            headerContent
         }
         .buttonStyle(.plain)
+    }
+
+    private var headerContent: some View {
+        HStack(spacing: 6) {
+            Image(systemName: expanded ? "chevron.down" : "chevron.right")
+                .font(.system(size: 9, weight: .semibold))
+                .foregroundStyle(glyphColor)
+                .frame(width: 12)
+
+            // 等宽小字 + 字距 = **标签感**（不用中文小标，也不上色）。
+            // ⚠️ 别改成大写 (`BASH`): `kind.label` 是 `rawValue`（`ToolCall.swift:51`），
+            //    轨迹视图那边仍按原样显示 —— 大写化会让两个视图分叉。
+            Text(tool.kind.label)
+                .font(CodexTheme.fontMonoXs)
+                .tracking(0.4)
+                .foregroundStyle(kindColor)
+
+            Text(tool.title)
+                .font(CodexTheme.fontMonoSm)
+                .foregroundStyle(CodexTheme.textPrimary)
+                .lineLimit(1)
+
+            if let cmd = tool.command {
+                Text(cmd)
+                    .font(CodexTheme.fontMonoXs)
+                    .foregroundStyle(CodexTheme.textTertiary)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+            }
+
+            // 这一行走的是"工具里再调工具"（codemode）⇒ 报一下里面跑了几次。
+            // 收起来的时候全靠它：没有这个数与"内层什么都没有"分不开。
+            // ⚠️ 必须有前导分隔点：命令本身也是等宽三级灰，直接贴上去会和命令连成一句
+            //    （出图实测：`…tools.bash({command: \`ls -la\`}) 内层 2` 读成了一条命令）。
+            if !children.isEmpty {
+                Text(String(format: L("· 内层 %lld"), children.count))
+                    .font(CodexTheme.fontMonoXs)
+                    .foregroundStyle(CodexTheme.textTertiary)
+                    .lineLimit(1)
+            }
+
+            if !tool.imagePaths.isEmpty {
+                HStack(spacing: 3) {
+                    Image(systemName: "photo")
+                        .font(.system(size: 9))
+                    Text(verbatim: "\(tool.imagePaths.count)")
+                        .font(.system(size: 9))
+                }
+                .foregroundStyle(CodexTheme.textMuted)
+            }
+
+            Spacer(minLength: 8)
+
+            phaseBadge
+                // 定宽 + 右对齐: 三态徽标宽度不同 (`等待` / 圈+`运行中` / 耗时+`完成`),
+                // 不定宽的话左边命令会被反复挤窄、截断位置跟着跳 —— 连发快工具时就是
+                // "整行在闪"。见 `Tune.toolPhaseBadgeWidth` 的账。
+                .frame(minWidth: Tune.toolPhaseBadgeWidth, alignment: .trailing)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 4)
+        .contentShape(Rectangle())
     }
 
     // MARK: - 展开后的内容
 
     private var expandedBody: some View {
         VStack(alignment: .leading, spacing: 4) {
+            // 嵌套调用（codemode 脚本里的 `tools.bash(...)`）—— **缩进一层**画在父卡里面。
+            // 顺序天然正确：父卡一定先于子卡存在，子卡按发生顺序追加。
+            // ⚠️ 排"输出"之前：这些调用是先发生的，输出是它们的结果。
+            // ⚠️ 子卡**默认收起**（2026-10-26 boss 定）：它们是 `.done`，按 `expanded` 的规则
+            //    本来就不自动展开 —— 内层往往一串、输出还很大，全摊开会把父卡的输出挤没了。
+            //    出错 / 待审批仍会自动展开（那是既有红线，不因为"是子卡"就打折）。
+            // ⚠️ 这里**递归一层就不再传 children** —— 子卡自己不再有子卡，
+            //    传下去等于给"递归忘了加界"留后门。
+            ForEach(children) { c in
+                ToolCallCardView(tool: c.tool,
+                                 decision: c.decision,
+                                 onApprove: c.onApprove,
+                                 onDeny: c.onDeny,
+                                 onAlwaysAllow: c.onAlwaysAllow)
+                    .padding(.leading, 12)
+            }
+
             // 输出头：分节标签 · 复制全部。**没有"展开全部"箭头了** —— 固定高滚动区接手，
             // 2 行截断 + 展开箭头那套和它讲的是同一件事，留着就是两个开关抢一个语义。
             if !tool.details.isEmpty {

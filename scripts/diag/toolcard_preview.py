@@ -50,6 +50,13 @@ SOURCES = [
     'mangox/Views/Chat/ImagePresentation.swift',
     'mangox/Views/Chat/ToolOutputImages.swift',
     'mangox/Views/Chat/ToolCallCardView.swift',
+    # 「段收据」那一层（2026-10-26 加的）—— 判「段折叠 + codemode 折叠」是不是叠成三层，
+    # 必须让**真的** `ToolRunBuilder` / `ToolRunReceiptRow` 参与编译，不能靠手搭。
+    'mangox/Models/PlanQuestion.swift',
+    'mangox/Models/Attachment.swift',
+    'mangox/Models/MessageModels.swift',
+    'mangox/Views/Chat/ToolRunReceipt.swift',
+    'mangox/Views/Chat/ThinkingCardView.swift',
 ]
 
 MAIN = r'''
@@ -125,7 +132,8 @@ func save(_ img: NSImage, _ path: String) {
 // MARK: - 渲染
 
 @MainActor
-func render(_ label: String, _ content: some View, width: CGFloat) {
+func render(_ label: String, _ content: some View, width: CGFloat,
+            extraHeight: CGFloat = 0) {
     let root = content
         .frame(width: width, alignment: .topLeading)
         .background(CodexTheme.bgChat)
@@ -135,7 +143,10 @@ func render(_ label: String, _ content: some View, width: CGFloat) {
 
     // `NSHostingView` + 离屏窗口, **不用** `ImageRenderer` —— 后者画不出 `ScrollView` 的内容。
     let host = NSHostingView(rootView: root)
-    let height = max(host.fittingSize.height, 1)
+    // ⚠️ `fittingSize` 会**低估**含 `ScrollView` 的内容高度（输出区就是 ScrollView）⇒
+    //    超出的部分被 `cacheDisplay(in: host.bounds)` 直接裁掉，看上去像"输出没画出来"。
+    //    判据：尾巴上的输出盒子只露半行。`extraHeight` 是给这种图补的余量（0 = 老行为）。
+    let height = max(host.fittingSize.height, 1) + extraHeight
     host.frame = NSRect(x: 0, y: 0, width: width, height: height)
     // 离屏窗口 (不 orderFront, 不上屏): 有 window 才拿得到完整的 layout/display 通道。
     let win = NSWindow(contentRect: host.frame, styleMask: [.borderless],
@@ -178,12 +189,20 @@ func caption(_ main: String, _ sub: String) -> some View {
     }
 }
 
-func sample(_ label: String, _ tool: ToolCall) -> some View {
+extension ToolCall {
+    /// 出图用: 把一张卡包成"嵌套调用"（决策与三个回调都空 —— 出图不点按钮）。
+    func asNested() -> ToolCallCardView.Nested {
+        .init(tool: self, decision: nil, onApprove: nil, onDeny: nil, onAlwaysAllow: nil)
+    }
+}
+
+func sample(_ label: String, _ tool: ToolCall,
+            children: [ToolCallCardView.Nested] = []) -> some View {
     VStack(alignment: .leading, spacing: 5) {
         Text(verbatim: label)
             .font(.system(size: 11))
             .foregroundStyle(CodexTheme.textMuted)
-        ToolCallCardView(tool: tool)
+        ToolCallCardView(tool: tool, children: children)
     }
 }
 
@@ -332,6 +351,114 @@ MainActor.assumeIsolated {
         .clipShape(RoundedRectangle(cornerRadius: CodexTheme.radius))
     }, width: 620)
 
+    // ── D. codemode 的嵌套调用 (2026-10-26) ──────────────────────────────────
+    // 判据: ① 一次调用**只有一行** (子调用不占顶层行);
+    //      ② 收起态靠行里的「内层 N」说话;
+    //      ③ 内层有一条待审批 ⇒ 父卡**自动展开** (否则审批入口藏在收起的卡里 = 没有入口)。
+    let cmdScript = "const r = await tools.bash({command: `ls -la`})"
+    let cmDone = ToolCall(kind: .codemode, title: cmdScript, command: nil,
+                          phase: .done, durationMs: 84)
+    let cmChild1 = ToolCall(kind: .bash, title: "ls -la", phase: .done, durationMs: 22)
+    let cmChild2 = ToolCall(kind: .read, title: "/opt/homebrew/lib/node_modules",
+                            phase: .done, durationMs: 1)
+    let cmPending = ToolCall(kind: .bash, title: "rm -rf build", phase: .awaitingApproval)
+
+    render("nested", VStack(alignment: .leading, spacing: 18) {
+        caption("codemode · 收起态",
+                "一次调用只有一行; 「内层 2」是唯一能看出里面跑过东西的地方")
+        sample("done · 内层 2", cmDone,
+               children: [cmChild1.asNested(), cmChild2.asNested()])
+
+        caption("codemode · 内层一条待审批",
+                "父卡自动展开 —— 子卡的审批入口藏在收起的父卡里 = 等于没有入口")
+        sample("内层待审批", cmDone, children: [cmPending.asNested()])
+    }, width: 620)
+
+    // ── E. 「段收据 × codemode」叠成几层（2026-10-26 boss 问）──────────────────
+    // 判据**全部由真的 `ToolRunBuilder` 算出来**，不靠眼睛。
+    func makeRun(_ tools: [ToolCall]) -> ToolRun? {
+        let msgs: [ChatMessage] = tools.map {
+            ChatMessage(role: .assistant, content: .tool($0))
+        }
+        // `attached` 由调用方给（此处整批就是一个会话）—— 与 `ChatView` 同一个来源。
+        return ToolRunBuilder.runs(in: msgs,
+                                   attached: ToolNesting.attachedToolIds(in: msgs)).first
+    }
+    let cmFlow = ToolCall(kind: .codemode, title: cmdScript, command: nil,
+                          phase: .done, durationMs: 84)
+    let nGit = ToolCall(kind: .bash, title: "git status", command: nil,
+                        details: [ToolDetail("输出", "On branch main\nnothing to commit")],
+                        phase: .done, durationMs: 22, parentId: cmFlow.id)
+    let nTest = ToolCall(kind: .read, title: "package.json", command: nil,
+                         details: [ToolDetail("输出", "{\"name\": \"mangox\", \"version\": \"0.1.31\"}")],
+                         phase: .done, durationMs: 1, parentId: cmFlow.id)
+    let bLint = ToolCall(kind: .bash, title: "npm run lint", command: nil,
+                         details: [ToolDetail("输出", "no problems found")],
+                         phase: .done, durationMs: 31)
+    let bTest = ToolCall(kind: .bash, title: "npm test", command: nil,
+                         details: [ToolDetail("输出", "Tests: 1593 passed, 1593 total")],
+                         phase: .done, durationMs: 4200)
+    let bDiff = ToolCall(kind: .edit, title: "ChatView.swift", phase: .done, durationMs: 12)
+
+    // ① 只有 codemode（内层 2 条）: 屏上**只有 1 行** ⇒ 不该折
+    let runAlone = makeRun([cmFlow, nGit, nTest])
+    // ② codemode + 3 条模型直接调的: 屏上 4 行 ⇒ 该折
+    let runMixed = makeRun([cmFlow, nGit, nTest, bLint, bTest, bDiff])
+
+    // ⚠️ 拆成两张图：离屏 `NSHostingView.fittingSize` 会**低估**含 `ScrollView` 的内容高度
+    //    （输出区就是 ScrollView）⇒ 一张长图会把最后几格裁掉，看着像"输出没画出来"。
+    render("nested-fold", VStack(alignment: .leading, spacing: 22) {
+        caption("① 只有 codemode 的段 · 不该折",
+                "内层不出行 ⇒ 屏上只有 1 行, 折起来省 0pt 却多一次点击 (折了才是错)")
+        ToolCallCardView(tool: cmFlow, children: [nGit.asNested(), nTest.asNested()])
+
+        caption("② codemode + 3 条直接调的 · 该折",
+                "屏上 4 行 ⇒ 收据按【可见行数】算, 内层不计入 (旧口径会印「6 次工具调用」)")
+        ToolRunReceiptRow(run: runMixed!, isExpanded: false, onToggle: {})
+    }, width: 620)
+
+    render("nested-fold-open", VStack(alignment: .leading, spacing: 22) {
+        caption("③ 点开收据 —— 第 1 次点击",
+                "收据留着当头, 下面放回 4 行; 内层行【不在这里】(它们画在父卡的展开区里)")
+        VStack(alignment: .leading, spacing: 4) {
+            ToolRunReceiptRow(run: runMixed!, isExpanded: true, onToggle: {})
+            ToolCallCardView(tool: cmFlow, children: [nGit.asNested(), nTest.asNested()])
+            ToolCallCardView(tool: bLint)
+            ToolCallCardView(tool: bTest)
+            ToolCallCardView(tool: bDiff)
+        }
+
+        caption("④ 再点 codemode —— 第 2 次点击, 内层默认收起",
+                "每张子卡仍有自己的 chevron, 但默认收起 (`.done` 不自动展开): 看哪条点哪条, 不让一堆输出糊屏")
+        ToolCallCardView(tool: cmFlow, children: [nGit.asNested(), nTest.asNested()],
+                         initialExpanded: true)
+    }, width: 620)
+
+    // ── F. 思考卡的竖条：与工具卡同一条血线（2026-10-26）────────────────────────
+    // 判据: 塞进**确定高度**的容器里，卡片只有自己那么高。
+    // 改前是 `HStack { Rectangle(可伸缩); VStack{...} }` —— 形状没有内在高度 ⇒ 它把这一行
+    // 撑成容器给的高度: 竖条一路画到底、文字顶在上面，下面一大片空白。
+    // ⚠️ 底下那层 bgCard 只是**标注容器范围**（不是 App 的底色），好让"空白有多大"看得见。
+    let thinkSample = "先把三条路径摊开：opencode 走 ACP、claude 走 stream-json、"
+        + "自研走自己的 rpc。差别不在协议，而在谁持有会话状态。"
+    render("thinking-rail", VStack(alignment: .leading, spacing: 22) {
+        caption("思考卡 · 正常流",
+                "折叠态一行 23pt；进行中右端挂一枚琥珀「思考中…」（颜色只给状态）")
+        ThinkingCardView(text: thinkSample, id: UUID())
+        ThinkingCardView(text: "", id: UUID(), isStreaming: true)
+
+        caption("三张卡塞进【240pt 定高】容器",
+                "只有自己那么高才叫对。若竖条一路画到底、行间成大段空白，就是形状在撑高（改前写法）")
+        VStack(alignment: .leading, spacing: 0) {
+            ThinkingCardView(text: thinkSample, id: UUID())
+            ThinkingCardView(text: thinkSample, id: UUID())
+            ThinkingCardView(text: thinkSample, id: UUID())
+        }
+        .frame(height: 240, alignment: .top)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(CodexTheme.bgCard)
+    }, width: 620)
+
     print("")
     print("判据:")
     print("  kind-compare   旧组三张读作 read; 新组读作 other 且标题是真名、command 是首参。")
@@ -341,6 +468,19 @@ MainActor.assumeIsolated {
     print("                 ③ 只有缩略条没有文本行; ⑤ 显示文件名不空白。")
     print("  phase-and-kind 箭头随相态: queued/running/done 收起、error 自动展开;")
     print("                 竖条 queued/running/done 冷蓝、error 红; 右侧 badge 各自读得出来。")
+    print("")
+    print("  nested-fold    (全部由真的 ToolRunBuilder 算出来, 不是眼看的)")
+    print("                 ① 只有 codemode + 2 内层 ⇒ 可见行 = 1 ⇒ foldable = \(runAlone?.foldable ?? false)")
+    print("                    (旧口径按 span.count=3 会折; 折了省 0pt 还多一次点击)")
+    print("                 ② + 3 条直接调的 ⇒ 可见行 = 4 ⇒ foldable = \(runMixed?.foldable ?? false)")
+    print("                    收据印「\(runMixed?.count ?? -1) 次工具调用」(内层 2 条不算)")
+    print("                    ⇒ 内层只要算进计数, 旧口径会印「6 次」—— 那是说谎")
+    print("                 ④ 子卡默认收起: 每行仍带 chevron (`.done` 不自动展开), 看哪条点哪条")
+    print("")
+    print("  thinking-rail  竖条走 overlay ⇒ **不参与尺寸计算**。上面两张是正常流;")
+    print("                 下面三张被塞进 240pt 定高容器 (底下那层浅色 = 容器范围)。")
+    print("                 ✅ 对的样子: 三行各自 23pt 贴在容器顶部, 竖条只有行那么高。")
+    print("                 ❌ 错的样子: 竖条一路画到底、每行之间大段空白 (形状在撑高)。")
     print("")
     print("⚠️ 限制: `running` 的转圈 (`ProgressView` 这类动画件) 在离屏渲染里画不出来 ——")
     print("   那不是 App 的病。缩略条本身走 `NSHostingView`, 画得出来 (见文末)。")

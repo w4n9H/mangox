@@ -76,7 +76,13 @@ enum TurnBillBuilder {
         var calls = 0
         var tokens = 0
         for m in group {
-            if case .tool(let t) = m.content, seenTools.insert(t.id).inserted { calls += 1 }
+            // ⚠️ 内层调用（`parentId != nil`）**不重复计**：一次 codemode 就是一次调用，
+            //    它内部扇出多少次是它的实现细节。
+            //    口径必须和「段收据」（`ToolRun.count`）一致 —— 两处都显示在同一屏
+            //    （页脚「N 次调用」/ 收据「N 次工具调用」），一个含内层一个不含，
+            //    就是"两个数对不上而谁都不报错"（2026-10-26 audit 发现）。
+            if case .tool(let t) = m.content, t.parentId == nil,
+               seenTools.insert(t.id).inserted { calls += 1 }
             if let u = m.usage { tokens += u.totalTokens }
         }
         return TurnBill(elapsed: elapsed, calls: calls, tokens: tokens,

@@ -1578,6 +1578,19 @@ final class PiRpcTransport: AgentTransport {
 
     // MARK: - 事件解析 (MainActor)
 
+    /// 嵌套调用（codemode 脚本里的 `tools.bash(...)`）的**父卡 id**。
+    ///
+    /// pi 只在嵌套调用的 `tool_execution_*` 事件上带 `parentToolCallId`
+    /// （= 父调用的 callId，形如 `<父>/<n>`；见 pi 的 `core/nested-tool-calls.js`）
+    /// ⇒ 模型直接调的工具没有这个字段，返回 nil = 顶层行。
+    ///
+    /// ⚠️ 父卡还没建出来时**返回 nil，不去猜**：宁可在外面多露一行，也不许把子卡挂到
+    ///    别的父上（挂错 = 这一行从界面上凭空消失，用户根本看不到它跑过）。
+    private func parentCardId(_ evt: [String: Any]) -> UUID? {
+        guard let pid = evt["parentToolCallId"] as? String else { return nil }
+        return toolCards[pid]?.id
+    }
+
     /// internal 供冒烟测试直接投喂 JSONL 行。
     /// arrivedAt: 读取线程的行到达时刻 (MainActor 处理可能被 UI 渲染阻塞, 计时不能用处理时刻)
     func handleRPCLine(_ line: String, arrivedAt: Date = Date()) {
@@ -1671,11 +1684,14 @@ final class PiRpcTransport: AgentTransport {
             let head = Self.toolHead(kind: kind, name: name, args: args)
             // P6.2.1: toolcall_start 提前卡已存在 → 沿用其 id 整卡升级 (否则旧 queued 卡
             // 永不落定 + 同一调用两张卡, 轨迹里被连续同类分组误并)
-            let card = ToolCall(id: toolCards[callId]?.id ?? UUID(),
+            var card = ToolCall(id: toolCards[callId]?.id ?? UUID(),
                                 kind: kind,
                                 title: String(head.title.prefix(120)),
                                 command: head.command,
                                 phase: .running)
+            // 嵌套调用（codemode 的 `tools.bash(...)`）: 记父卡, 由视图画进父卡里面
+            // （自己**不出顶层行** —— 否则一次调用显示成两行, 且重放时子行会排到父前面）。
+            card.parentId = parentCardId(dict)
             toolCards[callId] = card
             toolStartAt[callId] = arrivedAt
             emit(.toolUpdated(card))

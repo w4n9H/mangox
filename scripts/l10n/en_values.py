@@ -13,6 +13,7 @@ key 的形态必须与 `gen_strings.source_keys()` 的产出**逐字节一致**:
 """
 
 VALUES = {
+    '· 内层 %lld': '· Nested %lld',
     '全部丢弃': 'Discard all',
     '全部采纳': 'Accept all',
     '已清空 %lld 条提案': 'Cleared %lld proposals',

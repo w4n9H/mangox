@@ -30,6 +30,16 @@ struct ToolRun: Identifiable, Hashable {
     ///    "既算进收据、又单独画一行"（2026-10-20 boss 截图实测）。跳行只认 `span`。
     let memberIds: [UUID]
     let tools: [ToolCall]
+    /// 段内的**内层调用**（`parentId != nil` —— codemode 脚本里的 `tools.bash(...)`）。
+    ///
+    /// 为什么要单独一栏、而不并进 `tools`：内层**不占可见行**（顶层投影把子行摘掉了，
+    /// 画在父卡的展开区里）⇒ 它们既不该进收据的「N 次工具调用」、也不该进耗时之和
+    /// （内层的时间已经被父卡包着了，再加一遍就是重复计费）。
+    ///
+    /// ⚠️ 但**相态判定必须看它们**：内层一条 `error` 被折进收据里，就等于把那次失败
+    ///    从界面上抹掉了 —— `ToolCallCardView` 的「失败不许自己缩回」是既有红线。
+    ///    同理 `awaitingApproval`：父卡会替它亮红，折起来就看不见了。
+    let nested: [ToolCall]
     /// 段内**思考块**的条数。
     ///
     /// 2026-10-20 boss 定: **正文之间的一切都收** —— 思考块不再是"单独一行 Reasoning" +
@@ -74,28 +84,102 @@ struct ToolRun: Identifiable, Hashable {
         //    ⚠️ 收它的理由**不是省高度**（`ThinkingCardView` 折叠态本来就是一行, 23pt → 23pt,
         //    持平, 还多一次点击）—— 上一版正是只算了高度就把它排除了。真正的收益是**秩序**:
         //    用户不用猜"这一段为什么没折"。
-        if tools.isEmpty { return thinkCount > 0 }
+        if tools.isEmpty { return nested.isEmpty && thinkCount > 0 }
 
-        // ② 只有一个工具、且没有思考的段: 23pt → 22pt, 省 1pt 却多一次点击, 纯亏。
+        // ② 判据是**可见行数**，不是 `span.count`。
+        //    `span` 覆盖段内**真实占的位置**（含内层调用行），但内层**不出顶层行**
+        //    （`ChatView` 按 `parentId` 摘掉了）⇒ 用 `span.count` 会把内层算成"看得见的行"。
+        //    症状: 一条 `codemode` + 2 条内层 ⇒ `span.count == 3` ⇒ 以为"3 行值得折"，
+        //    实际屏上只有 1 行，折起来省 0pt 却多一次点击（正是 2026-10-20 那条"1 条不折"的反面）。
         // ③ 全部 `.done`: 含 `error` / 待审 / `running` 的段**必须原样露出**。
         //    `ToolCallCardView` 定的"失败不许自己缩回、待审必须问人"是既有红线,
         //    新机制**不许旁路**它 —— 折掉一条 error 行, 等于让人以为这组干干净净。
-        return span.count >= 2 && tools.allSatisfy { $0.phase == .done }
+        //    ⚠️ 相态要连**内层**一起看（内层出事时父卡会替它亮红，折起来就看不见了）。
+        let visible = tools.count + thinkCount
+        return visible >= 2 && (tools + nested).allSatisfy { $0.phase == .done }
+    }
+}
+
+// MARK: - 嵌套调用（codemode 的父子）与聊天行的对应
+//
+// ⚠️ 这一节存在的理由是一次**零红灯的消失**（2026-10-26 boss 截图）：内层 bash 既不在顶层
+//    占行、又没出现在父卡的展开区里 —— 界面上凭空少了 5 次调用，编译、冒烟、构建全绿。
+//    根因是**两种 id 混用**：`ToolCall.parentId` 存的是父卡**工具** id，而聊天流按
+//    **消息** id 找宿主（`ChatMessage.id != ToolCall.id`，见 `ToolRun` 顶部那条注）。
+//    ⇒ 这类"键对不上就静默丢"的东西必须收进一个能断言的纯函数里，别散在视图里现算。
+
+enum ToolNesting {
+    /// 一趟扫完的嵌套索引。**`children` 与 `attached` 必须出自同一次扫描。**
+    ///
+    /// ⚠️ 这两张表是同一个事实的两面（"子卡挂在哪" / "哪些子卡挂上了"），分两次算就等于
+    ///    允许它们**各自为政**。2026-10-26 已经被这个形状咬过一次：`ChatView` 按一张表摘行、
+    ///    按另一张表找宿主，两边判据略一岔开，子卡就**凭空消失**（编译/冒烟/构建全绿）。
+    ///    现在它们只能一起产出，形态上不允许分家。
+    struct Index {
+        /// 宿主**消息** id → 挂在它上面的子卡（时间序）。
+        var children: [UUID: [ToolCall]]
+        /// **真的挂上了**父卡的工具调用 id（= `children` 里出现过的那些，同源派生）。
+        var attached: Set<UUID>
+    }
+
+    /// 父卡**工具** id → 承载它的那条**消息** id。
+    ///
+    /// 子卡要挂到父卡的展开区里，而展开区是**按消息 id** 索引的（`ChatView` 遍历的是
+    /// `MessageRow`）⇒ 中间必须过这一道翻译。
+    static func hostMessageIds(in messages: [ChatMessage]) -> [UUID: UUID] {
+        var out: [UUID: UUID] = [:]
+        for m in messages {
+            if case .tool(let t) = m.content { out[t.id] = m.id }
+        }
+        return out
+    }
+
+    static func index(in messages: [ChatMessage]) -> Index {
+        let hosts = hostMessageIds(in: messages)
+        var children: [UUID: [ToolCall]] = [:]
+        var attached: Set<UUID> = []
+        for m in messages {
+            // ⚠️ 判据不能只看 `parentId != nil`：父卡那条工具消息不在这批消息里时（压缩截断、
+            //    老会话只留半截、父卡没建出来就被丢事件），子卡既被摘掉顶层行、又没有宿主可挂 ⇒
+            //    **凭空消失**。宁可在外面多露一行 —— 多一行是噪音，少一行是骗人。
+            guard case .tool(let t) = m.content, let pid = t.parentId,
+                  let host = hosts[pid] else { continue }
+            children[host, default: []].append(t)
+            attached.insert(t.id)
+        }
+        return Index(children: children, attached: attached)
+    }
+
+    static func childrenByHostMessage(in messages: [ChatMessage]) -> [UUID: [ToolCall]] {
+        index(in: messages).children
+    }
+
+    static func attachedToolIds(in messages: [ChatMessage]) -> Set<UUID> {
+        index(in: messages).attached
     }
 }
 
 enum ToolRunBuilder {
+
     /// 把**一组内**的消息切成若干段。
     ///
     /// 边界 = 正文（`.text`，且非空白）/ 计划卡（`.plan`）/ 压缩标记（`.compaction`）。
     /// ⇒ 两段正文之间的**一切**（思考 + 工具）属于同一段。
-    static func runs(in messages: [ChatMessage]) -> [ToolRun] {
+    ///
+    /// - Parameter attached: **谁挂上了父卡**（`ToolNesting.Index.attached`）。
+    ///   ⚠️ 必须是**会话级**的那份，不能在本函数里按传进来的 `messages` 现算 —— 传进来的
+    ///   只是**一组**，而子卡的父卡可能不在这一组里（压缩插了 `.system`、老会话只留半截）。
+    ///   本函数自己现算就会把那种子卡当成"看得见的一行"计进 `count`，而 `ChatView` 那边
+    ///   按会话级的表**已经把它的行摘掉了** ⇒ 两个数对不上，且谁都不报错。
+    ///   同一个判据只许有**一个来源**，由调用方算一次传进来（那里本来就要算）。
+    static func runs(in messages: [ChatMessage], attached: Set<UUID>) -> [ToolRun] {
         var out: [ToolRun] = []
         var head: UUID?
         var start = 0        // 段首块的下标
         var last = 0         // 段内**最后一块**的下标
         var ids: [UUID] = []
         var acc: [ToolCall] = []
+        var inner: [ToolCall] = []
         var thinks = 0
 
         func flush() {
@@ -106,11 +190,13 @@ enum ToolRunBuilder {
                 // ⚠️ 上界用 `last + 1`（**段内最后一块**的位置）而不是数组长度 ——
                 //    段后面的正文不属于这一段，不能一起吞掉。
                 out.append(ToolRun(id: head, memberIds: ids, tools: acc,
-                                   thinkCount: thinks, span: start..<(last + 1)))
+                                   nested: inner, thinkCount: thinks,
+                                   span: start..<(last + 1)))
             }
             head = nil
             ids = []
             acc = []
+            inner = []
             thinks = 0
         }
 
@@ -119,7 +205,10 @@ enum ToolRunBuilder {
             case .tool(let t):
                 if head == nil { head = m.id; start = i }
                 ids.append(m.id)
-                acc.append(t)
+                // 内层调用（`parentId != nil` 且宿主在）与顶层工具分开记：前者不出可见行（见 `nested`）。
+                // ⚠️ 但**照样更新 `last`** —— `span` 要覆盖它们真实占的位置，
+                //    否则视图层按 span 前进时会落后，把内层行当普通行再画一遍。
+                if attached.contains(t.id) { inner.append(t) } else { acc.append(t) }
                 last = i
             case .think:
                 // 思考**属于这一段**（boss: 正文之间的一切都收）: 既不切段, 也不单独留行。

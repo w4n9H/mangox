@@ -30,6 +30,7 @@ extension SmokeMain {
             caseToolRun,
             caseSessionTitlePersist,
             caseEmptyTurn,
+            caseNestedTool,
             caseModelPin,
             caseFollowBeats,
             caseFoldRule,

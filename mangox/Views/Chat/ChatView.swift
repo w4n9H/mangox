@@ -496,11 +496,30 @@ struct ChatView: View {
         let blocks: [ChatBlock]
         /// 宿主消息 id（该轮**末条 assistant 正文**）→ 那一轮的账。
         let bills: [UUID: TurnBill]
+        /// 父工具卡 id → 它的**嵌套调用**（codemode 脚本里的 `tools.bash(...)`）。
+        ///
+        /// ⚠️ 子卡**不出顶层行**，由父卡在自己的展开区里画（与 pi 官方 TUI 同一口径）。
+        ///    它们仍住在 `store.messages` 里 —— 审批、落库、轮末账单都要看到它们。
+        let children: [UUID: [ToolCall]]
+
+        static let empty = ProjectedChat(blocks: [], bills: [:], children: [:])
     }
 
     private var projectedChat: ProjectedChat {
         let rows = messageRows
-        guard !rows.isEmpty else { return ProjectedChat(blocks: [], bills: [:]) }
+        guard !rows.isEmpty else { return .empty }
+
+        // 嵌套调用（父卡 → 子卡）。**先建这张表**，后面遍历要靠它认"这一行是不是子行"。
+        // ⚠️ 键是**父卡那条消息的 id**，不是 `ToolCall.parentId` 里存的工具 id ——
+        //    两者不是一个东西，混用的症状是子卡**凭空消失**（2026-10-26 boss 截图：
+        //    5 次内层 bash 一次都没出现，而编译/冒烟/构建全绿）。翻译只许走 `ToolNesting`。
+        // ⚠️ `children` 与 `attached` **出自同一次扫描**（`ToolNesting.Index`）：它们是同一个
+        //    事实的两面，分成两次算就允许它们各自为政 —— 一处判"摘掉"、另一处判"没人挂"，
+        //    子卡就既不在顶层、也不在父卡里。派生关系由类型保证，不靠"记得两处一起改"。
+        let nesting = ToolNesting.index(in: store.messages)
+        let children = nesting.children
+        // 只有**真挂上了**的子卡才允许被摘掉顶层行（挂不上的要露出来，见 `Index.attached`）。
+        let attached = nesting.attached
 
         // 组边界 = `.user` 开新组；`.system`（压缩标记）自成一组 —— 它本来就不属于任何发言。
         var groups: [[MessageRow]] = []
@@ -527,20 +546,36 @@ struct ChatView: View {
         for (gi, group) in groups.enumerated() {
             let keepOpen = ChatFoldRule.keepOpen(index: gi, count: groups.count,
                                                  tailIsLoneUserRow: awaitingReply)
+            // 嵌套调用（codemode 的 `tools.bash(...)`）在本层**没有自己的行** —— 它们画在父卡
+            // 的展开区里。⚠️ 判据是 `attached`（真挂上了父卡），**不是** `parentId != nil`：
+            // 按后者判，一处挂错就是那一行从界面上消失；按前者判，挂不上就照常露出来。
+            let isNested: (Int) -> Bool = { idx in
+                if case .tool(let t) = group[idx].message.content { return attached.contains(t.id) }
+                return false
+            }
             guard !keepOpen else {
-                out.append(contentsOf: group.map { .row($0, headTaken: false) })
+                out.append(contentsOf: group.enumerated()
+                    .filter { !isNested($0.offset) }
+                    .map { ChatBlock.row($0.element, headTaken: false) })
                 continue
             }
             var runAt: [Int: ToolRun] = [:]
             // ⚠️ 只登记 `foldable` 的段。不可折的段（1 条 / 含 error 等）走普通行路径,
             //    于是它们连"收据"都不出现 —— 形态与改前完全一致。
             // 键用**段首在组内的下标**（不是消息 id）: 遍历是按位置走的, 用位置索引才不会错位。
-            for run in ToolRunBuilder.runs(in: group.map(\.message)) where run.foldable {
+            // 2026-10-26: 含内层行的段**照样登记**。可折性交给 `ToolRun.foldable` 按**可见行数**判
+            // （内层不出顶层行 ⇒ 不进计数）—— 这里再按 `span` 排除一次，会连带把
+            // 「codemode + 3 条 bash」这种真的值得折的段也挡住（一个 codemode 就把整段焊死摊开）。
+            // ⚠️ `attached` 传**会话级**那份（与上面 `isNested` 同一个 Set）：让 builder 自己按
+            // 本组消息现算，跨组挂载的子卡会被它当成"看得见的一行"，与 `isNested` 的结论分家。
+            let runs = ToolRunBuilder.runs(in: group.map(\.message), attached: attached)
+            for run in runs where run.foldable {
                 runAt[run.span.lowerBound] = run
             }
 
             var i = 0
             while i < group.count {
+                if isNested(i) { i += 1; continue }
                 if let run = runAt[i] {
                     let row = group[i]
                     let isExpanded = expandedRuns.contains(run.id)
@@ -551,7 +586,8 @@ struct ChatView: View {
                     if isExpanded {
                         // 还原 = 把这段**真实占的那几行**原样放回去（含中间那条 `.think`）。
                         // 段首那行的 head 收据已经画过了 ⇒ `headTaken: true`，否则 `MangoX` 出现两次。
-                        for k in run.span {
+                        // ⚠️ 内层行仍要跳过（它们画在父卡的展开区里）—— 放回来 = 同一张卡出现两次。
+                        for k in run.span where !isNested(k) {
                             out.append(.row(group[k], headTaken: k == run.span.lowerBound))
                         }
                     }
@@ -590,7 +626,7 @@ struct ChatView: View {
                                             root: store.activeProjectPath)
             if !bill.isEmpty { bills[host.message.id] = bill }
         }
-        return ProjectedChat(blocks: out, bills: bills)
+        return ProjectedChat(blocks: out, bills: bills, children: children)
     }
 
     /// `You` / `MangoX` 是**角色标签, 原样保留英文**（与 Chat / Trace 同族，见 `Tune.authorLabelSpacing`）。
@@ -615,7 +651,8 @@ struct ChatView: View {
                         // ⚠️ `headTaken` 时**不画**：收据已经替这行挂过小标了。
                         if row.isAuthorHead && !headTaken { authorLabel(isUser: row.message.role == .user) }
                         MessageBlockView(message: row.message, store: store,
-                                         bill: proj.bills[row.message.id])
+                                         bill: proj.bills[row.message.id],
+                                         children: proj.children[row.message.id] ?? [])
                     }
                     // 回合首间距同理：收据那一步已经加过了，这里再加就是双份。
                     .padding(.top, (row.isTurnStart && !headTaken)
@@ -818,6 +855,9 @@ struct MessageBlockView: View {
     /// 这一轮的账 —— **只在该轮末条正文上非 nil**（见 `ChatView.projectedChat`）。
     /// 账号宿主是消息而不是轮，所以它跟着这一行走：换会话 / 重排 / 懒加载都不需要额外的账本。
     var bill: TurnBill? = nil
+    /// 这张工具卡的**嵌套调用**（codemode 脚本里的 `tools.bash(...)`）—— 由 `ChatView.projectedChat`
+    /// 按 `ToolCall.parentId` 归组进来。它们不出顶层行, 在这一行的展开区里画。
+    var children: [ToolCall] = []
     @State private var hovering: Bool = false
     /// P7-M6c: 大图预览 (sheet, 不开独立 NSWindow — P4.2 尺寸控制坑)。
     @State private var previewAttachment: Attachment?
@@ -950,11 +990,21 @@ struct MessageBlockView: View {
         case .think(let s):
             ThinkingCardView(text: s, id: message.id, isStreaming: message.isStreaming)
         case .tool(let tool):
+            // 嵌套调用（codemode 的 `tools.bash(...)`）带着**自己的**审批状态与回调进来 ——
+            // 父卡的 decision 不能替子卡表态（那是两次独立的批准）。
             ToolCallCardView(tool: tool,
                              decision: store.toolDecisions[tool.id],
                              onApprove: { store.approveTool(tool.id) },
                              onDeny: { store.denyTool(tool.id) },
-                             onAlwaysAllow: { store.alwaysAllowTool(tool.id) })
+                             onAlwaysAllow: { store.alwaysAllowTool(tool.id) },
+                             children: children.map { c in
+                                 ToolCallCardView.Nested(
+                                     tool: c,
+                                     decision: store.toolDecisions[c.id],
+                                     onApprove: { store.approveTool(c.id) },
+                                     onDeny: { store.denyTool(c.id) },
+                                     onAlwaysAllow: { store.alwaysAllowTool(c.id) })
+                             })
         case .plan(let q):
             PlanQuestionCardView(question: q)
         case .compaction(let before, let after, let reason):

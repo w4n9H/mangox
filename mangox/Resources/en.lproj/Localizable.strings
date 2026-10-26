@@ -7,7 +7,7 @@
    **本文件由 scripts/l10n/gen_strings.py --write 生成, 别手改** ——
    译文改 scripts/l10n/en_values.py 的 VALUES, 再跑 --write。
 
-   条数: 812
+   条数: 813
 */
 
 " [附件: %@]" = " [Attachment: %@]";
@@ -111,6 +111,7 @@
 "tokens" = "tokens";
 "txt / html 没有 frontmatter — 标题就是文件名" = "txt / html have no frontmatter — the filename is the title";
 "· %lld 个在途" = "· %lld in flight";
+"· 内层 %lld" = "· Nested %lld";
 "· 最近：" = "· Latest: ";
 "… 其余改动省略" = "… remaining changes omitted";
 "… 还有 %lld 条" = "… %lld more";

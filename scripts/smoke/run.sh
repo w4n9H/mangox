@@ -171,6 +171,47 @@ if ! echo "$FOLLOW_LOOP" | grep -qE 'materialize != materializedTail'; then
     exit 1
 fi
 
+# ③h codemode 的**嵌套调用**必须挂到父卡上，而不是各占一行。
+#     pi 为嵌套调用（`ctx.executeTool()` → codemode 的 `tools.bash(...)`）发的
+#     `tool_execution_*` 带 `parentToolCallId`（= `<父callId>/<n>`）；官方 TUI 的判据就一句
+#     `if (event.parentToolCallId) break;`（画在父行里面）。
+#     ⚠️ 不接这个字段的两个后果都实测过（2026-10-26 boss 截图）：
+#     ① 一次调用显示成 `bash` + `codemode` **两行**；
+#     ② **重放时子行排到父前面** —— 落库只写终态，子调用先完成（22ms）父后完成（84ms）
+#        ⇒ seq 子在前 ⇒ 按 seq 还原就颠倒。直播时反而是对的，所以这现象只在重开会话后出现。
+#     ⚠️ 三条写法都编译得过、数值不变、没有断言会红 ⇒ 只能扫源码事实。
+if ! grep -qE 'parentToolCallId' mangox/Agent/PiRpcTransport.swift; then
+    echo "FAIL - 传输层没读 parentToolCallId (嵌套调用会被当成顶层工具卡)" >&2
+    echo "       后果: 一次 codemode 显示两行, 且重放时 bash 排到 codemode 前面" >&2
+    exit 1
+fi
+if ! grep -qE 'ToolNesting\.index\(in: store\.messages\)' mangox/Views/Chat/ChatView.swift; then
+    echo "FAIL - 顶层投影没走 ToolNesting.index 建嵌套索引" >&2
+    echo "       ⚠️ 键必须是【父卡那条消息的 id】, 不是 parentId 里的工具 id —— 混用的症状如下:" >&2
+    echo "       子卡凭空消失 (2026-10-26 boss 截图: 5 次内层调用一个都没画出来, 全绿却错)" >&2
+    echo "       ⚠️ children 与 attached 必须出自**同一次扫描** (Index 的两面, 分两次算就允许各自为政)" >&2
+    exit 1
+fi
+if ! grep -qE 'attached\.contains\(t\.id\)' mangox/Views/Chat/ChatView.swift; then
+    echo "FAIL - 摘掉顶层行的判据不是 attached (真挂上了才许摘)" >&2
+    echo "       按 parentId != nil 判 = 一挂错就那一行从界面上消失; 按 attached 判 = 挂不上就露出来" >&2
+    exit 1
+fi
+# 段收据的 count 与屏上的行必须是**同一个判据** —— 2026-10-26 audit ③:
+# `ToolRunBuilder` 收到的是**一组**消息, 而子卡的父卡可能不在这一组里（压缩插了 `.system`、
+# 老会话只留半截）。它若自己按本组现算, 就把那种子卡数成"看得见的一行", 收据上的
+# 「N 次工具调用」与 `ChatView` 摘行后的实际行数对不上 —— 且两边都不报错。
+if ! grep -qE 'ToolRunBuilder\.runs\(in: .*attached: attached' mangox/Views/Chat/ChatView.swift; then
+    echo "FAIL - 段收据没拿到会话级的 attached (判据与 isNested 分家了)" >&2
+    echo "       跨组挂载的子卡会被数进「N 次工具调用」, 而 ChatView 已经把它的行摘掉了" >&2
+    exit 1
+fi
+if ! grep -qE 'children: \[Nested\]' mangox/Views/Chat/ToolCallCardView.swift; then
+    echo "FAIL - 工具行没有接收嵌套调用的入口 (ToolCallCardView.children)" >&2
+    echo "       摘掉行却没人接 = 内层调用直接从界面上消失" >&2
+    exit 1
+fi
+
 # ④ 冒烟主文件的**体量棘轮** (2026-10-19) —— 判据 = 行数**只减不增**。
 #    为什么要有这条: 冒烟已长到 7000+ 行, 而且几乎全在**一个函数 `run()`** 里
 #    (Swift 函数体不能跨文件 ⇒ 只要它还是一个大函数, 就必然是一个大文件)。

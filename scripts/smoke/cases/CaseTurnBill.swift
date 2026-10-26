@@ -23,9 +23,11 @@ extension SmokeMain {
         let root = "/tmp/billproj"
 
         func toolMsg(_ path: String, _ kind: ToolKind = .edit,
-                     phase: ToolPhase = .done, id: UUID = UUID()) -> ChatMessage {
+                     phase: ToolPhase = .done, id: UUID = UUID(),
+                     parent: UUID? = nil) -> ChatMessage {
             ChatMessage(role: .assistant,
-                        content: .tool(ToolCall(id: id, kind: kind, title: path, phase: phase)))
+                        content: .tool(ToolCall(id: id, kind: kind, title: path,
+                                                phase: phase, parentId: parent)))
         }
         func textMsg(_ s: String = "讲完了", role: MessageRole = .assistant,
                      tokens: Int? = nil) -> ChatMessage {
@@ -111,5 +113,27 @@ extension SmokeMain {
               "T-BILL 1 走单数词条")
         check(TurnBill.count(5, one: "1 file", many: "%lld files") == "5 files",
               "T-BILL 5 走复数词条 (显示成 1 files 的那种英文错就出在这儿)")
+
+        // ⑩ 内层调用（codemode 脚本里的 `tools.bash(...)`）**不算**这一轮的调用次数 ——
+        //    2026-10-26 audit ①: 一次 codemode 就是一次调用, 它内部扇出几次是实现细节。
+        //    ⚠️ 口径必须与「段收据」（`ToolRun.count`）一致: 两个数显示在同一屏
+        //    （页脚「N 次调用」/ 收据「N 次工具调用」）, 一个含内层一个不含 ⇒ 用户看到
+        //    "2 次调用" 与 "1 次工具调用" 并列, 而没有任何一处报错。
+        let cmID = UUID()
+        let withNested = [textMsg("跑一下脚本", role: .user),
+                          toolMsg("script", .codemode, id: cmID),
+                          toolMsg("ls -la", .bash, parent: cmID),
+                          toolMsg("git status", .bash, parent: cmID),
+                          textMsg("跑完了")]
+        let bNested = TurnBillBuilder.bill(group: withNested, elapsed: nil, root: root)
+        check(bNested.calls == 1,
+              "T-BILL 内层调用不计数 (实测 \(bNested.calls), 期望 1 —— 3 说明把子卡算成了独立调用)")
+        // 反例自证: 同一条消息只去掉 `parentId` ⇒ 它就该被数进去（否则上面的断言可能
+        // 因为"根本没数工具"而假绿）。
+        let withoutParent = [textMsg("跑一下脚本", role: .user),
+                             toolMsg("ls -la", .bash),
+                             textMsg("跑完了")]
+        check(TurnBillBuilder.bill(group: withoutParent, elapsed: nil, root: root).calls == 1,
+              "T-BILL 反例: 没 parentId 的同一条 bash 照样计数 (钉住上一条不是假绿)")
     }
 }
