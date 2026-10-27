@@ -47,7 +47,13 @@ final class ChatStore: ObservableObject {
     /// spawn 期配置快照: 新实例创建时与每次 send 前下发 (P3.7 注入 / P3.11 扩展)。
     private var currentExtensionPaths: [String] = []
     /// P4.0.2 会话化流式状态: 在途回合的会话集合 (并发数 = 集合大小; 上限治理在 P4.0.4)。
-    @Published private(set) var runningTurns: Set<UUID> = []
+    @Published private(set) var runningTurns: Set<UUID> = [] {
+        didSet {
+            // 锁屏运行 (2026-10-27): 只有真的有回合在途才按住"别睡"的断言。
+            // ⚠️ 这里**每次变动都会调**(并发任务进出很频繁) ⇒ `SleepGuard.apply` 必须幂等。
+            SleepGuard.shared.apply(mode: lockScreenMode, busy: !runningTurns.isEmpty)
+        }
+    }
     /// 兼容视图: 当前选中会话是否有回合在途。
     var isStreaming: Bool {
         selectedConversationId.map { runningTurns.contains($0) } ?? false
@@ -121,6 +127,22 @@ final class ChatStore: ObservableObject {
             let clamped = min(max(maxConcurrentTurns, 1), 20)   // 与 SettingsView Stepper 同域
             if clamped != maxConcurrentTurns { maxConcurrentTurns = clamped; return }   // 触发 didSet 二次进入
             persistence?.saveSetting(key: "max_concurrent_turns", value: clamped)
+        }
+    }
+
+    // MARK: - 锁屏运行 (2026-10-27: 有回合在途时别让机器睡过去)
+
+    /// 三档: 不保持唤醒 / 熄屏后保持唤醒 / 保持屏幕常亮。
+    ///
+    /// ⚠️ 它是"上限"不是"开关"：真正持有断言的只有 `runningTurns` 非空那段时间
+    /// （见 `SleepGuard` 与 `runningTurns.didSet`）。
+    /// ⚠️ 落库存 `rawValue`（小写标识），不存显示文案 —— 改文案不能丢设置。
+    @Published var lockScreenMode: LockScreenMode = .dimming {
+        didSet {
+            guard lockScreenMode != oldValue else { return }
+            persistence?.saveSettingText(key: "lock_screen_mode", value: lockScreenMode.rawValue)
+            // 正有任务在跑时改设置要**立刻**生效, 不能等下一个回合。
+            SleepGuard.shared.apply(mode: lockScreenMode, busy: !runningTurns.isEmpty)
         }
     }
     /// 超限拒绝横幅 (Composer 上方, 8s 自清; 与提炼横幅同语言)。
@@ -688,6 +710,7 @@ final class ChatStore: ObservableObject {
                 store.loadSetting(key: "completion_notifications", defaultValue: 1) == 1   // P4.1
             backupDirectory = store.loadSettingText(key: "backup_dir")   // P8-T28
             lastBackupSummary = store.loadSettingText(key: "backup_last")
+            lockScreenMode = LockScreenMode.resolve(store.loadSettingText(key: "lock_screen_mode"))   // 锁屏运行
             capture.restore(CaptureHotkey.load(persistence: store))   // P8-T27 (P9.1d: 状态随 CaptureService)
         }
         // P9.1b/c/d: 子 store 挂接 + objectWillChange 转发 (两阶段初始化完成后才可引用 self)

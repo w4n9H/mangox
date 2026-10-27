@@ -7,7 +7,7 @@
    **本文件由 scripts/l10n/gen_strings.py --write 生成, 别手改** ——
    译文改 scripts/l10n/en_values.py 的 VALUES, 再跑 --write。
 
-   条数: 813
+   条数: 824
 */
 
 " [附件: %@]" = " [Attachment: %@]";
@@ -143,6 +143,7 @@
 "上次收信 %@" = "Last received %@";
 "上次退出时回合还在跑, 重启后无法结算" = "A turn was still running when you last quit; it cannot be settled after restart.";
 "下载落盘/上传文件" = "downloading or uploading files";
+"不保持唤醒" = "Let it sleep";
 "不弹卡, 全部放行 — 定时任务用 (无人点击, 弹卡即死锁)。" = "No prompts, everything allowed — for scheduled tasks (nobody is there to click; a prompt would deadlock).";
 "不采纳该候选, 直接删除" = "Dismiss this candidate and delete it";
 "丢弃" = "Discard";
@@ -198,6 +199,7 @@
 "保存修改" = "Save changes";
 "保存并启用" = "Save and enable";
 "保存日志" = "Save log";
+"保持屏幕常亮" = "Keep screen on";
 "修好文件开头的 --- 收尾后自动恢复; 点行尾「文件」去打开目录" = "Closing the opening --- restores it automatically; click “File” at the row’s end to open the folder";
 "值守" = "Watch";
 "值守中 · %@" = "Watching · %@";
@@ -206,6 +208,7 @@
 "停用" = "Disabled";
 "停用后不再收信 (绑定关系保留)" = "Once disabled it stops receiving mail (the binding is kept).";
 "允许" = "Allow";
+"允许锁屏运行" = "Allow running while locked";
 "先删除 Inbox agent「%@」" = "Delete the Inbox agent “%@” first";
 "全局" = "Global";
 "全局串行 (同一时刻只跑一个远程任务)" = "Global serial (only one remote task runs at a time)";
@@ -293,6 +296,7 @@
 "取消" = "Cancel";
 "变更史 · %lld 条" = "History · %lld";
 "只作用于这个 Inbox 起的会话, 不改变你当前会话的模型与档位" = "Applies only to sessions started by this Inbox; your current session's model and mode are untouched.";
+"只保证 MangoX 自己不被休眠打断。任务实际是在后台进程里跑的，系统会不会让它变慢，这条设置影响不到。" = "This only keeps MangoX itself from being interrupted by sleep. Tasks actually run in the background, and this setting cannot affect whether the system slows them down.";
 "只出提案，不改任何文件" = "Proposals only, no files touched";
 "只收 .md (大小写敏感); 若你刚要删或改名, 这条就是唯一的线索" = "Only .md is picked up (case-sensitive); if you just deleted or renamed something, this line is the only trace of it";
 "只是不再挂载, 目录与里面的文件一个都不动。" = "It is only unmounted — the directory and every file inside stay untouched.";
@@ -493,6 +497,7 @@
 "改完要点保存 —— 自动保存会把写了一半的句子也落盘, 还会跟你在外部编辑器里的改动抢。" = "Save explicitly — autosave would persist half-written sentences and race with your edits in an external editor.";
 "改配置不影响已建线程 —— 它们吃首封快照 (项目目录也随之固定)。" = "Changing settings does not affect existing threads — they use the first message's snapshot (including the project directory).";
 "教训" = "Lesson";
+"数据" = "Data";
 "数据库拷贝失败: %@" = "Copying the database failed: %@";
 "数据库文件缺失: %@" = "Database file missing: %@";
 "整场" = "Entire session";
@@ -551,6 +556,7 @@
 "最近提交" = "Recent commits";
 "最近收信 %@" = "Last received %@";
 "最高" = "Max";
+"有任务在跑时不让电脑休眠，跑完自动恢复；没任务时照常休眠" = "Keeps the computer awake while a task is running and lets it sleep again afterwards";
 "服务商" = "Provider";
 "服务端未返回该邮件 (UID 已不存在或被移走)" = "The server returned no such message (the UID no longer exists or was moved)";
 "未上报 %lld 条 (旧会话无 responseId)" = "%lld unreported (older sessions have no responseId)";
@@ -633,6 +639,8 @@
 "点「常驻」区头的文件夹按钮: 目录不在时会就地建出来; 若那个位置被同名文件占着, 请先移走它" = "Click the folder button in the “Always on” header: it creates the folder if it is missing; if a file of the same name occupies that spot, move it away first";
 "点击复制 hash: %@" = "Click to copy hash: %@";
 "点击查看大图" = "Click to view full size";
+"熄屏后保持唤醒" = "Stay awake";
+"熄屏后保持唤醒 = 屏幕可以熄灭，电脑不睡；保持屏幕常亮 = 连屏幕也不熄灭（更费电）。" = "Stay awake = the screen may turn off but the computer keeps running; Keep screen on = the screen stays lit as well (uses more power).";
 "现在" = "Now";
 "生成中…" = "Generating…";
 "用户" = "User";
@@ -779,10 +787,12 @@
 "选择目录…" = "Choose a directory…";
 "选择要附加的文件" = "Choose files to attach";
 "选择邮箱" = "Choose a mailbox";
+"选择锁屏后是否让电脑保持唤醒" = "Choose whether the computer stays awake after the screen locks";
 "选择项目" = "Choose a project";
 "选择项目…" = "Choose project…";
 "选择项目文件夹 (将作为 Agent 工作目录)" = "Choose the project folder (used as the agent's working directory)";
 "选择预设, 填 Key 后测试连接" = "Pick a preset, enter the key and test the connection";
+"通用" = "General";
 "邮件正文为空 (或只有 HTML): 请以纯文本发送任务内容。" = "The message body is empty (or HTML only): send the task as plain text.";
 "邮箱" = "Mailbox";
 "邮箱地址" = "Email address";
@@ -806,6 +816,7 @@
 "间隔" = "Interval";
 "阿里云邮箱" = "Alibaba Cloud Mail";
 "附加文件…" = "Attach files…";
+"集成" = "Integrations";
 "零拷贝" = "No copy";
 "需要审批" = "Ask for approval";
 "需要时才查" = "On demand";

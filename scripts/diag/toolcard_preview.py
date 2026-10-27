@@ -58,6 +58,7 @@ SOURCES = [
     'mangox/Views/Chat/ToolRunReceipt.swift',
     'mangox/Views/Chat/ThinkingCardView.swift',
     'mangox/Views/Sidebar/SidebarFooter.swift',
+    'mangox/Views/Settings/SettingsCategory.swift',
 ]
 
 MAIN = r'''
@@ -195,6 +196,38 @@ extension ToolCall {
     /// 出图用: 把一张卡包成"嵌套调用"（决策与三个回调都空 —— 出图不点按钮）。
     func asNested() -> ToolCallCardView.Nested {
         .init(tool: self, decision: nil, onApprove: nil, onDeny: nil, onAlwaysAllow: nil)
+    }
+}
+
+
+/// 出图用: 给 `SettingsShell` 一个能选的 `@State`, 右侧内容区是占位（真内容吃 `ChatStore`）。
+struct ShellProbe: View {
+    let selected: SettingsCategory
+    @State private var sel: SettingsCategory
+
+    init(selected: SettingsCategory) {
+        self.selected = selected
+        _sel = State(initialValue: selected)
+    }
+
+    var body: some View {
+        SettingsShell(selection: $sel) {
+            VStack(alignment: .leading, spacing: 14) {
+                caption("（右栏真实内容区 · 这里是占位）",
+                        "通用 = 外观 / 语言 / 锁屏运行 / 并发 / 通知 / 热键；集成 = 联网搜索 + 邮箱账号；数据 = 备份")
+                ForEach(0..<3, id: \.self) { _ in
+                    RoundedRectangle(cornerRadius: 10)
+                        .fill(CodexTheme.bgElevated)
+                        .frame(height: 84)
+                        .overlay(RoundedRectangle(cornerRadius: 10)
+                            .strokeBorder(CodexTheme.divider, lineWidth: 1))
+                }
+            }
+        }
+        .frame(width: 920, height: 560)
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .overlay(RoundedRectangle(cornerRadius: 8)
+            .strokeBorder(CodexTheme.border, lineWidth: 1))
     }
 }
 
@@ -491,6 +524,18 @@ MainActor.assumeIsolated {
 
 
 
+
+    // ── H. 设置页外壳（2026-10-26 boss: "排版方面现在太混乱了, 应该在左侧有个分类"）──
+    // 左列与外壳都是**真源码**（`SettingsShell` / `SettingsCategory`）。
+    // ⚠️ 右侧内容区里放的是**占位文字** —— 真内容是 `SettingsView` 的各 section，它们吃
+    //    `ChatStore`（数据库 / 模型目录 / 通知授权），出图脚本编不动。骨架是真的，内容不是。
+    render("settings-shell", VStack(alignment: .leading, spacing: 18) {
+        caption("设置页 · 左列分类 + 右栏内容",
+                "4 类: 通用(外观/语言/锁屏运行/并发/通知/热键) · 模型 · 集成(联网搜索/邮箱) · 数据(备份)")
+        ShellProbe(selected: .general)
+        ShellProbe(selected: .integration)
+    }, width: 960, scheme: .light)
+
     print("")
     print("判据:")
     print("  kind-compare   旧组三张读作 read; 新组读作 other 且标题是真名、command 是首参。")
@@ -517,6 +562,9 @@ MainActor.assumeIsolated {
     print("  sidebar-footer 每一格都是真的 `SidebarFooter`（产品源码），悬停靠 `hoverOverride` 指定。")
     print("                 定形 = 只有齿轮 · 靠右 · **静息常驻 bgPill 底** · 悬停/选中叠 selected。")
     print("                 ⚠️ 暗色那张请重点看「悬停」有没有变化 —— 那是这条路最容易翻的地方。")
+    print("")
+    print("  settings-shell 左列 4 类由 `SettingsCategory.allCases` 驱动（真源码）; 选中行 = accent 图标 + 胶囊底。")
+    print("                 ⚠️ 右栏里那三块是**占位矩形** —— 真 section 吃 ChatStore, 出图编不动。")
     print("")
     print("⚠️ 限制: `running` 的转圈 (`ProgressView` 这类动画件) 在离屏渲染里画不出来 ——")
     print("   那不是 App 的病。缩略条本身走 `NSHostingView`, 画得出来 (见文末)。")

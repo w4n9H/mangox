@@ -239,6 +239,10 @@ VALUES = {
     '复制': 'Copy',
     '复制全部输出': 'Copy all output',
     '外观': 'Appearance',
+    # 设置页左侧分类 (2026-10-26; '运行' 2026-10-27 并入 '通用' 后删除)
+    '通用': 'General',
+    '集成': 'Integrations',
+    '数据': 'Data',
     '多久看一次收件箱 (全局串行: 同一时刻只跑一个远程任务)': 'How often to check the inbox (global serial: only one remote task runs at a time)',
     '好': 'OK',
     '好的,先记下「%@」的需求,我会在下一轮把上下文喂给模型,再回执计划。': 'Got it. Noting the "%@" request; I will feed the context to the model on the next turn and reply with a plan.',
@@ -989,4 +993,19 @@ VALUES = {
     #  落点是工作区的**改动 tab** (账单说的就是改动), 所以不能只说"打开工作区"。
     '在工作区打开': 'Open in workspace',
     '这一轮花了什么': 'What this turn cost',
+    # 锁屏运行 (2026-10-27) —— ⚠️ 文案要给**普通人**读: 不出现 "assertion / child process /
+    # scheduling" 这类词 (boss: "『断言』『pi子进程』等描述过于专业")。
+    '允许锁屏运行': 'Allow running while locked',
+    '有任务在跑时不让电脑休眠，跑完自动恢复；没任务时照常休眠':
+        'Keeps the computer awake while a task is running and lets it sleep again afterwards',
+    '不保持唤醒': 'Let it sleep',
+    '熄屏后保持唤醒': 'Stay awake',
+    '选择锁屏后是否让电脑保持唤醒': 'Choose whether the computer stays awake after the screen locks',
+    '保持屏幕常亮': 'Keep screen on',
+    '熄屏后保持唤醒 = 屏幕可以熄灭，电脑不睡；保持屏幕常亮 = 连屏幕也不熄灭（更费电）。':
+        'Stay awake = the screen may turn off but the computer keeps running; '
+        'Keep screen on = the screen stays lit as well (uses more power).',
+    '只保证 MangoX 自己不被休眠打断。任务实际是在后台进程里跑的，系统会不会让它变慢，这条设置影响不到。':
+        'This only keeps MangoX itself from being interrupted by sleep. Tasks actually run in the '
+        'background, and this setting cannot affect whether the system slows them down.',
 }

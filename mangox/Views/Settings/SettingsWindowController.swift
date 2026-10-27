@@ -27,8 +27,47 @@ final class SettingsWindowController {
         window = win
         // store 换代 (ContentView 重建) 时重挂内容 —— 否则窗口指向上一份已失效的 store。
         if hostingStore !== store { win.contentView = makeHosting(store: store) }
+        // ⚠️ **每次开都重算尺寸与位置**：主窗口可能被拖过、缩过、挪过屏 —— 只算一次的话，
+        //    第二次打开就会出现"比主窗口还大"或"漂到屏幕另一边"（正是 2026-10-26 那条投诉）。
+        fit(win)
         win.makeKeyAndOrderFront(nil)
         store.showSettingsPanel = true   // 侧栏高亮 / 其它消费点读的就是它
+    }
+
+    /// 把设置窗**收进主窗口**并居中到它上面（2026-10-26 boss: 弹出页不能超过主窗口、要居中）。
+    ///
+    /// 几何全部在 `SettingsWindowFit`（纯函数，冒烟守着）；这里只负责**顺序**：先定尺寸再定位置。
+    /// 反过来算的话，位置是按旧尺寸算的，窗口会偏。
+    private func fit(_ win: NSWindow) {
+        guard let host = mainWindow() else {
+            win.setContentSize(Tune.settingsWindowSize)
+            win.center()   // 主窗口不在（mini 台 / 全隐藏）⇒ 退回屏幕居中
+            return
+        }
+        let content = SettingsWindowFit.contentSize(
+            preferred: Tune.settingsWindowSize,
+            host: host.frame.size,
+            margin: Tune.settingsWindowMargin)
+        win.contentMinSize = SettingsWindowFit.minSize(preferredMin: Tune.settingsWindowMinSize,
+                                                       content: content)
+        win.setContentSize(content)   // ⇐ 必须先设尺寸：下面的 origin 要用窗口外框（含标题栏）
+
+        let screen = (host.screen ?? win.screen)?.visibleFrame ?? host.frame
+        win.setFrameOrigin(SettingsWindowFit.origin(windowSize: win.frame.size,
+                                                    host: host.frame,
+                                                    screen: screen))
+    }
+
+    /// 主窗口 = 扣掉自己、迷你台、各种 panel 之后那个可见窗口
+    /// （与 `ContentView` 里 mini 模式那条判据同一口径）。
+    private func mainWindow() -> NSWindow? {
+        NSApp.windows.first {
+            $0 !== window
+                && !($0 is NSPanel)
+                && $0.identifier?.rawValue != "miniTaskWindow"
+                && $0.identifier?.rawValue != "settingsWindow"
+                && $0.isVisible
+        }
     }
 
     /// 侧栏按钮 / 菜单共用入口: 开着就关, 关着就开。
@@ -53,9 +92,7 @@ final class SettingsWindowController {
         win.identifier = NSUserInterfaceItemIdentifier("settingsWindow")
         win.isReleasedWhenClosed = false   // 红灯 close 只隐藏, 窗口对象复用
         win.contentView = makeHosting(store: store)
-        win.setContentSize(Tune.settingsWindowSize)
-        win.contentMinSize = Tune.settingsWindowMinSize   // 拖到首版尺寸就打住, 再小只会更难读
-        win.center()
+        // 尺寸/位置不在这里定 —— 见 `fit(_:)`：它每次开都按当时的主窗口重算。
 
         // 红灯 / ⌘W 关窗 → 同步 flag (侧栏高亮跟着灭, 不留"面板开着"的假状态)
         NotificationCenter.default.addObserver(

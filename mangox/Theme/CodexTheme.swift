@@ -313,7 +313,20 @@ enum Tune {
     /// 尺寸按 "8 个 section 里一眼能看见 3~4 段、其余滚动" 定; 2026-10-10 首版 760×640 实测偏挤 ⇒ 放大。
     static let settingsWindowSize    = CGSize(width: 920, height: 780)
     /// 设置窗的收缩下限 = 首版尺寸 (窗口可拖大; 再小就回到"挤"的状态, 没有意义)。
+    /// ⚠️ 它是**首选下限**不是硬下限: 主窗口比它还小时, 下限跟着主窗口一起缩
+    ///    （"不能超过主窗口"优先 —— 见 `SettingsWindowController.fit`）。
     static let settingsWindowMinSize = CGSize(width: 760, height: 640)
+    /// 设置窗与主窗口之间**每边**至少留的空隙（2026-10-26 boss: 弹出页不能超过主窗口）。
+    /// 24 是为了让底下的主窗口露出边框 —— 贴齐会读成"整窗替换", 分不出这是一个浮窗。
+    static let settingsWindowMargin: CGFloat = 24
+    /// 设置页左侧分类列宽的**地板**（2026-10-26 排版骨架 / 2026-10-27 改成只托底）。
+    ///
+    /// ⚠️ 这不是列宽本身 —— 列宽由**最宽那一行标签**撑开（`SettingsShell.categoryList`
+    /// 末尾的 `fixedSize`）。定过两次定宽都翻车：168 是「左侧留白太大」，128 是英文
+    /// `Integrations` 在词中断行。根因是 HStack 会把剩余空间在 `Text` 与 `Spacer` 之间
+    /// 对半分，任何"刚好装下"的数字都会在某语言/某字号下不够。
+    /// 120 只保证中文两字标签不窄成一条线；英文实际会撑到 ~121，中文留在 120。
+    static let settingsSidebarMinWidth: CGFloat = 120
     /// 工作区图片预览的渲染上界 (超过就靠 ScrollView 滚; 不放大到糊)
     static let workspacePreviewImageMaxSide: CGFloat = 1600
 

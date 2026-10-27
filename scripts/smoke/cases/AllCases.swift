@@ -37,6 +37,8 @@ extension SmokeMain {
             caseTimeline,
             caseTurnBill,
             caseWindowFit,
+            caseSettingsWindow,
+            caseSleepGuard,
         ]
     }
 

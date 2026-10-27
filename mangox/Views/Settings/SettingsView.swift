@@ -13,6 +13,10 @@ struct SettingsView: View {
     @ObservedObject private var appearance = AppearanceModel.shared   // P10.7: 主题外观三态
     @ObservedObject private var language = LanguageModel.shared        // P10.7: 语言三态
 
+    /// 左侧当前选中的分类。**不落库**：下次开设置从「通用」开始 —— 一个设置页记住用户
+    /// 上次翻到哪一栏，收益远小于"新开窗时的那一屏是乱的"这个代价。
+    @State private var category: SettingsCategory = .general
+
     // P7-M3 添加表单状态
     @State private var selectedPresetId: String?      // nil = 自定义
     @State private var customProvider = ""
@@ -53,27 +57,35 @@ struct SettingsView: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            header
-            Divider().overlay(CodexTheme.divider)
-            ScrollView {
-                VStack(alignment: .leading, spacing: 16) {
+        // 左列分类 + 右栏内容（2026-10-26）。原来是一整列 9 段卡片竖着堆,
+        // 想改「备份」得先滚过 8 段別的东西 —— 版式没有骨架, boss 的原话是「排版太混乱」。
+        // 分组口径按**用户要干什么**分, 不按代码里 section 的先后:
+        //   通用 = 长啥样 + 一次任务怎么跑（外观 / 语言 / 锁屏运行 / 并发 / 通知 / 捕获热键）
+        //   模型 = 唯一一件会影响每次请求的东西
+        //   集成 = 需要第三方账号/Key 才能用的（联网搜索 / 邮箱）
+        //   数据 = 落到磁盘、会被拷走的东西（备份）
+        // ⚠️ 2026-10-27 把「运行」并进了「通用」(boss: "不然看上去太空旷了") ——
+        //    两类各自只有 2~3 段, 单独立一页右栏大半是空白。
+        SettingsShell(selection: $category) {
+            VStack(alignment: .leading, spacing: 16) {
+                switch category {
+                case .general:
                     appearanceSection
                     languageSection
-                    modelSection
-                    webSearchSection
+                    lockScreenSection
                     concurrencySection
                     notificationSection
                     captureSection
+                case .model:
+                    modelSection
+                case .integration:
+                    webSearchSection
                     MailboxAccountsSection(store: store)
+                case .data:
                     backupSection
                 }
-                .padding(.horizontal, 24)
-                .padding(.vertical, 20)
-                .frame(maxWidth: .infinity, alignment: .topLeading)
             }
         }
-        .background(CodexTheme.bgChat)
         .onDisappear {
             // P9-#4: 录制 monitor 必须随视图销毁清理 — 否则录制中切走后 monitor 永久存活,
             // 吞掉全 App 修饰键且再次录制因 guard no-op 假死
@@ -86,19 +98,6 @@ struct SettingsView: View {
         } message: {
             Text(store.backupFailureMessage ?? "")
         }
-    }
-
-    private var header: some View {
-        HStack {
-            Text("设置")
-                    .textCase(.uppercase)
-                .font(.system(size: 11, weight: .semibold))
-                .tracking(0.5)
-                .foregroundStyle(CodexTheme.textMuted)
-            Spacer()
-        }
-        .padding(.horizontal, 24)
-        .padding(.vertical, 14)
     }
 
     // MARK: - 统一行范式: 左标题+说明, 右控件
@@ -719,6 +718,51 @@ struct SettingsView: View {
     }
 
     // MARK: - 并发上限
+
+    // MARK: - 锁屏运行 (2026-10-27: 有回合在途时别让机器睡过去)
+
+    private var lockScreenSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            settingRow(title: "允许锁屏运行",
+                       detail: "有任务在跑时不让电脑休眠，跑完自动恢复；没任务时照常休眠") {
+                CodexPillMenu {
+                    ForEach(LockScreenMode.allCases) { mode in
+                        // ⚠️ `Menu` 里只能放 Button/Toggle/Picker/Link —— 照 Picker 抄成
+                        //    `Text(x).tag(x)` 会让整列变**灰色禁用项**且点不中 (零编译信号)。
+                        Button {
+                            store.lockScreenMode = mode
+                        } label: {
+                            Text(mode == store.lockScreenMode ? "✓ " + mode.label : mode.label)
+                        }
+                    }
+                } label: {
+                    // ⚠️ 图标写在**前面**：macOS 的 `Menu` 会把 label 里的图标提到最左
+                    //    （实测：写成"文字+图标"也渲染成"图标+文字"）。按渲染结果写，
+                    //    免得下次有人照源码以为顺序反了又"修"一遍。
+                    Image(systemName: "chevron.up.chevron.down")
+                        .font(.system(size: 9))
+                        .foregroundStyle(CodexTheme.textMuted)
+                    Text(store.lockScreenMode.label)
+                }
+                // ⚠️ 必须 fixedSize：`Menu` 在 HStack 里会**撑满剩余宽度**，胶囊会变成一条
+                //   横贯整行的长条（本行其余控件也都带这一句，我第一版漏了）。
+                .fixedSize()
+                .help("选择锁屏后是否让电脑保持唤醒")
+            }
+            Divider().overlay(CodexTheme.divider)
+            // ⚠️ 这两句是**给人看的**, 不许出现"断言 / 子进程 / 调度"这类词 ——
+            //    boss 2026-10-27 原话: "『断言』『pi子进程』等描述过于专业, 使用更加易懂的描述"。
+            Text("熄屏后保持唤醒 = 屏幕可以熄灭，电脑不睡；保持屏幕常亮 = 连屏幕也不熄灭（更费电）。")
+                .font(.system(size: 11))
+                .foregroundStyle(CodexTheme.textMuted)
+                .fixedSize(horizontal: false, vertical: true)
+            Text("只保证 MangoX 自己不被休眠打断。任务实际是在后台进程里跑的，系统会不会让它变慢，这条设置影响不到。")
+                .font(.system(size: 11))
+                .foregroundStyle(CodexTheme.textMuted)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .settingsCard()
+    }
 
     private var concurrencySection: some View {
         VStack(alignment: .leading, spacing: 12) {
