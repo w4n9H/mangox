@@ -152,6 +152,16 @@ final class ChatStore: ObservableObject {
     /// 主区切换: true = 设置面板 (侧栏 gear 入口)。
     @Published var showSettingsPanel: Bool = false
 
+    /// 「请把设置页切到某一栏」—— 由**别处的入口**放进去, 设置页取走并清空。
+    ///
+    /// ⚠️ 存 `rawValue` 而不是 `SettingsCategory` 本身: 那是 View 层的枚举, State 层不去
+    ///    依赖视图类型 (本仓 `LockScreenMode` 反过来也是出于同一个边界)。
+    ///
+    /// 来历 (2026-10-28 boss): computer use 的开关原来只在设置页最下面, 被说「藏的太深了」。
+    /// 现在输入框那一行的 pill 才是主入口, 它点"选择能读的应用…"时要能**直接落到那一栏** ——
+    /// 否则"打开设置"之后还要用户自己在左列找一次, 等于把深度换了个地方。
+    @Published var pendingSettingsCategory: String?
+
     // MARK: - P4.1 回合完成通知 + P4.2 迷你条计时
 
     /// 通知开关 (settings 持久化, 默认开; 前台不弹 — 触发判定在 streamEnded 路径)。
@@ -711,6 +721,14 @@ final class ChatStore: ObservableObject {
             backupDirectory = store.loadSettingText(key: "backup_dir")   // P8-T28
             lastBackupSummary = store.loadSettingText(key: "backup_last")
             lockScreenMode = LockScreenMode.resolve(store.loadSettingText(key: "lock_screen_mode"))   // 锁屏运行
+            // P18: computer use 的开关与作用域 —— 与其它设置同一张表(能被备份一起带走)。
+            // ⚠️ 落盘口子在这里接: 单例自己不持有 persistence, 冒烟里它是 nil ⇒ 只测纯函数。
+            ComputerSettings.shared.restore(
+                enabledRaw: store.loadSettingText(key: ComputerSettings.enabledKey),
+                bundlesRaw: store.loadSettingText(key: ComputerSettings.bundlesKey))
+            ComputerSettings.shared.onPersist = { [weak self] key, value in
+                self?.persistence?.saveSettingText(key: key, value: value)
+            }
             capture.restore(CaptureHotkey.load(persistence: store))   // P8-T27 (P9.1d: 状态随 CaptureService)
         }
         // P9.1b/c/d: 子 store 挂接 + objectWillChange 转发 (两阶段初始化完成后才可引用 self)

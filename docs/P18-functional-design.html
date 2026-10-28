@@ -1,0 +1,799 @@
+<!DOCTYPE html>
+<html lang="zh-Hans">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>P18 — 让 MangoX 能看见并操作 macOS 界面</title>
+<!-- @style:begin · generated from docs/assets/design-doc.css — 请勿手改 -->
+<style>
+/* ============================================================================
+   design-doc.css —— MangoX 对齐文档统一样式
+   ----------------------------------------------------------------------------
+   ⚠️ 这是**唯一手改的样式源**。任何 docs/*.html 都不得自己写样式。
+      各文档里的 style 块由 scripts/docs/design_doc_css.py 从本文件生成：
+          python3 scripts/docs/design_doc_css.py --apply    # 同步
+          python3 scripts/docs/design_doc_css.py --check    # 不同步就退码 1
+      改完样式必须重跑 --apply，否则文档里的副本是旧的。
+
+   为什么不用外链：预览面板只服务单个文件（同级路径返回 403），
+   外链样式在面板里会静默失效 ⇒ 必须内联。单一来源靠脚本保证，不靠链接。
+
+   主题：跟随系统（prefers-color-scheme），两套色板都在 :root 里。
+   字号：正文 14px；标题 30 / 19 / 14；说明 12~13px。**不要小于 11px。**
+
+   —— 类名清单（骨架 = .wrap + 章节 h2，其余按需） ——
+   骨架   .wrap .eyebrow h1(.small) .metaline .tag h2(.n .en) h3
+   文本   .lead p code pre(.c .k) .foot ul.tight .kv .cite
+   强调块 .call(.lbl)  变体：.call.ok / .call.warn / .call.bad
+          .tldr > .tl(> .tln)
+   状态   .chip  变体：.c-ok .c-bad .c-warn .c-info .c-acc .c-mute
+   卡片   .grid(.g2 .g3) > .v(> .face > span)
+   对照   .flow > .lyr(.name .code .st)  + .arrowdown
+   条形   .bars > .bar(.on) > .track > .fill / .bv   + .barnote
+   表格   .tbl / .tw  > table > th/td(.num .sub)
+   待办   .todos > .todo(.blocked) > .tn / .tbody > .tt .td   + .cite
+   折叠   details.fold > summary
+   ============================================================================ */
+
+:root{
+  --bg:#fbfbf9; --card:#ffffff; --soft:#f4f4f0;
+  --fg:#1b1b19; --mute:#6a6a64; --faint:#9c9c95;
+  --line:#e5e4df; --line2:#d2d1cb;
+  --ok:#0f6e56; --okbg:#e3f5ee; --okbd:#9fe1cb;
+  --bad:#a32d2d; --badbg:#fcebeb; --badbd:#f7c1c1;
+  --warn:#82500b; --warnbg:#faeeda; --warnbd:#fac775;
+  --info:#185fa5; --infobg:#e8f1fb; --infobd:#b5d4f4;
+  --acc:#4a41b0; --accbg:#eeedfe; --accbd:#cecbf6;
+  --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
+}
+@media (prefers-color-scheme:dark){
+  :root{
+    --bg:#141417; --card:#1d1d21; --soft:#232328;
+    --fg:#ececea; --mute:#a2a29b; --faint:#74746e;
+    --line:#2e2e33; --line2:#414148;
+    --ok:#8adcbc; --okbg:#0e2f27; --okbd:#1d6e57;
+    --bad:#f4a4a4; --badbg:#361818; --badbd:#8f3b3b;
+    --warn:#f2c47f; --warnbg:#332610; --warnbd:#8a5f19;
+    --info:#9bc9f2; --infobg:#132539; --infobd:#255f94;
+    --acc:#b6b1f4; --accbg:#231f3e; --accbd:#4a41b0;
+  }
+}
+
+*{box-sizing:border-box}
+html{-webkit-text-size-adjust:100%}
+body{
+  margin:0;background:var(--bg);color:var(--fg);
+  font:14px/1.65 -apple-system,BlinkMacSystemFont,"PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;
+}
+.wrap{max-width:1060px;margin:0 auto;padding:44px 28px 72px}
+
+/* ---------- 页头 ---------- */
+.eyebrow{font:500 12px/1 var(--mono);letter-spacing:.08em;text-transform:uppercase;color:var(--faint)}
+h1{font-size:30px;line-height:1.25;font-weight:600;margin:12px 0 10px;letter-spacing:-.01em}
+h1 small{display:block;font-size:15px;font-weight:400;color:var(--mute);margin-top:8px;letter-spacing:0}
+.metaline{display:flex;flex-wrap:wrap;gap:8px;margin-top:18px}
+.tag{font:12px/1 var(--mono);padding:6px 10px;border:1px solid var(--line2);border-radius:999px;color:var(--mute);background:var(--card)}
+.tag b{color:var(--fg);font-weight:500}
+
+/* ---------- 章节 ---------- */
+h2{font-size:19px;font-weight:600;margin:52px 0 4px;padding-bottom:10px;border-bottom:1px solid var(--line);letter-spacing:-.01em}
+h2 .n{font:500 12px/1 var(--mono);color:var(--faint);margin-right:10px;vertical-align:2px}
+h2 .en{font:400 11px/1 var(--mono);color:var(--faint);letter-spacing:.06em;margin-left:10px;vertical-align:2px}
+h3{font-size:14px;font-weight:600;margin:28px 0 10px;color:var(--fg)}
+
+/* ---------- 文本 ---------- */
+p{margin:12px 0}
+.lead{color:var(--mute);font-size:13px;margin:8px 0 0}
+code{font:12.5px/1.5 var(--mono);background:var(--soft);padding:2px 5px;border-radius:5px;color:var(--fg)}
+pre{font:12.5px/1.7 var(--mono);background:var(--soft);border:1px solid var(--line);border-left:3px solid var(--accbd);
+    padding:14px 16px;border-radius:10px;overflow-x:auto;margin:12px 0;color:var(--fg)}
+pre .c{color:var(--faint)}
+pre .k{color:var(--acc)}
+.foot{color:var(--faint);font-size:12px;margin-top:44px;padding-top:18px;border-top:1px solid var(--line);font-family:var(--mono)}
+ul.tight{margin:12px 0;padding-left:20px}
+ul.tight li{margin:7px 0;font-size:13.5px}
+ul.tight li b{font-weight:600}
+.kv{display:grid;grid-template-columns:96px 1fr;gap:6px 14px;font-size:13px;margin:14px 0}
+.kv dt{color:var(--faint);font-family:var(--mono);font-size:11.5px;padding-top:2px}
+.kv dd{margin:0}
+.cite{font:11.5px/1.5 var(--mono);color:var(--faint);white-space:nowrap}
+hr{border:none;border-top:1px solid var(--line);margin:40px 0}
+
+/* ---------- 强调块 ---------- */
+.call{border:1px solid var(--accbd);background:var(--accbg);border-radius:12px;padding:16px 18px;margin:20px 0}
+.call .lbl{font:500 11px/1 var(--mono);letter-spacing:.08em;text-transform:uppercase;color:var(--acc);margin-bottom:8px}
+.call p{margin:0;font-size:14px}
+.call+.call{margin-top:10px}
+.call.ok{border-color:var(--okbd);background:var(--okbg)}   .call.ok .lbl{color:var(--ok)}
+.call.warn{border-color:var(--warnbd);background:var(--warnbg)} .call.warn .lbl{color:var(--warn)}
+.call.bad{border-color:var(--badbd);background:var(--badbg)}   .call.bad .lbl{color:var(--bad)}
+
+.tldr{display:flex;flex-direction:column;gap:1px;background:var(--line);border:1px solid var(--line);border-radius:12px;overflow:hidden;margin:10px 0 0}
+.tldr .tl{display:flex;gap:12px;align-items:flex-start;background:var(--card);padding:12px 16px;font-size:13.5px}
+.tldr .tl .tln{flex:none;color:var(--acc);font:500 13px/1.6 var(--mono)}
+.tldr .tl b{font-weight:600}
+
+/* ---------- 状态 chip ---------- */
+.chip{display:inline-block;font-size:11.5px;font-weight:500;padding:4px 9px;border-radius:999px;border:1px solid;white-space:nowrap}
+.c-ok{color:var(--ok);background:var(--okbg);border-color:var(--okbd)}
+.c-bad{color:var(--bad);background:var(--badbg);border-color:var(--badbd)}
+.c-warn{color:var(--warn);background:var(--warnbg);border-color:var(--warnbd)}
+.c-info{color:var(--info);background:var(--infobg);border-color:var(--infobd)}
+.c-acc{color:var(--acc);background:var(--accbg);border-color:var(--accbd)}
+.c-mute{color:var(--mute);background:var(--soft);border-color:var(--line2)}
+
+/* ---------- 卡片 ---------- */
+.grid{display:grid;gap:10px;margin:18px 0}
+.g2{grid-template-columns:repeat(2,1fr)}
+.g3{grid-template-columns:repeat(3,1fr)}
+.v{display:flex;align-items:center;gap:12px;background:var(--card);border:1px solid var(--line);border-radius:10px;padding:12px 14px}
+.v.top{align-items:flex-start}
+.v .face{flex:1;font-size:13px;min-width:0}
+.v .face>span{display:block;font-size:11.5px;color:var(--faint);margin-top:2px;font-family:var(--mono)}
+
+/* ---------- 对照（层 / 开关 / 流程） ---------- */
+.flow{display:flex;flex-direction:column;gap:8px;margin:18px 0}
+.lyr{display:flex;align-items:center;gap:14px;background:var(--card);border:1px solid var(--line);border-radius:10px;padding:13px 16px}
+.lyr .name{flex:none;width:112px;font-size:13px;font-weight:600}
+.lyr .code{flex:1;font-family:var(--mono);font-size:12px;color:var(--mute);min-width:0}
+.lyr .st{flex:none}
+.lyr.off{border-style:dashed}
+.arrowdown{text-align:center;color:var(--faint);font-size:15px;line-height:1;margin:-2px 0}
+
+/* ---------- 条形对比 ---------- */
+.bars{margin:18px 0;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:18px 20px}
+.bar{display:grid;grid-template-columns:150px 1fr 76px;align-items:center;gap:12px;margin-bottom:10px}
+.bar:last-child{margin-bottom:0}
+.bar .bn{font:12px/1.4 var(--mono);color:var(--mute)}
+.bar .track{height:26px;background:var(--soft);border-radius:6px;overflow:hidden}
+.bar .fill{height:100%;border-radius:6px;background:var(--line2);transition:width .6s ease}
+.bar.on .fill{background:var(--okbd);border:1px solid var(--ok)}
+.bar .bv{font:12px/1 var(--mono);color:var(--mute);text-align:right}
+.bar.on .bv{color:var(--ok);font-weight:500}
+.barnote{font-size:12px;color:var(--faint);margin-top:12px;padding-top:12px;border-top:1px solid var(--line)}
+
+/* ---------- 表格 ---------- */
+table{width:100%;border-collapse:collapse;margin:16px 0;font-size:13px}
+th{text-align:left;font-weight:500;color:var(--mute);font-size:11.5px;text-transform:uppercase;letter-spacing:.05em;
+   padding:10px 12px;border-bottom:1px solid var(--line2);white-space:nowrap}
+td{padding:11px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+tr:last-child td{border-bottom:none}
+tbody tr:hover{background:var(--soft)}
+td.mono,th.mono{font-family:var(--mono);font-size:12px}
+td .sub{display:block;color:var(--faint);font-size:12px;margin-top:3px;font-family:var(--mono)}
+.num{text-align:right;font-family:var(--mono);font-size:12px}
+.tbl{border:1px solid var(--line);border-radius:12px;overflow:hidden;background:var(--card)}
+.tbl table{margin:0}
+.tw{overflow-x:auto;border:1px solid var(--line);border-radius:12px;background:var(--card)}
+.tw table{margin:0;min-width:640px}
+/* 定义式表格：首列窄、键名不折行（契约 / 术语 / 字段表） */
+table.def th:first-child{width:150px}
+table.def th{white-space:nowrap}
+
+/* ---------- 待办与跟进 ---------- */
+.todos{margin:18px 0}
+.todo{display:flex;gap:14px;align-items:flex-start;background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px 16px;margin-bottom:8px}
+.todo .tn{flex:none;width:26px;height:22px;border-radius:6px;background:var(--soft);border:1px solid var(--line2);
+  font:500 12px/20px var(--mono);text-align:center;color:var(--mute);margin-top:1px}
+.todo .tbody{flex:1;min-width:0}
+.todo .tt{font-size:13.5px;font-weight:600}
+.todo .td{font-size:12.5px;color:var(--mute);margin-top:4px}
+.todo .td b{color:var(--fg);font-weight:500}
+.todo.blocked{border-color:var(--warnbd);background:var(--warnbg)}
+.todo.done{border-color:var(--okbd);background:var(--okbg)}
+.todo.done .tt{color:var(--ok)}
+
+/* ---------- 折叠 ---------- */
+details.fold{margin:16px 0}
+details.fold>summary{cursor:pointer;list-style:none;display:inline-flex;align-items:center;gap:8px;
+  font:12px/1 var(--mono);color:var(--info);background:var(--infobg);border:1px solid var(--infobd);
+  border-radius:999px;padding:7px 13px;user-select:none}
+details.fold>summary::-webkit-details-marker{display:none}
+details.fold>summary::before{content:"▸";font-size:10px;translate:0 1px}
+details.fold[open]>summary::before{content:"▾"}
+details.fold>summary:hover{border-color:var(--info)}
+details.fold[open]>summary{margin-bottom:4px}
+
+/* ---------- UI 原型 (mock) ----------
+   给「新页面长什么样」用的积木。**只在设计文档里用**, 不是产品样式。
+   为什么必须放这儿: lint ① 要求所有 class 都能在共享 CSS 里找到定义。 */
+.mocks{display:flex;flex-direction:column;gap:20px;margin:18px 0}
+.mock{background:var(--card);border:1px solid var(--line2);border-radius:12px;overflow:hidden}
+.mock .cap{font:500 11px/1 var(--mono);letter-spacing:.07em;text-transform:uppercase;color:var(--faint);
+  padding:9px 14px;border-bottom:1px solid var(--line);background:var(--soft)}
+.mock .win{display:flex;min-height:112px}
+.mock .pane{flex:1;padding:12px 14px;min-width:0}
+.mock .pane.side{flex:none;width:154px;border-right:1px solid var(--line);background:var(--soft)}
+.mock .tbar{display:flex;align-items:center;gap:6px;padding:9px 12px;border-bottom:1px solid var(--line)}
+.mock .dot{width:9px;height:9px;border-radius:50%;background:var(--line2);flex:none}
+.mock .ttl{font-size:12px;font-weight:500;color:var(--mute);margin-left:6px}
+.mock .row{display:flex;align-items:center;gap:8px;padding:6px 9px;border-radius:7px;font-size:12.5px}
+.mock .row.on{background:var(--accbg);color:var(--acc)}
+.mock .row .lab{flex:1;min-width:0}
+.mock .row .k{flex:none;color:var(--faint);font:11.5px/1.5 var(--mono)}
+.mock .row.on .k{color:var(--acc)}
+.mock .sep{height:1px;background:var(--line);margin:6px 0}
+.mock .mi{display:flex;gap:28px;justify-content:space-between;padding:5px 10px;border-radius:5px;font-size:12.5px}
+.mock .mi.hl{background:var(--accbg);color:var(--acc)}
+.mock .mi .k{color:var(--faint);font:11.5px/1.5 var(--mono)}
+.mock .mi.hl .k{color:var(--acc)}
+.mock .pill{display:inline-block;font:11px/1 var(--mono);padding:4px 8px;border-radius:999px;
+  border:1px solid var(--line2);background:var(--soft);color:var(--mute)}
+.mock .thumb{display:block;width:100%;height:74px;border:1px solid var(--line);border-radius:8px;
+  background:repeating-linear-gradient(45deg,var(--soft),var(--soft) 7px,transparent 7px,transparent 14px)}
+.mock .note{font-size:12px;color:var(--faint);padding:9px 14px;border-top:1px solid var(--line);background:var(--soft)}
+.mock .note b{color:var(--fg);font-weight:500}
+
+/* ---------- 窄屏 ---------- */
+@media (max-width:760px){
+  .g3,.g2{grid-template-columns:1fr}
+  .bar{grid-template-columns:1fr;gap:4px}
+  .bar .bv{text-align:left}
+  .lyr{flex-wrap:wrap;gap:8px}
+  .lyr .name{width:auto}
+}
+</style>
+<!-- @style:end -->
+</head>
+<body>
+<div class="wrap">
+
+<div class="eyebrow">P18 &nbsp;·&nbsp; 状态 <b>提案（未动工）</b>&nbsp;·&nbsp; 前身 <b>无</b>&nbsp;·&nbsp; 单一来源 <b>本文件</b>&nbsp;·&nbsp; 2026-10-28</div>
+
+<h1>让 MangoX 能看见并操作 macOS 界面
+  <small>computer use 这件事,在 macOS 上有一条被验证过的窄路:不是"看截图猜坐标",是<b>读可访问性树</b>(AX)。它比截屏快 40~100 倍、<b>不移动鼠标</b>、而且是可枚举的 —— 枚举出来,就能给用户看"它现在看得见什么",并把授权分成两层：<b>App 面宽、动作面窄</b>（能进的默认全给,进去之后能不能动手按类收紧）。这一版把这条路走通:三个载体(一个 Swift 辅助进程 + 一层薄扩展 + App 侧的权限与接管面)、两个工具、一条<b>先修的审批闸门</b>。</small>
+</h1>
+
+<div class="metaline">
+  <span class="tag">状态 <b>提案 · 未动工</b></span>
+  <span class="tag">感知 <b>AX 树 + 差分</b></span>
+  <span class="tag">动作 <b>AX 语义优先</b></span>
+  <span class="tag">前置 <b>审批闸门倒置</b></span>
+  <span class="tag">2026-10-28</span>
+</div>
+
+<h2><span class="n">00</span>结论先行<span class="en">VERDICT</span></h2>
+
+<div class="call">
+  <div class="lbl">一句话</div>
+  <p>MangoX 要的 computer use <b>不该是"截屏 + 猜坐标"</b>(那会把每次感知变成一次云端往返、每次点击都变成一次焦点争夺),而该是<b>以可访问性树为主角</b>的一条路:<b>读</b>界面用 AX 树(带编号、带差分),<b>动</b>界面用 AX 的语义动作(按按钮、填字段 —— <b>不移动鼠标</b>),截屏只在 AX 树读不到东西时才按需出场。落到本仓,它是<b>一个自建扩展 + 一个 Swift 辅助进程</b>,判据全在 Swift 侧(能进冒烟、能造反例)。<b>但动工前必须先修两条</b> —— ① 现在的"敏感工具白名单"会让任何新工具<b>自动放行</b>,而远程驱动档(<code>autoJudge</code>)甚至对写操作一律放行;② 辅助进程那条 socket 默认<b>同用户任何进程都能连</b>,作用域判据挡不住本地进程 —— 见下 ① 与 §04 门 0。</p>
+</div>
+
+<div class="tldr">
+  <div class="tl"><span class="tln">①</span><div><b>先修闸门:现在的审批白名单是"漏 = 出事"的方向。</b>敏感工具集是 <code>new Set(["bash","write","edit"])</code>(<code>PiRpcTransport.swift:287</code>),不在集里 ⇒ <b>直接放行</b>(<code>:327</code>)⇒ <b>任何新工具都自带豁免</b>。更狠的是远程驱动档（<code>autoJudge</code>）:分级只管 bash,<b>write / edit 一律放行</b>(<code>:1931-1934</code>)—— 而那正是邮箱哨兵远程驱动用的档。⇒ 若 computer 是个普通工具,<b>一封远程邮件就能驱动你的界面</b>。这条不修,后面全部不做。</div></div>
+  <div class="tl"><span class="tln">②</span><div><b>感知用 AX 树 + 差分,不用截屏。</b>AX 读一次约 <b>50ms</b>,截屏方案一次往返 <b>2~5 秒</b> —— 10 步任务 <b>3 秒 vs 35 秒</b>(<b>中</b> · 行业综述,待本机实测)。更重要的是 AX 树是<b>文本</b>:压缩 80~92% 后每步几百 token,且动作后只回<b>差分</b>。而截屏是像素,<b>每步必须重发</b>,且要送到云端。</div></div>
+  <div class="tl"><span class="tln">③</span><div><b>动作走 AX 的语义接口 ⇒ 不抢你的鼠标。</b>AXPress / AXSetValue 是<b>程序化</b>触发,官方文档原话是 "without synthetic mouse movement"。这一条把 macOS 桌面 agent 最难的那个问题(人和 agent 抢同一个鼠标)消掉 ~80%;剩下的 20% 靠<b>人类接管检测</b>兜底。这是本方案与"截屏派"最本质的差别 —— <b>不是更快,是更不打扰你</b>。</div></div>
+  <div class="tl"><span class="tln">④</span><div><b>授权分两层:App 面宽、动作面窄 —— 不是"把整台 Mac 锁起来"。</b>AX 是可枚举的:枚举出来,就能在界面上列给用户看"它现在看得见什么",并把动作限制在名单 pid 的指定面上(<code>read</code> / <code>act</code> / <code>none</code>)。<b>密码类 App 能进能读,值恒 <code>••••</code>,但 <code>act</code> 面恒关</b>。真正不给的只有两种:<b>结构上做不到的</b>(系统授权窗、永久删除)与<b>恒拒判据</b>(存盘确认 / 付款字样 / 删除语义)—— 见 §03 改动七。<b>"发送"不在其中</b>(2026-10-28 拍板):它通常就是任务的目的本身。另外要认清:<b>作用域是"我们自缚",不是系统在兜</b> —— 用户真要放行整台 Mac 也拦不住;这条线的价值在于"默认宽、可收紧、看得见",而不是"系统替你挡了"。</div></div>
+</div>
+
+<h3>状态矩阵</h3>
+<div class="grid g3">
+  <div class="v"><div class="face">前置修复 · 审批闸门倒置<span>强 · 不修则 computer 工具<b>自动放行</b>（源码 :287 / :327）</span></div><span class="chip c-ok">已落地 · 未发版</span></div>
+  <div class="v"><div class="face">前置修复 · 远程驱动档（autoJudge）显式拒 computer<span>强 · 否则远程邮件可驱动界面（源码 :1931-1934）</span></div><span class="chip c-ok">已落地 · 未发版</span></div>
+  <div class="v"><div class="face">前置修复 · helper socket 的 peer 校验<span>强 · 不改则本机<b>任何进程</b>都能连上发动作（见 §04 门 0）</span></div><span class="chip c-bad">必须先行</span></div>
+  <div class="v"><div class="face">感知层 · AX 树 + 编号 + 差分<span>强 · 官方 API 齐备 · <b>本机覆盖率未实测</b></span></div><span class="chip c-acc">提案</span></div>
+  <div class="v"><div class="face">动作层 · AXPress / AXSetValue 优先<span>强 · 官方文档: without synthetic mouse movement</span></div><span class="chip c-acc">提案</span></div>
+  <div class="v"><div class="face">兜底层 · CGEvent 坐标点击<span>中 · 官方 API · 需 Screen Recording 权限</span></div><span class="chip c-warn">兜底</span></div>
+  <div class="v"><div class="face">安全层 · App 面 + 动作面<span>提案 · App 面默认全给可排除;密码类只 <code>read</code>(值恒 ••••)</span></div><span class="chip c-acc">提案</span></div>
+  <div class="v"><div class="face">安全层 · 人类接管检测<span>提案 · CGEventTap · 抢回控制权</span></div><span class="chip c-acc">提案</span></div>
+  <div class="v"><div class="face">安全层 · 不可逆动作红线<span>提案 · 与 P15「零先例自动删知识」同族</span></div><span class="chip c-acc">提案</span></div>
+  <div class="v"><div class="face">安全层 · 密码 / 敏感字段遮蔽<span>强 · 必须在<b>序列化边界</b>做,不能等 prompt</span></div><span class="chip c-acc">提案</span></div>
+  <div class="v"><div class="face">载体 · Swift 辅助进程 + 薄扩展<span>强 · 现有扩展机制 + 判据留在 Swift 侧</span></div><span class="chip c-acc">提案</span></div>
+  <div class="v"><div class="face">载体 · 审批卡 / 工具卡 / Trace 复用<span>强 · 现成（源码 :342 / :1729 / :2265）</span></div><span class="chip c-ok">复用现成</span></div>
+  <div class="v"><div class="face">档位 · 工具面只登记在 full<span>提案 · 沿用 web-search 的"挂载 + env"双闸门;定时任务另需<b>任务级</b>选 full（两根轴）</span></div><span class="chip c-acc">提案</span></div>
+  <div class="v"><div class="face">门禁 · 序列化 / 压缩 / 差分 / 遮蔽 / 作用域<span>强 · 纯函数,可造反例,不需要真屏幕</span></div><span class="chip c-acc">提案</span></div>
+  <div class="v"><div class="face">成本 · 上下文约为截屏法的 1/4<span>中 · 行业参考数字 · <b>待本机实测</b></span></div><span class="chip c-warn">待实测</span></div>
+  <div class="v"><div class="face">TCC · 每次重装可能需重授<span>强 · 与 Keychain 同因（ad-hoc 签名换身份）</span></div><span class="chip c-bad">已知摩擦</span></div>
+</div>
+
+<h2><span class="n">01</span>需求说明<span class="en">REQUIREMENT</span></h2>
+
+<div class="tldr">
+  <div class="tl"><span class="tln">R1</span><div><b>MangoX 现在的能力边界是"能写文件、能跑 shell",不是"能操作界面"。</b>凡是没有 API、没有 CLI、只有图形界面的东西 —— 某个内部系统、某个只有网页版的后台、某个画布型工具 —— 现在的 MangoX 一点办法都没有。</div></div>
+  <div class="tl"><span class="tln">R2</span><div><b>而"用 shell 硬凑"这条路是有天花板的。</b><code>osascript</code> + System Events 能做一部分,但它拿不到结构化的元素标识(每次都要按标题找),要逐个 App 授"自动化"权限,而且对自绘界面完全无能为力。</div></div>
+  <div class="tl"><span class="tln">R3</span><div><b>受益场景的具体形态</b>:① 每天要从一个只有网页版的系统里取数填进另一个表;② 某个客户端没开放 API,只能点;③ 想让 agent 在"我打开的那个 App"里替我做一段重复操作(填表、导出、贴进去)。这三类的共同点是<b>操作是 GUI 语义上的(点某个按钮、填某个字段),不是像素上的</b>。</div></div>
+</div>
+
+<h3>明确不做什么</h3>
+
+<div class="tbl">
+<table class="def">
+  <thead><tr><th>不做</th><th>理由</th></tr></thead>
+  <tbody>
+    <tr><td>不接 MCP</td><td>MCP 那条路在等审批语义翻转;computer use <b>用自建扩展</b>就能做,不欠新债(同 <code>mangox-web-search.ts</code> 的路数)。</td></tr>
+    <tr><td>不做纯截屏派</td><td>每步一次云端往返、每次点击抢你的鼠标、像素要外发。三条代价都与"个人生产力工具"的身份冲突。</td></tr>
+    <tr><td>不做"自动无限操作"</td><td>不给 agent 无限循环的权利。每一轮都是普通的一轮,做完就停 —— 跟 MangoX 其它能力同一条纪律。</td></tr>
+    <tr><td>不接管全屏键盘</td><td>不装全局键盘记录器。AX 的 <code>AXSetValue</code> 够填字段了;真要按键,只允许在 <b>受作用域约束</b>的窗口里发。</td></tr>
+    <tr><td>不在 minimal / standard 档提供</td><td>它吃上下文、要求系统权限、且是"重能力"。只进 full 档且要用户显式开启。</td></tr>
+  </tbody>
+</table>
+</div>
+
+<h2><span class="n">02</span>需求调研<span class="en">RESEARCH</span></h2>
+
+<h3>A · 外部契约（一）· macOS 的可访问性 API</h3>
+
+<p class="lead">Apple 的 Accessibility framework(AX)本来就是给读屏软件(VoiceOver)用的 —— 它给 agent 的东西正好是<b>结构化的界面语义</b>。</p>
+
+<div class="tbl">
+<table class="def">
+  <thead><tr><th>能力</th><th>API</th><th>对本方案的意义</th></tr></thead>
+  <tbody>
+    <tr><td>权限自检 + 弹窗索要</td><td><code>AXIsProcessTrustedWithOptions([kAXTrustedCheckOptionPrompt: true])</code></td><td>没有它就是 <code>kAXErrorCannotComplete (-25204)</code>;能自检 ⇒ MangoX 能在界面上说清"缺哪个权限、去哪点"。</td></tr>
+    <tr><td>取某个 App 的界面根</td><td><code>AXUIElementCreateApplication(pid)</code></td><td><b>作用域的支点</b>:只对允许的 pid 建根,别的 App 根本拿不到句柄。</td></tr>
+    <tr><td>读树 / 读属性</td><td><code>AXUIElementCopyAttributeValue</code>(role / title / value / position / size / children)</td><td>观察层的全部原料。</td></tr>
+    <tr><td><b>程序化按按钮</b></td><td><code>AXUIElementPerformAction(el, kAXPressAction)</code></td><td><b>不移动鼠标</b> —— 官方文档原话: "Directly triggers the accessibility action without synthetic mouse movement"。</td></tr>
+    <tr><td><b>程序化填字段</b></td><td><code>AXUIElementSetAttributeValue(el, kAXValueAttribute, …)</code></td><td>同上,不需要模拟键盘。</td></tr>
+    <tr><td>按坐标反查元素</td><td><code>AXUIElementCopyElementAtPosition</code></td><td>兜底路:有坐标时先反查出元素,能走 AX 就走 AX。</td></tr>
+    <tr><td>密码 / 受保护内容</td><td><code>kAXProtectedContentAttribute</code> / 密码框角色</td><td>序列化时遮蔽 —— <b>必须在序列化边界做</b>。</td></tr>
+    <tr><td>截屏</td><td>ScreenCaptureKit(macOS 12.3+)</td><td>兜底路的视觉面。</td></tr>
+  </tbody>
+</table>
+</div>
+
+<p class="lead"><b>出处</b>:Apple Developer 文档 <code>AXUIElement.h</code>(Accessories / ApplicationServices)。可信度 <b>中</b>(官方文档)—— <b>但"文档说支持"≠"我们这条路真跑通"</b>,本机实测列入 §04 前置门。</p>
+
+<h3>B · 外部契约（二）· 性能与压缩的量级</h3>
+
+<div class="tbl">
+<table class="def">
+  <thead><tr><th>维度</th><th>截屏派</th><th>AX 派</th><th>出处 / 可信度</th></tr></thead>
+  <tbody>
+    <tr><td>单次感知</td><td class="num">2~5 秒（云端往返）</td><td class="num">~50 毫秒</td><td>行业综述 <b>中</b></td></tr>
+    <tr><td>10 步任务</td><td class="num">~35 秒</td><td class="num">~3 秒</td><td>同上 <b>中</b></td></tr>
+    <tr><td>树压缩</td><td>—</td><td class="num">80~92%</td><td>剪掉非交互容器 + <b>步间差分</b> <b>中</b></td></tr>
+    <tr><td>像素是否外发</td><td>是</td><td>否（只发 AX 文本）</td><td><b>中</b> · 隐私口径</td></tr>
+  </tbody>
+</table>
+</div>
+
+<div class="call warn">
+  <div class="lbl">⚠️ 这四条数字全部是二手，本机一条都没测</div>
+  <p>本版<b>没有</b>在真机上跑过任何一次 AX 读取 —— 本仓至今<b>零</b> AXUIElement / CGEvent / ScreenCaptureKit 代码(全仓 grep 命中 0,只有一条注释提到 <code>CGWindowListCreateImage</code>)。⇒ 上表只能当<b>方向</b>用,<b>不能当预算</b>。§04 前置门第 ③ 条就是先测这个:<b>先在本机跑一次真实 AX 读,拿到树的大小、耗时、覆盖率</b>,再谈 token 账。</p>
+</div>
+
+<h3>C · 外部契约（三）· TCC 权限的身份问题</h3>
+
+<p class="lead">macOS 的 TCC 授权<b>按代码签名认进程</b>。而 MangoX 的 Release 包是 <b>ad-hoc 签名</b>(见 README「下载与本地签名」)⇒ <b>每次重装 / 换机器,权限可能被清掉要重授</b>。</p>
+
+<p class="lead">这<b>不是新问题</b> —— 仓库里已经有同一个成因的另一处:<b>钥匙串按身份判 ACL,重装后可能弹一次授权</b>(README「首次从 Release 装的 App 可能弹一次钥匙串授权」)。⇒ 权限面<b>照抄那条已知形态</b>:设置页给状态、缺失时给常驻横幅、并在已知限制里写清"重装可能需重授"。</p>
+
+<p class="lead">另有一条:辅助进程若<b>放在 .app bundle 内且随包签名</b>,TCC 的"责任进程"仍是 MangoX ⇒ <b>辅助进程继承 MangoX 已有的授权</b>,不必单独再授一次。(<b>弱</b> —— 这条要本机验:把 helper 放进 bundle 后不额外授权,看 AX 读是否直接可用。)</p>
+
+<h3>D · 我们这边的现状（源码事实）</h3>
+
+<div class="tbl">
+<table class="def">
+  <thead><tr><th>事实</th><th>位置</th><th>对本方案的意义</th></tr></thead>
+  <tbody>
+    <tr><td>敏感工具集 = 白名单式</td><td><code>PiRpcTransport.swift:287</code> <code>SENSITIVE = new Set(["bash","write","edit"])</code> · <code>:327</code> 不在集里直接放行</td><td><b>新工具自动豁免</b>。computer 工具必须先把这条改成默认敏感。</td></tr>
+    <tr><td>「始终允许」只活在扩展进程内</td><td><code>:286</code> <code>const alwaysAllowed = new Set()</code></td><td>per-turn 拆进程 ⇒ <b>下一回合就没了</b>。作用域授权必须落盘(参照 bash 白名单那条路:<code>ChatStore.swift:2147-2149</code>)。</td></tr>
+    <tr><td>远程驱动档（autoJudge）对写操作一律放行</td><td><code>:1931-1934</code> "分级只管 bash,write/edit 一律放行"</td><td><b>远程驱动档</b>。computer 绝不能落进这个默认分支。</td></tr>
+    <tr><td>分级裁决器已经是"白名单放行"立场</td><td><code>BashRiskEvaluator.swift:4</code> "白名单放行(漏 = 多弹一次卡, 失败模式是烦),不做黑名单拦截"</td><td>⇒ <b>项目自己的哲学是 fail-safe</b>。闸门倒置是把它贯彻到底,不是引入新观念。</td></tr>
+    <tr><td>工具结果支持图片</td><td><code>:2265-2267</code> <code>ImageContent = { type:"image", data: base64, mimeType }</code> · <code>:1729</code> <code>persistToolImages</code></td><td>⇒ 截屏兜底<b>不需要新渲染路径</b>:现成的工具卡就能显示。</td></tr>
+    <tr><td>扩展能声明工具</td><td><code>:491</code> <code>pi.registerTool({name,label,description,parameters,execute})</code></td><td>computer 的工具面照 <code>mangox-dream.ts</code> 抄即可。</td></tr>
+    <tr><td>扩展能弹审批 UI</td><td><code>:342</code> <code>ctx.ui.select(title, ["Allow","Allow always","Deny"])</code> · <code>:1744</code> <code>extension_ui_request</code></td><td>⇒ 审批卡 UI <b>直接复用</b>,只需多一个选项。</td></tr>
+    <tr><td>turn_end 是可动作边界</td><td><code>:1823-1824</code> "0.87.0 起变成可动作边界(扩展可注入 entries 并 <code>continue: true</code>)"</td><td>⇒ 将来可以做"感知→动作→再感知"的<b>回合内</b>循环,不必然要新机制。</td></tr>
+    <tr><td>档位工具面</td><td><code>AgentMode.swift:60-67</code> minimal = allowlist 四件套 · standard/full = <code>["+grep","+find","+ls"]</code> 增补式</td><td>⇒ <b>档位天然分层</b>:minimal 的 allowlist 会把扩展工具裁掉,standard/full 的增补式不裁 ⇒ computer 只挂 full 即可,<b>不需要改 toolListArguments</b>。</td></tr>
+    <tr><td>零 macOS 自动化代码</td><td>全仓 grep:AXUIElement / AXIsProcessTrusted / CGEvent / ScreenCaptureKit 命中 0</td><td>⇒ 这是<b>从零</b>的一条能力,不是接线。</td></tr>
+    <tr><td>既有源码事实门</td><td><code>scripts/smoke/run.sh</code> ③ / ③b~③h 八道</td><td>⇒ computer 需要同类门:helper 契约 / 作用域判据 / 不许裸发 CGEvent。</td></tr>
+    <tr><td>自动放行档对<b>所有</b>工具直接放行</td><td><code>PiRpcTransport.swift:1904-1908</code> <code>guard approvalMode.judgesByRisk else { … "Allow" … }</code> · <code>ApprovalMode.swift:57</code> <code>judgesByRisk = self != .autoAllow</code></td><td>⇒ 定时任务档<b>连 bash 分级都不做</b>。所以「没人点卡」的档有两个,不是一个(见 §03 改动五)。</td></tr>
+    <tr><td>env 下发的现成范式</td><td><code>PiRpcTransport.swift:997-1004</code> <code>webSearchEnvironment(existing:key:inherited:)</code> · 接线 <code>:1366-1369</code> · <code>p.environment</code> 的赋值坑 <code>:1351-1358</code></td><td>⇒ socket 路径照它下发。⚠️ <b>两个方向都要管</b>:父环境里已有同名变量时必须<b>显式删</b>,否则「没开」与「其实开了」同时为真且不亮任何红灯。</td></tr>
+  </tbody>
+</table>
+</div>
+
+<h2><span class="n">03</span>路径与方案<span class="en">APPROACH</span></h2>
+
+<h3>改动一 · 三个载体（谁做判断，谁只是搬运）</h3>
+
+<div class="flow">
+  <div class="lyr"><span class="name">MangoX.app</span><span class="code">权限状态 · 作用域配置 · 接管横幅 · 审批卡 · 工具卡渲染</span><span class="st"><span class="chip c-ok">已有面</span></span></div>
+  <div class="arrowdown">↓ spawn(per-turn) · env 传 socket 路径与作用域</div>
+  <div class="lyr"><span class="name">pi 进程</span><span class="code">mangox-computer.ts —— <b>只做 JSON 转发</b>,一个判断都不做</span><span class="st"><span class="chip c-acc">薄壳</span></span></div>
+  <div class="arrowdown">↓ unix socket · JSON 一问一答</div>
+  <div class="lyr"><span class="name">mangox-compute</span><span class="code">Swift 辅助进程:AX 读 / AX 动作 / 坐标兜底 / 遮蔽 / 作用域 / 接管</span><span class="st"><span class="chip c-acc">判据都在这</span></span></div>
+</div>
+
+<div class="call">
+  <div class="lbl">为什么不是"扩展里直接做"</div>
+  <p>扩展跑在 <b>node</b> 里(<code>mangox-web-search.ts</code> / <code>mangox-dream.ts</code> 都是 TS),而 AX / CGEvent 是<b>原生 macOS API</b> ⇒ 扩展拿不到。要么在扩展里 shell out 到 <code>osascript</code>(拿不到结构化元素、要逐 App 授自动化权限),要么引一个原生辅助进程。<b>后者更贵,但它把"判断"放回了 Swift 侧</b> —— 而 Swift 侧有本仓最值钱的东西:<b>纯函数 + 冒烟 + 能造反例</b>。</p>
+  <p>这正是 <code>mangox-dream.ts</code> 已经用过的路数:扩展"故意是哑的",判据全在 <code>Models/NoteProposal.swift</code> 的纯函数里(<code>PiRpcTransport.swift:436-439</code> 原话: "判据全部留在…纯函数里,那里能造反例、能进门禁")。<b>computer 沿用同一条纪律,不给 TS 留任何策略。</b></p>
+</div>
+
+<p class="lead"><b>辅助进程的生命周期:不随 per-turn 拆。</b>MangoX 每次回合拆一个 pi 进程,但辅助进程<b>按 App 会话常驻</b>(懒启动)。理由三条:① 它持有<b>观察缓冲</b>与元素索引,跨回合复用;② TCC 授权提示<b>只弹一次</b>;③ 人类接管的事件监听<b>只有一个</b>,不会出现两个进程同时抢鼠标。</p>
+<div class="call bad">
+  <div class="lbl">忘了写的一条：这条 socket 只认自己人</div>
+  <p>env 把 socket 路径交给 pi(<code>PiRpcTransport.swift:1339-1369</code> 那套 <code>p.environment</code> 写法),而 <b>unix socket 默认同用户任何进程都能连</b> —— 一个后台脚本、一个别的 App、甚至某个依赖里的一段代码,都能连上来发 <code>ui_act</code>。<b>作用域、遮蔽、不可逆红线全在这一层后面 ⇒ 它们挡的是模型,挡不住本地进程。</b></p>
+  <p>三条硬要求:<b>①</b> socket 放 <code>0700</code> 目录、文件 <code>0600</code>(<code>~/.mangox/run/</code>);<b>②</b> accept 之后立刻 <code>getsockopt(LOCAL_PEERCRED)</code> 取 <code>pid</code>,<b>只接受本轮 pi 进程或它的子孙</b>,其余断开并记一笔;<b>③</b> 路径<b>只经 env 下发、不落盘</b>,且父环境里的同名变量<b>必须显式删</b> —— 照 <code>webSearchEnvironment</code>(<code>PiRpcTransport.swift:997-1004</code>):只"有就设进去"不够,<code>key == nil</code> 且父环境已有同名变量时必须移除,否则会出现「面板显示没开 / 扩展其实连上了」同时为真、而且<b>不亮任何红灯</b>。</p>
+  <p>⚠️ 我建议它<b>排在闸门倒置前面</b>:闸门挡的是模型的误用,socket 挡的是<b>别人替你的机器动手</b>。前者是"做错事",后者是"被别人做"。</p>
+</div>
+
+<h3>改动二 · 观察：AX 树 → 编号表 → 差分</h3>
+
+<p class="lead">模型看到的东西长这样:</p>
+
+<pre class="c"><code># 快照 v3 · 前台:飞书 · 窗口:与张三的对话
+[1] Button "发送"            (120,34  24×22)
+[2] TextField "输入消息"      (值:"" , 200,58  400×22)  ← 焦点
+[3] StaticText "对方正在输入…" (200,90  120×16)
+[4] Button "附件"            (60,58  22×22)
+
+— 变化(v2→v3):[2] 值 "" → "好的,我看一下"</code></pre>
+
+<p class="lead">三条整形规则(全部在辅助进程里做,<b>不污染模型上下文</b>):</p>
+
+<div class="tbl">
+<table class="def">
+  <thead><tr><th>规则</th><th>做什么</th><th>为什么</th></tr></thead>
+  <tbody>
+    <tr><td>剪枝</td><td>只保留可交互角色(button / textfield / checkbox / menuitem / tab / link / toggle / slider / 有文本的 listitem),丢掉纯布局容器</td><td>这是"80~92% 压缩"的主要来源;布局节点对模型无用。</td></tr>
+    <tr><td>去冗余</td><td><code>AXDescription</code> 与 <code>AXTitle</code> 或角色名相同时丢弃</td><td>同样的词不写两遍。</td></tr>
+    <tr><td>编号 + 差分</td><td>每次读给一份快照编号;动作后只回<b>变化</b>(新值 / 焦点 / 新增 / 消失)</td><td>动作后不必重发整棵树 ⇒ 每步几百 token 而不是几千。</td></tr>
+  </tbody>
+</table>
+</div>
+
+<p class="lead"><b>模型寻址用编号,不用坐标。</b>坐标只写给人看(审批卡里"点哪儿")。理由:坐标会因窗口移动、滚动、缩放而失效,而编号背后是"那个叫『发送』的按钮" —— 语义稳定。</p>
+
+<div class="call">
+  <div class="lbl">截屏什么时候才出场</div>
+  <p>只有三种:<b>①</b> 模型明确要看图;<b>②</b> AX 树读不到东西(画布型 / 自绘 / 游戏 / 某些 Electron);<b>③</b> 一次动作失败,需要视觉证据。<b>默认永远不截屏</b> —— 截屏是<b>兜底</b>,不是主路。</p>
+</div>
+
+<h3>改动三 · 动作：AX 语义优先，坐标兜底</h3>
+
+<div class="tbl">
+<table class="def">
+  <thead><tr><th>动作</th><th>首选实现</th><th>兜底</th><th>会不会动鼠标</th></tr></thead>
+  <tbody>
+    <tr><td>点按钮 / 选菜单项</td><td><code>AXUIElementPerformAction(kAXPressAction)</code></td><td>坐标 + <code>CGEvent</code></td><td><b>首选不会</b></td></tr>
+    <tr><td>填文本框</td><td><code>AXUIElementSetAttributeValue(kAXValueAttribute)</code></td><td>坐标 + 键盘事件</td><td><b>首选不会</b></td></tr>
+    <tr><td>滚动 / 拖拽</td><td>AX 的 scroll action(有则用)</td><td><code>CGEvent</code></td><td>兜底会</td></tr>
+    <tr><td>读内容</td><td>AX 树 + 差分</td><td>OCR(仅兜底路)</td><td>不会</td></tr>
+  </tbody>
+</table>
+</div>
+
+<p class="lead">辅助进程在收到坐标动作时<b>先反查</b>(<code>AXUIElementCopyElementAtPosition</code>)—— 查得到元素就走 AX,查不到才真的发坐标事件。<b>能语义就不要像素</b>是这条路的总原则。</p>
+
+<p class="lead"><b>粒度拍板(2026-10-28):先按 App。</b>按窗口更细,但 AX 的窗口归属判定更脆 —— 先按 App,真被误伤时再收窄,不提前把复杂度背上。</p>
+
+<div class="call ok">
+  <div class="lbl">2026-10-28 再拍：App 面放宽，动作面收紧</div>
+  <p>原来写的是"这五类 App <b>进不了白名单</b>" —— 那是<b>补丁</b>:挡不住改名换姓的同类 App,却实打实挡住"帮我把那个密码填进去"这种高频需求。改成 <b>App 面默认全给 + 动作面按类收紧</b> 之后,<b>权限是变多的</b>(能进、能读),而"不能替你按付款"这件事改由<b>动作面</b>保证,不再靠名单。</p>
+</div>
+
+<h3>改动四 · 作用域：App 面宽、动作面窄（最重要的产品决定）</h3>
+
+<div class="call">
+  <div class="lbl">两层：谁能进（App 面）× 进去能做什么（动作面）</div>
+  <p><b>App 面</b>：<b>默认全选</b>,用户可逐个排除 —— <b>不拿 App 类别去代理"危险"</b>(理由见改动七)。辅助进程只对名单里的 pid 建 AX 根、只对名单窗口里的落点发坐标事件。</p>
+  <p><b>动作面</b>：每个 App 给一个面 —— <code>read</code> / <code>act</code> / <code>none</code>。<b>密码管理器 / 钥匙串 / 钱包 / 支付类 = 进得来,但 <code>act</code> 面恒关</b>:读到的密码值在序列化边界恒 <code>••••</code> ⇒ 读也不泄露;要它填密码,它拿不到值,自然填不进去。<b>能看不能动,比"根本进不来"更准</b> —— 前者挡的是行为,后者挡的只是名字。</p>
+  <p>为什么这条比任何别的都重要:AX 的权限本身是<b>全有或全无</b>的(辅助功能 = 读所有界面 + 模拟按键,Apple 不给粒度)。<b>粒度只能我们自己造</b> —— 而只有 AX 这条路造得出来(因为它是按 pid 寻址的)。<b>用截屏派就造不出这个粒度</b> —— 那是一个像素流,没有 pid 概念。</p>
+</div>
+<div class="call warn">
+  <div class="lbl">这个作用域是"我们自缚",不是系统在兜</div>
+  <p>授权辅助功能之后,<b>系统层面任何进程都能读整屏</b> —— Apple 不给粒度。「只准碰飞书」是<b>辅助进程自己遵守的纪律</b>,不是内核强制的边界 ⇒ 界面文案<b>必须直说</b>,否则用户会以为点完「允许飞书」系统就替他挡住了其它一切。<b>诚实说法</b>:「MangoX 已获得辅助功能权限(整台机器)。我们只在下面这些 App 里读和点 —— 这条约束由 MangoX 执行,不是由系统执行。」</p>
+  <p>连带一句:白名单也<b>挡不住</b>绕过辅助进程的路径(见下面「忘了写的一条」与 §04 门 0) —— 那才是唯一能被外部利用的缝。</p>
+</div>
+
+<h3>改动五 · 审批闸门倒置（前置，不修则全盘不做）</h3>
+
+<p class="lead">现状:扩展层用<b>敏感工具白名单</b>决定"要不要问客户端"(<code>:287</code> / <code>:327</code>),客户端桥再决定"要不要真拦"(<code>BashRiskEvaluator</code>)。问题在第一层:<b>不在白名单 ⇒ 根本不会到第二层</b> ⇒ 第二层那套精细判据对任何新工具<b>完全失效</b>。</p>
+
+<div class="flow">
+  <div class="lyr"><span class="name">现在</span><span class="code">扩展:敏感白名单 → 不过就放行 · 客户端:风险分级(只管 bash)</span><span class="st"><span class="chip c-bad">新工具自动豁免</span></span></div>
+  <div class="arrowdown">改成</div>
+  <div class="lyr"><span class="name">倒置后</span><span class="code">扩展:<b>全量转发</b> → 客户端:<b>只读白名单放行 / 其余弹卡</b></span><span class="st"><span class="chip c-ok">fail-safe</span></span></div>
+</div>
+
+<p class="lead">这不是新观念,是把 <code>BashRiskEvaluator.swift:4</code> 已经写下的立场("白名单放行…不做黑名单拦截")<b>贯彻到工具层</b>:失败模式统一成"多弹一次卡"(烦),而不是"悄悄放行"(出事)。</p>
+
+<p class="lead"><b>computer 轴的判据(放客户端桥里,纯函数,可造反例):</b></p>
+
+<div class="tbl">
+<table class="def">
+  <thead><tr><th>操作</th><th>交互档 <code>interactive</code></th><th>远程驱动档 <code>autoJudge</code></th><th>定时任务档 <code>autoAllow</code></th></tr></thead>
+  <tbody>
+    <tr><td><code>read</code>(读界面)</td><td>作用域内静默放行</td><td>作用域内静默放行</td><td>作用域内静默放行</td></tr>
+    <tr><td><code>act</code>(动界面)</td><td>弹审批卡(带作用域与目标)</td><td><b>一律拒并记原因</b>(本方案唯一保留的一档)</td><td><b>放行</b>(与它现在对 write/edit 的待遇一致)</td></tr>
+    <tr><td>两层红线面(见本 § 改动七)</td><td><b>一律拒</b>(结构上不可达的两条本来就调不到)</td><td><b>一律拒</b></td><td><b>一律拒</b></td></tr>
+  </tbody>
+</table>
+</div>
+
+<p class="lead">⚠️ <b>远程驱动档这条是本方案里最硬的安全承诺</b>:<b>computer use 在远程驱动档永远不动作</b>,只读。原因见 §02.D —— 那一档现在对 write/edit 一律放行(<code>:1931-1934</code>),若 computer 落进同一分支,<b>一封邮件就是一次远程桌面</b>。</p>
+<div class="call bad">
+  <div class="lbl">一共两个口子,不是一个 —— 第二个比你写的更宽</div>
+  <p><b>口子一</b>(§00 ① 那个):<code>SENSITIVE</code> 是<b>黑名单式交集</b> ⇒ 新工具不在集里、<code>:327</code> 直接 <code>return undefined</code> ⇒ <b>任何新工具自带豁免</b>。</p>
+  <p><b>口子二</b>(本版补齐时发现):<code>PiRpcTransport.swift:1904-1908</code> 的 <code>guard approvalMode.judgesByRisk else { … "Allow" … }</code> —— 而 <code>judgesByRisk</code> 的定义是 <code>self != .autoAllow</code>(<code>ApprovalMode.swift:57</code>)⇒ <b>自动放行档对「所有工具」直接放行,连 bash 分级都不做</b>。这一档给定时任务用(弹卡没人点 = 死锁),它<b>必须</b>这么放 —— 但代价是:computer 若被定时任务带上,<b>一次定时触发的界面操作也不需要任何人拍板</b>。</p>
+  <p>⇒ 所以 computer 要在<b>两处</b>写显式分支,不能只堵 <code>autoJudge</code>。<b>三档结论(2026-10-28 拍板)</b>:<code>interactive</code> 弹卡 · <code>autoAllow</code> <b>给完整权限</b>(它的语义本来就是"不弹卡、全放行",computer 落进去<b>不需要特殊分支</b>)· <code>autoJudge</code> <b>仍只读</b> —— <b>唯一保留的一档,理由不是权限大小,是输入源</b>(见下与 §05)。</p>
+</div>
+<div class="call ok">
+  <div class="lbl">已拍板（2026-10-28）：定时任务档给完整权限</div>
+  <p>boss 的原话:「开发 computer use 的目的就是让 MangoX 成为我的助手,什么权限都不开那就没法玩了」。所以 <code>autoAllow</code> 的 <code>read</code> <b>与 <code>act</code> 都给</b> —— 而且这对实现是<b>减法</b>:那一档原本就是"不弹卡、全放行",computer 不需要任何新分支。</p>
+  <p>⚠️ 但 <code>autoJudge</code> 不跟着开。<b>这不是"权限给多给少"的取舍,是"这句话是谁说的"的取舍</b> —— 定时任务的指令是你写的,邮件正文可能是任何人写的。这两件事的差别不在权限表里,在输入源上。</p>
+</div>
+
+<h3>改动六 · 人类接管（人和 agent 抢鼠标的兜底）</h3>
+
+<p class="lead">AX 优先把冲突消掉 ~80%(不移动鼠标),剩下 20% 是坐标兜底与菜单操作。兜底手段是行业里那套<b>屏幕共享式接管</b>:</p>
+
+<div class="tbl">
+<table class="def">
+  <thead><tr><th>层</th><th>做什么</th></tr></thead>
+  <tbody>
+    <tr><td>检测</td><td>辅助进程挂 <code>CGEventTap</code>,监听<b>人类</b>的鼠标位移与按键(自己的事件打标记,不算)。</td></tr>
+    <tr><td>中止</td><td>检测到人类输入 ⇒ <b>立刻中止当前动作</b>,把这一轮标成"人接管了"。</td></tr>
+    <tr><td>告知</td><td>给模型回一句"用户接管了,界面可能已变,重读再动" —— <b>不许模型拿旧快照继续点</b>。</td></tr>
+    <tr><td>可见</td><td>MangoX 自己的窗口上常驻一条:"正在控制界面 · 移动鼠标或按 Esc 接管"。</td></tr>
+  </tbody>
+</table>
+</div>
+
+<p class="lead">这一层是<b>别的桌面 agent 普遍没做</b>的。对一个"你边用电脑边让它干活"的个人工具,它是可用性的地板,不是加分项。</p>
+
+<h3>改动七 · 红线与遮蔽</h3>
+
+<div class="call">
+  <div class="lbl">总原则（2026-10-28 boss 定）：能力面 7 : 3 —— 只留三成不给</div>
+  <p>这个功能的目的就是<b>当助手</b>。每条都要人点一下,做出来的是个玩具。所以判据不是"这条危险不危险",而是<b>"这条不该由谁触发"</b>。<b>约七成的界面能力直接交给它,只有三成永远不给</b>。</p>
+  <p>⚠️ <b>"三成"不是一张 App 黑名单。</b>第一版我写的是五类 App 进不了白名单 —— 那是<b>补丁</b>:拿 App 类别去代理"危险",挡的是名字不是行为(坏人不会因为 1Password 不在名单里就罢手),而被挡住的反而是高频正事。所以三成落成两层:<b>结构上做不到的</b>(两个)+ <b>做之前恒拒的判据</b>(三条),见下两表。</p>
+</div>
+
+<p class="lead"><b>第一层 · 结构性不可达</b> —— 不是"不许做",是<b>"没有这个动作"</b>。</p>
+
+<div class="tbl">
+<table class="def">
+  <thead><tr><th>不可达的东西</th><th>为什么它坏在"结构"上,而不是坏在"危险"上</th></tr></thead>
+  <tbody>
+    <tr><td>系统级授权窗（TCC 弹窗 / 登录窗 / 锁屏）</td><td>让被授权者批自己的权限 = <b>自指授权</b>。这不是危险程度问题,<b>任何动作级评估都救不了</b> ⇒ 辅助进程对这类系统进程<b>不建 AX 根</b>,名单里根本不出现。</td></tr>
+    <tr><td>永久删除 / 清空 / 格式化</td><td>helper <b>只实现"移到废纸篓"</b>(<code>trashItem</code>),<b>"直接删"这条 API 在代码里不存在</b> ⇒ 模型想干也没有可调的动作。<b>把不可逆动作从能力面删掉,审批面上就不用判它</b> —— 这是修根因,不是贴补丁。</td></tr>
+  </tbody>
+</table>
+</div>
+
+<p class="lead"><b>密码管理器 / 钥匙串 / 钱包 / 支付类不属于这一层</b> —— 它们归改动四的<b>动作面</b>:进得来、只有 <code>read</code>,值恒 <code>••••</code>。</p>
+
+<p class="lead"><b>第二层 · 恒拒判据</b> —— 做之前就判,纯函数、可造反例(不受"环境不同"影响)。</p>
+
+<div class="tbl">
+<table class="def">
+  <thead><tr><th>看到什么</th><th>恒做什么</th><th>为什么这条不能"弹张卡让人点"</th></tr></thead>
+  <tbody>
+    <tr><td>存盘确认弹窗（"要保存吗"）</td><td><b>恒选"取消"</b>,回报"这里有未保存的修改,要你决定"</td><td>模型<b>永远不该替人决定"不保存"</b> —— 内容的唯一副本就在那个窗口里;反过来"保存"也不该它定(存哪、覆盖不覆盖)。</td></tr>
+    <tr><td>付款 / 下单 / 确认支付 这类控件</td><td><b>恒拒</b>,回报"这一步涉及付款,我不点"</td><td>钱。哪怕能退款,退款本身也是一次操作。这类判断不需要"理解业务",<b>认字就够</b>。</td></tr>
+    <tr><td>永久删除语义（<code>⇧⌘⌫</code> / "立即删除" / "清空废纸篓"）</td><td><b>恒拒</b></td><td>第一层已经把 API 拿掉了,这条是<b>坐标兜底的兜底</b> —— 万一落点恰好压在"立即删除"上,还得有判据接住。</td></tr>
+  </tbody>
+</table>
+</div>
+
+<div class="call ok">
+  <div class="lbl">不在两层里的,一律放行 —— 包括"发送"</div>
+  <p><b>发送(邮件 / 消息 / 表单提交)不算不可逆</b>(2026-10-28 boss 拍板,原来我把它列进去了,是错的)。理由站得住:「发出去」往往就是<b>这个任务的目的本身</b> —— 日报写好要发、消息拟好要发,每到这一步弹一张"不可撤销"的卡,等于让它永远停在最后一步。</p>
+  <p><b>密码类 App 的 <code>read</code> 也在这里</b> —— 进作用域、只读、值恒 <code>••••</code>:它看得到"有个密码框",看不到里面的字。</p>
+  <p>判据换一句:<b>该拦的是"做完之后你还不知道发生了什么"(删掉 / 覆盖 / 关掉未保存的);不该拦的是"做完之后你正要它发生的事"(发送 / 提交 / 点确认)</b>。</p>
+</div>
+
+<div class="call warn">
+  <div class="lbl">遮蔽必须在序列化边界做,不能等 prompt</div>
+  <p>密码框 / 受保护内容 / 疑似卡号的字段 ⇒ <b>辅助进程在拼字符串时就把值换成 <code>••••</code></b>。理由:一旦进了工具结果,它就进了上下文、进了 DB、可能进了日志。<b>"提示模型别看"是第二道防线,第一道是别让它出去。</b></p>
+</div>
+
+<h3>改动八 · 工具面与档位</h3>
+
+<div class="tbl">
+<table class="def">
+  <thead><tr><th>工具</th><th>作用</th><th>审批</th></tr></thead>
+  <tbody>
+    <tr><td><code>screen_read</code></td><td>读当前作用域内的界面(元素表 + 差分);可选"给张图"</td><td>作用域内静默</td></tr>
+    <tr><td><code>ui_act</code></td><td>对某个元素/坐标做动作(press / setValue / scroll / menu)</td><td>交互档弹卡 · 远程驱动档拒 · 定时任务档放行</td></tr>
+  </tbody>
+</table>
+</div>
+
+<p class="lead"><b>只有两个工具</b> —— 工具越多,模型的选错率越高、说明越长。<b>档位</b>:挂 <code>full</code>;定时任务想在没人看着的情况下驱动界面,<b>任务级档位也要选 <code>full</code></b> —— 这两件事正交(<b>工具面在档位轴,裁决在审批轴</b>),别混;沿用 web-search 的<b>双闸门</b>(挂载闸门 = 设置里开着;env 闸门 = 这一轮真要它)⇒ 别的会话<b>连 socket 路径都拿不到</b>。</p>
+
+<h3>改动九 · 上下文账（待本机实测）</h3>
+
+<div class="bars">
+  <div class="bar"><span class="bn">截屏派 · 每步</span><div class="track"><div class="fill" style="width:100%"></div></div><span class="bv">~1500 tok</span></div>
+  <div class="bar on"><span class="bn">AX 派 · 每步（差分）</span><div class="track"><div class="fill" style="width:20%"></div></div><span class="bv">~200~400 tok</span></div>
+  <div class="bar"><span class="bn">AX 派 · 首次全量</span><div class="track"><div class="fill" style="width:35%"></div></div><span class="bv">~2~5k tok</span></div>
+</div>
+
+<div class="barnote">按"10 步任务"折:<b>截屏派 ≈ 15,000 token + 10 次云端往返（~35 秒）</b>;<b>AX 派 ≈ 6,800 token + 10 次本地读（~0.5 秒）</b>。<br>⚠️ <b>本机一行都没测过</b>(§02.B 全是二手)。真值要靠 §04 前置门第 ③ 条测出来;测出来的数若与上表差一个量级,<b>本节整节重写</b>。</div>
+
+<h3>改动十 · 门禁</h3>
+
+<div class="tbl">
+<table class="def">
+  <thead><tr><th>门</th><th>类型</th><th>为什么必须</th></tr></thead>
+  <tbody>
+    <tr><td>AX 树序列化 / 剪枝 / 差分</td><td>纯函数冒烟</td><td>不需要真屏幕就能造反例;这是观察层的全部逻辑。</td></tr>
+    <tr><td>遮蔽</td><td>纯函数冒烟</td><td>密码框 ⇒ 必须恒被遮蔽(改坏即红)。</td></tr>
+    <tr><td>作用域判据</td><td>纯函数冒烟</td><td>白名单外的 pid / 落点 ⇒ 必须恒被拒。</td></tr>
+    <tr><td>helper 契约(socket 路径 / 一问一答形状)</td><td>源码事实门</td><td>同 <code>run.sh</code> ③~③h 那八道:编译得过、数值一个不变、也没断言会红。</td></tr>
+    <tr><td>不许裸发 CGEvent</td><td>源码事实门</td><td>坐标事件必须先过作用域判据 ⇒ 门扫"发事件前有没有作用域检查"。</td></tr>
+    <tr><td>闸门倒置的回归</td><td>冒烟</td><td>把 <code>SENSITIVE</code> 改回白名单式 ⇒ 必须变红。</td></tr>
+  </tbody>
+</table>
+</div>
+
+<h2><span class="n">04</span>待办与跟进<span class="en">TODO</span></h2>
+
+<h3>前置门（不过就不做）</h3>
+
+<div class="todos">
+  <div class="todo">
+    <span class="tn">0</span>
+    <div class="tbody">
+      <div class="tt">helper socket 的 peer 校验（本版补齐时新增,建议排在最前）</div>
+      <div class="td"><b>判据</b>：socket 在 <code>0700</code> 目录、文件 <code>0600</code>;连上来先 <code>getsockopt(LOCAL_PEERCRED)</code> 取 pid，<b>只接受本轮 pi 进程或其子孙</b>，其余断开并记一笔。<b>反例</b>：删掉 peer 判据 ⇒ 冒烟里「陌生进程连上来发 <code>ui_act</code>」必须被拒(现在会通过 ⇒ 必须红)。<b>为什么必须先</b>：env 把路径交给 pi，而 unix socket 默认<b>同用户任何进程都能连</b> ⇒ 作用域/遮蔽/红线挡的是模型，<b>挡不住本地进程</b>。详细见 §03 改动一末段。<b>状态</b>：<span class="chip c-bad">未做</span></div>
+    </div>
+  </div>
+  <div class="todo">
+    <span class="tn">1</span>
+    <div class="tbody">
+      <div class="tt">审批闸门倒置（敏感白名单 → 默认敏感 + 只读白名单）</div>
+      <div class="td"><b>判据</b>：新增一条冒烟断言 —— 工具层的「要不要审批」必须<b>由只读白名单反推</b>（不在只读集里 ⇒ 敏感），再把 <code>SENSITIVE</code> 改回 <code>new Set(["bash","write","edit"])</code> ⇒ <b>必须变红</b>。⚠️ 现在<b>没有</b>这条断言（不是「它是红的」）⇒ 这一步的工作量是<b>造门</b>，不是改实现。<b>为什么必须先</b>：computer 工具若在白名单外,<b>根本到不了客户端桥</b> ⇒ <code>BashRiskEvaluator</code> 那套精细判据对它完全失效;而 <code>autoJudge</code> 档对非 bash 一律放行(<code>:1931-1934</code>)⇒ 远程邮件可直接驱动界面。<b>状态</b>：<span class="chip c-ok">已做（未发版）</span> —— 白名单落在 <code>ApprovalGate</code>（唯一真源，扩展源码由它插值生成），门在 <code>CaseApprovalGate</code>：反例（<code>needsApproval</code> 退回黑名单语义 + 删掉 <code>autoJudge</code> 的 computer 分支）⇒ <b>7 条红</b>。</div>
+    </div>
+  </div>
+  <div class="todo">
+    <span class="tn">2</span>
+    <div class="tbody">
+      <div class="tt">本机 AX 实测：树有多大、多快、覆盖多少 App</div>
+      <div class="td"><b>判据</b>：拿一个真实 App(飞书 / Safari / 备忘录)跑一次 AX 读 ⇒ 记下①原始树节点数 ②剪枝后节点数 ③单次耗时 ④压缩后字符数。<b>没有这四个数,§03 改动九的账就是猜的</b>。<b>为什么必须先</b>：本仓至今零 AX 代码,而所有性能数字都来自二手综述。<b>状态</b>：<span class="chip c-bad">未做</span></div>
+    </div>
+  </div>
+  <div class="todo">
+    <span class="tn">3</span>
+    <div class="tbody">
+      <div class="tt">TCC 身份继承验：辅助进程放进 bundle 后是否需单独授权</div>
+      <div class="td"><b>判据</b>：把 helper 放进 <code>MangoX.app/Contents/MacOS/</code> 且随包签名 ⇒ <b>不</b>单独给 helper 授辅助功能权限,MangoX 已授权 ⇒ AX 读直接可用。<b>为什么必须先</b>：若不成立,则多一次授权流程,方案的成本要重算。<b>状态</b>：<span class="chip c-bad">未做</span></div>
+    </div>
+  </div>
+</div>
+
+<h3>验收项</h3>
+
+<div class="todos">
+  <div class="todo">
+    <span class="tn">4</span>
+    <div class="tbody">
+      <div class="tt">纯观察端到端（不碰任何界面）</div>
+      <div class="td"><b>判据</b>：新会话里只挂 <code>mangox-computer.ts</code> ⇒ 让模型"读一下当前屏幕上有什么" ⇒ 断言①返回里有编号元素表 ②<b>没有</b> image content(默认不截屏) ③作用域外的 pid 一律读不到。<b>反例</b>：把作用域判据去掉 ⇒ 必须变红。</div>
+    </div>
+  </div>
+  <div class="todo">
+    <span class="tn">5</span>
+    <div class="tbody">
+      <div class="tt">"始终允许"能跨回合存活</div>
+      <div class="td"><b>判据</b>：点一次"允许本会话" ⇒ <b>下一个回合</b>同一个动作不再弹卡(现状:<code>alwaysAllowed</code> 是扩展进程内的 <code>Set</code>(<code>:286</code>),per-turn 拆进程 ⇒ 必然失效)。落盘形态照 bash 白名单那条路(<code>ChatStore.swift:2147-2149</code>)。<b>为什么</b>：不修这条,GUI 任务每个动作都弹一次卡,不可用。</div>
+    </div>
+  </div>
+  <div class="todo">
+    <span class="tn">6</span>
+    <div class="tbody">
+      <div class="tt">远程驱动档（autoJudge）下 computer 一律被拒且留痕</div>
+      <div class="td"><b>判据</b>：<code>autoJudge</code> 档发起 <code>computer_act</code>（工具名契约见下）⇒ 断言①被拒 ②<b>落一条记原因</b>(同 <code>autoJudgeBlocks</code> 的形态)③<b>没有任何 image / 像素被发出</b>。<b>反例</b>：把该分支改回落进"一律放行" ⇒ 必须变红。<b>状态</b>：<span class="chip c-ok">① ② 已做（未发版）</span> —— ③ 目前是<b>结构性</b>保证（图像面还没接，<code>includeImage</code> 一律回"批 2 才接"），<b>等批 3 接上图像时必须补一条真断言</b>，不许靠"现在还读不到像素"这件事撑着。<br><b>工具名契约</b>：<code>computer_read</code> / <code>computer_act</code>（前缀 <code>computer_</code> 才是判据 —— 以后加 <code>computer_scroll</code> 自动落入要审批那一侧，本文早期草稿里的 <code>ui_read</code>/<code>ui_act</code> 作废）。</div>
+    </div>
+  </div>
+  <div class="todo">
+    <span class="tn">7</span>
+    <div class="tbody">
+      <div class="tt">人类接管可中止</div>
+      <div class="td"><b>判据</b>：动作进行中注入一次人类鼠标位移 ⇒ 断言①动作中止 ②给模型的回执里出现"用户接管"字样 ③模型不得凭旧快照继续动作(下一次读必须重新取)。</div>
+    </div>
+  </div>
+  <div class="todo">
+    <span class="tn">8</span>
+    <div class="tbody">
+      <div class="tt">密码框恒被遮蔽</div>
+      <div class="td"><b>判据</b>：构造一棵含密码框的 AX 树 ⇒ 序列化结果里该值恒为 <code>••••</code>;改坏遮蔽代码 ⇒ 必须变红。<b>注意</b>：这条要在<b>序列化边界</b>测,不是测"prompt 里有没有让它别看"。</div>
+    </div>
+  </div>
+  <div class="todo">
+    <span class="tn">9</span>
+    <div class="tbody">
+      <div class="tt">恒拒判据的反例（存盘确认 / 付款字样 / 删除语义）</div>
+      <div class="td"><b>判据</b>：给判据函数喂三组输入 —— ① 一个带"要保存吗"的 sheet ⇒ 必须返回"取消",且回报文案里有"未保存";② 一个标题含"确认付款"的控件 ⇒ 必须拒;③ 一个 <code>⇧⌘⌫</code> 语义的菜单项 ⇒ 必须拒。<b>三条各造一次反例</b>(把判据改回放行)⇒ 必须变红。<b>注意</b>:这三条是<b>纯函数</b>,不需要真屏幕,也就没有"环境不同所以测不出来"的借口;而且它们挡的正是"模型替人决定不保存"这类事,<b>不该靠人点卡兜</b>。</div>
+    </div>
+  </div>
+</div>
+
+<h3>已拍板（2026-10-28）</h3>
+
+<p class="lead">这四条原来都是"等你拍板"的问号,已全部定了(总原则 = 能力面 <b>7 : 3</b>,见 §03 改动七)。<b>第 13 条与我原来的倾向相反</b>,故意把旧倾向也写在里面 —— 以后按新的推,不要回到旧的去。</p>
+
+<div class="todos">
+  <div class="todo">
+    <span class="tn">10</span>
+    <div class="tbody">
+      <div class="tt">不可逆动作清单的边界</div>
+      <div class="td"><b>已定</b>：<b>发送不算不可逆</b> —— 原话「发送不算不可逆,什么权限都不给的话,开发这个的意义也就没了」。我原先把它列进去是错的:判据不是"能不能撤回",而是<b>"做完之后你还不知道发生了什么"</b>。红线清单保留(见 §03 改动七;第一版那五类黑名单已改成"两条结构性不可达 + 三条恒拒判据")。<b>状态</b>：<span class="chip c-ok">已定</span></div>
+    </div>
+  </div>
+  <div class="todo">
+    <span class="tn">11</span>
+    <div class="tbody">
+      <div class="tt">作用域的授权粒度：按 App 还是按"窗口"</div>
+      <div class="td"><b>已定：先按 App</b> —— 原话「作用域的授权粒度,先按 app」。按窗口更细(只准动某个对话框),但 AX 的窗口归属判定更脆;窗口级留到"被误伤"时再加。<b>状态</b>：<span class="chip c-ok">已定</span></div>
+    </div>
+  </div>
+  <div class="todo">
+    <span class="tn">12</span>
+    <div class="tbody">
+      <div class="tt">computer 的指令常量放在哪</div>
+      <div class="td"><b>已定：拆两层</b> —— 原话「computer 的指令常量,按你的建议来」。<b>常驻硬约束</b>("先读再动""编号优先于坐标""不越作用域")=出厂常量,任务页只读;<b>任务提示</b>(这次要做什么)=可配。分界判据是"换一个任务还立不立":立的进出厂,只这次立的进可配。<b>状态</b>：<span class="chip c-ok">已定</span></div>
+    </div>
+  </div>
+  <div class="todo">
+    <span class="tn">13</span>
+    <div class="tbody">
+      <div class="tt">定时任务档（<code>autoAllow</code>）要不要连 read 也拒</div>
+      <div class="td"><b>已定：给完整权限</b> —— 原话「定时任务档（autoAllow）给完整权限」。<b>与我原来的倾向相反</b>(我写的是"默认拒"),记一笔以后别再按旧的推。<b>read 与 act 都放行</b>,不需要特殊分支;改动七那两张表(结构性不可达 + 恒拒判据)仍然一律拒。<b>那"保留只读"的只剩 <code>autoJudge</code></b>,理由不是权限大小,是<b>输入源</b>:定时任务的指令是你写的,邮件正文可能是任何人写的。<b>状态</b>：<span class="chip c-ok">已定</span></div>
+    </div>
+  </div>
+</div>
+
+<h2><span class="n">05</span>风险与边界<span class="en">RISK &amp; BOUNDARY</span></h2>
+
+<h3>代价（如实报，不劝阻）</h3>
+
+<div class="tbl">
+<table class="def">
+  <thead><tr><th>代价</th><th>说明</th></tr></thead>
+  <tbody>
+    <tr><td>TCC 授权要手动点，且可能重授</td><td>辅助功能 + 屏幕录制两项;ad-hoc 签名 ⇒ 重装可能清。<b>这与钥匙串那条同因</b>(README 已写)。</td></tr>
+    <tr><td>AX 覆盖率是天花板</td><td>自绘 / 画布 / 部分 Electron 应用的 AX 树稀薄 ⇒ 落到坐标兜底 ⇒ 速度与脆度回到截屏派。<b>不能假装没有这条</b>。</td></tr>
+    <tr><td>多显示器坐标原点</td><td><code>NSScreen</code> 与 <code>CGEventPost</code> 的坐标系原点约定不同,多屏下会点错。<b>必须本机验</b>。</td></tr>
+    <tr><td>AX 消息会超时</td><td>目标 App 无响应时 <code>AXUIElementCopyAttributeValue</code> 挂住或返回 <code>kAXErrorCannotComplete</code> ⇒ 必须有超时与"跳过"语义,不能无限等。</td></tr>
+    <tr><td>对抗性界面</td><td>视觉上骗过 AX 的恶意元素(同形异义的标题)存在 ⇒ 可加 OCR 双模复核,但那是另一批的事。</td></tr>
+    <tr><td>动作级判据有误判面</td><td>同一个按钮在不同 App 里含义不同("删除"在邮件里是归档、在文件管理器里是进废纸篓) ⇒ 三条恒拒判据<b>一定会先误伤一批</b>,只能靠"误伤了加一条豁免"逐轮收敛。<b>豁免必须能变红</b> —— 按名字记的豁免等于悄悄把门卸掉(本仓 10-14 已踩过一次)。</td></tr>
+    <tr><td>上下文仍会累积</td><td>即便有差分,一场长 GUI 任务的快照仍会堆 ⇒ 照样会触发压缩。</td></tr>
+    <tr><td>辅助进程是一个新的生命周期面</td><td>常驻 ⇒ <b>App 退出 / 崩溃时得有人收</b>:socket 文件、helper 进程、AX 句柄。本仓对「删会话与删项目同一清理半径」有过纪律,这里同一族 —— 漏了就是<b>孤儿进程一直握着辅助功能权限</b>。</td></tr>
+    <tr><td><code>CGEventTap</code> 会被系统静默踢掉</td><td>回调超时 ⇒ 系统把 tap 置为 disabled(<code>kCGEventTapDisabledByTimeout</code>),<b>不报错、不留痕</b>。人类接管检测会假死 ⇒ 必须在回调里自检并重装 tap,否则"你抢回控制权"这件事会悄悄失效。</td></tr>
+    <tr><td>开发期 TCC 反复重授</td><td>不是「重装可能重授」那么轻:<b>每次重编都可能换签名</b> ⇒ 一天要重授好几次。dev 期应固定签名身份,否则改一行代码就要去系统设置点一遍。</td></tr>
+  </tbody>
+</table>
+</div>
+
+<h3>一条会撞碎的不变量</h3>
+
+<div class="call warn">
+  <div class="lbl">「MangoX 装的扩展是哑的」这条会被打破 —— 所以判据必须留在 Swift 侧</div>
+  <p>本仓现有立场:扩展"故意是哑的",判断全在 Swift 纯函数里(同 <code>PiRpcTransport.swift:436-439</code>)。<b>computer 的作用域、遮蔽、不可逆红线,一个都不能写在 TS 里</b> —— 写在 TS 里的判据<b>进不了门禁</b>(冒烟跑的是 Swift)。</p>
+  <p>⇒ 辅助进程存在的理由不只是"node 拿不到 AX API",更是"<b>让判据落回能被断言的那一侧</b>"。</p>
+</div>
+
+<h3>红线</h3>
+
+<div class="call bad">
+  <div class="lbl">computer use 不得成为"一条远程邮件就能做的事"</div>
+  <p>远程驱动档（<code>autoJudge</code>,邮箱哨兵）下,computer <b>只读、不动作</b>。这条不许用"以后加个开关"绕过去 —— 这一档的全部意义就是"没人能点" ⇒ <b>没有人能点的场景里,界面操作必须为零</b>。</p>
+  <p>它是<b>唯一</b>一个保留"只读"的档(定时任务档 <code>autoAllow</code> 已拍板给完整权限)。判据不是权限大小,是<b>输入源</b>:定时任务的指令是你自己写的,邮件正文可能是任何人写的。</p>
+</div>
+
+<h3>边界</h3>
+
+<div class="tbl">
+<table class="def">
+  <thead><tr><th>这条能力<b>不</b>跨到哪里</th></tr></thead>
+  <tbody>
+    <tr><td>不跨到 <code>autoJudge</code> 档的动作面 —— 只读可以,动作不行。</td></tr>
+    <tr><td>不跨到 <code>autoAllow</code>(定时任务)档的“不可逆豁免” —— 那一档已拍板给完整权限(read / act 都不特殊分支),但改动七那两层(结构性不可达 + 恒拒判据)照旧一律拒。</td></tr>
+    <tr><td>不跨到密码类 App 的 <code>act</code> 面 —— 它们能进、能读(值恒 <code>••••</code>),但 <code>act</code> 恒关;挡行为,不挡名字。</td></tr>
+    <tr><td>不跨到"模型自己决定要不要开 computer" —— 开关在<b>设置</b>里,不在 prompt 里。</td></tr>
+    <tr><td>不跨到 minimal / standard 档的工具面 —— 只登记在 full;而且要用户在设置里显式开启(定时任务还要额外在<b>任务级</b>选 full)。</td></tr>
+    <tr><td>不跨到"绕过审批" —— 审批卡复用现成那张,只多一个作用域选项。</td></tr>
+  </tbody>
+</table>
+</div>
+
+<p class="foot">本文件是 P13 起的对齐文档格式(见 <code>docs/must_read.txt</code>)。<b>本文所有性能与覆盖数字均为二手或未测</b>(§02.B / §02.D 已标),§04 前置门第 ②③ 条未过之前,§03 改动九的账只是估算。</p>
+
+</div>
+</body>
+</html>

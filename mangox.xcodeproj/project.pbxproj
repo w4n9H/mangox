@@ -6,6 +6,13 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		7A1801000000000000000001 /* mangox-compute in Embed mangox-compute */ = {isa = PBXBuildFile; fileRef = 7A1801000000000000000005 /* mangox-compute */; settings = {ATTRIBUTES = (CodeSignOnCopy, ); }; };
+		7A1801000000000000000002 /* mangox/Models/ComputerScope.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A1801000000000000000006 /* mangox/Models/ComputerScope.swift */; };
+		7A1801000000000000000003 /* mangox/Models/ComputerRedline.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A1801000000000000000007 /* mangox/Models/ComputerRedline.swift */; };
+		7A1801000000000000000004 /* mangox/Models/AXSnapshot.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A1801000000000000000008 /* mangox/Models/AXSnapshot.swift */; };
+/* End PBXBuildFile section */
+
 /* Begin PBXContainerItemProxy section */
 		56B08B433020225C0091E498 /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
@@ -21,12 +28,37 @@
 			remoteGlobalIDString = 56B08B303020225B0091E498;
 			remoteInfo = mangox;
 		};
+		7A1801000000000000000014 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 56B08B293020225B0091E498 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 7A1801000000000000000010;
+			remoteInfo = "mangox-compute";
+		};
 /* End PBXContainerItemProxy section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		7A1801000000000000000013 /* Embed mangox-compute */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = Contents/MacOS;
+			dstSubfolderSpec = 1;
+			files = (
+				7A1801000000000000000001 /* mangox-compute in Embed mangox-compute */,
+			);
+			name = "Embed mangox-compute";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
 		56B08B313020225B0091E498 /* mangox.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = mangox.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		56B08B423020225C0091E498 /* mangoxTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = mangoxTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		56B08B4C3020225C0091E498 /* mangoxUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = mangoxUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		7A1801000000000000000005 /* mangox-compute */ = {isa = PBXFileReference; explicitFileType = "compiled.mach-o.executable"; includeInIndex = 0; path = "mangox-compute"; sourceTree = BUILT_PRODUCTS_DIR; };
+		7A1801000000000000000006 /* mangox/Models/ComputerScope.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = mangox/Models/ComputerScope.swift; sourceTree = "<group>"; };
+		7A1801000000000000000007 /* mangox/Models/ComputerRedline.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = mangox/Models/ComputerRedline.swift; sourceTree = "<group>"; };
+		7A1801000000000000000008 /* mangox/Models/AXSnapshot.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = mangox/Models/AXSnapshot.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
@@ -46,6 +78,11 @@
 				56B08B60302022600091E498 /* Exceptions for "mangox" folder in "mangox" target */,
 			);
 			path = mangox;
+			sourceTree = "<group>";
+		};
+		7A1801000000000000000009 /* mangox-compute */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = "mangox-compute";
 			sourceTree = "<group>";
 		};
 /* End PBXFileSystemSynchronizedRootGroup section */
@@ -72,14 +109,33 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		7A1801000000000000000012 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
+		562A33C23091AF1400A177EE /* Recovered References */ = {
+			isa = PBXGroup;
+			children = (
+				7A1801000000000000000006 /* mangox/Models/ComputerScope.swift */,
+				7A1801000000000000000007 /* mangox/Models/ComputerRedline.swift */,
+				7A1801000000000000000008 /* mangox/Models/AXSnapshot.swift */,
+			);
+			name = "Recovered References";
+			sourceTree = "<group>";
+		};
 		56B08B283020225B0091E498 = {
 			isa = PBXGroup;
 			children = (
 				56B08B333020225B0091E498 /* mangox */,
+				7A1801000000000000000009 /* mangox-compute */,
 				56B08B323020225B0091E498 /* Products */,
+				562A33C23091AF1400A177EE /* Recovered References */,
 			);
 			sourceTree = "<group>";
 		};
@@ -89,6 +145,7 @@
 				56B08B313020225B0091E498 /* mangox.app */,
 				56B08B423020225C0091E498 /* mangoxTests.xctest */,
 				56B08B4C3020225C0091E498 /* mangoxUITests.xctest */,
+				7A1801000000000000000005 /* mangox-compute */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -103,10 +160,12 @@
 				56B08B2D3020225B0091E498 /* Sources */,
 				56B08B2E3020225B0091E498 /* Frameworks */,
 				56B08B2F3020225B0091E498 /* Resources */,
+				7A1801000000000000000013 /* Embed mangox-compute */,
 			);
 			buildRules = (
 			);
 			dependencies = (
+				7A1801000000000000000015 /* PBXTargetDependency */,
 			);
 			fileSystemSynchronizedGroups = (
 				56B08B333020225B0091E498 /* mangox */,
@@ -158,6 +217,27 @@
 			productReference = 56B08B4C3020225C0091E498 /* mangoxUITests.xctest */;
 			productType = "com.apple.product-type.bundle.ui-testing";
 		};
+		7A1801000000000000000010 /* mangox-compute */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 7A1801000000000000000016 /* Build configuration list for PBXNativeTarget "mangox-compute" */;
+			buildPhases = (
+				7A1801000000000000000011 /* Sources */,
+				7A1801000000000000000012 /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				7A1801000000000000000009 /* mangox-compute */,
+			);
+			name = "mangox-compute";
+			packageProductDependencies = (
+			);
+			productName = "mangox-compute";
+			productReference = 7A1801000000000000000005 /* mangox-compute */;
+			productType = "com.apple.product-type.tool";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -179,6 +259,9 @@
 						CreatedOnToolsVersion = 16.2;
 						TestTargetID = 56B08B303020225B0091E498;
 					};
+					7A1801000000000000000010 = {
+						CreatedOnToolsVersion = 16.2;
+					};
 				};
 			};
 			buildConfigurationList = 56B08B2C3020225B0091E498 /* Build configuration list for PBXProject "mangox" */;
@@ -199,6 +282,7 @@
 				56B08B303020225B0091E498 /* mangox */,
 				56B08B413020225C0091E498 /* mangoxTests */,
 				56B08B4B3020225C0091E498 /* mangoxUITests */,
+				7A1801000000000000000010 /* mangox-compute */,
 			);
 		};
 /* End PBXProject section */
@@ -249,6 +333,16 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		7A1801000000000000000011 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				7A1801000000000000000002 /* mangox/Models/ComputerScope.swift in Sources */,
+				7A1801000000000000000003 /* mangox/Models/ComputerRedline.swift in Sources */,
+				7A1801000000000000000004 /* mangox/Models/AXSnapshot.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
@@ -261,6 +355,11 @@
 			isa = PBXTargetDependency;
 			target = 56B08B303020225B0091E498 /* mangox */;
 			targetProxy = 56B08B4D3020225C0091E498 /* PBXContainerItemProxy */;
+		};
+		7A1801000000000000000015 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 7A1801000000000000000010 /* mangox-compute */;
+			targetProxy = 7A1801000000000000000014 /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
 
@@ -499,6 +598,40 @@
 			};
 			name = Release;
 		};
+		7A1801000000000000000017 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				ENABLE_HARDENED_RUNTIME = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 14.8;
+				MARKETING_VERSION = 0.1.32;
+				PRODUCT_BUNDLE_IDENTIFIER = moofs.mangox.compute;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
+		7A1801000000000000000018 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				ENABLE_HARDENED_RUNTIME = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 14.8;
+				MARKETING_VERSION = 0.1.32;
+				PRODUCT_BUNDLE_IDENTIFIER = moofs.mangox.compute;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -534,6 +667,15 @@
 			buildConfigurations = (
 				56B08B5D3020225C0091E498 /* Debug */,
 				56B08B5E3020225C0091E498 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		7A1801000000000000000016 /* Build configuration list for PBXNativeTarget "mangox-compute" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				7A1801000000000000000017 /* Debug */,
+				7A1801000000000000000018 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

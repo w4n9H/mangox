@@ -74,3 +74,46 @@ mangox/Models/KnowledgeModels.swift|事实
 mangox/Models/KnowledgeModels.swift|教训
 mangox/Models/KnowledgeModels.swift|每轮都带上
 mangox/Models/KnowledgeModels.swift|需要时才查
+
+# ── C. 兼作判别键 (键留中文, 显示点 LK() 取词) ───────────────────────────────
+# SettingsCategory.rawValue 兼作左列 ForEach 的 id 与 SettingsShell 的选中判定 → 键恒定;
+# 显示点已是 Text(LK(c.rawValue))，与 DayBucket 四条同待遇 (2026-10-28 补登记)。
+mangox/Views/Settings/SettingsCategory.swift|数据
+mangox/Views/Settings/SettingsCategory.swift|模型
+mangox/Views/Settings/SettingsCategory.swift|通用
+mangox/Views/Settings/SettingsCategory.swift|集成
+
+# ── E. 注入模型的文本 (恒中文, 界面上永不显示) ───────────────────────────────
+# 判据: 这段字**只进 prompt**, 界面上永远不出现 ⇒ 本地化它没有意义, 而且有害 ——
+#       模型靠 `改:` / `新增:` / `消失:` 这些前缀认段落, 跟着 UI 语言变会让它认不出;
+#       AX 控件标题是中文还是英文取决于**用户系统语言**, 跟 MangoX 的界面语言无关。
+# AX 快照的渲染格式
+mangox/Models/AXSnapshot.swift| (值:\"%@\")
+mangox/Models/AXSnapshot.swift|# 快照 · 前台:%@ · 窗口:%@
+mangox/Models/AXSnapshot.swift|— 变化:
+mangox/Models/AXSnapshot.swift|— 变化:无(界面没动)
+mangox/Models/AXSnapshot.swift|… 还有 %lld 项未显示 (需要的话让我滚动/展开再看)
+mangox/Models/AXSnapshot.swift|改:
+mangox/Models/AXSnapshot.swift|新增:
+mangox/Models/AXSnapshot.swift|消失:
+
+# 恒拒判据的关键词表: 拿去**匹配 AX 控件标题**(见 ComputerRedline 文件头) ⇒
+# 匹配什么语言由界面上那个 App 决定, 不由 MangoX 的界面语言决定 ⇒ 恒中文。
+mangox/Models/ComputerRedline.swift|下单
+mangox/Models/ComputerRedline.swift|不保存
+mangox/Models/ComputerRedline.swift|付款
+mangox/Models/ComputerRedline.swift|保存更改
+mangox/Models/ComputerRedline.swift|去结算
+mangox/Models/ComputerRedline.swift|取消
+mangox/Models/ComputerRedline.swift|彻底删除
+mangox/Models/ComputerRedline.swift|提交订单
+mangox/Models/ComputerRedline.swift|支付
+mangox/Models/ComputerRedline.swift|未保存
+mangox/Models/ComputerRedline.swift|格式化
+mangox/Models/ComputerRedline.swift|永久删除
+mangox/Models/ComputerRedline.swift|清空废纸篓
+mangox/Models/ComputerRedline.swift|确认支付
+mangox/Models/ComputerRedline.swift|确认购买
+mangox/Models/ComputerRedline.swift|立即删除
+mangox/Models/ComputerRedline.swift|立即购买
+mangox/Models/ComputerRedline.swift|要保存

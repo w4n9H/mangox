@@ -147,6 +147,8 @@ final class PiRpcTransport: AgentTransport {
     /// 协议侧入口 (P10.1b)。key 变更后需重启引擎才生效。
     func updateWebSearchKey(_ key: String?) { webSearchKey = key }
 
+    private let computerHost = ComputerHost()
+
     /// P7-M3: 接收自管模型物化产物 (ChatStore 在模型变更时推送)。
     func updatePIConfig(_ output: ModelMaterializer.Output?) {
         piConfig = output
@@ -246,11 +248,13 @@ final class PiRpcTransport: AgentTransport {
     static func extensionArguments(hostedExtensionPath: String,
                                    codemodeExtensionPath: String?,
                                    dreamExtensionPath: String? = nil,
+                                   computerExtensionPath: String? = nil,
                                    enabled: [String]) -> [String] {
         var args = ["--no-extensions", "--extension", builtinLlamaExtension,
                     "--extension", hostedExtensionPath]
         if let codemode = codemodeExtensionPath { args += ["--extension", codemode] }
         if let dream = dreamExtensionPath { args += ["--extension", dream] }
+        if let computer = computerExtensionPath { args += ["--extension", computer] }
         for path in enabled { args += ["--extension", path] }
         return args
     }
@@ -272,19 +276,40 @@ final class PiRpcTransport: AgentTransport {
         return (node, [script])
     }
 
-    /// 审批门控扩展: tool_call 拦截敏感工具, ui.select 三选项 (Allow/Allow always/Deny)。
+    /// 审批门控扩展: tool_call 拦下**默认敏感**的工具, ui.select 三选项 (Allow/Allow always/Deny)。
     /// --extension 显式加载, 不污染用户终端里的 pi (不用自动发现目录)。
     static func ensureExtensionFile() -> String {
         let dir = NSHomeDirectory() + "/.mangox/extensions"
         let path = dir + "/mangox-approval.ts"
-        let source = """
-        // Auto-deployed by MangoX. Gate sensitive tools behind a MangoX approval card.
+        let source = approvalExtensionSource()
+        try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+        let existing = try? String(contentsOfFile: path, encoding: .utf8)
+        if existing != source {
+            try? source.write(toFile: path, atomically: true, encoding: .utf8)
+        }
+        return path
+    }
+
+    /// 审批扩展的源码 —— **纯函数, 不落盘**(冒烟直测)。
+    ///
+    /// P18 批 2a: 两个工具集合从 `ApprovalGate` **插值**进来, 不在 JS 里另抄一份。
+    /// 理由: 抄一份就是两个真源, 改一边不会有任何编译错误, 而现象是"某个工具又自带豁免了"
+    /// —— 与 `MANGOX_COMPUTE_*` 那条契约 token 纪律同族。
+    static func approvalExtensionSource() -> String {
+        let readOnly = ApprovalGate.jsSetLiteral(ApprovalGate.readOnlyTools)
+        let passthrough = ApprovalGate.jsSetLiteral(ApprovalGate.passthroughContainers)
+        return """
+        // Auto-deployed by MangoX. Gate every tool that is not explicitly read-only.
+        // P18 批 2a: **默认敏感** —— 只有 READ_ONLY 里的工具能绕开审批。翻面之前的
+        // `SENSITIVE = new Set(["bash","write","edit"])` 会让任何新工具自带豁免(漏 = 出事)。
+        // PASSTHROUGH = 容器工具(它自己不做动作, 内层每次调用会再走一遍这个钩子)。
         // P3.10: write 新建文件放行 (覆盖已存在文件才请求审批); bash/edit 全部交客户端判定。
         // diff 预览: edit/write 审批时把 -/+ 行对照拼进 title (客户端 @@MANGOX_DIFF@@ 分段解析)。
         import * as fs from "fs";
         export default function (pi) {
           const alwaysAllowed = new Set();
-          const SENSITIVE = new Set(["bash", "write", "edit"]);
+          const READ_ONLY = new Set(\(readOnly));
+          const PASSTHROUGH = new Set(\(passthrough));
           const MAX_DIFF_LINES = 120;
           const MAX_LINE_CHARS = 200;
           const truncLine = (s) => {
@@ -324,7 +349,10 @@ final class PiRpcTransport: AgentTransport {
             }
           };
           pi.on("tool_call", async (event, ctx) => {
-            if (!SENSITIVE.has(event.toolName)) return undefined;   // 只读工具放行
+            // 默认敏感: 只有明确只读的才放行。不在这两个集合里的任何工具 —— 包括以后
+            // 才加的那些 —— 都会走到下面的审批卡, 而不是"名字没命中就放行"。
+            if (READ_ONLY.has(event.toolName)) return undefined;
+            if (PASSTHROUGH.has(event.toolName)) return undefined;
             if (alwaysAllowed.has(event.toolName)) return undefined;
             if (!ctx.hasUI) return undefined;
             const input = event.input || {};
@@ -349,12 +377,6 @@ final class PiRpcTransport: AgentTransport {
           });
         }
         """
-        try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
-        let existing = try? String(contentsOfFile: path, encoding: .utf8)
-        if existing != source {
-            try? source.write(toFile: path, atomically: true, encoding: .utf8)
-        }
-        return path
     }
 
     /// P13: 自建 codemode 扩展 —— **唯一能钉住 `mode: "only"` 的载体**。
@@ -997,6 +1019,166 @@ final class PiRpcTransport: AgentTransport {
         return env
     }
 
+    // MARK: - P18 批 1: computer use (自建扩展, 只读)
+
+    /// P18: computer 扩展注册出来的工具名 —— 与 `computerExtensionSource` 同源同改
+    /// (冒烟断言"每个名字都能在源码里找到 `name: "<名字>"`", 同 `webSearchToolNames` 那条守)。
+    ///
+    /// ⚠️ **批 1 只注册一个工具**: 工具面越小, 模型越不会选错。动作面(`computer_click` 之类)
+    /// 是批 2b 的事 —— 在那之前多挂一个工具, 等于多一条"模型以为自己能动"的路。
+    nonisolated static let computerToolNames: [String] = ["computer_read"]
+
+    nonisolated static let computerExtensionFileName = "mangox-computer.ts"
+
+    /// P18 批 1: 只读的界面读取器 —— 一次连一次问, 一问一答。
+    ///
+    /// ⚠️ **这个扩展是哑的**(同 dream 那条纪律): 读 env → 连 socket → 发一行 → 收一行。
+    ///    判断全在 Swift 侧: "能不能读这个 App" 在 `ComputerScope`/`ComputerServer.isInScope`,
+    ///    "读出来长什么样" 在 `AXSnapshot`, "哪些动作恒拒" 在 `ComputerRedline`。
+    ///    判据写在 TS 里 ⇒ 冒烟断言不到(扩展不参与 Swift 编译), 只能靠肉眼看。
+    ///
+    /// ⚠️ **双闸门**(同 dream / webSearch): ① 挂载闸门 —— 作用域为空时 `spawnProcess`
+    ///    连 helper 都不起, 也不挂扩展; ② 激活闸门 —— 只有那一次 spawn 设 `MANGOX_COMPUTE_SOCK`。
+    ///    两条都要: 只挂不给 env ⇒ 工具每次回"未启用"; 只给 env 没挂 ⇒ 模型看不到这个工具。
+    ///
+    /// ⚠️ **失败分两类, 处理方式不同**: "被拒"(作用域/权限)是**一个答案**, 用 `ok()` 把
+    ///    Swift 侧给的人话原样交回去, 让模型换目标; "连不上/超时"是**故障**, 用 `throw`
+    ///    让它显示在跑的过程里 —— 否则模型会把"没回音"读成"界面上什么都没有"。
+    static let computerExtensionSource: String = #"""
+        // Auto-deployed by MangoX (P18). Read-only window reader: one JSON line in, one
+        // JSON line out, over a unix socket that only MangoX itself can reach.
+        //
+        // Deliberately dumb: nothing here decides anything. Which apps are in scope, how
+        // the tree is shaped, which values get masked -- all of that is decided in Swift,
+        // where a counterexample can be written against it.
+        import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+        import { Type } from "typebox";
+        import { connect } from "node:net";
+
+        const SOCK_ENV = "MANGOX_COMPUTE_SOCK";
+        const TIMEOUT_MS = 10000;
+
+        function ok(text) {
+            return { content: [{ type: "text", text: text }], details: undefined };
+        }
+
+        // Framing is one JSON object per line (ComputerFraming on the Swift side): a request
+        // is one line, a reply is one line. No length prefix -- one round trip carries exactly
+        // one message, and newline framing stays readable in `nc` when things go wrong.
+        function ask(sockPath, payload) {
+            return new Promise(function (resolve, reject) {
+                const socket = connect(sockPath);
+                let buffer = "";
+                let settled = false;
+                const fail = function (message) {
+                    if (settled) return;
+                    settled = true;
+                    clearTimeout(timer);
+                    socket.destroy();
+                    reject(new Error(message));
+                };
+                const timer = setTimeout(function () {
+                    fail("no reply from the window reader within " + TIMEOUT_MS + "ms");
+                }, TIMEOUT_MS);
+                socket.on("error", function (error) { fail(String(error)); });
+                socket.on("connect", function () {
+                    socket.write(JSON.stringify(payload) + "\n");
+                });
+                socket.on("data", function (chunk) {
+                    if (settled) return;
+                    buffer += String(chunk);
+                    const cut = buffer.indexOf("\n");
+                    if (cut < 0) return;
+                    settled = true;
+                    clearTimeout(timer);
+                    const line = buffer.slice(0, cut);
+                    socket.end();
+                    let reply;
+                    try {
+                        reply = JSON.parse(line);
+                    } catch (error) {
+                        fail("the window reader sent a line that is not JSON: " + line);
+                        return;
+                    }
+                    resolve(reply);
+                });
+            });
+        }
+
+        export default function (pi: ExtensionAPI) {
+            pi.registerTool({
+                name: "computer_read",
+                label: "Read window",
+                description: [
+                    "Read the front window of a macOS app as a text outline: each control with",
+                    "its role, title, value and the actions it offers, numbered row by row.",
+                    "",
+                    "Pass `app` as a name or bundle id (\"Safari\" or \"com.apple.Safari\");",
+                    "leave it out to read whatever is frontmost right now. Only apps the user",
+                    "opened for this session are readable -- everything else is refused by the",
+                    "app itself, and the refusal names the apps you can read, so do not guess",
+                    "your way through a list of candidates.",
+                    "",
+                    "This is a description, not a screenshot: it tells you what is there, not",
+                    "what it looks like. Row numbers are valid only for the outline you just",
+                    "received -- read again after anything changes, and never reuse a number",
+                    "from an earlier call. Values behind password fields are masked before they",
+                    "reach you; treat a masked value as something you were never given.",
+                ].join("\n"),
+                parameters: Type.Object({
+                    app: Type.Optional(Type.String({
+                        description: "App name or bundle id. Omit to read the frontmost app.",
+                    })),
+                }, { additionalProperties: false }),
+
+                async execute(_toolCallId, params) {
+                    const sock = process.env[SOCK_ENV];
+                    if (!sock) {
+                        // Second gate -- the first is MangoX not mounting this extension at
+                        // all. Reaching here means mount and env disagree, so say so rather
+                        // than letting the model retry a tool that cannot work.
+                        return ok("computer_read is not enabled in this session: no "
+                            + SOCK_ENV + " was provided.");
+                    }
+                    let reply;
+                    try {
+                        reply = await ask(sock, { op: "read", app: params.app || "" });
+                    } catch (error) {
+                        // A transport failure is a failure, not an answer.
+                        throw new Error("could not reach the window reader: " + String(error));
+                    }
+                    if (!reply || typeof reply !== "object") {
+                        throw new Error("the window reader sent something that is not an object.");
+                    }
+                    if (reply.ok !== true) {
+                        // A refusal IS an answer. Hand back the app's own wording verbatim.
+                        return ok("Refused: " + (reply.error || "no reason given."));
+                    }
+                    return ok(typeof reply.text === "string"
+                        ? reply.text
+                        : "(the reader returned no text)");
+                },
+            });
+        }
+        """#
+
+    /// 把 `computerExtensionSource` 写到 `<dir>/mangox-computer.ts`, 返回路径。
+    ///
+    /// ⚠️ `dir` 必须能指到别处(默认才是生产目录) —— 同 `ensureWebSearchExtensionFile` 那条:
+    /// 写死 `NSHomeDirectory()` 会让冒烟一边往真实 `~/.mangox/extensions` 落文件、一边在
+    /// 夹具里扫不到它。
+    static func ensureComputerExtensionFile(dir: String? = nil) -> String {
+        let dir = dir ?? (NSHomeDirectory() + "/.mangox/extensions")
+        let path = dir + "/" + Self.computerExtensionFileName
+        let source = Self.computerExtensionSource
+        try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+        let existing = try? String(contentsOfFile: path, encoding: .utf8)
+        if existing != source {
+            try? source.write(toFile: path, atomically: true, encoding: .utf8)
+        }
+        return path
+    }
+
     // MARK: - AgentTransport
 
     func send(prompt: String, images: [OutgoingImage]) {
@@ -1272,6 +1454,18 @@ final class PiRpcTransport: AgentTransport {
         if desiredExtensions.contains(where: { $0.hasSuffix(Self.webSearchExtensionFileName) }) {
             _ = Self.ensureWebSearchExtensionFile()
         }
+        // P18 批 1: computer 的**挂载闸门这一半** —— 作用域为空 ⇒ `start` 返回 nil
+        // (那条判据只写在 `ComputerHost.start` 里, 这里不重复判断), 于是扩展不挂(下面)、
+        // env 不给(更下面)。两半共用同一个 nil, 所以不存在"挂了但没生效"的中间态 ——
+        // 那是比"没挂"更难查的一种: 模型看得到工具, 每次调用都回"未启用", 而界面上没有任何
+        // 地方说为什么。
+        //
+        // ⚠️ 作用域**每次 spawn 重新读**, 不做实例字段: 它是"这一轮才存在的凭证"。
+        //    用户在设置里关掉 ⇒ 下一轮 spawn 就不再给 env ⇒ 扩展根本不挂。
+        //    存成字段会多出一个"改了设置但在途会话还开着"的窗口, 而那个窗口界面上看不见。
+        let computerBundles = ComputerSettings.shared.activeBundles
+        let computerSock = computerHost.start(allowedBundles: computerBundles)
+        let computerExtPath = computerSock != nil ? Self.ensureComputerExtensionFile() : nil
         var args = spec.scriptArgs + ["--mode", "rpc"]
         // P12.1b + P13: 扩展参数 (关自动发现 + 补回内置 provider + 挂托管扩展 + codemode 层)。
         // 业务扩展仅完整档挂载 (P7-M4); 系统扩展 (审批桥) 四档恒挂。
@@ -1279,6 +1473,7 @@ final class PiRpcTransport: AgentTransport {
             hostedExtensionPath: extPath,
             codemodeExtensionPath: codemodeExtPath,
             dreamExtensionPath: dreamExtPath,
+            computerExtensionPath: computerExtPath,
             enabled: desiredMode.mountsBusinessExtensions ? desiredExtensions : [])
         if let fork = desiredForkSource {
             // P6.3.1: 侧问首回合 — fork 源快照 (互斥分支: 不带 --session/--no-session)。
@@ -1366,6 +1561,16 @@ final class PiRpcTransport: AgentTransport {
         if let env = Self.webSearchEnvironment(existing: p.environment,
                                                key: webSearchKey,
                                                inherited: ProcessInfo.processInfo.environment) {
+            p.environment = env
+        }
+        // P18 批 1: computer 的四个 env 键。⚠️ 同上面那条守卫 —— `p.environment` 此时可能还是
+        // nil(没人给过), 那时 `p.environment?[k] = v` 是**静默空操作** ⇒ 必须整体赋值。
+        // 判据不写成 `if let sock = computerSock`: 那会漏掉"父进程里残留了同名变量"这一半。
+        if let env = ComputerHost.environment(existing: p.environment,
+                                              socketPath: computerSock,
+                                              allowedBundles: computerBundles,
+                                              peerPid: ProcessInfo.processInfo.processIdentifier,
+                                              inherited: ProcessInfo.processInfo.environment) {
             p.environment = env
         }
         p.arguments = args
@@ -1471,6 +1676,10 @@ final class PiRpcTransport: AgentTransport {
         var meta: [String: Any] = [:]
         if let t = dict["type"] { meta["type"] = t }
         if let id = dict["id"] { meta["id"] = id }
+        // P18 批 2a: 审批的**答案**也要留副本。只记 type 的话, "Allow" 与 "Deny" 在
+        // 冒烟里长得一模一样 —— 而这两件事正好是安全判据的正反面(「远程驱动档必须拒」
+        // 与「同档的 write 仍放行」靠的就是这一个字段区分)。值是个短字符串, 不带负载。
+        if let v = dict["value"] { meta["value"] = v }
         sentCommands.append(meta)
         #endif
         guard let stdinHandle,
@@ -1930,6 +2139,23 @@ final class PiRpcTransport: AgentTransport {
             }
         } else if approvalMode == .autoJudge {
             // 决定 8 (P10.2) B 案: 分级只管 bash, write/edit 一律放行。
+            //
+            // ⚠️ P18 批 2a 的唯一例外: **computer 在远程驱动档一律拒**。
+            //    理由不是"权限给多给少", 是**输入源** —— 定时任务的指令是用户自己写的,
+            //    而邮箱哨兵驱动的这一档, 指令可能是**任何人发来的邮件正文**。同一张权限表
+            //    表达不了这个差别, 所以它必须是显式分支, 不许靠"以后加个开关"绕过去。
+            //    落痕同 bash 那条(autoJudgeBlocks + 卡片标红), 让任务回执能写"卡在 X"。
+            if ApprovalGate.isComputerTool(parts[3]) {
+                let reason = L("远程驱动档不允许操作界面")
+                autoJudgeBlocks.append(AutoJudgeBlock(callId: callId,
+                                                      command: fullDetail,
+                                                      reason: reason))
+                card = card.withPhase(.error(String(format: L("MangoX 自动裁决拦下: %@"), reason)))
+                toolCards[callId] = card
+                emit(.toolUpdated(card))
+                respondExtensionUI(reqId, value: "Deny", callId: callId)
+                return
+            }
             respondExtensionUI(reqId, value: "Allow", callId: callId)
             return
         }

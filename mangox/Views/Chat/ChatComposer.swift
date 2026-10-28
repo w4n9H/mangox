@@ -11,6 +11,9 @@ import UniformTypeIdentifiers
 
 struct ChatComposer: View {
     @ObservedObject var store: ChatStore
+    /// P18: computer use 的开关与作用域。**和设置页是同一个单例** ⇒ 两处永远一致
+    /// (不存在"这边开了、那边还显示关")。
+    @ObservedObject private var computer = ComputerSettings.shared
     /// CompactTextEditor 实测内容高度回调 (SwiftUI 外部 frame 才是权威布局)。
     @State private var editorHeight: CGFloat = Tune.editorMinHeight
     /// 输入框焦点态 —— 占位提示据此**在获得焦点时退场** (见 `inputCard` 里的条件)。
@@ -125,6 +128,7 @@ struct ChatComposer: View {
                 approvalToggle
                 modeMenu
                 knowledgePill
+                computerPill
                 Spacer()
                 modelMenu
                 sendButton
@@ -311,6 +315,66 @@ struct ChatComposer: View {
             .fixedSize()
             .help("知识库/记忆: 当前会话注入条数")
         }
+    }
+
+    // MARK: - P18 computer use 快捷开关
+
+    /// 为什么在这一行 (2026-10-28 boss: 原来只在设置页最下面, 「藏的太深了」):
+    /// 它管的是**这一轮要不要给模型这个能力**, 与"需要审批 / 模式档位 / 知识注入"同族 ——
+    /// 都是"这次对话的边界", 不是应用级偏好。设置页那一段留着(作用域要在那儿勾),
+    /// 两边读写**同一个单例**, 所以不会出现"这边开了那边还显示关"。
+    ///
+    /// ⚠️ 状态只用**文字色**表达 (off = textTertiary / on = textPrimary), 不加描边不加底色 ——
+    ///    与同排三个控件同一套口径 (P14 第四批)。
+    @ViewBuilder
+    private var computerPill: some View {
+        Menu {
+            Button(L(computer.enabled ? "关闭电脑操作" : "开启电脑操作")) {
+                computer.enabled.toggle()
+            }
+            Divider()
+            Button(L("选择能读的应用…")) { openComputerSettings() }
+            if computer.enabled && computer.selected.isEmpty {
+                // ⚠️ 原生 `Menu` 里**只能放 Button / Toggle / Picker / Link** —— 放 `Text` 会让
+                //    整列变灰且点不中 (零编译信号)。这条说明用 disabled 的 Button 承载。
+                Button(L("还没勾选任何应用 ⇒ 这一轮不开放")) {}.disabled(true)
+            }
+        } label: {
+            // ⚠️ borderlessButton 的 Menu label 只渲染"首个 Image + 首个 Text" ⇒ 必须用
+            //    `+` 拼成**一个** Text 表达式 (同 `knowledgePill` 那条)。
+            let tone = computer.enabled ? CodexTheme.textPrimary : CodexTheme.textTertiary
+            let suffix: Text = {
+                if !computer.enabled { return Text("") }
+                if computer.selected.isEmpty {
+                    return Text(L(" 未选"))
+                        .font(CodexTheme.fontTiny).foregroundColor(CodexTheme.toolRunning)
+                }
+                return Text(verbatim: " \(computer.selected.count)")
+                    .font(CodexTheme.fontTiny).foregroundColor(tone)
+            }()
+            (Text(Image(systemName: "display")).font(.system(size: 10)).foregroundColor(tone)
+             + Text(" 电脑").font(CodexTheme.fontSmall).foregroundColor(tone)
+             + suffix)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 3)
+                .frame(height: Tune.pillHeight)
+                .contentShape(Rectangle())
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        // ⚠️ `LK` 必须放进**两支各自**里, 不能写成 `LK(cond ? "…" : "…")`:
+        //    后者实参不是字面量 ⇒ 接线扫描认不出这是查表 ⇒ 报"疑似未接线"。
+        .help(computer.enabled
+              ? LK("电脑操作已开启: 模型能读你勾过的应用界面 — 再点一次关闭")
+              : LK("电脑操作已关闭: 打开后模型能读你勾过的应用界面 (下一回合生效)"))
+    }
+
+    /// 落到设置页的「集成」栏 —— 否则"打开设置"之后用户还得自己在左列找一次,
+    /// 等于把深度换了个地方 (boss 的原话是"藏的太深了")。
+    private func openComputerSettings() {
+        store.pendingSettingsCategory = SettingsCategory.integration.rawValue
+        SettingsWindowController.shared.show(store: store)
     }
 
     // MARK: - Bottom-right: model picker + send

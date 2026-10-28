@@ -345,7 +345,16 @@ def _is_triple_delim(text, at):
         k -= 1
         while k >= 0 and text[k] in ' \t\r':
             k -= 1
-    return k < 0 or text[k] in '=(,['
+    if k >= 0 and text[k] in '=(,[':
+        return True
+    # `return """…"""` 也是常态 (2026-10-28 实证): 把内嵌源码抽成独立的返回函数后,
+    # 定界符前面就只剩一个 `return` —— 不在这个集合里的话, 那一对引号**配不上对**,
+    # 于是后面的**闭**引号被当成**开**引号, 之后每一对都错位一格, 最后一个一路延到文件末尾
+    # ⇒ 15 处正常接了 `L()` 的文案被报成 EMBEDDED(而且给出的修法还是"去登记豁免")。
+    # 又一次「判据本身错了比没有判据更坏」。
+    if k >= 5 and text[k - 5:k + 1] == 'return':
+        return True
+    return False
 
 
 def _find_delim(text, from_at):

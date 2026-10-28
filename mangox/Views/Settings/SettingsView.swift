@@ -39,6 +39,12 @@ struct SettingsView: View {
     // P10.1b 联网搜索 (博查)
     @State private var bochaKeyInput = ""
 
+    // P18 computer use: 开关与作用域 (单例 —— 与 `AppearanceModel.shared` 同款,
+    // spawn 那一侧读的是同一份, 所以改完下一轮就生效, 不需要再往 ChatStore 上补一次)
+    @ObservedObject private var computer = ComputerSettings.shared
+    /// 应用列表的搜索词（已安装的 App 有几百个，没有搜索翻不动）。
+    @State private var computerQuery = ""
+
     enum TestState: Equatable { case idle, testing, done }
 
     /// 勾选行条目 (seed 元数据 或 /models 拉回的 id + 保守默认 / 目录元数据)。
@@ -81,11 +87,16 @@ struct SettingsView: View {
                 case .integration:
                     webSearchSection
                     MailboxAccountsSection(store: store)
+                    computerSection
                 case .data:
                     backupSection
                 }
             }
         }
+        .onAppear { consumePendingCategory() }
+        // 窗口是**复用**的 (`isReleasedWhenClosed = false`) ⇒ 第二次从入口点进来时视图不会
+        // 重建、`onAppear` 也不再触发; 那一次要靠 `onChange` 接住。
+        .onChange(of: store.pendingSettingsCategory) { _, _ in consumePendingCategory() }
         .onDisappear {
             // P9-#4: 录制 monitor 必须随视图销毁清理 — 否则录制中切走后 monitor 永久存活,
             // 吞掉全 App 修饰键且再次录制因 guard no-op 假死
@@ -98,6 +109,18 @@ struct SettingsView: View {
         } message: {
             Text(store.backupFailureMessage ?? "")
         }
+    }
+
+    /// 取走"请切到某一栏"的请求（输入框那行的 computer pill 会放进来）。
+    ///
+    /// ⚠️ 清空必须**延到下一轮 runloop**: 正在视图更新里改 `@Published` 会报
+    ///    "Publishing changes from within view updates", 而且那个警告只在控制台里, 界面上
+    ///    什么都看不出来 —— 典型的"零信号"问题。
+    private func consumePendingCategory() {
+        guard let raw = store.pendingSettingsCategory,
+              let target = SettingsCategory(rawValue: raw) else { return }
+        category = target
+        DispatchQueue.main.async { store.pendingSettingsCategory = nil }
     }
 
     // MARK: - 统一行范式: 左标题+说明, 右控件
@@ -715,6 +738,142 @@ struct SettingsView: View {
     private func saveBochaKey() {
         store.setBochaKey(bochaKeyInput)
         bochaKeyInput = ""
+    }
+
+    // MARK: - P18 computer use (批 1: 只读)
+
+    private var computerSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            settingRow(title: "电脑操作 (只读)",
+                       detail: "开 = 模型可以读你勾过的应用的界面: 窗口里有哪些控件、上面写着什么。目前只能看, 不能点") {
+                Toggle("", isOn: $computer.enabled)
+                    .toggleStyle(.switch)
+                    .controlSize(.small)
+                    .labelsHidden()
+                    .fixedSize()
+            }
+            Divider().overlay(CodexTheme.divider)
+            Text("第一次用到时系统会弹窗要求勾「辅助功能」—— 勾的是 mangox-compute 这一条。没勾就读不到界面, 工具会把原因直接说出来")
+                .font(.system(size: 11))
+                .foregroundStyle(CodexTheme.textMuted)
+                .fixedSize(horizontal: false, vertical: true)
+            Divider().overlay(CodexTheme.divider)
+            HStack(spacing: 8) {
+                Text("能读哪些应用")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(CodexTheme.textPrimary)
+                Spacer(minLength: 0)
+                Button("刷新") { computer.refresh() }
+                    .fixedSize()
+            }
+            computerAppList
+            computerStatusLine
+        }
+        .settingsCard()
+        .onAppear { computer.refresh() }
+    }
+
+    /// 列表 = **已安装 ∪ 运行中**（合并逻辑在 `ComputerSettings.merge`，纯函数，冒烟守着）。
+    ///
+    /// ⚠️ 只列"正在运行"的话，没打开的 App 就永远勾不到 —— 2026-10-28 boss 拿着截图问
+    ///    「浏览器怎么都没有」就是这个：Safari 没开，所以它不在列表里。
+    @ViewBuilder
+    private var computerAppList: some View {
+        let q = computerQuery.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let rows = q.isEmpty ? computer.options : computer.options.filter {
+            $0.name.lowercased().contains(q) || $0.bundle.lowercased().contains(q)
+        }
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 6) {
+                Image(systemName: "magnifyingglass")
+                    .font(.system(size: 10))
+                    .foregroundStyle(CodexTheme.textMuted)
+                TextField("搜索应用…", text: $computerQuery)
+                    .textFieldStyle(.plain)
+                    .font(CodexTheme.fontSmall)
+                if !computerQuery.isEmpty {
+                    Button("清除") { computerQuery = "" }
+                        .fixedSize()
+                }
+            }
+            .padding(.horizontal, 6)
+            .padding(.vertical, 4)
+            .background(CodexTheme.bgInput)
+            .clipShape(RoundedRectangle(cornerRadius: CodexTheme.radiusSm))
+
+            if rows.isEmpty {
+                Text(computer.options.isEmpty ? "正在列出应用…" : "没有匹配的应用")
+                    .font(.system(size: 11))
+                    .foregroundStyle(CodexTheme.textMuted)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else {
+                // ⚠️ 必须**限高**: 已安装的 App 有几百个，不限高会把设置页撑成无限长，
+                //    下面的状态说明与其它段全被推出屏幕。
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 4) {
+                        ForEach(rows) { app in computerRow(app) }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .frame(maxHeight: 240)
+            }
+        }
+    }
+
+    private func computerRow(_ app: ComputerSettings.Option) -> some View {
+        Toggle(isOn: Binding(get: { computer.selected.contains(app.bundle) },
+                             set: { _ in computer.toggle(app.bundle) })) {
+            HStack(spacing: 6) {
+                Text(verbatim: app.name)
+                    .font(.system(size: 12))
+                    .foregroundStyle(CodexTheme.textPrimary)
+                Text(verbatim: app.bundle)
+                    .font(.system(size: 10))
+                    .foregroundStyle(CodexTheme.textMuted)
+                // ⚠️ 只标"在跑"的: 几百行都写"未运行"是噪音，而"现在就能读"才是要突出的。
+                if app.running {
+                    Text("运行中")
+                        .font(.system(size: 9))
+                        .foregroundStyle(CodexTheme.toolDone)
+                }
+                Spacer(minLength: 0)
+            }
+        }
+        .toggleStyle(.checkbox)
+        // ⚠️ 总开关关着时勾不了: 否则会出现"勾了但这一轮并没开放"，而界面上没有任何地方
+        //    说为什么（停用态必须看得出来，不能只是点了没反应）。
+        .disabled(!computer.enabled)
+    }
+
+    @ViewBuilder
+    private var computerStatusLine: some View {
+        if !computer.enabled {
+            Text("已关闭 —— 这个工具不会挂上, 模型看不到它")
+                .font(.system(size: 11))
+                .foregroundStyle(CodexTheme.textMuted)
+                .fixedSize(horizontal: false, vertical: true)
+        } else if computer.selected.isEmpty {
+            Text("开了但一个都没勾 ⇒ 这一轮仍然不开放 (空 = 不开放, 不是全都行)")
+                .font(.system(size: 11))
+                .foregroundStyle(CodexTheme.toolRunning)
+                .fixedSize(horizontal: false, vertical: true)
+        } else {
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 4) {
+                    Text("本次开放")
+                        .font(.system(size: 11))
+                        .foregroundStyle(CodexTheme.toolDone)
+                    Text(verbatim: "\(computer.selected.count) 个")
+                        .font(.system(size: 11))
+                        .foregroundStyle(CodexTheme.toolDone)
+                }
+                // 列表是**数据**不是文案 ⇒ verbatim, 不进词表。
+                Text(verbatim: computer.activeBundles.joined(separator: "\n"))
+                    .font(.system(size: 10))
+                    .foregroundStyle(CodexTheme.textMuted)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
     }
 
     // MARK: - 并发上限

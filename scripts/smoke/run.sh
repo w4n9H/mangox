@@ -108,6 +108,15 @@ if grep -nE 'withAnimation' -A2 mangox/Views/Chat/ChatView.swift | grep -qE 'scr
     exit 1
 fi
 
+# 「源码事实门」的公共取词器 —— 剥掉**整行被注释掉**的行之后再匹配。
+#    为什么必须剥: 把 `chmod(path, 0o600)` 前面加两个斜杠, 那串字**还在文件里** —— 不剥的话门会
+#    对着注释里的同一串字点头, 反例注入之后照样 RC=0(2026-10-28 实测踩到: 注释掉 socket 权限那行,
+#    ③i 一条没红)。⇒ 这类门当前全是**假门**, 判据改成"有效代码行里有这串字"。
+#    ⚠️ 已知边界: 只挡「整行注释」这一种; 行尾注释 `let x = 1 // chmod(...)` 仍会误命中。
+has_code() {
+    awk '!/^[ \t]*\/\//' "$1" | grep -qE -- "$2"
+}
+
 # ③d 「滚到底」的锚点必须是**恒实例化**的末尾哨兵 (2026-10-23 boss 报「打开后默认会话不在最底、
 #     ｜也没有《跳转最新》按钮，切一次会话才正常」)。
 #     锚在 `LazyVStack` 的行 id 上时，那个行在初屏**还没实例化** ⇒ `scrollTo` 只能按**估算**的
@@ -116,13 +125,12 @@ fi
 #     更坏的是内容底探针住在最后一块**下面**，视口够不到 ⇒ 永不实例化 ⇒ 永不报数 ⇒
 #     `nearBottom` 停在初始 `true` ⇒ 按钮永不出现。换成末尾哨兵后 gap = **0.0pt**（三次跑全 0）。
 #     ⚠️ 两条都编译得过、没有任何数值会变、也没有断言会红 ⇒ 只能扫**源码事实**。
-if ! grep -qE 'private var scrollTarget: AnyHashable \{ Self\.tailAnchor \}' \
-        mangox/Views/Chat/ChatView.swift; then
+if ! has_code mangox/Views/Chat/ChatView.swift 'private var scrollTarget: AnyHashable \{ Self\.tailAnchor \}'; then
     echo "FAIL - 「滚到底」的锚点不是内容末尾哨兵 (scrollTarget 必须返回 Self.tailAnchor)" >&2
     echo "       锚在 LazyVStack 的行 id 上 = 按估算落点, 实测距真底 240~2900pt 且按钮永不出现" >&2
     exit 1
 fi
-if ! grep -qE '\.id\(Self\.tailAnchor\)' mangox/Views/Chat/ChatView.swift; then
+if ! has_code mangox/Views/Chat/ChatView.swift '\.id\(Self\.tailAnchor\)'; then
     echo "FAIL - 内容末尾哨兵不见了 (`.id(Self.tailAnchor)` 必须在 ScrollView 的内容里)" >&2
     exit 1
 fi
@@ -133,7 +141,7 @@ fi
 #     实测同一白屏场景（dream → 模型部署测试）：只锚哨兵 `y=50719` 白 → 先锚最后一块 `y=49881` 有内容。
 #     ⚠️ 这次最狠的教训：**虚高文档上 `gap=0` 照样成立** —— 几何判据判不出白屏，只有画面能判。
 #     ⇒ 源码事实门（两条写法都编译得过、数值也不变，没有断言会红）。
-if ! grep -qE 'projectedChat\.blocks\.last\.map \{ AnyHashable' mangox/Views/Chat/ChatView.swift; then
+if ! has_code mangox/Views/Chat/ChatView.swift 'projectedChat\.blocks\.last\.map \{ AnyHashable'; then
     echo "FAIL - 找不到「先把尾块量出来」的锚点 (materializeTarget 必须取 projectedChat.blocks.last)" >&2
     echo "       只锚末尾哨兵会在切换后落进估算出来的空尾 = 白屏 (实测 y=50719 纯白)" >&2
     exit 1
@@ -157,7 +165,7 @@ if ! echo "$FOLLOW_LOOP" | grep -qE 'target = Self\.streamingAnchor'; then
     echo "       指示器是懒栈的孩子才量得出真实落点; 只改注释不算, 这门看的是真源码" >&2
     exit 1
 fi
-if ! grep -qE '\.id\(Self\.streamingAnchor\)' mangox/Views/Chat/ChatView.swift; then
+if ! has_code mangox/Views/Chat/ChatView.swift '\.id\(Self\.streamingAnchor\)'; then
     echo "FAIL - 流式指示器上没有 .id(Self.streamingAnchor) (锚一个不存在的 id = 静默不滚 = 白屏)" >&2
     exit 1
 fi
@@ -180,19 +188,19 @@ fi
 #     ② **重放时子行排到父前面** —— 落库只写终态，子调用先完成（22ms）父后完成（84ms）
 #        ⇒ seq 子在前 ⇒ 按 seq 还原就颠倒。直播时反而是对的，所以这现象只在重开会话后出现。
 #     ⚠️ 三条写法都编译得过、数值不变、没有断言会红 ⇒ 只能扫源码事实。
-if ! grep -qE 'parentToolCallId' mangox/Agent/PiRpcTransport.swift; then
+if ! has_code mangox/Agent/PiRpcTransport.swift 'parentToolCallId'; then
     echo "FAIL - 传输层没读 parentToolCallId (嵌套调用会被当成顶层工具卡)" >&2
     echo "       后果: 一次 codemode 显示两行, 且重放时 bash 排到 codemode 前面" >&2
     exit 1
 fi
-if ! grep -qE 'ToolNesting\.index\(in: store\.messages\)' mangox/Views/Chat/ChatView.swift; then
+if ! has_code mangox/Views/Chat/ChatView.swift 'ToolNesting\.index\(in: store\.messages\)'; then
     echo "FAIL - 顶层投影没走 ToolNesting.index 建嵌套索引" >&2
     echo "       ⚠️ 键必须是【父卡那条消息的 id】, 不是 parentId 里的工具 id —— 混用的症状如下:" >&2
     echo "       子卡凭空消失 (2026-10-26 boss 截图: 5 次内层调用一个都没画出来, 全绿却错)" >&2
     echo "       ⚠️ children 与 attached 必须出自**同一次扫描** (Index 的两面, 分两次算就允许各自为政)" >&2
     exit 1
 fi
-if ! grep -qE 'attached\.contains\(t\.id\)' mangox/Views/Chat/ChatView.swift; then
+if ! has_code mangox/Views/Chat/ChatView.swift 'attached\.contains\(t\.id\)'; then
     echo "FAIL - 摘掉顶层行的判据不是 attached (真挂上了才许摘)" >&2
     echo "       按 parentId != nil 判 = 一挂错就那一行从界面上消失; 按 attached 判 = 挂不上就露出来" >&2
     exit 1
@@ -201,14 +209,77 @@ fi
 # `ToolRunBuilder` 收到的是**一组**消息, 而子卡的父卡可能不在这一组里（压缩插了 `.system`、
 # 老会话只留半截）。它若自己按本组现算, 就把那种子卡数成"看得见的一行", 收据上的
 # 「N 次工具调用」与 `ChatView` 摘行后的实际行数对不上 —— 且两边都不报错。
-if ! grep -qE 'ToolRunBuilder\.runs\(in: .*attached: attached' mangox/Views/Chat/ChatView.swift; then
+if ! has_code mangox/Views/Chat/ChatView.swift 'ToolRunBuilder\.runs\(in: .*attached: attached'; then
     echo "FAIL - 段收据没拿到会话级的 attached (判据与 isNested 分家了)" >&2
     echo "       跨组挂载的子卡会被数进「N 次工具调用」, 而 ChatView 已经把它的行摘掉了" >&2
     exit 1
 fi
-if ! grep -qE 'children: \[Nested\]' mangox/Views/Chat/ToolCallCardView.swift; then
+if ! has_code mangox/Views/Chat/ToolCallCardView.swift 'children: \[Nested\]'; then
     echo "FAIL - 工具行没有接收嵌套调用的入口 (ToolCallCardView.children)" >&2
     echo "       摘掉行却没人接 = 内层调用直接从界面上消失" >&2
+    exit 1
+fi
+
+# ③i mangox-compute 的**socket 只认自己人** —— P18 §04 前置门 0。
+#     这条挡的是"别人替你的机器动手", 比审批闸门(挡模型误用)更该排在前面:
+#     授权辅助功能之后, 本机**任何同 uid 进程**都能连上这条 socket 发动作,
+#     而作用域/遮蔽/恒拒判据全挡不住这条路径 —— 它们只挡模型。
+#     三件必须都在: ① `LOCAL_PEERCRED` 取对端 uid(不依赖对端自报) ② 进程树校验
+#     ③ 文件 0600 / 目录 0700。
+#     ⚠️ 三件都编译得过、没有任何数值会变 ⇒ 只能扫**源码事实**(与上面 ③ 同一类取舍)。
+if ! has_code mangox-compute/PeerCheck.swift 'getsockopt\(socket, SOL_LOCAL, LOCAL_PEERCRED'; then
+    echo "FAIL - helper 不再用 LOCAL_PEERCRED 取对端 uid (这条是 peer 校验的支点)" >&2
+    echo "       不取内核凭据 = 只能信对端自报 = 本机任何进程都能驱动界面" >&2
+    exit 1
+fi
+if ! has_code mangox-compute/PeerCheck.swift 'isSelfOrDescendant\(pid: pid, of: ancestor\)'; then
+    echo "FAIL - accept 之后没有走进程树校验 (只验 uid 不够: 同 uid 的任何进程都能连)" >&2
+    exit 1
+fi
+if ! has_code mangox-compute/ComputerServer.swift 'chmod\(path, 0o600\)'; then
+    echo "FAIL - socket 文件的权限没有显式设成 0600 (目录 0700 之外的另一半)" >&2
+    exit 1
+fi
+# 作用域名单为空时必须**拒**, 而不是"全都行" —— 空 = 没下发, 不是开放。
+if ! has_code mangox-compute/ComputerServer.swift 'guard !allowedBundles\.isEmpty else \{ return false \}'; then
+    echo "FAIL - helper 的作用域判据在名单为空时放行了 (空名单 = 没下发, 不是全部允许)" >&2
+    exit 1
+fi
+
+# ③j computer 的**跨 target 契约 token**: App 侧 `ComputerHost` 写的 env 名与 helper 侧读的
+#     必须逐字相同。⚠️ 这两个 target **各自编译**, 改一边不会有任何编译错误, 也不会有断言变红
+#     —— 只是子进程读到 nil, 现象是"工具每次都回未启用"。同 `MANGOX_BOCHA_KEY` 那条纪律:
+#     契约 token 只能靠门钉住, 不能靠类型系统。
+for KEY in MANGOX_COMPUTE_ALLOWED_BUNDLES MANGOX_COMPUTE_PEER_PID MANGOX_COMPUTE_PARENT_PID; do
+    # ⚠️ 模式**必须带引号**: 只子串匹配的话, 把 key 改名成 `..._PIDX` 依然含 `..._PID`
+    #    ⇒ 门对着已然对不上的两个名字点头(2026-10-28 反例实测: 注入后 RC=0)。
+    if ! has_code mangox/Agent/ComputerHost.swift "\"$KEY\""; then
+        echo "FAIL - computer 契约 token $KEY 在 App 侧不见了 (helper 读的就是这几个字)" >&2
+        exit 1
+    fi
+    if ! has_code mangox-compute/ComputerServer.swift "\"$KEY\"" \
+       && ! has_code mangox-compute/PeerCheck.swift "\"$KEY\""; then
+        echo "FAIL - computer 契约 token $KEY 在 helper 侧不见了 (App 侧改名 ⇒ 这里必须同改)" >&2
+        exit 1
+    fi
+done
+
+# ③k helper 里有两个**决定模型能看见什么**的数, 而它们没有任何断言拦得住(真 AX 调用测不了):
+#    ① 名字只从 `AXTitle` 取 ⇒ 实测 Safari 的工具栏按钮 title 是空的、名字只在 `AXDescription`
+#       里 ⇒ 那一排按钮在快照里全是无名的 `[n] button`(模型只能点编号, 人也看不懂审批卡);
+#    ② 深度上限 14 ⇒ 实测 Chrome 的网页正文**恰好从 d15 开始**(Finder 7 · Chrome 23),
+#       整页 DOM 被切在外面, 读出来只剩工具栏, 而且回执看着像"读成功了"。
+#    ⚠️ 这两条都不改数值就编译得过、断言也全绿 —— 只能扫源码事实(同 ③i)。
+if ! has_code mangox-compute/AXAdapter.swift 'kAXDescriptionAttribute'; then
+    echo "FAIL - AXAdapter 不再读 kAXDescriptionAttribute (Safari 的名字就在这一处)" >&2
+    echo "       去掉它 ⇒ Safari 那一排按钮全是无名的 [n] button, 而快照看着完全正常" >&2
+    exit 1
+fi
+# 深度上限是**实测出来的数**, 不是拍的: 低于 24 就一定把浏览器正文切掉。
+COMPUTE_DEPTH="$(awk '/static let maxDepth/ { for (i = 1; i <= NF; i++) if ($i ~ /^[0-9]+$/) print $i }' mangox-compute/AXAdapter.swift)"
+if [ -z "$COMPUTE_DEPTH" ] || [ "$COMPUTE_DEPTH" -lt 24 ]; then
+    echo "FAIL - AXAdapter.maxDepth = ${COMPUTE_DEPTH:-取不到} (< 24)" >&2
+    echo "       实测深度: Finder 7 · Chrome 23, 且 Chrome 的正文从 d15 开始 ⇒ 14 会把整页切掉" >&2
     exit 1
 fi
 

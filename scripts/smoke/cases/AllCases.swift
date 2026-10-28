@@ -39,6 +39,8 @@ extension SmokeMain {
             caseWindowFit,
             caseSettingsWindow,
             caseSleepGuard,
+            caseComputerPure,
+            caseApprovalGate,
         ]
     }
 
