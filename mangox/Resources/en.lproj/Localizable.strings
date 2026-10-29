@@ -7,7 +7,7 @@
    **本文件由 scripts/l10n/gen_strings.py --write 生成, 别手改** ——
    译文改 scripts/l10n/en_values.py 的 VALUES, 再跑 --write。
 
-   条数: 905
+   条数: 909
 */
 
 " (值:\"%@\")" = " (value: %@)";
@@ -144,6 +144,8 @@
 "「%@」按不了 —— %@ ⇒ 没动。" = "Cannot press %@ — %@ ⇒ nothing was done.";
 "「%@」是 %@, " = "%@ is %@, ";
 "「%@」是口令/系统类应用 ⇒ 我永远不操作它, 只读。" = "%@ is a password manager or a system app ⇒ it stays read-only, always.";
+"「%@」还没勾「可操作」⇒ 没动它。到「设置 → 电脑操作」里给这个 App 勾上" = "%@ is not marked actable ⇒ I did not touch it. Tick it under Settings → Computer actions.";
+"「%@」还没勾「可读」⇒ 没打开它。到「设置 → 电脑操作」里给这个 App 勾上" = "%@ is not marked readable ⇒ I did not open it. Tick it under Settings → Computer actions.";
 "一" = "Mon";
 "一行一个地址; 名单外的信静默丢弃并移入 Trash" = "One address per line; mail from anyone else is silently dropped and moved to Trash.";
 "三" = "Wed";
@@ -197,7 +199,6 @@
 "仍然覆盖" = "Overwrite anyway";
 "从托管区删除" = "Remove from managed area";
 "付款" = "Payment";
-"任何完整模式的会话都能用 (不是只对当前会话); 改完勾选, 下一次对话才生效" = "Any session in Full mode can use this (not just the current one). Ticked changes take effect on the next turn.";
 "任务" = "Task";
 "任务删除后停止调度。工作日志文件始终保留; 日志会话可选删除。" = "Deleting a task stops scheduling. The work log file is always kept; the log session is optional.";
 "任务台" = "Task bar";
@@ -238,7 +239,7 @@
 "全局" = "Global";
 "全局串行 (同一时刻只跑一个远程任务)" = "Global serial (only one remote task runs at a time)";
 "全局唤起捕获输入条: 输入后回车即以无人值守模式开跑 (关审批 + Minimal 档); Esc 或点击外部关闭" = "Global hotkey opens the capture bar: type and press Enter to run unattended (approval off, Minimal mode); Esc or clicking outside closes it.";
-"全局开关: 开 = 任何完整模式的会话都能读你勾过的应用的界面, 不是只对当前会话生效。再给某个 App 勾上「可操作」它才能按按钮/填输入框 —— 没勾的一律只读" = "Global switch. On = any session in Full mode can read the windows of the apps you ticked — not just the current session. Tick Act on an app to let it press buttons and fill fields — everything else stays read-only.";
+"全局开关: 开 = 常规与完整模式的会话都能读你勾过的应用的界面, 不是只对当前会话生效 (极简与 codemode 档看不到这些工具)。再给某个 App 勾上「可操作」它才能按按钮/填输入框 —— 勾上就是允许, 不再逐次问你; 没勾的一律只读。让助手打开一个 App 只需要「可读」(那等于替你点一下图标)" = "Global switch. On = sessions in Standard or Full mode can read the windows of the apps you ticked — not just the current session (Minimal and Codemode never see these tools). Tick Act on an app to let it press buttons and fill fields — ticking it is the permission, there is no per-action prompt; everything else stays read-only. Opening an app only needs Read (it is the same as clicking its icon for you).";
 "全部丢弃" = "Discard all";
 "全部采纳" = "Accept all";
 "六" = "Sat";
@@ -443,6 +444,7 @@
 "已采纳 %lld 条" = "Accepted %lld";
 "已采纳 %lld 条，%lld 条没成，仍留在队列里" = "Accepted %lld, %lld failed and stayed in the queue";
 "帮助" = "Help";
+"常规与完整模式的会话都能用 (不是只对当前会话); 改完勾选, 下一次对话才生效" = "Sessions in Standard or Full mode can use this (not just the current one). Ticked changes take effect on the next turn.";
 "常规模式" = "Standard mode";
 "常驻" = "Always on";
 "常驻硬规 %lld 条没进 prompt: %@" = "%lld always-on rules did not make it into the prompt: %@";
@@ -479,6 +481,8 @@
 "我是谁" = "Who I Am";
 "手动填写 IMAP / SMTP 主机 (含端口, 如 imap.example.com:993); 同样须用授权码或客户端专用密码" = "Enter the IMAP / SMTP hosts by hand (with the port, e.g. imap.example.com:993); an app password is still required";
 "手动备份" = "Manual backup";
+"打开" = "Open";
+"打开 (没说哪个 App)" = "Open (no app named)";
 "打开工作区" = "Open workspace";
 "打开目录" = "Open folder";
 "打开知识面板的待审核分组" = "Open the review group in the knowledge panel";
@@ -704,8 +708,8 @@
 "由此侧问 (含 Turn %lld 及之前)" = "Side chat from here (up to and including turn %lld)";
 "由此处侧问" = "Start side chat";
 "电脑操作" = "Computer use";
-"电脑操作已关闭: 打开后任何完整模式的会话都能读你勾过的应用界面 (下一回合生效)" = "Computer use is off: turning it on lets any session in Full mode read the apps you ticked (takes effect next turn)";
-"电脑操作已开启 (全局): 任何完整模式的会话都能读你勾过的应用界面 — 再点一次关闭" = "Computer use is on (global): any session in Full mode can read the apps you ticked — click again to turn it off";
+"电脑操作已关闭: 打开后常规与完整模式的会话都能读你勾过的应用界面 (下一回合生效)" = "Computer use is off: turning it on lets sessions in Standard or Full mode read the apps you ticked (takes effect next turn)";
+"电脑操作已开启 (全局): 常规与完整模式的会话都能读你勾过的应用界面 — 再点一次关闭" = "Computer use is on (global): sessions in Standard or Full mode can read the apps you ticked — click again to turn it off";
 "白名单 %lld 条" = "%lld on the allowlist";
 "白名单至少一个发件人地址" = "Add at least one sender address to the allowlist";
 "目录: %lld 家 / %lld 条" = "Catalog: %lld providers / %lld models";

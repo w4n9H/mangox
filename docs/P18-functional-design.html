@@ -280,7 +280,7 @@ details.fold[open]>summary{margin-bottom:4px}
   <div class="v"><div class="face">安全层 · 密码 / 敏感字段遮蔽<span>强 · 必须在<b>序列化边界</b>做,不能等 prompt</span></div><span class="chip c-acc">提案</span></div>
   <div class="v"><div class="face">载体 · Swift 辅助进程 + 薄扩展<span>强 · 现有扩展机制 + 判据留在 Swift 侧</span></div><span class="chip c-acc">提案</span></div>
   <div class="v"><div class="face">载体 · 审批卡 / 工具卡 / Trace 复用<span>强 · 现成（源码 :342 / :1729 / :2265）</span></div><span class="chip c-ok">复用现成</span></div>
-  <div class="v"><div class="face">档位 · 工具面只登记在 full<span>提案 · 沿用 web-search 的"挂载 + env"双闸门;定时任务另需<b>任务级</b>选 full（两根轴）</span></div><span class="chip c-acc">提案</span></div>
+  <div class="v"><div class="face">档位 · 挂载不看档位,<b>开关才是控制</b><span>定案(10-29):扩展挂载与档位无关;模型看不看得到由 <code>--tools</code> 决定 ⇒ 实际能用的是 standard / full 两档;定时任务另需<b>任务级</b>选 full</span></div><span class="chip c-ok">已定</span></div>
   <div class="v"><div class="face">门禁 · 序列化 / 压缩 / 差分 / 遮蔽 / 作用域<span>强 · 纯函数,可造反例,不需要真屏幕</span></div><span class="chip c-acc">提案</span></div>
   <div class="v"><div class="face">成本 · 上下文约为截屏法的 1/4<span>中 · 行业参考数字 · <b>待本机实测</b></span></div><span class="chip c-warn">待实测</span></div>
   <div class="v"><div class="face">TCC · 每次重装可能需重授<span>强 · 与 Keychain 同因（ad-hoc 签名换身份）</span></div><span class="chip c-bad">已知摩擦</span></div>
@@ -304,7 +304,7 @@ details.fold[open]>summary{margin-bottom:4px}
     <tr><td>不做纯截屏派</td><td>每步一次云端往返、每次点击抢你的鼠标、像素要外发。三条代价都与"个人生产力工具"的身份冲突。</td></tr>
     <tr><td>不做"自动无限操作"</td><td>不给 agent 无限循环的权利。每一轮都是普通的一轮,做完就停 —— 跟 MangoX 其它能力同一条纪律。</td></tr>
     <tr><td>不接管全屏键盘</td><td>不装全局键盘记录器。AX 的 <code>AXSetValue</code> 够填字段了;真要按键,只允许在 <b>受作用域约束</b>的窗口里发。</td></tr>
-    <tr><td>不在 minimal / standard 档提供</td><td>它吃上下文、要求系统权限、且是"重能力"。只进 full 档且要用户显式开启。</td></tr>
+    <tr><td>不在 minimal / codemode 档可用</td><td>它吃上下文、要求系统权限、且是"重能力"。<b>能不能用只由那个开关决定</b>(设置页全局 + 对话框,10-29 定案),但 <code>minimal</code> 的 <code>--tools</code> allowlist 会把扩展工具一起裁掉、<code>codemode</code> 只留 codemode 一个工具 ⇒ 这两档用不了。</td></tr>
   </tbody>
 </table>
 </div>
@@ -367,14 +367,14 @@ details.fold[open]>summary{margin-bottom:4px}
   <thead><tr><th>事实</th><th>位置</th><th>对本方案的意义</th></tr></thead>
   <tbody>
     <tr><td>敏感工具集 = 白名单式</td><td><code>PiRpcTransport.swift:287</code> <code>SENSITIVE = new Set(["bash","write","edit"])</code> · <code>:327</code> 不在集里直接放行</td><td><b>新工具自动豁免</b>。computer 工具必须先把这条改成默认敏感。</td></tr>
-    <tr><td>「始终允许」只活在扩展进程内</td><td><code>:286</code> <code>const alwaysAllowed = new Set()</code></td><td>per-turn 拆进程 ⇒ <b>下一回合就没了</b>。作用域授权必须落盘(参照 bash 白名单那条路:<code>ChatStore.swift:2147-2149</code>)。</td></tr>
+    <tr><td>「始终允许」只活在扩展进程内</td><td><code>:286</code> <code>const alwaysAllowed = new Set()</code></td><td>per-turn 拆进程 ⇒ <b>下一回合就没了</b>。<b>当时的结论是"必须落盘", 还照着做了一版</b>(settings KV + 工具 × App 粒度), 后来推翻: 这条能力<b>根本不该存在</b> —— act 的授权由作用域那个勾表达, 不需要第二份名单。见 §04 第 5 条。</td></tr>
     <tr><td>远程驱动档（autoJudge）对写操作一律放行</td><td><code>:1931-1934</code> "分级只管 bash,write/edit 一律放行"</td><td><b>远程驱动档</b>。computer 绝不能落进这个默认分支。</td></tr>
     <tr><td>分级裁决器已经是"白名单放行"立场</td><td><code>BashRiskEvaluator.swift:4</code> "白名单放行(漏 = 多弹一次卡, 失败模式是烦),不做黑名单拦截"</td><td>⇒ <b>项目自己的哲学是 fail-safe</b>。闸门倒置是把它贯彻到底,不是引入新观念。</td></tr>
     <tr><td>工具结果支持图片</td><td><code>:2265-2267</code> <code>ImageContent = { type:"image", data: base64, mimeType }</code> · <code>:1729</code> <code>persistToolImages</code></td><td>⇒ 截屏兜底<b>不需要新渲染路径</b>:现成的工具卡就能显示。</td></tr>
     <tr><td>扩展能声明工具</td><td><code>:491</code> <code>pi.registerTool({name,label,description,parameters,execute})</code></td><td>computer 的工具面照 <code>mangox-dream.ts</code> 抄即可。</td></tr>
     <tr><td>扩展能弹审批 UI</td><td><code>:342</code> <code>ctx.ui.select(title, ["Allow","Allow always","Deny"])</code> · <code>:1744</code> <code>extension_ui_request</code></td><td>⇒ 审批卡 UI <b>直接复用</b>,只需多一个选项。</td></tr>
     <tr><td>turn_end 是可动作边界</td><td><code>:1823-1824</code> "0.87.0 起变成可动作边界(扩展可注入 entries 并 <code>continue: true</code>)"</td><td>⇒ 将来可以做"感知→动作→再感知"的<b>回合内</b>循环,不必然要新机制。</td></tr>
-    <tr><td>档位工具面</td><td><code>AgentMode.swift:60-67</code> minimal = allowlist 四件套 · standard/full = <code>["+grep","+find","+ls"]</code> 增补式</td><td>⇒ <b>档位天然分层</b>:minimal 的 allowlist 会把扩展工具裁掉,standard/full 的增补式不裁 ⇒ computer 只挂 full 即可,<b>不需要改 toolListArguments</b>。</td></tr>
+    <tr><td>档位工具面</td><td><code>AgentMode.swift:60-67</code> minimal = allowlist 四件套 · standard/full = <code>["+grep","+find","+ls"]</code> 增补式</td><td>⇒ <b>档位天然分层</b>:minimal 的 allowlist 会把扩展工具裁掉,standard/full 的增补式不裁 ⇒ computer 的<b>挂载不看档位</b>(10-29 定案),而它的<b>可见性</b>正好落在这条分界上:standard / full 能用、minimal 用不了 ⇒ <b>不需要改 toolListArguments</b>。</td></tr>
     <tr><td>零 macOS 自动化代码</td><td>全仓 grep:AXUIElement / AXIsProcessTrusted / CGEvent / ScreenCaptureKit 命中 0</td><td>⇒ 这是<b>从零</b>的一条能力,不是接线。</td></tr>
     <tr><td>既有源码事实门</td><td><code>scripts/smoke/run.sh</code> ③ / ③b~③h 八道</td><td>⇒ computer 需要同类门:helper 契约 / 作用域判据 / 不许裸发 CGEvent。</td></tr>
     <tr><td>自动放行档对<b>所有</b>工具直接放行</td><td><code>PiRpcTransport.swift:1904-1908</code> <code>guard approvalMode.judgesByRisk else { … "Allow" … }</code> · <code>ApprovalMode.swift:57</code> <code>judgesByRisk = self != .autoAllow</code></td><td>⇒ 定时任务档<b>连 bash 分级都不做</b>。所以「没人点卡」的档有两个,不是一个(见 §03 改动五)。</td></tr>
@@ -497,18 +497,21 @@ details.fold[open]>summary{margin-bottom:4px}
   <thead><tr><th>操作</th><th>交互档 <code>interactive</code></th><th>远程驱动档 <code>autoJudge</code></th><th>定时任务档 <code>autoAllow</code></th></tr></thead>
   <tbody>
     <tr><td><code>read</code>(读界面)</td><td>作用域内静默放行</td><td>作用域内静默放行</td><td>作用域内静默放行</td></tr>
-    <tr><td><code>act</code>(动界面)</td><td>弹审批卡(带作用域与目标)</td><td><b>一律拒并记原因</b>(本方案唯一保留的一档)</td><td><b>放行</b>(与它现在对 write/edit 的待遇一致)</td></tr>
+    <tr><td><code>act</code>(动界面)</td><td><b>勾了「可操作」就放行, 没勾就拒</b>(不弹卡, 卡上点名是哪个 App)</td><td><b>一律拒并记原因</b>(本方案唯一保留的一档)</td><td><b>放行</b>(与它现在对 write/edit 的待遇一致)</td></tr>
     <tr><td>两层红线面(见本 § 改动七)</td><td><b>一律拒</b>(结构上不可达的两条本来就调不到)</td><td><b>一律拒</b></td><td><b>一律拒</b></td></tr>
   </tbody>
 </table>
 </div>
 
 <p class="lead">⚠️ <b>远程驱动档这条是本方案里最硬的安全承诺</b>:<b>computer use 在远程驱动档永远不动作</b>,只读。原因见 §02.D —— 那一档现在对 write/edit 一律放行(<code>:1931-1934</code>),若 computer 落进同一分支,<b>一封邮件就是一次远程桌面</b>。</p>
+<p class="lead">⚠️ <b>「read 在这一档放行」是怎么成立的</b> —— 不是客户端判了"允许",而是它<b>根本不进审批桥</b>:<code>ApprovalGate.readOnlyTools</code> 里有 <code>computer_read</code> ⇒ 生成出来的扩展在 <code>tool_call</code> 钩子第一句就 <code>return undefined</code>(<code>PiRpcTransport.swift:367</code>),请求连 MangoX 都到不了。所以 <code>:2261</code> 那条 <code>isComputerTool</code> 前缀分支<b>只作用于会来问的工具</b>(<code>computer_act</code> / <code>computer_open</code>,以及以后那些非只读的)。拿它当「read 也被拒」的依据是误读 —— 2026-10-29 我自己就这么误读过一次,所以写在这儿。</p>
+
+<p class="lead">⚠️ <b>进桥 ≠ 查同一道门</b> —— <code>computer_open</code> 也走这条前缀分支,但它查的是 <b>读面</b>(<code>activeBundles</code>),<code>computer_act</code> 查的是操作面(<code>activeActBundles</code>)。两档权限在设置页上是两个勾(<code>可读</code> / <code>可操作</code>),桥里就必须是两次查:把 open 也按操作面查,一个只勾了「可读」的 App <b>连打开都会被拒</b> —— 那等于把两档合成一档,而界面上还写着两档。</p>
 <div class="call bad">
   <div class="lbl">一共两个口子,不是一个 —— 第二个比你写的更宽</div>
   <p><b>口子一</b>(§00 ① 那个):<code>SENSITIVE</code> 是<b>黑名单式交集</b> ⇒ 新工具不在集里、<code>:327</code> 直接 <code>return undefined</code> ⇒ <b>任何新工具自带豁免</b>。</p>
   <p><b>口子二</b>(本版补齐时发现):<code>PiRpcTransport.swift:1904-1908</code> 的 <code>guard approvalMode.judgesByRisk else { … "Allow" … }</code> —— 而 <code>judgesByRisk</code> 的定义是 <code>self != .autoAllow</code>(<code>ApprovalMode.swift:57</code>)⇒ <b>自动放行档对「所有工具」直接放行,连 bash 分级都不做</b>。这一档给定时任务用(弹卡没人点 = 死锁),它<b>必须</b>这么放 —— 但代价是:computer 若被定时任务带上,<b>一次定时触发的界面操作也不需要任何人拍板</b>。</p>
-  <p>⇒ 所以 computer 要在<b>两处</b>写显式分支,不能只堵 <code>autoJudge</code>。<b>三档结论(2026-10-28 拍板)</b>:<code>interactive</code> 弹卡 · <code>autoAllow</code> <b>给完整权限</b>(它的语义本来就是"不弹卡、全放行",computer 落进去<b>不需要特殊分支</b>)· <code>autoJudge</code> <b>仍只读</b> —— <b>唯一保留的一档,理由不是权限大小,是输入源</b>(见下与 §05)。</p>
+  <p>⇒ 所以 computer 要在<b>两处</b>写显式分支,不能只堵 <code>autoJudge</code>。<b>三档结论</b>(2026-10-28 拍板, <code>interactive</code> 那一档 10-29 修订):<code>interactive</code> <b>按作用域那个勾</b>(勾了放行 / 没勾拒, <b>不弹卡</b> —— 见 §04 第 5 条)· <code>autoAllow</code> <b>给完整权限</b>(它的语义本来就是"不弹卡、全放行",computer 落进去<b>不需要特殊分支</b>)· <code>autoJudge</code> <b>仍只读</b> —— <b>唯一保留的一档,理由不是权限大小,是输入源</b>(见下与 §05)。</p>
 </div>
 <div class="call ok">
   <div class="lbl">已拍板（2026-10-28）：定时任务档给完整权限</div>
@@ -587,17 +590,20 @@ details.fold[open]>summary{margin-bottom:4px}
 <table class="def">
   <thead><tr><th>工具</th><th>作用</th><th>审批</th></tr></thead>
   <tbody>
-    <tr><td><code>screen_read</code></td><td>读当前作用域内的界面(元素表 + 差分);可选"给张图"</td><td>作用域内静默</td></tr>
-    <tr><td><code>ui_act</code></td><td>对某个元素/坐标做动作(press / setValue / scroll / menu)</td><td>交互档弹卡 · 远程驱动档拒 · 定时任务档放行</td></tr>
+    <tr><td><code>computer_read</code></td><td>读当前作用域内的界面(元素表 + 差分);可选"给张图"</td><td>作用域内静默</td></tr>
+    <tr><td><code>computer_act</code></td><td>对某个元素做动作(press / setValue)</td><td><b>勾了「可操作」就放行, 没勾就拒</b>(不弹卡, 见 §04 第 5 条)· 远程驱动档一律拒</td></tr>
+    <tr><td><code>computer_open</code></td><td>打开(或切到前台)名单里的一个 App —— <b>没打开的 App 没有窗口</b>, 读不到也就动不了</td><td><b>勾了「可读」就放行</b>(打开等于替你点一下图标)· 远程驱动档一律拒</td></tr>
   </tbody>
 </table>
 </div>
 
-<p class="lead"><b>只有两个工具</b> —— 工具越多,模型的选错率越高、说明越长。<b>档位</b>:挂 <code>full</code>;定时任务想在没人看着的情况下驱动界面,<b>任务级档位也要选 <code>full</code></b> —— 这两件事正交(<b>工具面在档位轴,裁决在审批轴</b>),别混;沿用 web-search 的<b>双闸门</b>(挂载闸门 = 设置里开着;env 闸门 = 这一轮 spawn 时名单非空)⇒ <b>非 <code>full</code> 档</b>的会话连 socket 路径都拿不到。</p>
+<p class="lead"><b>三个工具, 一条链</b> —— 打开 → 读 → 动, 每一步各自是最小的一件事: 工具越多,模型的选错率越高、说明越长,所以动作面只开 <code>press</code> / <code>setValue</code>。<b>为什么非要有 <code>computer_open</code></b>: 2026-10-29 boss 实测「帮我用计算器算 100×5」在计算器没开时<b>结构上做不到</b> —— 没有窗口可读 ⇒ 没有编号可动, 而模型手里唯一的出路是"请用户自己打开它"。它不是动作面的一部分: 打开一个 App <b>不动它里面的任何东西</b>, 与"在 Dock 上点一下图标"同一件事 ⇒ 它查的是<b>读面</b>那道门。详见 §04 补记 批 2d。</p>
+
+<p class="lead"><b>档位</b>:<b>挂载与档位无关</b>(<code>extensionArguments</code> 里 computer 与业务扩展<b>并列</b>,10-29 定案),能不能用由 <code>--tools</code> 决定 —— <code>standard</code> / <code>full</code> 能用,<code>minimal</code> 被 allowlist 裁掉、<code>codemode</code> 只剩一个工具;定时任务想在没人看着的情况下驱动界面,<b>任务级档位要选 <code>full</code></b> —— 这两件事正交(<b>能不能用看 <code>--tools</code>,裁决看审批轴</b>),别混;沿用 web-search 的<b>双闸门</b>(挂载闸门 = 设置里开着;env 闸门 = 这一轮 spawn 时名单非空)⇒ <b>名单空</b>的会话连 socket 路径都拿不到。</p>
 
 <div class="call warn">
   <div class="lbl">⚠️ 别把双闸门读成「每个会话各配一份」</div>
-  <p><b>名单是全局的</b>:存在 settings 表里,<b>一份</b>,所有 <code>full</code> 档的会话 spawn 时都读同一份 —— 一旦在设置里配好,<b>任何 <code>full</code> 档会话都能用</b>,不需要逐会话开启。<b>唯一带「这一轮」味道的是生效时机</b>:名单在 spawn 那一刻下发给 helper ⇒ 改完勾选要等下一次对话才生效(进程复用时会按名单重启 helper,见 <code>ComputerHost.Scope</code>)。</p>
+  <p><b>名单是全局的</b>:存在 settings 表里,<b>一份</b>,所有 <code>standard</code> / <code>full</code> 档的会话 spawn 时都读同一份 —— 一旦在设置里配好,<b>任何 standard / full 档会话都能用</b>,不需要逐会话开启。<b>唯一带「这一轮」味道的是生效时机</b>:名单在 spawn 那一刻下发给 helper ⇒ 改完勾选要等下一次对话才生效(进程复用时会按名单重启 helper,见 <code>ComputerHost.Scope</code>)。</p>
   <p>2026-10-29 boss 指出原文案在说谎 —— 当时设置页与回执里写的是「本次会话 / 这一轮 / 本次开放」,而事实是全局一份。已全量改为「任何完整模式的会话」,并把「改完下一次对话生效」写在明面上。<b>教训</b>:「什么时候生效」与「归谁所有」是两件事,合成一句话就会把后者说错。</p>
 </div>
 
@@ -675,15 +681,15 @@ details.fold[open]>summary{margin-bottom:4px}
   <div class="todo">
     <span class="tn">5</span>
     <div class="tbody">
-      <div class="tt">"始终允许"能跨回合存活</div>
-      <div class="td"><b>判据</b>：点一次"允许本会话" ⇒ <b>下一个回合</b>同一个动作不再弹卡(现状:<code>alwaysAllowed</code> 是扩展进程内的 <code>Set</code>(<code>:286</code>),per-turn 拆进程 ⇒ 必然失效)。落盘形态照 bash 白名单那条路(<code>ChatStore.swift:2147-2149</code>)。<b>为什么</b>：不修这条,GUI 任务每个动作都弹一次卡,不可用。</div>
+      <div class="tt">"可操作"那个勾就是授权 —— act 不再逐次弹卡</div>
+      <div class="td"><b>判据</b>：某个 App 勾了「可操作」⇒ <code>computer_act</code> 动它 <b>不弹卡</b>,直接放行;没勾 ⇒ <b>也不弹卡</b>,直接 <code>Deny</code>,卡上点名"「X」还没勾「可操作」⇒ 没动它。到「设置 → 电脑操作」里给这个 App 勾上"。(2026-10-29 boss 拍板:「我给了权限的就是允许就行」)<br><b>为什么不该弹</b>:勾「可操作」已经是一次明确的授权,而且 helper 侧还有一道<b>独立进程里的硬门</b>(<code>ComputerAct.swift</code> 的 <code>scope.actBundles.contains</code>) —— 客户端漏判也绕不过去。在这之上再弹一张卡 = <b>同一个决定问第二遍</b>;一次 GUI 任务十几个动作,连点十几次「允许」之后那张卡就是摆设(告警疲劳,保护等于 0)。没勾时弹卡更糟:用户点了「允许」helper 照样拒(名单没变),那张卡<b>纯误导</b>且给不了补救路径(勾选不在卡上)。<br><b>不变量</b>:<b>客户端的判断只用来拒,不用来放行</b>。算不出是哪个 App(模型没给 <code>app</code> = 当前前台)时<b>不表态</b>,交 helper 用同一份名单判 ——"当前前台是谁"在决定的那一刻只有 helper 知道。<br><b>查的是投影不是勾选框</b>:判据读 <code>activeActBundles</code>(真正下发的那一份),不读 <code>actSelected</code> —— 手改过的库能让口令类留在勾选集里,读原始状态就会放行一个 helper 必拒的动作。<br><b><code>computer_open</code> 查的是另一道门</b>:它读 <code>activeBundles</code>(读面),没勾「可读」⇒ 不弹卡、直接 <code>Deny</code>,卡上的话也换成「「X」还没勾「可读」⇒ 没打开它」。<b>两句话不能拼装</b>(不写成「还没勾「%@」」再往里塞一个译文词):那样词表里只剩半句,译者看不见它填进哪儿。<br><b>沿革(别再走回头路)</b>:这一条先做成过一份跨回合的「始终允许」名单(粒度 = 工具 + App,落 settings KV),随后<b>整条删掉</b> —— 它是<b>补丁</b>:真正的缺口是"授权该落在哪一层",不是"怎么记住"。<b>别把名单加回来</b>。<br><b>状态</b>：<span class="chip c-ok">已做（未发版）</span> —— <code>CaseActScope</code> 40 条(认 App 归一(含 bundle 末段) / <b>act 仍进审批桥</b> / 勾了放行 / 没勾 Deny 且卡上点名 / 算不出交 helper / 口令类查投影 / autoJudge 仍拒 / <b>open 查读面:只勾可读也放行、提示说「可读」、远程驱动档仍拒</b> / <b>候选表 = 名单 ∩ 在跑、open 三分支</b>);反例 = 判据退化成查勾选集 + 没勾也弹卡 ⇒ <b>5 条红</b>;再一轮反例 = 把 open 判据改成查操作面 + 摘掉 bundle 末段那一档 ⇒ <b>4 条红</b>(全在 T-ACTSCOPE)。</div>
     </div>
   </div>
   <div class="todo">
     <span class="tn">6</span>
     <div class="tbody">
       <div class="tt">远程驱动档（autoJudge）下 computer 一律被拒且留痕</div>
-      <div class="td"><b>判据</b>：<code>autoJudge</code> 档发起 <code>computer_act</code>（工具名契约见下）⇒ 断言①被拒 ②<b>落一条记原因</b>(同 <code>autoJudgeBlocks</code> 的形态)③<b>没有任何 image / 像素被发出</b>。<b>反例</b>：把该分支改回落进"一律放行" ⇒ 必须变红。<b>状态</b>：<span class="chip c-ok">① ② 已做（未发版）</span> —— ③ 目前是<b>结构性</b>保证（图像面还没接，<code>includeImage</code> 一律回"批 2 才接"），<b>等批 3 接上图像时必须补一条真断言</b>，不许靠"现在还读不到像素"这件事撑着。<br><b>工具名契约</b>：<code>computer_read</code> / <code>computer_act</code>（前缀 <code>computer_</code> 才是判据 —— 以后加 <code>computer_scroll</code> 自动落入要审批那一侧，本文早期草稿里的 <code>ui_read</code>/<code>ui_act</code> 作废）。</div>
+      <div class="td"><b>判据</b>：<code>autoJudge</code> 档发起 <code>computer_act</code>（工具名契约见下）⇒ 断言①被拒 ②<b>落一条记原因</b>(同 <code>autoJudgeBlocks</code> 的形态)③<b>没有任何 image / 像素被发出</b>。<b>反例</b>：把该分支改回落进"一律放行" ⇒ 必须变红。<b>状态</b>：<span class="chip c-ok">① ② 已做（未发版）</span> —— ③ 目前是<b>结构性</b>保证（图像面还没接，<code>includeImage</code> 一律回"批 2 才接"），<b>等批 3 接上图像时必须补一条真断言</b>，不许靠"现在还读不到像素"这件事撑着。<br><b>工具名契约</b>：<code>computer_read</code> / <code>computer_act</code> / <code>computer_open</code>（前缀 <code>computer_</code> 才是判据 —— 以后加 <code>computer_scroll</code> 自动落入要审批那一侧，本文早期草稿里的 <code>ui_read</code>/<code>ui_act</code> 作废）。</div>
     </div>
   </div>
   <div class="todo">
@@ -765,6 +771,41 @@ details.fold[open]>summary{margin-bottom:4px}
   </div>
 </div>
 
+<h3>补记 · 批 2d：打开 App + 两个「把人引错方向」的回执（2026-10-29）</h3>
+
+<p class="lead">boss 的第二张截图把两件事一起摆出来了：设置里<b>明明勾着计算器</b>，回执却说<b>「没有开放任何 App ⇒ 我不读界面」</b>并让他去设置页勾选。他去看了，勾选是好的 ⇒ 剩下唯一的结论只能是「这功能坏了」。<b>回执把一个"你勾了但那个 App 没在跑"说成了"你什么都没勾"</b> —— 事实与下一步<b>两处都错</b>。</p>
+
+<div class="todos">
+  <div class="todo">
+    <span class="tn">16</span>
+    <div class="tbody">
+      <div class="tt">没有窗口的 App ⇒ 读不到也动不了 ⇒ 得有 <code>computer_open</code></div>
+      <div class="td"><b>症状</b>：「帮我用计算器算 100×5」，计算器没开 ⇒ 模型<b>结构上做不到</b>：没有窗口树就没有编号，<code>computer_act</code> 连试的资格都没有，而它唯一能做的是请用户自己打开。<br><b>判据</b>：新增 <code>computer_open(app)</code>（协议 <code>op: "open"</code> + helper 用 LaunchServices 取 App URL 再启动）。<b>它归读面</b>：打开一个 App 不动它里面的任何东西，与"在 Dock 上点一下图标"同一件事 ⇒ 桥里查 <code>activeBundles</code>，<b>不查</b> <code>activeActBundles</code>。已经在跑 ⇒ 只 <code>activate</code>（不再 launch，某些 App 被再 launch 会开新窗口）。<br><b>不查辅助功能权限</b>：启动 App 不需要 AX，需要它的是"读" —— 在这里设权限门会让没授权的人连"打开计算器"都做不到，而回执会把他引去隐私面板（与他此刻要办的事毫无关系）。<br><b>等它真的起来再回话</b>：<code>NSWorkspace.open</code> 只保证"启动请求发出去了"，而模型拿到 ok 之后下一个动作必然是 <code>computer_read</code> —— 差半秒就是"读不到窗口"，它只会把这次启动当成没发生。轮询上限 4s，超时<b>说成"请系统启动过但我还没看到它"</b>（慢 ≠ 失败）。<br><b>状态</b>：<span class="chip c-ok">已做（未发版）</span> —— 新增 <code>ToolKind.computerOpen</code>（落 <code>other</code> 会让"只是打开了它"与"进去按了东西"分不开）；<code>CaseComputerKind</code> 补 <code>kindFor</code> / 卡头 / 编解码 6 条；<code>CaseActScope</code> ④ 组 6 条（<b>只勾「可读」也放行</b> / 没勾「可读」Deny 且提示说「可读」/ 远程驱动档仍拒）。</div>
+    </div>
+  </div>
+  <div class="todo">
+    <span class="tn">17</span>
+    <div class="tbody">
+      <div class="tt">两种成因不许合成一句；模型给的英文名要认得出中文 App</div>
+      <div class="td"><b>症状一</b>：「没有开放任何 App ⇒ 我不读界面。(在 设置 › 集成 › 电脑操作 里勾选)」—— 这句话对"名单空"成立，对"名单里的人都<u>没在跑</u>"是<b>假话</b>，而两者的下一步完全不同（前者去勾选，后者<b>把 App 打开</b>）。<br><b>症状二</b>：中文机器上系统 App 的显示名是「计算器」/「访达」，而模型手里最稳的名字是英文（bundle id 的末段 <code>calculator</code>）。原来的 <code>ComputerTarget.pick</code> 只认 bundle 全等与<b>显示名</b> ⇒ 给 <code>Calculator</code> <b>一个都选不中</b>，回执还说"它没在跑，或者不在名单里"（两个都不是）。<br><b>判据</b>：① <code>emptyScopeNote</code> 分开说（名单空 ⇒ 提设置页；名单非空但都没在跑 ⇒ <b>点名叫他勾了哪个、让他先打开，绝不再提设置页</b>）；② <code>refusal</code> 先答"是不是勾了但没在跑"（有唯一一个明确的下一步）；③ <code>pick</code> 加一档 <b>bundle 末段全等</b>（排在"名字全等"之前：bundle id 不随语言变，显示名会）；④ 回执里每个 App 都写成 <code>名字(bundle id)</code> —— 没在跑的 App <b>拿不到本地化名</b>（helper 是裸可执行文件，<code>Bundle.preferredLocalizations</code> 恒 <code>["en"]</code>，三条 API 全给英文名），带上 bundle id 就有了语言无关的第二个说法。<br><b>状态</b>：<span class="chip c-ok">已做（未发版）</span> —— <code>CaseActScope</code> ①d 四条（中文名 / 英文名=末段 / 大小写 / <b>末段是全等不是包含</b>）。</div>
+    </div>
+  </div>
+</div>
+
+<h3>补记 · 批 2e：helper 看不见「后起来的 App」（2026-10-29，真机会话实测）</h3>
+
+<p class="lead">这条 bug <b>一条断言都拦不住</b>：编译通过、纯函数全绿、也<b>不是权限问题</b> —— 界面上什么都没发生，只有回执在说假话。它只在真机上"先起助手、再起 App"这个次序里现形。</p>
+
+<div class="todos">
+  <div class="todo">
+    <span class="tn">18</span>
+    <div class="tbody">
+      <div class="tt"><code>NSWorkspace.shared.runningApplications</code> 在没有 run loop 的进程里<b>定格在首次查询那一刻</b></div>
+      <div class="td"><b>症状</b>：<code>computer_open</code> 回「已经请系统启动「calculator」, 但 4 秒内还没看到它起来」、<code>computer_read</code> 一路回「它们现在都没在运行 ⇒ 没有可读的窗口」；而同一时刻 <code>pgrep -x Calculator</code> 有 pid、<code>CGWindowList</code> 也看得到那个 232×321 的窗口。<br><b>根因（实测，macOS 14.8.1）</b>：这两个查询靠 <b>LaunchServices 通知</b>刷新，而 helper 是"阻塞在 <code>accept()</code> 上一个 loop 都不跑"的裸进程 ⇒ 它看到的是<b>启动那一刻的快照</b>：起 App 前枚举 0，起 App 后 8 秒仍是 0。同一进程里抽一次 <code>CFRunLoopRunInMode(.defaultMode, 0.06, false)</code> ⇒ 枚举 0→1、frontmost 立刻从 Chrome 变「计算器」；而 <code>NSRunningApplication.runningApplications(withBundleIdentifier:)</code> 是<b>同步查询</b>，不抽也立刻 0→1。<br><b>判据</b>：① 取"谁在跑"一律按 bundle 现问，<b>不许用那两个会定格的查询</b>（<code>run.sh</code> ③p 扫源码事实封住退路）；② 前台 = 名单里 <code>isActive</code> 的那个；名单里一个都不 active（前台是没开放的 App）时，从 <code>CGWindowList</code> 最前面的 layer-0 窗口反查 owner —— 只为把名字说出来，<b>不需要屏幕录制权限</b>；③ "取"与"判"拆开：<code>ComputerTarget.candidates(inScope:running:)</code> 与 <code>openPlan(query:installed:running:)</code>（<code>.activate</code> / <code>.launch</code> / <code>.notInScope</code>）是纯函数，helper 只负责取与执行。<br><b>别跟权限混谈</b>：这次失败<b>不是</b>缺辅助功能 —— helper 早已过 <code>AXIsProcessTrusted()</code> 那道门（否则回执会是那句权限话）。<code>CGPreflightScreenCaptureAccess = false</code> 只影响截图/图像面（批 3），读界面走 AX 树。<br><b>状态</b>：<span class="chip c-ok">已做（未发版）</span> —— 冒烟 1932 / 0；<code>CaseActScope</code> ⑤ 组 9 条（名单 ∩ 在跑 / 名单里有但它没在跑 ⇒ 不进候选 / pid=-1 丢弃 / 名单空 ⇒ 候选空 / activate 取系统那份 pid / launch / 名字对不上不猜 / 空 query）；反例 = 把 <code>runningApp</code> 换回 <code>NSWorkspace.shared.runningApplications</code> ⇒ <code>run.sh</code> ③p <b>变红</b>。</div>
+    </div>
+  </div>
+</div>
+
 <h2><span class="n">05</span>风险与边界<span class="en">RISK &amp; BOUNDARY</span></h2>
 
 <h3>代价（如实报，不劝阻）</h3>
@@ -824,6 +865,7 @@ details.fold[open]>summary{margin-bottom:4px}
     <tr><td>只认 <code>role == "system"</code></td><td>jsonl 里还有 <code>thinking_level_change</code> / user / assistant 等行型,它们不携带工具面;认错就等于「用户把工具名贴进对话 ⇒ 提示闭嘴」。</td></tr>
     <tr><td>钉住的清单为空 ⇒ <b>不算缺</b></td><td>空 = 这个会话还没被钉住(首轮没写 / 旧格式),那时 spawn 按当前工具集设置 ⇒ 全部可见。少了这一条,<b>每新建一个会话都先弹一句假警报</b>。</td></tr>
     <tr><td>只说 MangoX 自己知道的工具</td><td>第三方扩展注册了什么,MangoX 不知道 ⇒ 不猜(猜了就是「每装一个扩展都误报」)。web-search 的挂载判据跨模块、dream 只在 fire 那一次挂 ⇒ 都不算进来。</td></tr>
+    <tr><td>档位把扩展工具裁掉时<b>不算缺</b></td><td>挂载与档位无关(10-29 定案),但<b>看得见</b>由 <code>--tools</code> 决定:<code>minimal</code> 的 allowlist 会裁掉扩展工具、<code>codemode</code> 只剩一个工具 ⇒ 那两档的会话里 <code>toolsAdded</code> 天然没有 <code>computer_*</code>。算进去的话,<b>每一个极简会话都会被报「缺两个工具」</b>,而新建一个极简会话照样没有 ⇒ 一条永远修不好的假警报。判据用 <code>AgentMode.exposesExtensionTools</code>,并连同<b>档位本身</b>一起进缓存键(切档位时 jsonl 一个字节都没变)。</td></tr>
   </tbody>
 </table>
 </div>
@@ -838,8 +880,9 @@ details.fold[open]>summary{margin-bottom:4px}
     <tr><td>不跨到 <code>autoAllow</code>(定时任务)档的“不可逆豁免” —— 那一档已拍板给完整权限(read / act 都不特殊分支),但改动七那两层(结构性不可达 + 恒拒判据)照旧一律拒。</td></tr>
     <tr><td>不跨到密码类 App 的 <code>act</code> 面 —— 它们能进、能读(值恒 <code>••••</code>),但 <code>act</code> 恒关;挡行为,不挡名字。</td></tr>
     <tr><td>不跨到"模型自己决定要不要开 computer" —— 开关在<b>设置</b>里,不在 prompt 里。</td></tr>
-    <tr><td>不跨到 minimal / standard 档的工具面 —— 只登记在 full;而且要用户在设置里显式开启(定时任务还要额外在<b>任务级</b>选 full)。</td></tr>
-    <tr><td>不跨到"绕过审批" —— 审批卡复用现成那张,只多一个作用域选项。</td></tr>
+    <tr><td>不跨到 minimal / codemode 档的工具面 —— 挂载与档位无关(10-29 定案),但那两档的 <code>--tools</code> 会把工具裁掉,所以用不了;开关要用户在设置里显式打开(定时任务还要额外在<b>任务级</b>选 full)。</td></tr>
+    <tr><td>不跨到"绕过审批" —— <code>computer_act</code> 本身不弹卡(授权由作用域那个勾表达,见 §04 第 5 条);<code>bash</code> / <code>write</code> / <code>edit</code> 的审批卡照旧,一格没松。</td></tr>
+    <tr><td>不跨到 <code>write</code> / <code>edit</code> 的"始终允许" —— 那两个是<b>不可逆面</b>,每一笔都值得看一眼;能"勾了就闭嘴"的只有 <code>computer_act</code>(<code>bash</code> 另有自己的 token 白名单)。</td></tr>
   </tbody>
 </table>
 </div>

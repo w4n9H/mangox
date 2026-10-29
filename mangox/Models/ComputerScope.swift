@@ -98,22 +98,87 @@ enum ComputerTarget {
         let pid: Int32
     }
 
+    /// 系统报的"这个 App 正在跑" —— 只留判据要用的三样。
+    ///
+    /// ⚠️ 为什么要这个中间类型: "谁在跑"是**本机事实**, 取它的那几个 API 有坑(见
+    ///    `ComputerServer.runningApp` 的注释: `NSWorkspace.runningApplications` 在没有
+    ///    run loop 的进程里会定格在首次查询那一刻)。把它挡在入参上, 剩下的筛选/排序/认名
+    ///    就是纯函数, 冒烟能一条条断言, 不用连系统。
+    struct Running: Equatable {
+        let bundle: String
+        let name: String
+        let pid: Int32
+    }
+
+    /// 作用域内的候选表: **名单 ∩ 正在跑**。
+    ///
+    /// 按 `bundle` 排序 ⇒ 回执里"能读的: A / B"这个顺序是稳定的(不随进程表顺序漂)。
+    /// `pid <= 0` 的丢弃 —— App 已退出但还留在列表里时 pid 是 -1, 那个 pid 读不到任何东西。
+    static func candidates(inScope bundles: Set<String>, running: [Running]) -> [Candidate] {
+        guard !bundles.isEmpty else { return [] }
+        return bundles.sorted().compactMap { bundle in
+            guard let r = running.first(where: { $0.bundle == bundle }), r.pid > 0 else { return nil }
+            return Candidate(bundle: r.bundle, name: r.name, pid: r.pid)
+        }
+    }
+
+    /// `computer_open` 该走哪条路 —— 判据在这里, 执行在 helper。
+    enum OpenPlan: Equatable {
+        /// 已经在跑 ⇒ **只切前台**(有些 App 被再 launch 会开出第二个窗口)。
+        case activate(Candidate)
+        /// 名单里有、包也在, 但没在跑 ⇒ 启动它。
+        case launch(Candidate)
+        /// 名单里没有(或本机没装)。
+        case notInScope
+    }
+
+    /// 三个分支的判据。`installed` = 名单里装了的那份(**不管在不在跑**), `running` = 在跑的。
+    ///
+    /// ⚠️ 为什么不把"在不在跑"写在这里查: 见 `Running` 上那段 —— 取得对那一步必须
+    ///    现问系统, 而"问对了之后怎么判"是纯的。
+    static func openPlan(query: String,
+                         installed: [Candidate],
+                         running: [Running]) -> OpenPlan {
+        guard let hit = pick(query: query, in: installed) else { return .notInScope }
+        guard let r = running.first(where: { $0.bundle == hit.bundle }) else { return .launch(hit) }
+        return .activate(Candidate(bundle: hit.bundle, name: hit.name, pid: r.pid))
+    }
+
     /// 从候选里挑出 `query` 指的那一个。
     ///
     /// ⚠️ **空 query ⇒ nil**(不是"随便挑一个")。空表示"当前前台", 而前台是谁
     /// **不是候选表能回答的问题** —— 它取决于此刻谁在最前面, 由调用方用
     /// `NSWorkspace.frontmostApplication` 解决。在这里猜 ⇒ 模型以为读到了它要的那个。
     ///
-    /// 优先级: bundle 全等 › bundle 忽略大小写 › 名字全等(忽略大小写) › 名字包含。
+    /// 优先级: bundle 全等 › bundle 忽略大小写 › **bundle 末段全等** › 名字全等(忽略大小写)
+    ///         › 名字包含。
     /// ⚠️ "包含"必须放最后: `Safari` 也命中 `Safari Technology Preview`, 只有没有精确
     ///    匹配时才退到它 —— 否则 `Mail` 会先撞上 `MailMate`, 读错还零报错。
+    ///
+    /// ⚠️ **bundle 末段**(`com.apple.calculator` → `calculator`)这一档是 2026-10-29 补的:
+    ///    系统 App 的**显示名是本地化的**, 中文机器上叫「计算器」/「访达」/「邮件」, 而模型
+    ///    手里最稳的那个名字是英文(bundle id 的末段)。少了这一档, 模型给 `Calculator` 在中文
+    ///    机器上**一个都选不中**, 回执还说"它没在跑, 或者不在名单里"(2026-10-29 实测)。
+    ///    排序放在**名字全等之前**: bundle id 是不随语言变的标识, 显示名会被本地化 ——
+    ///    两个都命中时, 认标识比认标签可靠。
     static func pick(query: String, in candidates: [Candidate]) -> Candidate? {
         let q = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !q.isEmpty else { return nil }
         let lower = q.lowercased()
         if let hit = candidates.first(where: { $0.bundle == q }) { return hit }
         if let hit = candidates.first(where: { $0.bundle.lowercased() == lower }) { return hit }
+        if let hit = candidates.first(where: { lastSegment(of: $0.bundle).lowercased() == lower }) {
+            return hit
+        }
         if let hit = candidates.first(where: { $0.name.lowercased() == lower }) { return hit }
         return candidates.first(where: { $0.name.lowercased().contains(lower) })
+    }
+
+    /// bundle id 的末段 —— `com.apple.calculator` → `calculator`。没有点 ⇒ 原样返回。
+    ///
+    /// ⚠️ 只切**最后一个点**: 用它去认 App 时(`pick`), 前几段是反写域名, 对不上用户说的名字。
+    static func lastSegment(of bundle: String) -> String {
+        guard let dot = bundle.lastIndex(of: ".") else { return bundle }
+        return String(bundle[bundle.index(after: dot)...])
     }
 }

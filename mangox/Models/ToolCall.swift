@@ -41,6 +41,12 @@ enum ToolKind: String, Hashable, Codable, CaseIterable {
     /// "真名占 title + 首个标量参数退居 command" 的兜底, 名次列会被 `computer_act` 占满。
     case computerRead
     case computerAct
+    /// P18 批 2d: 打开 App (`computer_open`)。
+    ///
+    /// ⚠️ **第三个 case, 不并进 `.computerAct`**: 它查的是**读面**那道门, act 查的是操作面 ——
+    ///    卡片标签是这两档权限在回看时唯一的痕迹。并在 act 里, 事后就分不清"它只是打开了
+    ///    一个 App"还是"它进去按了东西"(前者只需读权限, 后者要动权限)。
+    case computerOpen
 
     /// 展示用名 = **原样工具名**（`rawValue`，小写；多词名自然成驼峰，如 `searchTools`）。
     ///
@@ -61,7 +67,7 @@ enum ToolKind: String, Hashable, Codable, CaseIterable {
     /// Default phase color (overridable per card via `phase`).
     var defaultColor: Color {
         switch self {
-        case .bash, .delegate, .codemode, .computerAct: return CodexTheme.accent   // 执行族: codemode 也是"把活干出去"
+        case .bash, .delegate, .codemode, .computerAct, .computerOpen: return CodexTheme.accent   // 执行族: codemode 也是"把活干出去"
         case .read, .grep, .find, .ls, .fetch, .search, .computerRead: return CodexTheme.info
         case .edit, .write: return CodexTheme.toolDone
         case .image: return CodexTheme.thinking

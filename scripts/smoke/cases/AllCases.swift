@@ -44,6 +44,7 @@ extension SmokeMain {
             caseComputerAct,
             caseComputerKind,
             caseToolFaceDrift,
+            caseActScope,
             caseCodeBlockLines,
         ]
     }

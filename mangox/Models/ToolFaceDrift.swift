@@ -62,18 +62,31 @@ enum ToolFaceDrift {
     /// `computerHost.start(allowedBundles: activeBundles) != nil` **同源**:
     /// `activeBundles` 空 ⇒ 不起 helper ⇒ 不挂扩展。
     ///
-    /// ⚠️ **不看档位** —— 与实现的事实一致: `extensionArguments(computerExtensionPath:)`
-    ///    是**独立参数**, 不受 `mountsBusinessExtensions` 过滤, 所以 standard 档也会挂。
-    ///    (设计文档 §06 写的是"挂 full", 实现没有落实; 一旦有人修成"只挂 full",
-    ///     这个函数必须跟着加档位判据 —— 否则会对着 standard 会话报"缺工具"。)
+    /// ⚠️ **挂载不看档位 —— 这是定案, 不是没落实的偏差**（2026-10-29 boss 拍板"保持现状"）:
+    ///    `extensionArguments(computerExtensionPath:)` 是**独立参数**, 不受
+    ///    `mountsBusinessExtensions` 过滤 ⇒ 挂不挂只由**作用域开关**决定(设置页全局 + 对话框),
+    ///    standard 档照样挂。**别往这里加"只挂 full"的判据** —— 加了就会对着一个真能用的
+    ///    standard 会话报"缺工具"。
+    ///
+    /// ⚠️ 但**看得见**是另一件事, 由 `--tools` 决定（`AgentMode.toolListArguments`）:
+    ///    minimal 传的是 allowlist 四件套 ⇒ 扩展注册的工具被**裁掉**; codemode 只剩 codemode
+    ///    一个工具 ⇒ 也调不到。这两档的会话里 `toolsAdded` 天然没有 computer_* ——
+    ///    若仍把它们算进 expected, **每一个 minimal 会话都会被报"缺两个工具"**,
+    ///    而新建一个 minimal 会话照样没有 ⇒ 一条永远修不好的假警报。
+    ///    ⇒ 判据必须是 `exposesExtensionTools`（`AgentMode` 已有这个属性, 且它自己的
+    ///      注释就写着"判据是各档 `--tools` 的语义"）。
     ///
     /// ⚠️ **web-search 不在这里**: 它的挂载还要看"有没有配博查 Key + 用户有没有停用",
     ///    判据跨到两个模块去了; 猜错就是每装一个空 Key 的会话都报缺。宁可少报。
     /// ⚠️ **dream 也不算**: 它只在 fire 那一次挂, 会话里根本用不到 ⇒ 算进来等于
     ///    "每一个正常会话都缺 dream 工具", 一次误报就把这条提示变成噪音。
-    static func expectedToolNames(computerMounted: Bool) -> Set<String> {
+    static func expectedToolNames(computerMounted: Bool,
+                                  exposesExtensionTools: Bool) -> Set<String> {
         var out = Set<String>()
-        if computerMounted { out.formUnion(PiRpcTransport.computerToolNames) }
+        // 挂了扩展 ≠ 模型看得见: 档位把工具裁掉时, 那几行根本不存在于对方的世界里。
+        if computerMounted && exposesExtensionTools {
+            out.formUnion(PiRpcTransport.computerToolNames)
+        }
         return out
     }
 

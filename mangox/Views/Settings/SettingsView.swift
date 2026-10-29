@@ -745,7 +745,7 @@ struct SettingsView: View {
     private var computerSection: some View {
         VStack(alignment: .leading, spacing: 12) {
             settingRow(title: "电脑操作",
-                       detail: "全局开关: 开 = 任何完整模式的会话都能读你勾过的应用的界面, 不是只对当前会话生效。再给某个 App 勾上「可操作」它才能按按钮/填输入框 —— 没勾的一律只读") {
+                       detail: "全局开关: 开 = 常规与完整模式的会话都能读你勾过的应用的界面, 不是只对当前会话生效 (极简与 codemode 档看不到这些工具)。再给某个 App 勾上「可操作」它才能按按钮/填输入框 —— 勾上就是允许, 不再逐次问你; 没勾的一律只读。让助手打开一个 App 只需要「可读」(那等于替你点一下图标)") {
                 Toggle("", isOn: $computer.enabled)
                     .toggleStyle(.switch)
                     .controlSize(.small)
@@ -906,7 +906,7 @@ struct SettingsView: View {
                 // ⚠️ 这一行是 boss 2026-10-29 那条的落点: 名单存在全局 settings 表里,
                 //    不是某个会话的私有凭证 —— 所以这里必须说破"全局 + 改完何时生效",
                 //    否则人会以为勾选是"只对眼前这场对话生效"。
-                Text("任何完整模式的会话都能用 (不是只对当前会话); 改完勾选, 下一次对话才生效")
+                Text("常规与完整模式的会话都能用 (不是只对当前会话); 改完勾选, 下一次对话才生效")
                     .font(.system(size: 10))
                     .foregroundStyle(CodexTheme.textMuted)
                     .fixedSize(horizontal: false, vertical: true)

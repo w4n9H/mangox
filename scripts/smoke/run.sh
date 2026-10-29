@@ -307,6 +307,22 @@ for f in mangox-compute/*.swift; do
         exit 1
     fi
 done
+# ③p helper 取"谁在跑 / 谁在前台"不许用 `NSWorkspace.shared.runningApplications` /
+#     `.frontmostApplication` —— 2026-10-29 实测(macOS 14.8.1), 这两个在**不抽 run loop** 的
+#     进程里返回的是**首次查询那一刻的快照**。helper 正是"阻塞在 accept() 上一个 loop 都不跑"
+#     的裸进程 ⇒ boss 那次 `computer_open` 回"4 秒内还没看到它起来"、`computer_read` 回
+#     "它们现在都没在运行", 而 `pgrep` 明明看得见 —— **回执在撒谎, 零红灯**。
+#     同一进程里抽 60ms run loop 就恢复(枚举 0→1) ⇒ 它靠通知刷新, 不抽就永不刷新;
+#     而按 bundle 现问的 `runningApplications(withBundleIdentifier:)` 是同步查询, 立刻 0→1。
+#     ⚠️ 这条只能扫源码事实: 编译得过、纯函数那半边全绿, 只有真机跑起来才看得出回执错了。
+for f in mangox-compute/*.swift; do
+    if has_code "$f" 'NSWorkspace\.shared\.(runningApplications|frontmostApplication)'; then
+        echo "FAIL - $f 又用了 NSWorkspace.shared 里那两个**会定格**的查询" >&2
+        echo "       它们在没抽 run loop 的进程里只反映首次查询那一刻 ⇒ 回执会说'它没在运行'而它明明在跑" >&2
+        echo "       改用 NSRunningApplication.runningApplications(withBundleIdentifier:) 逐个问 (见 ComputerServer.runningApp)" >&2
+        exit 1
+    fi
+done
 for NEEDLE in 'ComputerRedline.refusal' 'ComputerRedline.savePromptDecision'; do
     if ! has_code mangox/Models/ComputerAct.swift "$NEEDLE"; then
         echo "FAIL - ComputerActGuard 里少了 $NEEDLE (判据表还在, 但没人用它)" >&2

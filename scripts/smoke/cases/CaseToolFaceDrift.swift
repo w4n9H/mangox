@@ -25,8 +25,14 @@ extension SmokeMain {
         let names = PiRpcTransport.computerToolNames
         let readTool = PiRpcTransport.computerReadToolName
         let actTool = PiRpcTransport.computerActToolName
-        let mounted = ToolFaceDrift.expectedToolNames(computerMounted: true)
-        let unmounted = ToolFaceDrift.expectedToolNames(computerMounted: false)
+        let openTool = PiRpcTransport.computerOpenToolName
+        let mounted = ToolFaceDrift.expectedToolNames(computerMounted: true,
+                                                      exposesExtensionTools: true)
+        let unmounted = ToolFaceDrift.expectedToolNames(computerMounted: false,
+                                                        exposesExtensionTools: true)
+        // 挂了扩展但档位把它裁掉(极简 / codemode) —— 那是"看不见", 不是"缺"。
+        let hidden = ToolFaceDrift.expectedToolNames(computerMounted: true,
+                                                     exposesExtensionTools: false)
 
         // 真实行型: {"type":"message","id":…,"message":{"role":"system","content":[…],"toolsAdded":[{…}]}}
         func systemLine(added: [String] = [], removed: [String] = [], role: String = "system") -> String {
@@ -40,7 +46,7 @@ extension SmokeMain {
             return "{" + parts.joined(separator: ",") + "}}"
         }
 
-        // ① 真实那一幕的重演: 老会话钉住 9 个工具, 里面**没有** computer_act
+        // ① 真实那一幕的重演: 老会话钉住 9 个工具, 里面**没有** computer_act / computer_open
         let oldSession = [
             systemLine(added: ["read", "bash", "grep", readTool]),
             #"{"type":"message","id":"u1","message":{"role":"user","content":[{"type":"text","text":"帮我点一下"}]}}"#,
@@ -48,11 +54,11 @@ extension SmokeMain {
         let oldPinned = ToolFaceDrift.pinnedToolNames(jsonl: oldSession)
         check(oldPinned == Set(["read", "bash", "grep", readTool]),
               "T-TFDRIFT 钉住的清单 = system 里 toolsAdded 的名字集 (实测 \(oldPinned.sorted()))")
-        check(ToolFaceDrift.missing(pinned: oldPinned, expected: mounted) == [actTool],
-              "T-TFDRIFT 老会话只报缺 \(actTool), 不连带 read (实测 \(ToolFaceDrift.missing(pinned: oldPinned, expected: mounted)))")
+        check(ToolFaceDrift.missing(pinned: oldPinned, expected: mounted) == [actTool, openTool],
+              "T-TFDRIFT 老会话报缺 \(actTool) + \(openTool), 不连带 read (实测 \(ToolFaceDrift.missing(pinned: oldPinned, expected: mounted)))")
 
         // ② 新会话(工具面齐全) ⇒ 一句都不说
-        let fresh = systemLine(added: ["read", readTool, actTool])
+        let fresh = systemLine(added: ["read", readTool, actTool, openTool])
         check(ToolFaceDrift.missing(pinned: ToolFaceDrift.pinnedToolNames(jsonl: fresh),
                                     expected: mounted).isEmpty,
               "T-TFDRIFT 工具面齐全时恒为空 (提示不许在正常会话里出现)")
@@ -93,7 +99,7 @@ extension SmokeMain {
 
         // ⑧ 排序稳定: 文案要逐字稳定, 不许每次换个次序 (Set 的遍历序是随机的)
         let sortedMiss = ToolFaceDrift.missing(pinned: ["read"], expected: mounted)
-        check(sortedMiss == [actTool, readTool],
+        check(sortedMiss == [actTool, openTool, readTool],
               "T-TFDRIFT 缺失清单按字母序 (实测 \(sortedMiss))")
 
         // ⑨ 本次侧: 没挂 computer (作用域空) ⇒ 没有"该有"的工具 ⇒ 永不报缺
@@ -103,5 +109,22 @@ extension SmokeMain {
               "T-TFDRIFT 没挂 computer 时, 工具面缺什么都与我无关 (不猜第三方扩展)")
         check(mounted == Set(names),
               "T-TFDRIFT expected 与 PiRpcTransport 的名字常量同源 (不手抄字面量, 实测 \(mounted.sorted()))")
+
+        // ⑩ **档位那一轴**: 挂着扩展 ≠ 模型看得见。
+        //    判据必须是 `AgentMode.exposesExtensionTools`(它的语义就是"这一档的 --tools 裁不裁扩展工具"),
+        //    否则**每一个极简模式的会话**都会被报"缺两个工具", 而新建一个极简会话照样没有
+        //    ⇒ 一条永远修不好的假警报。这一条同时把判据钉在真实的档位表上: 以后谁改了
+        //    `--tools` 的语义而忘了改 `exposesExtensionTools`, 这里立刻红。
+        check(hidden.isEmpty,
+              "T-TFDRIFT 档位裁掉扩展工具时 expected 为空 (实测 \(hidden.sorted()))")
+        check(ToolFaceDrift.missing(pinned: ["read"], expected: hidden).isEmpty,
+              "T-TFDRIFT 极简 / codemode 档不报缺 (那里压根没有这几个工具名)")
+        for mode in AgentMode.allCases {
+            let e = ToolFaceDrift.expectedToolNames(computerMounted: true,
+                                                    exposesExtensionTools: mode.exposesExtensionTools)
+            check((!e.isEmpty) == mode.exposesExtensionTools,
+                  "T-TFDRIFT 档位 \(mode.rawValue): 看得见扩展工具 = \(mode.exposesExtensionTools) "
+                  + "(expected 实测 \(e.sorted()))")
+        }
     }
 }

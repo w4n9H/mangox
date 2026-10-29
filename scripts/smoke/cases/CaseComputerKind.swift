@@ -1,6 +1,6 @@
 //
 //  CaseComputerKind.swift
-//  P18: computer 的两个工具**归类** —— 它们原来落 `.other`(徽章写着 OTHER)。
+//  P18: computer 的三个工具**归类** —— 它们原来落 `.other`(徽章写着 OTHER)。
 //
 //  ⚠️ 只改 `kindFor` 不改 `toolHead` 会**丢信息**, 而且是静默的:
 //     `toolHead` 的通用式是 `title = path ?? cmd ?? name`, 而 computer 传的是 `app` ——
@@ -92,5 +92,26 @@ extension SmokeMain {
         let alien = #"{"id":"00000000-0000-0000-0000-000000000009","kind":"computerDrag","title":"x","details":[],"phase":{"done":{}}}"#
         check((try? JSONDecoder().decode(ToolCall.self, from: Data(alien.utf8)))?.kind == .other,
               "T-CKIND 陌生 computer* rawValue 降级 other (旧版 App 读新库不崩)")
+
+        // ⑦ 打开 App (批 2d): 又是**另一个** kind —— 它归读面那道门, 与动界面不是一件事。
+        let coTool = PiRpcTransport.computerOpenToolName
+        pi.handleRPCLine(#"{"type":"tool_execution_start","toolCallId":"co1","toolName":"\#(coTool)","args":{"app":"Calculator"}}"#)
+        let coCard = lastTool()
+        check(coCard?.kind == .computerOpen,
+              "T-CKIND \(coTool) 归到 .computerOpen (落 other 会让「只是打开了它」与「进去按了东西」分不开)")
+        check(coCard?.kind.label == "computerOpen", "T-CKIND 徽章 = computerOpen (原样)")
+        check(coCard?.title == "Calculator",
+              "T-CKIND 打开 App: `app` 占 title (实测 \(String(describing: coCard?.title)))")
+        check(coCard?.command == nil, "T-CKIND 打开 App 没有动作列 (它没有 op 参数)")
+        check(coCard?.kind.defaultColor == ToolKind.computerAct.defaultColor,
+              "T-CKIND 打开与动界面同族色 (都是「执行」, 与「看」分开)")
+        if let card = coCard,
+           let data = try? JSONEncoder().encode(card),
+           let back = try? JSONDecoder().decode(ToolCall.self, from: data) {
+            check(back.kind == .computerOpen && back.title == "Calculator",
+                  "T-CKIND computerOpen 编解码往返不丢 (落库 → 重放)")
+        } else {
+            check(false, "T-CKIND computerOpen 编解码往返: 编码或解码失败")
+        }
     }
 }

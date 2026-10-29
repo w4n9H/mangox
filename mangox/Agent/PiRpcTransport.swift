@@ -328,8 +328,13 @@ final class PiRpcTransport: AgentTransport {
           // computer 工具的审批卡那一行。⚠️ 只写**动作 + 编号 + App**, 不写标题:
           // 卡是在动作**之前**弹的, 此刻那个编号指向的控件可能刚从「登录」变成「删除」——
           // 写上去等于替判据背书, 而判据还没跑。
-          const describeComputer = (input) => {
+          const describeComputer = (toolName, input) => {
             const app = input.app ? " · " + String(input.app) : " · 当前前台";
+            if (toolName === "computer_open") {
+              // ⚠️ 拼法为的是**不留下以空格结尾的字面量**: `wiring_allow.txt` 逐行 strip,
+              //    那种字面量登不进豁免名单(门会一直红)。共用 `app` 那一段也省一份译文。
+              return input.app ? "打开" + app : "打开 (没说哪个 App)";
+            }
             if (input.op === "setValue") {
               const n = input.text === undefined ? 0 : String(input.text).length;
               return "写 #" + (input.index ?? "?") + " (" + n + " 字)" + app;
@@ -375,7 +380,7 @@ final class PiRpcTransport: AgentTransport {
             // computer 工具没有 command / path / url —— 不看这一支的话卡片上那一行是空的,
             // 人只知道"它要动电脑", 不知道要动哪一下。
             const detail = String(input.command || input.path || input.url
-              || (String(event.toolName).indexOf("computer_") === 0 ? describeComputer(input) : "")
+              || (String(event.toolName).indexOf("computer_") === 0 ? describeComputer(event.toolName, input) : "")
             ).slice(0, 500);
             let title = "MANGOX|APPROVE|" + event.toolCallId + "|" + event.toolName + "|" + detail;
             if (event.toolName === "edit" || event.toolName === "write") {
@@ -1038,7 +1043,7 @@ final class PiRpcTransport: AgentTransport {
 
     // MARK: - P18 批 1: computer use (自建扩展, 只读)
 
-    /// `computer_` 两个工具**各自的名字常量**。
+    /// `computer_` 三个工具**各自的名字常量**。
     ///
     /// ⚠️ 单独成常量不是为了好看: `kindFor` 与 `toolHead` 都要按名认它们, 而那两处
     ///    **写不下 case 模式**（Swift 的 `switch` 不放 static property）⇒ 只能写 `if` 比较。
@@ -1046,14 +1051,17 @@ final class PiRpcTransport: AgentTransport {
     ///    两个都是**零红灯**的退化。用常量则编译器盯着。
     nonisolated static let computerReadToolName = "computer_read"
     nonisolated static let computerActToolName = "computer_act"
+    nonisolated static let computerOpenToolName = "computer_open"
 
     /// P18: computer 扩展注册出来的工具名 —— 与 `computerExtensionSource` 同源同改
     /// (冒烟断言"每个名字都能在源码里找到 `name: "<名字>"`", 同 `webSearchToolNames` 那条守)。
     ///
-    /// ⚠️ **批 2b 起有两个工具**: 读一个、动一个。动作面刻意只开 `press` / `setValue` ——
+    /// ⚠️ **现在有三个工具**: 读一个、动一个、打开一个。动作面刻意只开 `press` / `setValue` ——
     /// 以后加 `computer_scroll` 时这里加一项即可, `ApprovalGate` 的 `computer_` 前缀判据
     /// 会自动把它算进"要审批"那一侧(不必也**不许**去改白名单)。
-    nonisolated static let computerToolNames: [String] = [computerReadToolName, computerActToolName]
+    /// ⚠️ `computer_open` **也在这张表里**(它同样要过桥), 但它查的是**读面**(见桥里那段)。
+    nonisolated static let computerToolNames: [String] =
+        [computerReadToolName, computerActToolName, computerOpenToolName]
 
     nonisolated static let computerExtensionFileName = "mangox-computer.ts"
 
@@ -1252,6 +1260,57 @@ final class PiRpcTransport: AgentTransport {
                             seq: params.seq,
                             text: params.text || "",
                         });
+                    } catch (error) {
+                        throw new Error("could not reach the window reader: " + String(error));
+                    }
+                    if (!reply || typeof reply !== "object") {
+                        throw new Error("the window reader sent something that is not an object.");
+                    }
+                    if (reply.ok !== true) {
+                        return ok("Refused: " + (reply.error || "no reason given."));
+                    }
+                    return ok(typeof reply.text === "string"
+                        ? reply.text
+                        : "(the reader returned no text)");
+                },
+            });
+
+            pi.registerTool({
+                name: "computer_open",
+                label: "Open an app",
+                description: [
+                    "Open a macOS app, or bring it to the front if it is already running.",
+                    "",
+                    "Use this when the app you need is not running: an app that is not open has no",
+                    "window, so computer_read has nothing to read and computer_act has nothing to",
+                    "act on. Only apps the user opened for this session can be launched -- the",
+                    "refusal names the launchable ones, with their bundle ids.",
+                    "",
+                    "Pass `app` as a name or bundle id (\"Calculator\" or \"com.apple.calculator\").",
+                    "Names are matched against the bundle id, its last segment, and the app's",
+                    "display name, so on a non-English system prefer the bundle id when a plain",
+                    "name is not recognised. There is no default: this tool never guesses which",
+                    "app you meant.",
+                    "",
+                    "This only launches. It does not read or touch anything inside the app: after",
+                    "it succeeds, call computer_read to get an outline (and a seq) before acting.",
+                    "Launching is gated by the same permission as reading, not by the acting one.",
+                ].join("\n"),
+                parameters: Type.Object({
+                    app: Type.String({
+                        description: "App name or bundle id. Required -- there is no frontmost default.",
+                    }),
+                }, { additionalProperties: false }),
+
+                async execute(_toolCallId, params) {
+                    const sock = process.env[SOCK_ENV];
+                    if (!sock) {
+                        return ok("computer_open is not enabled in this session: no "
+                            + SOCK_ENV + " was provided.");
+                    }
+                    let reply;
+                    try {
+                        reply = await ask(sock, { op: "open", app: params.app || "" });
                     } catch (error) {
                         throw new Error("could not reach the window reader: " + String(error));
                     }
@@ -1581,6 +1640,11 @@ final class PiRpcTransport: AgentTransport {
         var args = spec.scriptArgs + ["--mode", "rpc"]
         // P12.1b + P13: 扩展参数 (关自动发现 + 补回内置 provider + 挂托管扩展 + codemode 层)。
         // 业务扩展仅完整档挂载 (P7-M4); 系统扩展 (审批桥) 四档恒挂。
+        // ⚠️ computer 是**第三类**: 挂载与档位无关 (2026-10-29 定案) —— 它按**作用域开关**挂
+        //    (设置页全局 / 对话框), 所以 `computerExtensionPath` 与上面那行
+        //    `mountsBusinessExtensions ? …` **并列**, 不跟着档位走。别把它并进去:
+        //    "模型看不看得见"由 `--tools` 决定 (AgentMode.toolListArguments),
+        //    那才是档位的地盘; 挂载这一层听开关。
         args += Self.extensionArguments(
             hostedExtensionPath: extPath,
             codemodeExtensionPath: codemodeExtPath,
@@ -2273,6 +2337,56 @@ final class PiRpcTransport: AgentTransport {
             return
         }
 
+        // computer: **作用域那个勾就是授权**(P18 批 2d, 2026-10-29 boss 拍板)。
+        //
+        // ⚠️ 为什么这里**不弹卡**:
+        //    勾上「可操作」本身就是一次明确的授权, 而且 helper 侧还有一道硬门
+        //    (`ComputerAct.swift:160` 的 `scope.actBundles.contains`, 独立进程) —— 客户端
+        //    漏判也绕不过去。在这之上再弹一张卡 = 同一个决定问第二遍; 而一次 GUI 任务
+        //    十几个动作, 连点十几次「允许」之后那张卡就是摆设(告警疲劳, 保护等于 0)。
+        //    曾经做过一份「始终允许」名单来记住这件事, 是**补丁**: 真正缺的是"授权该落在
+        //    哪一层", 而不是"怎么记住"。名单已删 —— 别再把它加回来。
+        //
+        // ⚠️ 不变量: **客户端的判断只用来拒, 不用来放行**。
+        //    算不出是哪个 App(模型没给 app = 当前前台)时 `?? true` **不表态**, 交 helper 用
+        //    同一份名单判 —— "当前前台是谁"在决定的那一刻只有 helper 知道。拒错了最多多拒
+        //    一次(可恢复), 放行错了是真出事。
+        //
+        // ⚠️ 位置与上面两条的相对顺序不许动: 全放行档与 autoJudge 已经 return 了 ——
+        //    远程驱动档的指令可能是任何人发来的邮件正文, 它的拒**不许**被"用户勾过"绕过。
+        //    也正因为如此, 走到这里的 computer 工具按定义都是非只读的(read 在 JS 里就放行),
+        //    所以用前缀判据不会误伤 read。
+        //
+        // ⚠️ **`computer_open` 查的是读面**(`activeBundles`), 不是操作面 —— 打开一个 App 与
+        //    "在 Dock 上点一下图标"是同一件事, 它不动 App 里的任何东西; 而清单页上写的是
+        //    「可读」「可操作」两档, 用户勾了「可读」就该能打开它。查操作面的话, 一个只勾了
+        //    读的 App **连打开都要动权限** —— 那是把两档权限合成了一档。
+        if ApprovalGate.isComputerTool(parts[3]) {
+            let isOpen = parts[3] == Self.computerOpenToolName
+            let allowed = isOpen
+                ? ComputerSettings.shared.activeBundles
+                : ComputerSettings.shared.activeActBundles
+            let bundle = ComputerSettings.shared.resolveBundle(query: card.title)
+            if bundle.map({ allowed.contains($0) }) ?? true {
+                respondExtensionUI(reqId, value: "Allow", callId: callId)
+            } else {
+                // 没勾 ⇒ **不弹卡**: 用户点了「允许」helper 照样拒(名单没变), 那张卡是纯误导,
+                // 而且它给不了补救路径(勾选不在卡上)。直接在卡上把话说明白。
+                // ⚠️ 两档话说两句, 不拼装: 句子里那块词(`可读`/`可操作`)本身是译文,
+                //    用 `string(format:)` 往里塞会把语序交给别的语言去猜(词表里也就只剩
+                //    半句话, 译者看不见它填进哪儿)。
+                let hint = String(format: isOpen
+                                  ? L("「%@」还没勾「可读」⇒ 没打开它。到「设置 → 电脑操作」里给这个 App 勾上")
+                                  : L("「%@」还没勾「可操作」⇒ 没动它。到「设置 → 电脑操作」里给这个 App 勾上"),
+                                  card.title)
+                card = card.withPhase(.error(hint))
+                toolCards[callId] = card
+                emit(.toolUpdated(card))
+                respondExtensionUI(reqId, value: "Deny", callId: callId)
+            }
+            return
+        }
+
         card = card.withPhase(.awaitingApproval)
         toolCards[callId] = card
         emit(.toolUpdated(card))
@@ -2587,14 +2701,15 @@ final class PiRpcTransport: AgentTransport {
     }
 
     private func kindFor(_ toolName: String) -> ToolKind {
-        // P18: computer 的两个工具 —— 同 codemode / `bocha_web_search` 那条, **按名归位**, 不落
+        // P18: computer 的三个工具 —— 同 codemode / `bocha_web_search` 那条, **按名归位**, 不落
         // other。落 other 不只是标签难看: `toolHead` 对 `.other` 走"真名占 title"的兜底 ⇒
         // 卡头会变成 `OTHER · computer_act · app=计算器`, 而且轨迹页那串"同类分组"会把
-        // 读界面和动界面混进一堆叫 OTHER 的东西里。
+        // 读界面、动界面、打开 App 混进一堆叫 OTHER 的东西里。
         // ⚠️ 用常量比较而不是 case 字面量: `switch` 的 case 模式放不下 static property,
         //    写死字面量就等于把"名字不许漂"这条又一次交给记忆。
         if toolName == Self.computerReadToolName { return .computerRead }
         if toolName == Self.computerActToolName { return .computerAct }
+        if toolName == Self.computerOpenToolName { return .computerOpen }
         switch toolName {
         case "bash", "powershell": return .bash   // P6.0④: powershell 是 Windows 同族
         case "read": return .read

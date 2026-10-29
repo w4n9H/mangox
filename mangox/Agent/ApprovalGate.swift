@@ -33,6 +33,10 @@ enum ApprovalGate {
     ///   · `bocha_web_search` —— MangoX 自带的搜索扩展(只发网络请求, 不落盘);
     ///   · `computer_read` —— P18 的读界面。**三档都放行**(见 §03 三档表: read 那一行
     ///     三档全是"静默放行") ⇒ 放行由这张表实现, 客户端桥不需要为它写分支。
+    ///     ⚠️ 正因为在这里, 它**根本不进审批桥** ⇒ 客户端 `autoJudge` 那条
+    ///     `ApprovalGate.isComputerTool` 前缀分支**只作用于 act**(以及以后那些非只读的)。
+    ///     别拿那条分支当"read 在远程驱动档也被拒"的依据 —— 它压根没走到那儿 (2026-10-29
+    ///     我自己就误读过一次, 于是差点照着错的结论去改设计文档)。
     static let readOnlyTools: Set<String> = [
         "read", "grep", "ls", "find",
         "bocha_web_search",

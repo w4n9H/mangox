@@ -328,6 +328,8 @@ struct ToolCallCardView: View {
 
             if let onAlwaysAllow {
                 Button(action: onAlwaysAllow) {
+                    // ⚠️ 只剩 bash 会走到这里(computer_act 不再弹卡, 授权见作用域那个勾),
+                    //    所以不必再区分"这个 App"—— 那句话在没有第二种粒度之后就是噪音。
                     Text("始终允许")
                         .font(.system(size: 12))
                         .foregroundStyle(CodexTheme.textSecondary)

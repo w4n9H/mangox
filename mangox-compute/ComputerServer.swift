@@ -201,13 +201,13 @@ final class ComputerServer {
             }
             let candidates = candidatesInScope()
             guard !candidates.isEmpty else {
-                return .failure("没有开放任何 App ⇒ 我不读界面。(在 设置 › 集成 › 电脑操作 里勾选; 改完下一次对话生效)")
+                return .failure(emptyScopeNote(verb: "读"))
             }
             let target = resolve(query: app, in: candidates)
             guard let t = target else {
                 // ⚠️ 回执**必须带上"能读哪些"**: 模型不知道作用域, 只说"不在作用域内"会让它
                 // 一个个 App 试过去(每次一轮往返, 而且它可能会猜 bundle id)。
-                return .failure(refusal(query: app, available: candidates))
+                return .failure(refusal(query: app, available: candidates, verb: "读"))
             }
             guard isInScope(pid: t.pid) else {
                 return .failure("「\(t.name)」不在开放名单里 ⇒ 我不读它。")
@@ -258,6 +258,9 @@ final class ComputerServer {
 
         case .act(let app, let opRaw, let index, let seq, let text):
             return handleAct(app: app, opRaw: opRaw, index: index, seq: seq, text: text)
+
+        case .open(let app):
+            return handleOpen(app: app)
         }
     }
 
@@ -294,10 +297,10 @@ final class ComputerServer {
         }
         let candidates = candidatesInScope()
         guard !candidates.isEmpty else {
-            return .failure("没有开放任何 App ⇒ 我不动界面。(在 设置 › 集成 › 电脑操作 里勾选; 改完下一次对话生效)")
+            return .failure(emptyScopeNote(verb: "动"))
         }
         guard let t = resolve(query: app, in: candidates) else {
-            return .failure(refusal(query: app, available: candidates))
+            return .failure(refusal(query: app, available: candidates, verb: "动"))
         }
         // ⚠️ 没读过就动 = 没有编号可依据。回执要说清"先读一次", 而不是"内部错误" ——
         //    模型看到后一种只会重试同一个动作。
@@ -397,6 +400,63 @@ final class ComputerServer {
                         seq: seq)
     }
 
+    // MARK: - 打开 App (批 2d)
+
+    /// 打开(或切到前台)名单里的一个 App。
+    ///
+    /// ⚠️ **这里不查辅助功能权限**: 启动一个 App 不需要 AX, 需要它的是"读"。查了的话, 没授权
+    ///    的人连「打开计算器」都做不到 —— 而回执会把他引去系统设置的隐私面板, 那与他此刻
+    ///    要做的事毫无关系 (§04 那条"回执不许比事实说得多"的同族)。
+    ///
+    /// ⚠️ **为什么"打开"归读面管**: 它不动 App 里的任何东西, 与"在 Dock 上点一下图标"同一件事;
+    ///    进去之后能做什么, 仍然由操作面那道门管(`actBundles`)。两件事两道门。
+    private func handleOpen(app: String) -> ComputerResponse {
+        let q = app.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !q.isEmpty else {
+            // "打开当前前台" 是同义反复。不猜一个填进来 —— 猜错就是"悄悄打开了别人"。
+            return .failure("computer_open 要说清打开哪个 App ⇒ 我什么都没打开。")
+        }
+        let installed = installedInScope()
+        // 三条分支的**判据**在 `ComputerTarget.openPlan`(纯函数, 冒烟能断言); 这里只执行。
+        switch ComputerTarget.openPlan(query: q, installed: installed, running: runningApps()) {
+        case .notInScope:
+            let names = installed.map { label(bundle: $0.bundle, running: installed) }
+                .joined(separator: " / ")
+            let tail = names.isEmpty
+                ? "名单里没有一个装着的 App ⇒ 先到 设置 › 集成 › 电脑操作 里勾上它。"
+                : "能打开的: \(names)"
+            return .failure("「\(q)」不在开放名单里(也可能本机没装) ⇒ 我没打开它。\(tail)")
+
+        case .activate(let t):
+            // 已经在跑 ⇒ **只切前台**, 不再 launch 一次: 有些 App 被再 launch 会开新窗口
+            // (用户眼里就是"它怎么又开了一个")。
+            _ = NSRunningApplication(processIdentifier: t.pid)?.activate(options: [.activateAllWindows])
+            return .success(text: "「\(t.name)」本来就在运行 ⇒ 已经切到前台(没有新开窗口)。"
+                            + "接下来用 computer_read 读它。")
+
+        case .launch(let t):
+            guard let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: t.bundle) else {
+                return .failure("找不到「\(t.name)」的 App 包(\(t.bundle)) ⇒ 它可能已经被卸掉了。")
+            }
+            guard NSWorkspace.shared.open(url) else {
+                return .failure("系统拒绝了这次启动「\(t.name)」的请求 ⇒ 什么都没打开。")
+            }
+            // ⚠️ **等它真的起来再回话**: `open` 只保证"启动请求发出去了", 而模型拿到 ok 之后
+            //    下一个动作必然是 `computer_read` —— 差半秒就是"读不到窗口", 它只会把这次
+            //    启动当成没发生, 于是重试。上限 4s: 再长就是在 socket 上干等(单连接顺序处理)。
+            for _ in 0..<20 {
+                if let live = runningApp(t.bundle), live.isFinishedLaunching {
+                    return .success(text: "打开了「\(t.name)」。接下来用 computer_read 读它"
+                                    + "(给 \(t.bundle) 或「\(t.name)」都行)。")
+                }
+                usleep(200_000)
+            }
+            // 慢 ≠ 失败: 大 App 起来要更久。把"请系统启动过"和"我还没看到它"分开说清楚。
+            return .success(text: "已经请系统启动「\(t.name)」, 但 4 秒内还没看到它起来。"
+                            + "过一会儿再 computer_read; 要是仍然不行, 让用户手动打开一次。")
+        }
+    }
+
     // MARK: - 指认 → 定位
 
     /// 作用域内**当前正在跑**的 App。
@@ -404,15 +464,81 @@ final class ComputerServer {
     /// ⚠️ 为什么先按作用域过滤再挑: 选不中的那一半**根本不该出现在候选里** ——
     ///    否则 `pick` 命中一个不在作用域的 App, 后面还要再挡一次(两处判就是两处会漂),
     ///    而且失败回执里会泄出"本机正跑着哪些 App"这类与本次任务无关的信息。
+    ///
+    /// ⚠️ 取"谁在跑"那一行不许换回 `NSWorkspace.shared.runningApplications` —— 见 `runningApp`。
     func candidatesInScope() -> [ComputerTarget.Candidate] {
-        guard !allowedBundles.isEmpty else { return [] }
-        return NSWorkspace.shared.runningApplications.compactMap { app in
-            guard let bundle = app.bundleIdentifier, allowedBundles.contains(bundle) else { return nil }
-            // `processIdentifier` 在 App 已退出但还在列表里时是 -1 ⇒ 那个 pid 读不到任何东西。
-            guard app.processIdentifier > 0 else { return nil }
+        ComputerTarget.candidates(inScope: allowedBundles, running: runningApps())
+    }
+
+    /// 某个 bundle **此刻在跑的那个进程**(没有就 nil)。**每次现问系统。**
+    ///
+    /// ⚠️⚠️ **不要用 `NSWorkspace.shared.runningApplications`** —— 2026-10-29 实测(macOS 14.8.1):
+    ///    在不抽 run loop 的进程里, 它返回的是**首次查询那一刻的快照**, 之后再起的 App
+    ///    永远不出现。helper 正是"阻塞在 `accept()` 上一个 run loop 都不跑"的裸进程 ⇒
+    ///    boss 那次 `computer_open` 一路回"4 秒内还没看到它起来"、`computer_read` 回
+    ///    "它们现在都没在运行", 而 `pgrep` 明明看得见 —— **回执在撒谎, 零红灯**。
+    ///    同一进程里抽 60ms run loop 就恢复正常(枚举 0→1), 说明它靠通知刷新;
+    ///    而 `runningApplications(withBundleIdentifier:)` 是**每次真问系统**的同步查询
+    ///    (同一实测: 起 App 后立刻 0→1), 所以这里按 bundle 逐个问, 不赌"什么时候抽过 loop"。
+    func runningApp(_ bundle: String) -> NSRunningApplication? {
+        // `processIdentifier` 在 App 已退出但还在列表里时是 -1 ⇒ 那个 pid 读不到任何东西。
+        NSRunningApplication.runningApplications(withBundleIdentifier: bundle)
+            .first { $0.processIdentifier > 0 }
+    }
+
+    /// 名单里**在跑**的那一份(判据只认 bundle/name/pid 三样 ⇒ 交给 `mangox/Models` 的纯函数)。
+    func runningApps() -> [ComputerTarget.Running] {
+        allowedBundles.sorted().compactMap { bundle in
+            guard let app = runningApp(bundle) else { return nil }
+            return ComputerTarget.Running(bundle: bundle,
+                                          name: app.localizedName
+                                              ?? displayName(bundle: bundle, running: []),
+                                          pid: app.processIdentifier)
+        }
+    }
+
+    /// 当前前台的 App。**也不用 `NSWorkspace.frontmostApplication`** —— 同一个冻结坑
+    /// (实测: 计算器的 `isActive` 已经是 true, 它还在报 Chrome, 而且此后一直报 Chrome)。
+    ///
+    /// ① 名单里 `isActive` 的那个最准 —— 那是系统标的"活动 App"(实测不冻结);
+    /// ② 名单里一个都不 active ⇒ 前台是个**没开放**的 App, 这时候要的只是"它是谁",
+    ///    从 WindowServer 最前面的普通窗口(layer 0)反查 owner 就够了(不需要屏幕录制权限)。
+    private func frontmost() -> (bundle: String, name: String)? {
+        for c in candidatesInScope() {
+            if let app = NSRunningApplication.runningApplications(withBundleIdentifier: c.bundle)
+                .first(where: { $0.processIdentifier == c.pid && $0.isActive }) {
+                return (c.bundle, app.localizedName ?? c.name)
+            }
+        }
+        let opts: CGWindowListOption = [.optionOnScreenOnly, .excludeDesktopElements]
+        guard let list = CGWindowListCopyWindowInfo(opts, kCGNullWindowID) as? [[String: Any]] else {
+            return nil
+        }
+        // WindowServer 的列表是**前到后**排的 ⇒ 第一个 layer 0 的窗口就是最前面那个 App 的。
+        for w in list where (w[kCGWindowLayer as String] as? Int) == 0 {
+            guard let pid = w[kCGWindowOwnerPID as String] as? pid_t,
+                  let app = NSRunningApplication(processIdentifier: pid) else { continue }
+            return (app.bundleIdentifier ?? "", app.localizedName ?? "那个 App")
+        }
+        return nil
+    }
+
+    /// 名单里**装了**的 App(**不管在不在跑**) —— `open` 的候选表, 也用来回答
+    /// "他是不是勾了它、只是没打开"。
+    ///
+    /// ⚠️ 为什么不能复用 `candidatesInScope()`: 那个只列**正在跑**的, 而这两件事要解决的
+    ///    正是"它没在跑"。名单是用户手勾的几个, 逐个问 LaunchServices 不贵。
+    /// ⚠️ 勾了但已经卸掉的 bundle **不列进来**(列了也打不开, 只会让模型多试一次)。
+    func installedInScope() -> [ComputerTarget.Candidate] {
+        let running = candidatesInScope()
+        return allowedBundles.sorted().compactMap { bundle in
+            if let live = running.first(where: { $0.bundle == bundle }) { return live }
+            guard NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundle) != nil else {
+                return nil
+            }
             return ComputerTarget.Candidate(bundle: bundle,
-                                            name: app.localizedName ?? bundle,
-                                            pid: app.processIdentifier)
+                                            name: displayName(bundle: bundle, running: running),
+                                            pid: 0)
         }
     }
 
@@ -420,9 +546,8 @@ final class ComputerServer {
     private func resolve(query: String,
                          in candidates: [ComputerTarget.Candidate]) -> ComputerTarget.Candidate? {
         if query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            guard let front = NSWorkspace.shared.frontmostApplication,
-                  let bundle = front.bundleIdentifier else { return nil }
-            return candidates.first { $0.bundle == bundle }
+            guard let front = frontmost() else { return nil }
+            return candidates.first { $0.bundle == front.bundle }
         }
         return ComputerTarget.pick(query: query, in: candidates)
     }
@@ -438,16 +563,64 @@ final class ComputerServer {
         + " ② 窗口确实是空的(例如刚新建的白页)。先换一个 App 试, 或者问用户这个界面上本来应该有什么。"
     }
 
-    /// 选不中时的人话。⚠️ 两种原因要分开说: "没在跑"与"不在作用域"对模型是两条不同的路
-    /// （前者可以等, 后者只能换目标或问用户）。
-    private func refusal(query: String, available: [ComputerTarget.Candidate]) -> String {
-        let names = available.map(\.name).joined(separator: " / ")
-        let q = query.trimmingCharacters(in: .whitespacesAndNewlines)
-        if q.isEmpty, let front = NSWorkspace.shared.frontmostApplication {
-            let who = front.localizedName ?? front.bundleIdentifier ?? "那个 App"
-            return "当前前台是「\(who)」, 它不在开放名单里 ⇒ 我不读它。能读的: \(names)"
+    /// 作用域里**一个能用的 App 都没有**时的回执 —— 两种成因**必须分开说**。
+    ///
+    /// ⚠️ 2026-10-29 boss 拿着截图问「我都配置这个了, 权限已经足够了」: 他名单勾好了, 只是
+    ///    那个 App 当时没在运行, 而回执说的是"没有开放任何 App。(在设置里勾选)" ——
+    ///    他勾了。**同一条回执在"事实"和"下一步"两处都错**, 比不说更糟: 人照着它去设置页,
+    ///    看到勾选明明是好的, 于是只剩下"这个功能坏了"。
+    private func emptyScopeNote(verb: String) -> String {
+        guard !allowedBundles.isEmpty else {
+            return "没有开放任何 App ⇒ 我不\(verb)界面。(在 设置 › 集成 › 电脑操作 里勾选; 改完下一次对话生效)"
         }
-        return "读不到「\(q)」—— 它现在没在跑, 或者不在开放名单里。能读的: \(names)"
+        let names = allowedBundles.sorted().map { label(bundle: $0, running: []) }
+            .joined(separator: " / ")
+        return "你开放了「\(names)」, 但它们现在都没在运行 ⇒ 没有可\(verb)的窗口。"
+            + "先把 App 打开(或者让我用 computer_open 打开), 再\(verb)。"
+    }
+
+    /// 选不中时的人话。⚠️ 三种原因要分开说, 它们的下一步完全不同:
+    /// ① 名单空(没勾) / ② **勾了但它没在跑**(打开它就行) / ③ 压根不在名单里(只能换目标或问人)。
+    private func refusal(query: String,
+                         available: [ComputerTarget.Candidate],
+                         verb: String) -> String {
+        let names = available.map { label(bundle: $0.bundle, running: available) }
+            .joined(separator: " / ")
+        let q = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        if q.isEmpty, let front = frontmost() {
+            return "当前前台是「\(front.name)」, 它不在开放名单里 ⇒ 我不\(verb)它。能\(verb)的: \(names)"
+        }
+        // ⚠️ 这一段是给 boss 那次失败补的: "勾了但没在跑"是最常见的一种, 而且它有**唯一一个**
+        //    明确的下一步(打开它)。笼统说成"没在跑, 或者不在名单里", 两个都不是 —— 模型只能
+        //    换目标或者去问人, 而它本来只差一次启动。
+        if let installed = ComputerTarget.pick(query: q, in: installedInScope()) {
+            let who = displayName(bundle: installed.bundle, running: available)
+            return "「\(who)」在你开放的名单里, 但它现在没在运行 ⇒ 没有可\(verb)的窗口。"
+                + "先把它打开(或者让我用 computer_open 打开它), 再\(verb)。现在有窗口的: \(names)"
+        }
+        return "「\(q)」不在开放名单里 ⇒ 我不\(verb)它。现在有窗口的: \(names)"
+    }
+
+    /// 回执里怎么称呼一个 App: **名字 + bundle id**。
+    ///
+    /// ⚠️ 为什么非要带 bundle id: 没在跑的 App **拿不到本地化名**(实测 —— helper 是裸可执行
+    ///    文件, `Bundle.preferredLocalizations` 恒 `["en"]` ⇒ `CFBundleDisplayName` /
+    ///    `.localizedNameKey` / 已废弃的 `LSCopyDisplayNameForURL` 三条路全给英文名), 于是
+    ///    中文机器上「计算器」在回执里写作 `Calculator`。带上 bundle id 就有了一个**语言无关**
+    ///    的说法: 模型照着重试一定选得中(见 `ComputerTarget.pick` 的 bundle 全等那一档)。
+    private func label(bundle: String, running: [ComputerTarget.Candidate]) -> String {
+        "\(displayName(bundle: bundle, running: running))(\(bundle))"
+    }
+
+    /// 显示名: 在跑就用进程报的那个(系统 App 在中文机器上叫「计算器」), 没在跑退回包里那个。
+    private func displayName(bundle: String, running: [ComputerTarget.Candidate]) -> String {
+        if let live = running.first(where: { $0.bundle == bundle }) { return live.name }
+        if let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundle),
+           let name = Bundle(url: url)?.object(forInfoDictionaryKey: "CFBundleDisplayName") as? String,
+           !name.isEmpty {
+            return name
+        }
+        return ComputerTarget.lastSegment(of: bundle)
     }
 
     /// 作用域判据的**这一层**: 只认 bundle id 名单。

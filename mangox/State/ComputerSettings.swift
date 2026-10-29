@@ -6,7 +6,7 @@
 //     一条从没被真机验证过的链路上去翻审批闸门(批 2a), 出问题分不清是闸门还是链路。
 //
 //  ⚠️ **归属是全局, 生效时机是 spawn** —— 这两件事 2026-10-29 被 boss 指出来过:
-//     名单存在 settings 表里, **一份**, 任何完整模式的会话 spawn 时都读同一份
+//     名单存在 settings 表里, **一份**, 每个 spawn 都读同一份（档位裁不裁它由 `--tools` 决定）
 //     (所以"只有某个会话能读 Safari"是不成立的)。
 //     但下发给 helper 的动作发生在 spawn 那一刻 ⇒ 改完要等下一次对话才生效。
 //     原来这里写的是"作用域是这一轮才存在的凭证" —— 错, 把"何时生效"说成了"归谁所有"。
@@ -42,6 +42,13 @@ final class ComputerSettings: ObservableObject {
 
     /// 勾上的 bundle id —— **操作面**。恒为 `selected` 的子集(不变量见 `decode`)。
     @Published private(set) var actSelected: Set<String> = [] { didSet { persist() } }
+
+    /// 候选表注入 —— **只给冒烟用**(真机上恒 nil)。
+    ///
+    /// ⚠️ 有它才能对"审批那一刻把 `app` 认成哪个 bundle"写真断言: 真机上哪些 App 在跑是
+    ///    环境(CI 上没有 Safari), 而判据必须**在任何机器上复现**。这不是给生产留的开关,
+    ///    冒烟用完就置回 nil。
+    var candidateOverride: [ComputerTarget.Candidate]?
 
     /// 设置页里能勾的 App = **已安装的 ∪ 正在运行的**。
     ///
@@ -156,6 +163,10 @@ final class ComputerSettings: ObservableObject {
     }
 
     /// 正在运行的 App(只算 regular —— 菜单栏程序与后台 agent 没有窗口可读)。
+    ///
+    /// ⚠️ 这里可以用 `NSWorkspace.shared.runningApplications`: App 的主线程一直在抽 run loop,
+    ///    它会随通知刷新。**helper 里不行** —— 那个进程阻塞在 `accept()` 上, 同一个 API 会
+    ///    **定格在首次查询那一刻**(2026-10-29 实测; 见 `ComputerServer.runningApp`, run.sh ③p 扫着)。
     static func runningApps(excluding me: String?) -> [ComputerTarget.Candidate] {
         NSWorkspace.shared.runningApplications.compactMap { app in
             guard let bundle = app.bundleIdentifier, bundle != me,
@@ -232,6 +243,27 @@ final class ComputerSettings: ObservableObject {
         //    "操作面里有、读面里没有"的短暂状态, 而 `didSet` 会把它 persist 出去。
         actSelected = d.actBundles
         selected = d.bundles
+    }
+
+    /// 把模型给的 `app`(名字或 bundle id)落到 bundle 上 —— **认不出就 nil, 不猜**。
+    ///
+    /// 候选表的来源是"可勾选清单(已安装 ∪ 运行中)": 与 `ComputerTarget.pick` 的优先级
+    /// 合起来, 精确 bundle / 精确名字都排在"名字包含"之前 ⇒ `Mail` 不会先撞上 `MailMate`。
+    ///
+    /// ⚠️ 2026-10-29 起这条是**审批桥里唯一的认 App 入口**: 桥里拿它的结果去查
+    ///    `activeActBundles`。查的必须是**真正下发给 helper 的那一份投影**, 不是勾选框的
+    ///    原始状态 —— 两者在"总开关关着"时就会分叉, 查原始状态等于放行一个 helper 必拒的动作。
+    func resolveBundle(query: String) -> String? {
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }   // 空 = 当前前台, 此刻答不了
+        var candidates = candidateOverride ?? options.map {
+            ComputerTarget.Candidate(bundle: $0.bundle, name: $0.name, pid: 0)
+        }
+        // `options` 可能还没被 `refresh()` 填过(用户没打开过设置) ⇒ 用**此刻正在跑的**兜底。
+        if candidates.isEmpty {
+            candidates = Self.runningApps(excluding: Bundle.main.bundleIdentifier)
+        }
+        return ComputerTarget.pick(query: trimmed, in: candidates)?.bundle
     }
 
     func setSelected(_ bundles: Set<String>) { selected = bundles }

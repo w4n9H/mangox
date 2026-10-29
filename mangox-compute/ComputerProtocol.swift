@@ -24,6 +24,14 @@ enum ComputerRequest: Decodable {
     ///    ⚠️ `seq` **没有默认值**: 缺了就是"没读过就想动", 必须拒 —— 给它一个 0 当默认,
     ///    等于给"先读再动"开了一个静默的后门。
     case act(app: String, op: String, index: Int, seq: Int, text: String)
+    /// 打开(或切到前台)一个 App —— P18 批 2d。
+    ///
+    /// ⚠️ 为什么不复用 `act`: 打开一个 App **不动它里面的任何东西**, 与"在 Dock 上点一下图标"
+    ///    同一件事; 而"进去之后能做什么"仍然由操作面那道门管(`actBundles`)。两件事两个 op,
+    ///    授权也就落在两道不同的门上(读面 vs 操作面)。
+    /// ⚠️ 没有它, 「用计算器算 100×5」在计算器没开时**结构上做不到**: 读不到 ⇒ 没有窗口树
+    ///    ⇒ 也没有编号可动。
+    case open(app: String)
 
     private enum CodingKeys: String, CodingKey {
         case op, app, includeImage, index, seq, text
@@ -46,6 +54,10 @@ enum ComputerRequest: Decodable {
                         index: try c.decodeIfPresent(Int.self, forKey: .index) ?? 0,
                         seq: try c.decodeIfPresent(Int.self, forKey: .seq) ?? -1,
                         text: try c.decodeIfPresent(String.self, forKey: .text) ?? "")
+        case "open":
+            // 空 `app` 交给 server 拒(并说清"打开哪个"): 解码阶段回一句机器话,
+            // 模型只会把 `dataCorrupted` 当成故障重试。
+            self = .open(app: try c.decodeIfPresent(String.self, forKey: .app) ?? "")
         default:
             // 不认识的 op 要说清楚, 不能默默当成 ping —— 否则扩展侧改名之后会读到"一切正常"。
             throw DecodingError.dataCorruptedError(forKey: .op, in: c,

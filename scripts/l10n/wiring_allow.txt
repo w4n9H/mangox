@@ -126,6 +126,9 @@ mangox/Agent/PiRpcTransport.swift| 字)
 mangox/Agent/PiRpcTransport.swift|写 #
 mangox/Agent/PiRpcTransport.swift|按 #
 mangox/Agent/PiRpcTransport.swift|读
+# P18 批 2d: `computer_open` 那一行("打开 · Calculator") —— 同上, 也是扩展 JS 拼的。
+mangox/Agent/PiRpcTransport.swift|打开
+mangox/Agent/PiRpcTransport.swift|打开 (没说哪个 App)
 
 # P18 批 2b: `ComputerActGuard` 的回执 —— **进的是模型的上下文, 不是界面**。
 # 它们住在 helper 与 App 共用的纯函数里, 由 socket 回给扩展再交给模型; 包 L() 会让

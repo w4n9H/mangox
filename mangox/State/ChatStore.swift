@@ -123,6 +123,12 @@ final class ChatStore: ObservableObject {
             transports.values.forEach { $0.updateMode(agentMode) }
             saveAgentMode()
             stampSessionConfig()   // P10.3: 写穿当前会话配置
+            // P18: 档位决定"模型看不看得见扩展工具"(--tools 裁不裁), 所以它一变,
+            // 工具面漂移的结论就得重算 —— 否则从 minimal 切到 full 之后, 那行提示会
+            // **一直挂着**(jsonl 一个字节都没变, mtime 缓存认为无事发生)。
+            // 启动路径也需要这一句: 先恢复选中会话(:698), 再恢复会话配置里的档位(:701),
+            // 第一次算的时候档位还是默认值。
+            refreshToolFaceDrift()
         }
     }
 
@@ -1072,9 +1078,12 @@ final class ChatStore: ObservableObject {
     /// 那时他多半已经忘了, 而这条提示的代价只是一行字。
     private var toolFaceDismissed: Set<UUID> = []
 
-    /// 每个会话上次算出来的结果 + 当时的文件 mtime。mtime 没变就不重读。
+    /// 每个会话上次算出来的结果 + 当时的文件 mtime + **算的时候那一档看不看得见扩展工具**。
+    /// mtime 没变就不重读。
     /// ⚠️ 长会话的 jsonl 是几 MB ⇒ 每次发消息都全量解析会把"发送"变成可感知的卡顿。
-    private var toolFaceCache: [UUID: (mtime: Date?, missing: [String])] = [:]
+    /// ⚠️ `exposes` 必须一起进缓存键: 用户把档位从 full 切到 minimal 时文件**一个字节都没变**,
+    ///    只看 mtime 就会拿着旧结论继续报"缺两个工具"。
+    private var toolFaceCache: [UUID: (mtime: Date?, exposes: Bool, missing: [String])] = [:]
 
     /// 重算当前会话的工具面漂移。调用点: **选中会话**（立即上屏）与**发送前**（勾选可能刚改过）。
     func refreshToolFaceDrift() {
@@ -1085,12 +1094,13 @@ final class ChatStore: ObservableObject {
         let path = PiRpcTransport.sessionFilePath(for: sid)
         guard FileManager.default.fileExists(atPath: path) else {
             // 还没跑过第一轮 = 还没有被钉住的东西 ⇒ 首轮会按当前工具集重新钉一遍, 不存在"缺"。
-            toolFaceCache[sid] = (nil, [])
+            toolFaceCache[sid] = (nil, agentMode.exposesExtensionTools, [])
             toolFaceMissing = []
             return
         }
         let mtime = (try? FileManager.default.attributesOfItem(atPath: path))?[.modificationDate] as? Date
-        if let cached = toolFaceCache[sid], cached.mtime == mtime {
+        let exposes = agentMode.exposesExtensionTools
+        if let cached = toolFaceCache[sid], cached.mtime == mtime, cached.exposes == exposes {
             toolFaceMissing = cached.missing
             return
         }
@@ -1100,12 +1110,16 @@ final class ChatStore: ObservableObject {
             return
         }
         let pinned = ToolFaceDrift.pinnedToolNames(jsonl: text)
-        // 与 spawn 的实际挂载条件同源: 作用域为空 ⇒ 不起 helper ⇒ 扩展不挂（见 `ToolFaceDrift`
-        // 那段"不看档位"的注释 —— 这里刻意不判档位, 与实现一致）。
+        // 与 spawn 的实际条件同源, 两条都要:
+        //   ① 作用域为空 ⇒ 不起 helper ⇒ 扩展不挂;
+        //   ② 档位把扩展工具裁掉时(minimal 的 allowlist / codemode 只剩一个工具), 对方世界里
+        //      根本没有这几个名字 ⇒ 不算"缺"。**挂载不看档位**(2026-10-29 定案), 但"看得见"
+        //      看 `--tools` —— 少判②就会给每一个 minimal 会话报一条永远修不好的假警报。
         let expected = ToolFaceDrift.expectedToolNames(
-            computerMounted: !ComputerSettings.shared.activeBundles.isEmpty)
+            computerMounted: !ComputerSettings.shared.activeBundles.isEmpty,
+            exposesExtensionTools: exposes)
         let miss = ToolFaceDrift.missing(pinned: pinned, expected: expected)
-        toolFaceCache[sid] = (mtime, miss)
+        toolFaceCache[sid] = (mtime, exposes, miss)
         toolFaceMissing = miss
     }
 
