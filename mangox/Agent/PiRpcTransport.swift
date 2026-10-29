@@ -325,6 +325,19 @@ final class PiRpcTransport: AgentTransport {
             for (const l of newLines) out.push("+ " + truncLine(l));
             return out;
           };
+          // computer 工具的审批卡那一行。⚠️ 只写**动作 + 编号 + App**, 不写标题:
+          // 卡是在动作**之前**弹的, 此刻那个编号指向的控件可能刚从「登录」变成「删除」——
+          // 写上去等于替判据背书, 而判据还没跑。
+          const describeComputer = (input) => {
+            const app = input.app ? " · " + String(input.app) : " · 当前前台";
+            if (input.op === "setValue") {
+              const n = input.text === undefined ? 0 : String(input.text).length;
+              return "写 #" + (input.index ?? "?") + " (" + n + " 字)" + app;
+            }
+            if (input.op === "press") return "按 #" + (input.index ?? "?") + app;
+            if (input.op) return String(input.op) + app;
+            return "读" + app;
+          };
           const buildDiff = (toolName, input) => {
             try {
               let rows = [];
@@ -359,7 +372,11 @@ final class PiRpcTransport: AgentTransport {
             if (event.toolName === "write" && input.path && !fs.existsSync(input.path)) {
               return undefined;   // 新建文件: 无覆盖风险, 放行
             }
-            const detail = String(input.command || input.path || input.url || "").slice(0, 500);
+            // computer 工具没有 command / path / url —— 不看这一支的话卡片上那一行是空的,
+            // 人只知道"它要动电脑", 不知道要动哪一下。
+            const detail = String(input.command || input.path || input.url
+              || (String(event.toolName).indexOf("computer_") === 0 ? describeComputer(input) : "")
+            ).slice(0, 500);
             let title = "MANGOX|APPROVE|" + event.toolCallId + "|" + event.toolName + "|" + detail;
             if (event.toolName === "edit" || event.toolName === "write") {
               const diff = buildDiff(event.toolName, input);
@@ -1021,20 +1038,30 @@ final class PiRpcTransport: AgentTransport {
 
     // MARK: - P18 批 1: computer use (自建扩展, 只读)
 
+    /// `computer_` 两个工具**各自的名字常量**。
+    ///
+    /// ⚠️ 单独成常量不是为了好看: `kindFor` 与 `toolHead` 都要按名认它们, 而那两处
+    ///    **写不下 case 模式**（Swift 的 `switch` 不放 static property）⇒ 只能写 `if` 比较。
+    ///    若那两处写死字面量, 改名时唯一的信号是"卡片标签悄悄退回 OTHER + `app` 从卡上消失",
+    ///    两个都是**零红灯**的退化。用常量则编译器盯着。
+    nonisolated static let computerReadToolName = "computer_read"
+    nonisolated static let computerActToolName = "computer_act"
+
     /// P18: computer 扩展注册出来的工具名 —— 与 `computerExtensionSource` 同源同改
     /// (冒烟断言"每个名字都能在源码里找到 `name: "<名字>"`", 同 `webSearchToolNames` 那条守)。
     ///
-    /// ⚠️ **批 1 只注册一个工具**: 工具面越小, 模型越不会选错。动作面(`computer_click` 之类)
-    /// 是批 2b 的事 —— 在那之前多挂一个工具, 等于多一条"模型以为自己能动"的路。
-    nonisolated static let computerToolNames: [String] = ["computer_read"]
+    /// ⚠️ **批 2b 起有两个工具**: 读一个、动一个。动作面刻意只开 `press` / `setValue` ——
+    /// 以后加 `computer_scroll` 时这里加一项即可, `ApprovalGate` 的 `computer_` 前缀判据
+    /// 会自动把它算进"要审批"那一侧(不必也**不许**去改白名单)。
+    nonisolated static let computerToolNames: [String] = [computerReadToolName, computerActToolName]
 
     nonisolated static let computerExtensionFileName = "mangox-computer.ts"
 
-    /// P18 批 1: 只读的界面读取器 —— 一次连一次问, 一问一答。
+    /// P18 批 1/2b: 界面读取器 + 动作面 —— 一次连一次问, 一问一答。
     ///
     /// ⚠️ **这个扩展是哑的**(同 dream 那条纪律): 读 env → 连 socket → 发一行 → 收一行。
     ///    判断全在 Swift 侧: "能不能读这个 App" 在 `ComputerScope`/`ComputerServer.isInScope`,
-    ///    "读出来长什么样" 在 `AXSnapshot`, "哪些动作恒拒" 在 `ComputerRedline`。
+    ///    "读出来长什么样" 在 `AXSnapshot`, "哪些动作恒拒 / 该不该动" 在 `ComputerActGuard`。
     ///    判据写在 TS 里 ⇒ 冒烟断言不到(扩展不参与 Swift 编译), 只能靠肉眼看。
     ///
     /// ⚠️ **双闸门**(同 dream / webSearch): ① 挂载闸门 —— 作用域为空时 `spawnProcess`
@@ -1068,7 +1095,12 @@ final class PiRpcTransport: AgentTransport {
         function ask(sockPath, payload) {
             return new Promise(function (resolve, reject) {
                 const socket = connect(sockPath);
-                let buffer = "";
+                // ⚠️ 攒**字节**、拿到完整行才解码。socket 的 chunk 边界与字符边界无关,
+                //    每来一块就 `String(chunk)` 会把跨块的汉字劈成两半, 两半各自解成
+                //    U+FFFD ⇒ 回执里凭空多出替换字符, 而**整条链路零报错**。
+                //    实测(2026-10-29): 一条 483 字的 Safari 脚注里「条」正好卡在块边界,
+                //    模型读到的是 `符合折抵???件`, 我一开始还以为是网页本身的乱码。
+                let buffer = Buffer.alloc(0);
                 let settled = false;
                 const fail = function (message) {
                     if (settled) return;
@@ -1086,12 +1118,12 @@ final class PiRpcTransport: AgentTransport {
                 });
                 socket.on("data", function (chunk) {
                     if (settled) return;
-                    buffer += String(chunk);
-                    const cut = buffer.indexOf("\n");
+                    buffer = buffer.length === 0 ? chunk : Buffer.concat([buffer, chunk]);
+                    const cut = buffer.indexOf(0x0a);
                     if (cut < 0) return;
                     settled = true;
                     clearTimeout(timer);
-                    const line = buffer.slice(0, cut);
+                    const line = buffer.subarray(0, cut).toString("utf8");
                     socket.end();
                     let reply;
                     try {
@@ -1152,6 +1184,81 @@ final class PiRpcTransport: AgentTransport {
                     }
                     if (reply.ok !== true) {
                         // A refusal IS an answer. Hand back the app's own wording verbatim.
+                        return ok("Refused: " + (reply.error || "no reason given."));
+                    }
+                    return ok(typeof reply.text === "string"
+                        ? reply.text
+                        : "(the reader returned no text)");
+                },
+            });
+
+            pi.registerTool({
+                name: "computer_act",
+                label: "Act on a window",
+                description: [
+                    "Do exactly one thing to the window you just read: press a control, or type",
+                    "into a field. Nothing else -- no scrolling, no coordinates, no dragging.",
+                    "",
+                    "You must pass `seq` from the read that produced `index`, and `index` must come",
+                    "from that same outline. Numbers are only valid for the snapshot that printed",
+                    "them: if the reply says the snapshot is stale, read again and take a fresh",
+                    "number. Never re-use a number across reads, and never guess one.",
+                    "",
+                    "Type into a field with op \"setValue\" and the `text` to put there. Writing an",
+                    "empty string is refused on purpose: that is a wipe, not a no-op.",
+                    "",
+                    "The reply is the *change*, not a new outline -- it also carries the new `seq`.",
+                    "A few things are always refused no matter who asks: paying or ordering,",
+                    "permanent deletion (Shift-Cmd-Delete included), and typing into password",
+                    "fields. When a \"do you want to save\" sheet is up, the save is cancelled and",
+                    "the document is left untouched -- that decision belongs to the person, not you.",
+                    "",
+                    "Only apps the user marked as actable can be touched. A refusal names the app",
+                    "and says whether the block was permission or policy; do not retry the same",
+                    "call hoping for a different answer.",
+                ].join("\n"),
+                parameters: Type.Object({
+                    app: Type.Optional(Type.String({
+                        description: "App name or bundle id. Omit to act on the frontmost app.",
+                    })),
+                    op: Type.String({
+                        enum: ["press", "setValue"],
+                        description: "press = invoke the control; setValue = write text into a field.",
+                    }),
+                    index: Type.Number({
+                        description: "The row number from the outline you are acting on.",
+                    }),
+                    seq: Type.Number({
+                        description: "The snapshot sequence number returned by that read.",
+                    }),
+                    text: Type.Optional(Type.String({
+                        description: "Only for setValue: the text to write. Must not be empty.",
+                    })),
+                }, { additionalProperties: false }),
+
+                async execute(_toolCallId, params) {
+                    const sock = process.env[SOCK_ENV];
+                    if (!sock) {
+                        return ok("computer_act is not enabled in this session: no "
+                            + SOCK_ENV + " was provided.");
+                    }
+                    let reply;
+                    try {
+                        reply = await ask(sock, {
+                            op: "act",
+                            app: params.app || "",
+                            action: params.op,
+                            index: params.index,
+                            seq: params.seq,
+                            text: params.text || "",
+                        });
+                    } catch (error) {
+                        throw new Error("could not reach the window reader: " + String(error));
+                    }
+                    if (!reply || typeof reply !== "object") {
+                        throw new Error("the window reader sent something that is not an object.");
+                    }
+                    if (reply.ok !== true) {
                         return ok("Refused: " + (reply.error || "no reason given."));
                     }
                     return ok(typeof reply.text === "string"
@@ -1460,11 +1567,16 @@ final class PiRpcTransport: AgentTransport {
         // 那是比"没挂"更难查的一种: 模型看得到工具, 每次调用都回"未启用", 而界面上没有任何
         // 地方说为什么。
         //
-        // ⚠️ 作用域**每次 spawn 重新读**, 不做实例字段: 它是"这一轮才存在的凭证"。
-        //    用户在设置里关掉 ⇒ 下一轮 spawn 就不再给 env ⇒ 扩展根本不挂。
-        //    存成字段会多出一个"改了设置但在途会话还开着"的窗口, 而那个窗口界面上看不见。
+        // ⚠️ 名字**每次 spawn 重新读**, 不做实例字段。注意这不等于"作用域归这一轮所有":
+        //    名单存在全局 settings 表里, 一份 (见 `ComputerSettings` 文件头);
+        //    每次读是为了让**生效时机**落在下一次 spawn —— 用户在设置里关掉 ⇒ 下一轮
+        //    spawn 就不再给 env ⇒ 扩展根本不挂。存成字段会多出一个"改了设置但在途
+        //    会话还开着"的窗口, 而那个窗口界面上看不见。
         let computerBundles = ComputerSettings.shared.activeBundles
-        let computerSock = computerHost.start(allowedBundles: computerBundles)
+        // 操作面(批 2b)单独读一次: 它是**第二档权限**, 与读面不同源(见 `activeActBundles`)。
+        let computerActBundles = ComputerSettings.shared.activeActBundles
+        let computerSock = computerHost.start(allowedBundles: computerBundles,
+                                             actBundles: computerActBundles)
         let computerExtPath = computerSock != nil ? Self.ensureComputerExtensionFile() : nil
         var args = spec.scriptArgs + ["--mode", "rpc"]
         // P12.1b + P13: 扩展参数 (关自动发现 + 补回内置 provider + 挂托管扩展 + codemode 层)。
@@ -1563,12 +1675,13 @@ final class PiRpcTransport: AgentTransport {
                                                inherited: ProcessInfo.processInfo.environment) {
             p.environment = env
         }
-        // P18 批 1: computer 的四个 env 键。⚠️ 同上面那条守卫 —— `p.environment` 此时可能还是
+        // P18 批 1/2b: computer 的五个 env 键。⚠️ 同上面那条守卫 —— `p.environment` 此时可能还是
         // nil(没人给过), 那时 `p.environment?[k] = v` 是**静默空操作** ⇒ 必须整体赋值。
         // 判据不写成 `if let sock = computerSock`: 那会漏掉"父进程里残留了同名变量"这一半。
         if let env = ComputerHost.environment(existing: p.environment,
                                               socketPath: computerSock,
                                               allowedBundles: computerBundles,
+                                              actBundles: computerActBundles,
                                               peerPid: ProcessInfo.processInfo.processIdentifier,
                                               inherited: ProcessInfo.processInfo.environment) {
             p.environment = env
@@ -2425,6 +2538,24 @@ final class PiRpcTransport: AgentTransport {
         // 未知工具 (kind == .other) 的卡头标签恒为 "OTHER", 标签本身不携带真名 ⇒ 真名必须
         // 占 title, 否则用户看不出跑的是哪个扩展工具 (args 退到 command 列)。
         if kind == .other { return (name, cmd ?? path ?? firstScalarArg(args)) }
+        // P18 computer: 唯一要紧的参数是**哪个 App**(act 还要看动作与文本)。
+        // ⚠️ 走下面的通用式会让 `app` 从卡上消失 —— 它既不是 `path` 也不是 `command`,
+        //    title 会退成工具名、command 恒 nil ⇒ 卡头只剩 `computerAct` 一个词, 看不出动的是谁。
+        //    那正是"看着像没发生"的那种卡: 审批时人要在**界面上**找它说的是哪个窗口。
+        if Self.computerToolNames.contains(name) {
+            let app = (args["app"] as? String)?
+                .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            let op = (args["op"] as? String)?
+                .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            var cmd = op.isEmpty ? nil : op
+            // setValue 的正文要看得见: 审批时"要往这个框里写什么"就是这个动作的全部内容。
+            if let text = args["text"] as? String, !text.isEmpty {
+                cmd = (cmd.map { $0 + " " } ?? "") + "\"" + String(text.prefix(60)) + "\""
+            }
+            // `app` 省略 = 读/动**前台**那个 App (扩展侧就是这么做的) ⇒ 用真名占 title,
+            // 别编一个"前台"上去: 那一刻前台是谁, 这里并不知道。
+            return (app.isEmpty ? name : app, cmd)
+        }
         // P13 codemode: 唯一参数是 `code` (**整段脚本**), 没有 path/command ⇒ 若走下面的通用式,
         // `title` 会退成 name(`codemode`)、`command` 恒 nil ⇒ **整段脚本从卡上消失**。
         // 让它占 title, 与 bash 的 `title = cmd` 同一道理; 审批时"要批的脚本"也才看得见。
@@ -2456,6 +2587,14 @@ final class PiRpcTransport: AgentTransport {
     }
 
     private func kindFor(_ toolName: String) -> ToolKind {
+        // P18: computer 的两个工具 —— 同 codemode / `bocha_web_search` 那条, **按名归位**, 不落
+        // other。落 other 不只是标签难看: `toolHead` 对 `.other` 走"真名占 title"的兜底 ⇒
+        // 卡头会变成 `OTHER · computer_act · app=计算器`, 而且轨迹页那串"同类分组"会把
+        // 读界面和动界面混进一堆叫 OTHER 的东西里。
+        // ⚠️ 用常量比较而不是 case 字面量: `switch` 的 case 模式放不下 static property,
+        //    写死字面量就等于把"名字不许漂"这条又一次交给记忆。
+        if toolName == Self.computerReadToolName { return .computerRead }
+        if toolName == Self.computerActToolName { return .computerAct }
         switch toolName {
         case "bash", "powershell": return .bash   // P6.0④: powershell 是 Windows 同族
         case "read": return .read

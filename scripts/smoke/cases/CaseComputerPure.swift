@@ -149,6 +149,21 @@ extension SmokeMain {
               "T-COMPUTER 渲染出模型看的那段文本 (含表头与编号行)")
         check(!text.contains("hunter2"),
               "T-COMPUTER 渲染结果里不得出现密码原文")
+        // 截断提示: 一句谎话比不写更坏 —— 没说"还有 N 项"模型就当那是全部(2026-10-29 补门:
+        // 这段文案此前**一条断言都没有**, 改了格式也没人知道)。
+        check(!text.contains("未显示"),
+              "T-COMPUTER 短快照不许出现截断提示 (没截断却写'还有 N 项' = 让模型以为漏了东西)")
+
+        let wideRoot = AXNode(role: "AXWindow", title: "长列表", frame: AXRect(x: 0, y: 0, w: 800, h: 600),
+                              children: (1...200).map { AXNode(role: "AXStaticText", title: "第\($0)条") })
+        let wideSnap = AXSnapshot.build(root: wideRoot, appName: "x", windowTitle: "长列表")
+        check(wideSnap.rows.count == 200,
+              "T-COMPUTER 200 条互不相同的文本都要留下 实际:\(wideSnap.rows.count)")
+        let wideText = wideSnap.rendered()
+        check(wideText.contains("还有 80 项未显示"),
+              "T-COMPUTER 超过上限(120)要**如实报出**剩下的 80 项 —— 否则模型把前 120 条当成全部")
+        check(!wideText.contains("[121]"),
+              "T-COMPUTER 上限外的不许渲染出来 (上界是硬上界, 不是'大概')")
 
         // MARK: AX 树 —— 差分
 
@@ -331,6 +346,26 @@ extension SmokeMain {
         check(round.enabled && round.bundles == ["com.apple.mail", "com.apple.Safari"],
               "T-COMPUTER 编码 → 反解回到同一个集合")
 
+        // MARK: helper 的作用域复用判据 —— 2026-10-29 boss「我明明加了」
+        //
+        // helper 的作用域是**启动那一刻读 env 定死的**, 进程一起就再也不看 env。
+        // 而 `start` 原来只问"进程还在跑吗"，不问"名单还是不是那一批" ⇒ 改了设置之后
+        // 助手照旧按旧名单拒，**拒绝信息里列的也是旧那批 App**。症状只有一句"我明明勾了"。
+
+        let permA = ComputerHost.Scope(read: ["com.b", "com.a"], act: [])
+        let permB = ComputerHost.Scope(read: ["com.a", "com.b"], act: [])
+        check(permA == permB,
+              "T-COMPUTER 作用域比较必须**忽略勾选顺序** —— 否则用户点一下顺序就重启一次助手")
+
+        let onlyA = ComputerHost.Scope(read: ["com.a"], act: [])
+        check(permA != onlyA,
+              "T-COMPUTER 名单变了就**不许复用** —— 复用了助手还按旧名单拒, 而设置页是勾着的")
+
+        let withAct = ComputerHost.Scope(read: ["com.a", "com.b"], act: ["com.a"])
+        check(permA != withAct,
+              "T-COMPUTER 操作面单独变了也不许复用 (读面相同 ≠ 同一个作用域; "
+              + "只比读面 = 新勾的「可操作」永远不生效)")
+
         // MARK: 「窗口是空的」还是「这个 App 不暴露界面」—— 2026-10-28 实测微信后加的判据
 
         // 微信实测形状: window 1052×754 + group×2 + button×3, 一个内容角色都没有
@@ -371,6 +406,62 @@ extension SmokeMain {
         check(AXSnapshot.hasReadableControls(root: AXNode(role: "AXWindow", children: [
             AXNode(role: "AXTextField"),
         ])), "T-COMPUTER 有输入框就算可读 (别按节点数判)")
+
+        // MARK: 懒加载兜底 —— 2026-10-29 boss 截图「应该是没加载出来」
+        //
+        // 第一次读 apple.com.cn 只拿到 20 个节点、全是地址栏与工具栏, 而**地址栏本身就是
+        // 一个 `textfield`** ⇒ 上面那条判据说"可读", 一个字警告都没有。隔几秒再读, 整页
+        // 4627px 全出来了。⇒ 判据不能只看"有没有一片内容控件", 得看**盖住了多少窗口**。
+
+        // 实测形状: 窗口 1440×900, 内容只有顶部 44px 那一行(地址栏 + 两个按钮)
+        let safariChromeOnly = AXNode(role: "AXWindow", title: "Apple (中国大陆)",
+                                      frame: AXRect(x: 0, y: 0, w: 1440, h: 900), children: [
+            AXNode(role: "AXGroup", frame: AXRect(x: 0, y: 0, w: 1440, h: 44), children: [
+                AXNode(role: "AXButton", title: "返回", frame: AXRect(x: 10, y: 8, w: 24, h: 28)),
+                AXNode(role: "AXTextField", title: "智能搜索栏", frame: AXRect(x: 60, y: 8, w: 600, h: 28)),
+                AXNode(role: "AXButton", title: "重新载入", frame: AXRect(x: 700, y: 8, w: 24, h: 28)),
+            ]),
+        ])
+        check(AXSnapshot.hasReadableControls(root: safariChromeOnly),
+              "T-LAZY 只读到地址栏也算'有内容角色' —— 这正是旧判据漏掉的那一类")
+        check(AXSnapshot.contentCoverage(root: safariChromeOnly) < AXSnapshot.rereadBelowCoverage,
+              "T-LAZY 地址栏那一层的覆盖率必须低于重读线 (实测 1425×44 / 1425×4627 ≈ 1%)")
+        check(AXSnapshot.worthRereading(root: safariChromeOnly),
+              "T-LAZY 只读到工具栏 ⇒ 必须触发重读 (boss 那次就是页面还没建好)")
+
+        // 同一棵树读到正文之后: webarea 铺满窗口
+        let safariLoaded = AXNode(role: "AXWindow", title: "Apple (中国大陆)",
+                                  frame: AXRect(x: 0, y: 0, w: 1440, h: 900), children: [
+            AXNode(role: "AXGroup", frame: AXRect(x: 0, y: 0, w: 1440, h: 44), children: [
+                AXNode(role: "AXTextField", title: "智能搜索栏", frame: AXRect(x: 60, y: 8, w: 600, h: 28)),
+            ]),
+            AXNode(role: "AXWebArea", title: "Apple (中国大陆)", frame: AXRect(x: 0, y: 44, w: 1440, h: 4627)),
+        ])
+        check(!AXSnapshot.worthRereading(root: safariLoaded),
+              "T-LAZY 正文读到了就不再重读 (webarea 铺满 ⇒ 覆盖率到顶)")
+
+        // 超出窗口的元素必须**裁掉** —— 实测 Safari 有一条 image 是 (-579,920 3009×692),
+        // 不裁的话一个跑到屏幕外的元素就能把覆盖率刷满。
+        let offscreen = AXNode(role: "AXWindow", title: "窗口",
+                               frame: AXRect(x: 0, y: 0, w: 1000, h: 800), children: [
+            AXNode(role: "AXWebArea", frame: AXRect(x: -579, y: 920, w: 3009, h: 692)),
+        ])
+        check(AXSnapshot.contentCoverage(root: offscreen) == 0,
+              "T-LAZY 完全在窗口外的内容角色裁完是 0 面积 (不裁 = 跑到屏幕外的元素把覆盖率刷满)")
+
+        // 前提判据: 内容角色一个都报不出坐标 ⇒ 覆盖率恒 0 ⇒ **不许**据此重读
+        let noFrames = AXNode(role: "AXWindow", title: "访达",
+                              frame: AXRect(x: 0, y: 0, w: 900, h: 600), children: [
+            AXNode(role: "AXOutline", children: [
+                AXNode(role: "AXRow", children: [AXNode(role: "AXCell", title: "桌面")]),
+            ]),
+        ])
+        check(!AXSnapshot.worthRereading(root: noFrames),
+              "T-LAZY 内容角色全都不报坐标 ⇒ 不重读 (否则每次读都白等 600ms)")
+        check(!AXSnapshot.worthRereading(root: smallDialog),
+              "T-LAZY 小弹窗(300×120)不重读 (与 lacksReadableControls 同一条面积下限)")
+        check(!AXSnapshot.worthRereading(root: wechatTree),
+              "T-LAZY 微信那种树不重读 (一个内容角色都没有 ⇒ 它本来就没实现 AX, 重读也没用)")
 
         // MARK: 可勾选清单 = 已安装 ∪ 运行中 (2026-10-28 boss: 「浏览器怎么都没有」)
 
@@ -528,7 +619,8 @@ extension SmokeMain {
         // 名字与值相同 ⇒ 只写一遍。实测 Safari 把同一段字既塞 AXDescription 又塞 AXValue
         let sameBoth = AXSnapshot.line(AXSnapshot.Row(number: 7, indent: 0, role: "statictext",
                                                       title: "设置", value: "设置",
-                                                      frame: nil, actions: [], key: "path:0"))
+                                                      frame: nil, actions: [], key: "path:0",
+                                                      path: [0]))
         check(sameBoth == "[7] statictext \"设置\"",
               "T-COMPUTER 值与名字相同时不许写两遍 (Safari 整页都是 desc==value ⇒ "
               + "以前渲染成 `\"设置\" (值:\"设置\")`) 实际:\(sameBoth)")

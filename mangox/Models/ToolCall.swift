@@ -33,6 +33,14 @@ enum ToolKind: String, Hashable, Codable, CaseIterable {
     /// **一起错**, 且落库的 `kind` 已失真、事后无法分辨。宁可是诚实的 `OTHER`。
     /// ⚠️ 自己扩展注册的工具**不该**住这儿 —— 按名归位才是终点（见 `.search` / `.codemode`）。
     case other
+    /// P18: 读界面 (`computer_read`) / 动界面 (`computer_act`)。
+    ///
+    /// ⚠️ **两个 case 而不是一个 `.computer`**: 它们是两档权限, 一次读和一次点击在
+    /// 回看时问的是两个问题("它看到了什么" / "它改了什么"), 合成一个标签就只能靠 title 猜。
+    /// 落 `other` 的后果与 codemode 那条同族 —— 而且更糟: `toolHead` 对 `.other` 走
+    /// "真名占 title + 首个标量参数退居 command" 的兜底, 名次列会被 `computer_act` 占满。
+    case computerRead
+    case computerAct
 
     /// 展示用名 = **原样工具名**（`rawValue`，小写；多词名自然成驼峰，如 `searchTools`）。
     ///
@@ -53,8 +61,8 @@ enum ToolKind: String, Hashable, Codable, CaseIterable {
     /// Default phase color (overridable per card via `phase`).
     var defaultColor: Color {
         switch self {
-        case .bash, .delegate, .codemode: return CodexTheme.accent   // 执行族: codemode 也是"把活干出去"
-        case .read, .grep, .find, .ls, .fetch, .search: return CodexTheme.info
+        case .bash, .delegate, .codemode, .computerAct: return CodexTheme.accent   // 执行族: codemode 也是"把活干出去"
+        case .read, .grep, .find, .ls, .fetch, .search, .computerRead: return CodexTheme.info
         case .edit, .write: return CodexTheme.toolDone
         case .image: return CodexTheme.thinking
         case .other: return CodexTheme.textSecondary

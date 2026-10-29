@@ -740,12 +740,12 @@ struct SettingsView: View {
         bochaKeyInput = ""
     }
 
-    // MARK: - P18 computer use (批 1: 只读)
+    // MARK: - P18 computer use (批 1 读 / 批 2b 动作)
 
     private var computerSection: some View {
         VStack(alignment: .leading, spacing: 12) {
-            settingRow(title: "电脑操作 (只读)",
-                       detail: "开 = 模型可以读你勾过的应用的界面: 窗口里有哪些控件、上面写着什么。目前只能看, 不能点") {
+            settingRow(title: "电脑操作",
+                       detail: "全局开关: 开 = 任何完整模式的会话都能读你勾过的应用的界面, 不是只对当前会话生效。再给某个 App 勾上「可操作」它才能按按钮/填输入框 —— 没勾的一律只读") {
                 Toggle("", isOn: $computer.enabled)
                     .toggleStyle(.switch)
                     .controlSize(.small)
@@ -753,13 +753,17 @@ struct SettingsView: View {
                     .fixedSize()
             }
             Divider().overlay(CodexTheme.divider)
-            Text("第一次用到时系统会弹窗要求勾「辅助功能」—— 勾的是 mangox-compute 这一条。没勾就读不到界面, 工具会把原因直接说出来")
+            // ⚠️ 2026-10-29 实测更正: 系统**不会**弹窗(helper 用 `AXIsProcessTrustedWithOptions(nil)`
+            //    只查不索要), 所以它也不会作为条目出现在列表里 —— 一直用的是 MangoX 自己的授权
+            //    (helper 是 MangoX 的子进程, TCC 按 responsible process 记账)。
+            //    原文案「勾的是 mangox-compute 这一条」是**错的**, 会让人在列表里白找。
+            Text("读界面要用「辅助功能」权限: 到 系统设置 › 隐私与安全性 › 辅助功能 里勾上 MangoX —— 列表里不会有 mangox-compute 这个名字, 它跟着 MangoX 的身份走。没勾就读不到界面, 工具会把原因直接说出来")
                 .font(.system(size: 11))
                 .foregroundStyle(CodexTheme.textMuted)
                 .fixedSize(horizontal: false, vertical: true)
             Divider().overlay(CodexTheme.divider)
             HStack(spacing: 8) {
-                Text("能读哪些应用")
+                Text("读与操作哪些应用")
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(CodexTheme.textPrimary)
                 Spacer(minLength: 0)
@@ -821,25 +825,46 @@ struct SettingsView: View {
     }
 
     private func computerRow(_ app: ComputerSettings.Option) -> some View {
-        Toggle(isOn: Binding(get: { computer.selected.contains(app.bundle) },
-                             set: { _ in computer.toggle(app.bundle) })) {
-            HStack(spacing: 6) {
-                Text(verbatim: app.name)
-                    .font(.system(size: 12))
-                    .foregroundStyle(CodexTheme.textPrimary)
+        let readable = computer.selected.contains(app.bundle)
+        let actable = computer.actSelected.contains(app.bundle)
+        let mayAct = ComputerSettings.canAct(app.bundle)
+        return HStack(spacing: 8) {
+            VStack(alignment: .leading, spacing: 1) {
+                HStack(spacing: 6) {
+                    Text(verbatim: app.name)
+                        .font(.system(size: 12))
+                        .foregroundStyle(CodexTheme.textPrimary)
+                    // ⚠️ 只标"在跑"的: 几百行都写"未运行"是噪音，而"现在就能读"才是要突出的。
+                    if app.running {
+                        Text("运行中")
+                            .font(.system(size: 9))
+                            .foregroundStyle(CodexTheme.toolDone)
+                    }
+                }
                 Text(verbatim: app.bundle)
                     .font(.system(size: 10))
                     .foregroundStyle(CodexTheme.textMuted)
-                // ⚠️ 只标"在跑"的: 几百行都写"未运行"是噪音，而"现在就能读"才是要突出的。
-                if app.running {
-                    Text("运行中")
-                        .font(.system(size: 9))
-                        .foregroundStyle(CodexTheme.toolDone)
-                }
-                Spacer(minLength: 0)
+            }
+            Spacer(minLength: 0)
+            // 两档权限**正交但有序**: 操作面必须在读面之下 —— 没勾读时"可操作"整格灰掉，
+            // 而不是"勾了之后悄悄帮你把读也勾上"(那会让人以为自己只开了一档)。
+            Toggle(L("可读"), isOn: Binding(get: { readable },
+                                           set: { _ in computer.toggle(app.bundle) }))
+                .toggleStyle(.checkbox)
+            if mayAct {
+                Toggle(L("可操作"), isOn: Binding(get: { actable },
+                                                set: { computer.setAct(app.bundle, $0) }))
+                    .toggleStyle(.checkbox)
+                    .disabled(!readable)
+            } else {
+                // ⚠️ 口令/系统类应用占**同一个位置**的禁用态，而不是干脆不显示:
+                //    不显示的话用户会以为"这批功能不支持这个 App"，于是去别处找开关。
+                Text(L("不可操作"))
+                    .font(.system(size: 10))
+                    .foregroundStyle(CodexTheme.textMuted)
+                    .help(L("口令 / 系统设置类应用: 只读, 永远不给操作权限"))
             }
         }
-        .toggleStyle(.checkbox)
         // ⚠️ 总开关关着时勾不了: 否则会出现"勾了但这一轮并没开放"，而界面上没有任何地方
         //    说为什么（停用态必须看得出来，不能只是点了没反应）。
         .disabled(!computer.enabled)
@@ -853,20 +878,38 @@ struct SettingsView: View {
                 .foregroundStyle(CodexTheme.textMuted)
                 .fixedSize(horizontal: false, vertical: true)
         } else if computer.selected.isEmpty {
-            Text("开了但一个都没勾 ⇒ 这一轮仍然不开放 (空 = 不开放, 不是全都行)")
+            Text("开了但一个都没勾 ⇒ 所有会话都用不了 (空 = 不开放, 不是全都行)")
                 .font(.system(size: 11))
                 .foregroundStyle(CodexTheme.toolRunning)
                 .fixedSize(horizontal: false, vertical: true)
         } else {
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 4) {
-                    Text("本次开放")
+                    Text("可读")
                         .font(.system(size: 11))
                         .foregroundStyle(CodexTheme.toolDone)
-                    Text(verbatim: "\(computer.selected.count) 个")
+                    Text(verbatim: "\(computer.activeBundles.count) 个")
                         .font(.system(size: 11))
                         .foregroundStyle(CodexTheme.toolDone)
+                    // 操作面单独报一个数 —— 它与读面是两档权限, 只报一个数会让人以为
+                    // 「开放了」就等于「能动」。
+                    Text("可操作")
+                        .font(.system(size: 11))
+                        .padding(.leading, 6)
+                        .foregroundStyle(computer.activeActBundles.isEmpty
+                                         ? CodexTheme.textMuted : CodexTheme.toolDone)
+                    Text(verbatim: "\(computer.activeActBundles.count) 个")
+                        .font(.system(size: 11))
+                        .foregroundStyle(computer.activeActBundles.isEmpty
+                                         ? CodexTheme.textMuted : CodexTheme.toolDone)
                 }
+                // ⚠️ 这一行是 boss 2026-10-29 那条的落点: 名单存在全局 settings 表里,
+                //    不是某个会话的私有凭证 —— 所以这里必须说破"全局 + 改完何时生效",
+                //    否则人会以为勾选是"只对眼前这场对话生效"。
+                Text("任何完整模式的会话都能用 (不是只对当前会话); 改完勾选, 下一次对话才生效")
+                    .font(.system(size: 10))
+                    .foregroundStyle(CodexTheme.textMuted)
+                    .fixedSize(horizontal: false, vertical: true)
                 // 列表是**数据**不是文案 ⇒ verbatim, 不进词表。
                 Text(verbatim: computer.activeBundles.joined(separator: "\n"))
                     .font(.system(size: 10))

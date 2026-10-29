@@ -127,14 +127,47 @@ struct CodeBlockView: View {
 
     /// ⚠️ 折行态**不能**留在横滚容器里 —— `ScrollView(.horizontal)` 给的是无界宽度提案,
     /// 折行在其中永远不会触发 (症状: 按了开关毫无变化)。
+    /// 代码正文。**超过 `Tune.codeBlockSplitLines` 行就逐行渲染** —— 不是审美选择, 是性能:
+    /// 一个 `Text` 承载又宽又长的横滚文本, 排版代价是平方级的(2026-10-29 boss 报往上拉卡顿)。
+    /// 短的仍然走整块那一路, 与原来的渲染**逐字相同**。
+    @ViewBuilder
     private var codeText: some View {
-        Text(CodeHighlighter.highlightCached(code, language: language))
-            .font(CodexTheme.fontMono)
-            .foregroundStyle(CodexTheme.textPrimary)
-            .lineSpacing(Tune.mdCodeLineSpacing)
-            .textSelection(.enabled)
-            // 横滚态按内容撑开 (不被提案压扁); 折行态放开水平约束, 允许按栏宽折
-            .fixedSize(horizontal: !wrapped, vertical: true)
+        if lineCount > Tune.codeBlockSplitLines {
+            VStack(alignment: .leading, spacing: Tune.mdCodeLineSpacing) {
+                ForEach(Array(lines.enumerated()), id: \.offset) { _, line in
+                    lineText(line)
+                        .font(CodexTheme.fontMono)
+                        .foregroundStyle(CodexTheme.textPrimary)
+                        // ⚠️ 光靠 VStack 的 spacing 不够: 折行态下一行本身会折成好几行, 那几行
+                        //    之间的行距归 `lineSpacing` 管, 不管的话折行态会比原来紧。
+                        .lineSpacing(Tune.mdCodeLineSpacing)
+                        .textSelection(.enabled)
+                        .fixedSize(horizontal: !wrapped, vertical: true)
+                }
+            }
+        } else {
+            Text(CodeHighlighter.highlightCached(code, language: language))
+                .font(CodexTheme.fontMono)
+                .foregroundStyle(CodexTheme.textPrimary)
+                .lineSpacing(Tune.mdCodeLineSpacing)
+                .textSelection(.enabled)
+                // 横滚态按内容撑开 (不被提案压扁); 折行态放开水平约束, 允许按栏宽折
+                .fixedSize(horizontal: !wrapped, vertical: true)
+        }
+    }
+
+    /// 逐行渲染时的**一行**。空行要占一个空格 —— `Text("")` 的高度是 0, 空行会被吃掉。
+    private func lineText(_ line: AttributedString) -> Text {
+        Text(line.characters.isEmpty ? AttributedString(" ") : line)
+    }
+
+    /// 行数。O(n) 扫一遍即可 —— 与"排版 n 行"不是一个量级。
+    private var lineCount: Int {
+        code.reduce(1) { $1 == "\n" ? $0 + 1 : $0 }
+    }
+
+    private var lines: [AttributedString] {
+        CodeHighlighter.highlightLinesCached(code, language: language)
     }
 
     private func copyCode() {

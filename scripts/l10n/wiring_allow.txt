@@ -117,3 +117,30 @@ mangox/Models/ComputerRedline.swift|确认购买
 mangox/Models/ComputerRedline.swift|立即删除
 mangox/Models/ComputerRedline.swift|立即购买
 mangox/Models/ComputerRedline.swift|要保存
+
+# P18 批 2b: 审批卡上那一行("按 #12 · Safari")由**注入给 pi 的扩展 JS** 拼出来 ——
+# 它写在多行字符串字面量里, 包 L() 会变成非法代码 ⇒ 只能登记。⚠️ 它们是**给人看**的,
+# 所以译文仍在词表里(gen_strings 收得到); 这里的豁免只是免掉"必须接线"那一条。
+mangox/Agent/PiRpcTransport.swift| · 当前前台
+mangox/Agent/PiRpcTransport.swift| 字)
+mangox/Agent/PiRpcTransport.swift|写 #
+mangox/Agent/PiRpcTransport.swift|按 #
+mangox/Agent/PiRpcTransport.swift|读
+
+# P18 批 2b: `ComputerActGuard` 的回执 —— **进的是模型的上下文, 不是界面**。
+# 它们住在 helper 与 App 共用的纯函数里, 由 socket 回给扩展再交给模型; 包 L() 会让
+# "界面语言 = 英文"时给模型发英文的回执, 而模型看到的中文界面 / 中文推断是它理解
+# "这一栏叫什么"的依据(同「落库文案恒中文」那条)。
+# ⚠️ 判据留在这里豁免的是**接线**这一道, 不是内容: 译文仍在词表里, gen_strings 照收。
+mangox/Models/ComputerAct.swift|「%@」是口令/系统类应用 ⇒ 我永远不操作它, 只读。
+mangox/Models/ComputerAct.swift|「%@」只开了「读」, 没开「操作」⇒ 我不动它。
+mangox/Models/ComputerAct.swift|按
+mangox/Models/ComputerAct.swift|写
+mangox/Models/ComputerAct.swift| ⇒ 没动。重新读一次再决定。
+mangox/Models/ComputerAct.swift|编号只对刚才那一次读有效, 重新读一次。
+mangox/Models/ComputerAct.swift|它一个动作都不提供
+mangox/Models/ComputerAct.swift|不是能写字的地方 ⇒ 我不往里写。
+mangox/Models/ComputerAct.swift|这么长的东西多半是搞错了对象。
+mangox/Models/ComputerAct.swift|要让它能动, 请在 设置 › 集成 › 电脑操作 里给它开「可操作」。
+mangox/Models/ComputerAct.swift| · 当前前台
+mangox/Models/ComputerAct.swift|它能做的只有：

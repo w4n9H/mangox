@@ -7,15 +7,20 @@
    **本文件由 scripts/l10n/gen_strings.py --write 生成, 别手改** ——
    译文改 scripts/l10n/en_values.py 的 VALUES, 再跑 --write。
 
-   条数: 874
+   条数: 905
 */
 
 " (值:\"%@\")" = " (value: %@)";
 " [附件: %@]" = " [Attachment: %@]";
+" · 当前前台" = " · frontmost";
+" ⇒ 没动。重新读一次再决定。" = " ⇒ nothing was done. Read again before deciding.";
+" 字)" = " chars)";
 " 待重启" = " Restart required";
 " 未选" = " none";
 " 电脑" = " Computer";
 "# 快照 · 前台:%@ · 窗口:%@" = "# Snapshot · front:%@ · window:%@";
+"#%@ 在这份快照里查不到对应元素 ⇒ 没动。重新读一次。" = "#%@ has no matching element in this snapshot ⇒ nothing was done. Read again.";
+"#%@ 属于旧快照(你手上 seq=%@, 现在是 %@)" = "#%@ belongs to an older snapshot (you hold seq=%@, it is %@ now)";
 "%@ 字" = "%@ chars";
 "%@ 拷贝失败: %@" = "Failed to copy %@: %@";
 "%lld 个" = "%lld";
@@ -134,6 +139,11 @@
 "✓ 连接正常 (IMAP 登录 + 列 INBOX)" = "✓ Connected (IMAP login + listed INBOX)";
 "✓ 连通, 勾选后保存" = "✓ Reachable — tick the models and save";
 "✓ 采纳入库" = "✓ Accepted and stored";
+"「%@」不在开放名单里 ⇒ 我不动它。" = "%@ is not on the open list ⇒ I will not touch it.";
+"「%@」只开了「读」, 没开「操作」⇒ 我不动它。" = "Only Read is enabled for %@, not Act ⇒ I will not touch it.";
+"「%@」按不了 —— %@ ⇒ 没动。" = "Cannot press %@ — %@ ⇒ nothing was done.";
+"「%@」是 %@, " = "%@ is %@, ";
+"「%@」是口令/系统类应用 ⇒ 我永远不操作它, 只读。" = "%@ is a password manager or a system app ⇒ it stays read-only, always.";
 "一" = "Mon";
 "一行一个地址; 名单外的信静默丢弃并移入 Trash" = "One address per line; mail from anyone else is silently dropped and moved to Trash.";
 "三" = "Wed";
@@ -154,7 +164,9 @@
 "下载落盘/上传文件" = "downloading or uploading files";
 "不保存" = "Dont Save";
 "不保持唤醒" = "Let it sleep";
+"不可操作" = "Read-only";
 "不弹卡, 全部放行 — 定时任务用 (无人点击, 弹卡即死锁)。" = "No prompts, everything allowed — for scheduled tasks (nobody is there to click; a prompt would deadlock).";
+"不是能写字的地方 ⇒ 我不往里写。" = " is not a field you can type into ⇒ I will not write there.";
 "不采纳该候选, 直接删除" = "Dismiss this candidate and delete it";
 "丢弃" = "Discard";
 "丢弃本地修改, 重读磁盘文件" = "Discard local changes and reread the file from disk";
@@ -185,6 +197,7 @@
 "仍然覆盖" = "Overwrite anyway";
 "从托管区删除" = "Remove from managed area";
 "付款" = "Payment";
+"任何完整模式的会话都能用 (不是只对当前会话); 改完勾选, 下一次对话才生效" = "Any session in Full mode can use this (not just the current one). Ticked changes take effect on the next turn.";
 "任务" = "Task";
 "任务删除后停止调度。工作日志文件始终保留; 日志会话可选删除。" = "Deleting a task stops scheduling. The work log file is always kept; the log session is optional.";
 "任务台" = "Task bar";
@@ -225,6 +238,7 @@
 "全局" = "Global";
 "全局串行 (同一时刻只跑一个远程任务)" = "Global serial (only one remote task runs at a time)";
 "全局唤起捕获输入条: 输入后回车即以无人值守模式开跑 (关审批 + Minimal 档); Esc 或点击外部关闭" = "Global hotkey opens the capture bar: type and press Enter to run unattended (approval off, Minimal mode); Esc or clicking outside closes it.";
+"全局开关: 开 = 任何完整模式的会话都能读你勾过的应用的界面, 不是只对当前会话生效。再给某个 App 勾上「可操作」它才能按按钮/填输入框 —— 没勾的一律只读" = "Global switch. On = any session in Full mode can read the windows of the apps you ticked — not just the current session. Tick Act on an app to let it press buttons and fill fields — everything else stays read-only.";
 "全部丢弃" = "Discard all";
 "全部采纳" = "Accept all";
 "六" = "Sat";
@@ -240,6 +254,8 @@
 "内容较长 · 展开" = "Long content · Expand";
 "内置" = "Built-in";
 "内置审批扩展, 不可停用" = "Built-in approval extension, cannot be disabled";
+"写" = "Write";
+"写 #" = "Write #";
 "写一篇新笔记 (存到全局笔记目录, 下一轮组装就会带上它)" = "Write a new note (stored in the global notes directory; the next assembly picks it up)";
 "写可判定的标准, 如: 官网发布 X 的正式公告页 (相关新闻不算)…" = "State a checkable criterion, e.g. the official announcement page for X goes live on the vendor site (related news does not count)…";
 "写回磁盘, 下次运行生效" = "Written to disk; takes effect on the next run";
@@ -310,6 +326,7 @@
 "发送失败: %@" = "Send failed: %@";
 "取消" = "Cancel";
 "变更史 · %lld 条" = "History · %lld";
+"口令 / 系统设置类应用: 只读, 永远不给操作权限" = "Password managers and System Settings stay read-only — acting is never allowed";
 "只作用于这个 Inbox 起的会话, 不改变你当前会话的模型与档位" = "Applies only to sessions started by this Inbox; your current session's model and mode are untouched.";
 "只保证 MangoX 自己不被休眠打断。任务实际是在后台进程里跑的，系统会不会让它变慢，这条设置影响不到。" = "This only keeps MangoX itself from being interrupted by sleep. Tasks actually run in the background, and this setting cannot affect whether the system slows them down.";
 "只出提案，不改任何文件" = "Proposals only, no files touched";
@@ -318,6 +335,8 @@
 "只读命令静默放行, 其余弹审批卡等待点击。" = "Read-only commands pass silently; anything else raises an approval card and waits for a click.";
 "只读命令静默放行, 危险命令自动拒绝并记下原因 (回执告知) — 远程驱动用。" = "Read-only commands pass silently; dangerous ones are refused automatically with the reason recorded (and sent back in the receipt) — for remote-driven work.";
 "只读显示本轮真正发出去的注入块 —— 门禁绿 ≠ 改对了" = "Read-only view of the injection block actually sent this turn — a green gate does not mean it is right";
+"可操作" = "Act";
+"可读" = "Read";
 "可选: 执行前先探这个 URL, 不通则不跑 (空 = 不探)" = "Optional: probe this URL before running; if it is unreachable the task is skipped (empty = no probe)";
 "右边是空的 —— 采纳后这篇进系统废纸篓, 还能在那里捞回来。" = "The right side is empty — accepting moves this note to the system Trash, where you can still recover it.";
 "名字" = "Name";
@@ -342,6 +361,7 @@
 "在 Finder 打开" = "Open in Finder";
 "在「文件」或「改动」里点一行" = "Pick a row under File or Changes";
 "在工作区打开" = "Open in workspace";
+"在当前项目下开一个新会话, 它会拿到最新的工具表" = "Start a new conversation in this project — it will see the latest tool list";
 "在这里输入该做什么…" = "Type what to do…";
 "在途: %@" = "In flight: %@";
 "增" = "New";
@@ -360,9 +380,11 @@
 "好的,先记下「%@」的需求,我会在下一轮把上下文喂给模型,再回执计划。" = "Got it. Noting the \"%@\" request; I will feed the context to the model on the next turn and reply with a plan.";
 "如 家里那台 / 任务专用" = "e.g. Home box / tasks only";
 "始终允许" = "Always allow";
+"它一个动作都不提供" = "it offers no actions at all";
 "它们不进 prompt, 也进不了笔记索引 (pack 目录不在任何根的扫描路径下)。把内容写成一篇笔记即可" = "They enter neither the prompt nor the notes index (the pack directory is outside every root scan path). Write the content as a note instead";
 "它攒的" = "It gathered this";
 "它没有声明 key（不锁任何名字）" = "It declares no keys (locks no names)";
+"它能做的只有：" = "the only thing it offers is ";
 "它锁住这些 key，DB 条目里不能再用:" = "It locks these keys, which DB items can no longer use:";
 "完成" = "Done";
 "完整地址, 如 you@example.com" = "Full address, e.g. you@example.com";
@@ -429,8 +451,7 @@
 "并发回合上限" = "Concurrent turn limit";
 "并发已达上限 (%lld), 捕获未发送" = "Concurrency limit reached (%lld); capture not sent";
 "并发已达上限 (%lld), 请等待任务结束或在设置中调高" = "Concurrency limit reached (%lld) — wait for a task to finish or raise the limit in settings";
-"开 = 模型可以读你勾过的应用的界面: 窗口里有哪些控件、上面写着什么。目前只能看, 不能点" = "On = the model can read the interface of the apps you tick: which controls a window has and what they say. Read-only for now — it cannot click.";
-"开了但一个都没勾 ⇒ 这一轮仍然不开放 (空 = 不开放, 不是全都行)" = "On, but nothing is ticked, so this run still opens nothing (empty means not open, not everything)";
+"开了但一个都没勾 ⇒ 所有会话都用不了 (空 = 不开放, 不是全都行)" = "On, but nothing is ticked, so no session can use it (empty means not open, not everything)";
 "开启电脑操作" = "Turn on computer use";
 "开始 Dream" = "Start Dream";
 "引擎 stderr 末尾几行:" = "Last lines of engine stderr:";
@@ -476,6 +497,8 @@
 "拷贝到 ~/.mangox/extensions (默认停用)" = "Copied to ~/.mangox/extensions (disabled by default)";
 "持续" = "Continuous";
 "持续模式: 每次触发自动带上此前运行的执行记录 (跨天任务保连续性)" = "Continuous mode: each trigger carries the previous run's record (keeps multi-day tasks coherent)";
+"按" = "Press";
+"按 #" = "Press #";
 "按下新组合键…" = "Press a new key combination…";
 "按需加载" = "Loaded on demand";
 "按频率轻检查触发条件, 条件成立才执行动作 (条件驱动)" = "Lightweight checks of the trigger condition at an interval; the action runs only once it holds (condition-driven)";
@@ -603,7 +626,6 @@
 "本会话还没有改动" = "No changes in this session yet";
 "本周" = "This week";
 "本地" = "Local";
-"本次开放" = "Open this run";
 "本次没有改动文件" = "No files changed this turn";
 "本次注入 (只读)" = "This turn's injection (read-only)";
 "本轮" = "This turn";
@@ -681,9 +703,9 @@
 "由此侧问" = "Side chat from here";
 "由此侧问 (含 Turn %lld 及之前)" = "Side chat from here (up to and including turn %lld)";
 "由此处侧问" = "Start side chat";
-"电脑操作 (只读)" = "Computer use (read-only)";
-"电脑操作已关闭: 打开后模型能读你勾过的应用界面 (下一回合生效)" = "Computer use is off: turning it on lets the model read the apps you ticked (takes effect next turn)";
-"电脑操作已开启: 模型能读你勾过的应用界面 — 再点一次关闭" = "Computer use is on: the model can read the apps you ticked — click again to turn it off";
+"电脑操作" = "Computer use";
+"电脑操作已关闭: 打开后任何完整模式的会话都能读你勾过的应用界面 (下一回合生效)" = "Computer use is off: turning it on lets any session in Full mode read the apps you ticked (takes effect next turn)";
+"电脑操作已开启 (全局): 任何完整模式的会话都能读你勾过的应用界面 — 再点一次关闭" = "Computer use is on (global): any session in Full mode can read the apps you ticked — click again to turn it off";
 "白名单 %lld 条" = "%lld on the allowlist";
 "白名单至少一个发件人地址" = "Add at least one sender address to the allowlist";
 "目录: %lld 家 / %lld 条" = "Catalog: %lld providers / %lld models";
@@ -713,7 +735,6 @@
 "笔记" = "Notes";
 "笔记目录" = "Notes folder";
 "第 %lld 轮" = "Turn %lld";
-"第一次用到时系统会弹窗要求勾「辅助功能」—— 勾的是 mangox-compute 这一条。没勾就读不到界面, 工具会把原因直接说出来" = "The first time this is used macOS asks you to allow it under Accessibility — the entry is mangox-compute. Without it nothing can be read, and the tool says exactly why.";
 "等待" = "Waiting";
 "等待审批" = "Awaiting approval";
 "索引宁缺勿残 — 残缺的索引会让你以为资料只有这些; 摘掉或停用一两个库即可恢复" = "A partial index is worse than none — it would read as “these are all the materials”. Unmount or disable a base or two to restore it";
@@ -721,6 +742,7 @@
 "细节" = "Details";
 "给 MangoX 发消息…" = "Message MangoX…";
 "缓存" = "Cache";
+"编号只对刚才那一次读有效, 重新读一次。" = "Item numbers are only valid for the read that produced them — read again.";
 "编辑" = "Edit";
 "编辑内容后采纳, 转为正式条目 (需重启引擎生效)" = "Edit and accept to turn it into a proper entry (restart the engine to apply)";
 "缺 IMAP 主机" = "IMAP host missing";
@@ -736,7 +758,6 @@
 "耗时" = "Duration";
 "联网搜索 (博查 API Key)" = "Web search (Bocha API key)";
 "联网搜索扩展没配博查 API Key —— 挂上它也只会每次调用都回「未启用」, 所以不挂。在 设置 → 联网搜索 里填一个 Key 并保存, 它就会挂上。" = "The web search extension has no Bocha API key set - mounting it would only make every call answer not enabled, so it stays unmounted. Enter a key under Settings - Web search and save; it gets mounted right away.";
-"能读哪些应用" = "Which apps can be read";
 "自动放行" = "Auto allow";
 "自动裁决" = "Auto judge";
 "自定义" = "Custom";
@@ -749,6 +770,9 @@
 "补跑" = "Catch up";
 "补跑只跑最近一次; 忽略 = 认下这批, 不再提示" = "Catch up runs only the most recent one; Ignore accepts this batch and stops asking";
 "要保存" = "Save";
+"要写的内容是空的 ⇒ 没动。清空某一栏请你自己来。" = "The text to write is empty ⇒ nothing was done. Clearing a field is your call.";
+"要写的内容有 %lld 个字, 超过 %@ 的上限 ⇒ 没写。" = "The text is %lld characters, over the %@ limit ⇒ nothing was written.";
+"要让它能动, 请在 设置 › 集成 › 电脑操作 里给它开「可操作」。" = "To let it act, tick Act for it under Settings › Integrations › Computer use.";
 "解析失败: %@" = "Parsing failed: %@";
 "触发条件 (每轮轻检查)" = "Trigger condition (checked lightly each round)";
 "触发条件与动作为必填" = "Trigger condition and action are required";
@@ -774,6 +798,9 @@
 "请看图" = "See the image";
 "请选择" = "Choose one";
 "请选择邮箱" = "Choose a mailbox";
+"读" = "Read";
+"读与操作哪些应用" = "Which apps can be read or acted on";
+"读界面要用「辅助功能」权限: 到 系统设置 › 隐私与安全性 › 辅助功能 里勾上 MangoX —— 列表里不会有 mangox-compute 这个名字, 它跟着 MangoX 的身份走。没勾就读不到界面, 工具会把原因直接说出来" = "Reading windows needs the Accessibility permission: tick MangoX under System Settings › Privacy & Security › Accessibility. There is no mangox-compute entry to look for — it runs under the identity of MangoX. Without it nothing can be read, and the tool says exactly why.";
 "调用" = "Calls";
 "账号不存在" = "Account does not exist";
 "账号已删除" = "Account deleted";
@@ -799,7 +826,7 @@
 "还差: %@" = "Still missing: %@";
 "还有 %lld 个" = "%lld more";
 "还有 %lld 行 · 展开" = "%lld more lines · Expand";
-"还没勾选任何应用 ⇒ 这一轮不开放" = "No app ticked yet ⇒ nothing is opened this run";
+"还没勾选任何应用 ⇒ 所有会话都用不了" = "No app ticked yet ⇒ no session can use it";
 "还没有可用的邮箱账号" = "No usable mailbox account yet";
 "还没有常驻内容\n点右上角 + 新建条目, 或用常驻区与笔记区的入口放入文件" = "Nothing always-on yet\nUse + in the top right to add an entry, or use the resident and notes section entries to put files in place";
 "还没有打开文件" = "No file open";
@@ -811,10 +838,14 @@
 "这一篇还是空的…" = "This note is still empty…";
 "这一轮花了什么" = "What this turn cost";
 "这个会话还没说过话，侧问会带一个空上下文。" = "This session has no messages yet — the side chat will start empty.";
+"这个对话建立时就钉住了工具表，看不到后来新增的 %@。新建一个会话就能用。" = "This conversation pinned its tool list when it started, so it never sees %@ added later. Start a new conversation to pick them up.";
 "这个目录里没有可读的文档" = "No readable documents in this directory";
 "这个路径不在笔记目录里" = "That path is outside the notes directory";
+"这么长的东西多半是搞错了对象。" = "That much text usually means the wrong field was picked.";
+"这份快照里没有 #%@(一共 %@ 项) ⇒ 没动。" = "This snapshot has no #%@ (it has %@ items) ⇒ nothing was done.";
 "这句话会进每轮 prompt 的索引 —— agent 靠它判断要不要来查这个目录。" = "This sentence goes into the index of every prompt — the agent uses it to decide whether to look into this directory.";
 "这是单独一次，不会移动每日 dream 的时间窗口。" = "One-off run — it will not shift the daily dream window.";
+"这是密码框 ⇒ 我不往里写任何东西。" = "This is a password field ⇒ I will not write anything into it.";
 "这条请求的缓存命中率 = 命中 token ÷ (输入 + 命中)" = "Cache hit rate for this call = cached ÷ (input + cached)";
 "这篇在你编辑期间被外部改过 — 你的改动没有写盘" = "This note was changed externally while you were editing — your changes were not written";
 "这篇已经不在了 — 可能在 App 外被删掉或改名了" = "This note is gone — it may have been deleted or renamed outside the app";

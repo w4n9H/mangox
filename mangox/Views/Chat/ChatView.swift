@@ -66,11 +66,28 @@ enum ChatFoldRule {
     }
 }
 
+/// 内容底读数的**引用盒子** —— 语义见 `ChatView.lastBottomY` 上那段注释。
+///
+/// 判据: 改这里的字段**不许**让视图失效 ⇒ 必须是 class（引用语义）。
+/// 换成 struct 也行不通: `@State` 存 struct 时改字段走的是 `wrappedValue` 的 setter,
+/// 照样每帧标记失效 —— 那正是要被修掉的那件事。
+final class BottomYBox {
+    var value: CGFloat = 0
+}
+
 struct ChatView: View {
     @ObservedObject var store: ChatStore
     @State private var viewportHeight: CGFloat = 0
     /// 最近一次内容底读数 —— 视口高**后到**时靠它重判（见 `refreshViewport`），否则判据会停在错的档上。
-    @State private var lastBottomY: CGFloat = 0
+    ///
+    /// ⚠️ **它必须是引用盒子，不能是 `@State CGFloat`**（2026-10-29 boss「读 safari 的那个会话
+    ///    往上拉卡顿严重」）。理由是 `contentBottomY` 的定义：**内容底相对视口顶**的 y ——
+    ///    滚动时它**每帧都在变**，而 `onPreferenceChange` 每帧都会调 `handleContentBottom`。
+    ///    写成 `@State` ⇒ 每滚一帧就写一次状态 ⇒ SwiftUI 每帧重算整个 body
+    ///    （`projectedChat` 单独计时 < 5ms，再加全部可见行重建）⇒ 内容越重掉帧越狠。
+    ///    而它**只在 `refreshViewport` 里被读一次**，body 从不读 ⇒ 完全不需要参与重绘。
+    ///    盒子改的是引用内部的字段，不动 `@State` 本身 ⇒ 值一模一样，但视图不再失效。
+    @State private var lastBottomY = BottomYBox()
     @State private var nearBottom = true   // 初始视为在底部 (初屏定位 = scrollContent 的 onAppear)
     /// 自动滚动同帧合并标记: 流式期同帧多个 chunk 只调度一次滚动 (防 "update multiple times per frame")。
     @State private var scrollScheduled = false
@@ -145,7 +162,7 @@ struct ChatView: View {
         //    前两次修的是判据公式和视口高来源 (方向都对), 全被这个 0 盖掉了。
         //    0 一律当"这一拍没量到", 保留上一次的有效读数 —— 绝不能当坐标用。
         guard bottomY > 0 else { return }
-        lastBottomY = bottomY
+        lastBottomY.value = bottomY
         let v = ChatView.isNearBottom(contentBottomY: bottomY, viewportHeight: viewportHeight)
         if nearBottom != v {
             nearBottom = v   // 等值不写, 防 PreferenceKey 高频触发失效性更新
@@ -162,7 +179,7 @@ struct ChatView: View {
     private func refreshViewport(_ h: CGFloat) {
         guard viewportHeight != h else { return }
         viewportHeight = h
-        if lastBottomY > 0 { handleContentBottom(lastBottomY) }
+        if lastBottomY.value > 0 { handleContentBottom(lastBottomY.value) }
     }
 
     /// ⚠️ 外面这层 `GeometryReader` 是**视口高度的唯一真源**（2026-10-16 上机实测定的）。

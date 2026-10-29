@@ -2,13 +2,14 @@
 //  ComputerHost.swift
 //  P18 批 1: `mangox-compute` 这条**本机进程**的生命周期。
 //
-//  三个"为什么它必须是个独立可执行文件"的理由(决定了这层不能省):
-//   ① **权限归属**: 辅助功能授权是**按可执行文件**记的。读 AX 树的代码住在 App 里 ⇒
-//      MangoX 本体要被勾上"辅助功能"; 拆出去 ⇒ 只有 helper 需要它, 而且系统弹窗里
-//      出现的名字是 `mangox-compute`(用户勾的是什么, 一眼看得出)。
-//   ② **崩溃隔离**: AX 树是别人家的进程给的, 形状完全不受控(递归引用、超大子树、
+//  两个"为什么它必须是个独立可执行文件"的理由(决定了这层不能省):
+//   ① **崩溃隔离**: AX 树是别人家的进程给的, 形状完全不受控(递归引用、超大子树、
 //      `kAXErrorCannotComplete`)。解析崩在 App 里 = 整个 App 没了, 连聊天记录都来不及存。
-//   ③ **作用域收缩**: helper 只听一条 unix socket, 而且只认**自己人**(见 `PeerCheck`)。
+//      ⚠️ 2026-10-29 实测更正: 原来这里写的是"权限归属 —— 系统弹窗里出现的名字是
+//      mangox-compute, 用户勾的是什么一眼看得出"。**这条不成立**: helper 是 MangoX 的子进程,
+//      TCC 按 responsible process 记账 ⇒ 列表里**只有 MangoX**, mangox-compute 从不出现。
+//      (证据: 列表里从来没有它, 而批 1/2b 的读一直都能成功。)
+//   ② **作用域收缩**: helper 只听一条 unix socket, 而且只认**自己人**(见 `PeerCheck`)。
 //      App 进程里跑着 Keychain、数据库、网络凭据 —— 让"读界面"这段代码住在同一个进程里,
 //      等于把那些东西的可见范围也一起交出去了。
 //
@@ -27,6 +28,9 @@ final class ComputerHost {
     ///    而且**不会编译报错**(只会静默读到 nil)。`run.sh` 有门把它们钉在两侧。
     static let sockEnvKey = "MANGOX_COMPUTE_SOCK"
     static let allowedBundlesEnvKey = "MANGOX_COMPUTE_ALLOWED_BUNDLES"
+    /// 操作面(批 2b): 允许**动**的 bundle id。⚠️ 与读面分开一档, 空 = 一律不许动。
+    /// 与 `ComputerServer.actBundlesEnvKey` 是同一个串(`run.sh` ③l 钉着)。
+    static let actBundlesEnvKey = "MANGOX_COMPUTE_ACT_BUNDLES"
     /// helper 用它做**进程树校验**: 只有 MangoX 自己(以及它的子孙, 也就是 pi)能连上来。
     ///
     /// ⚠️ 值是 **App 自己的 pid**, 不是 pi 的: helper 由 App 起, pi 也由 App 起 ⇒
@@ -62,18 +66,46 @@ final class ComputerHost {
 
     private var process: Process?
     private(set) var socketPath: String?
+    /// 起 socket 那次**实际下发**的作用域。复用前拿它跟这次要的比 —— 见 `Scope` 的注释。
+    private var runningScope: Scope?
+
+    /// 一次下发给 helper 的作用域。**排序后比较** —— 勾选顺序变了不算"变了"。
+    ///
+    /// ⚠️ 为什么需要一个类型来做这件事（2026-10-29 boss「我明明加了」）：
+    ///    helper 的作用域是**启动那一刻读 env 定死的**，进程一起就再也不看 env 了。
+    ///    而 `start` 原来只问"进程还在跑吗"，不问"名单是不是还是那一批" ⇒ 改了设置之后
+    ///    助手照旧按旧名单拒，而**拒绝信息里列的也是旧那批 App**。
+    ///    症状只有一句"我明明勾了"，值对、日志对、零红灯。
+    struct Scope: Equatable {
+        var read: [String]
+        var act: [String]
+
+        init(read: [String], act: [String]) {
+            self.read = read.sorted()
+            self.act = act.sorted()
+        }
+    }
 
     /// 起 helper, 返回 socket 路径。**`nil` = 没起来 ⇒ 调用方不要挂扩展、也不要给 env**
     /// （只挂不给 env ⇒ 工具每次都回"未启用"; 那还不如不挂, 免得模型白试）。
     ///
-    /// ⚠️ **空作用域 ⇒ 连进程都不起**: 作用域是这一轮才存在的凭证, 空不是"全都行",
-    ///    空是"没开放"。起了进程但名单为空 ⇒ helper 什么都会拒, 白占一条辅助功能授权。
+    /// ⚠️ **空作用域 ⇒ 连进程都不起**: 空不是"全都行", 空是"没开放"。
+    ///    起了进程但名单为空 ⇒ helper 什么都会拒, 白占一条辅助功能授权。
     func start(home: String = NSHomeDirectory(),
                allowedBundles: [String],
+               actBundles: [String] = [],
                peerPid: pid_t = ProcessInfo.processInfo.processIdentifier,
                bundlePath: String = Bundle.main.bundlePath) -> String? {
         guard !allowedBundles.isEmpty else { return nil }
-        if let socketPath, process?.isRunning == true { return socketPath }
+        // ⚠️ **复用之前先比名单**：helper 只在启动时读一次 env，进程活着不等于名单还是那一批。
+        //    见 `Scope` 上那段（boss 报「我明明加了」就是这个）。
+        let wanted = Self.Scope(read: allowedBundles, act: actBundles)
+        if let socketPath, process?.isRunning == true, runningScope == wanted {
+            return socketPath
+        }
+        // 名单变了（或进程不在）⇒ 旧的必须收掉：留着一个按旧名单办的助手，
+        // 模型会一直拿到"不在范围内"，而人看到的设置页是勾着的。
+        if process?.isRunning == true { stop() }
 
         let sock = Self.socketPath(home: home, id: UUID().uuidString)
         let exe = Self.helperPath(bundlePath: bundlePath)
@@ -84,6 +116,9 @@ final class ComputerHost {
         p.arguments = [sock]
         var env = ProcessInfo.processInfo.environment
         env[Self.allowedBundlesEnvKey] = allowedBundles.joined(separator: ",")
+        // ⚠️ 操作面**恒设**, 空串也设: helper 把空当"不许动"。不设的话它读到 nil,
+        //    虽然结论一样(都拒), 但"这次 spawn 到底有没有下发操作面"就看不出来了。
+        env[Self.actBundlesEnvKey] = actBundles.joined(separator: ",")
         env[Self.peerPidEnvKey] = String(peerPid)
         env[Self.parentPidEnvKey] = String(peerPid)
         p.environment = env
@@ -103,6 +138,7 @@ final class ComputerHost {
             usleep(100_000)
         }
         socketPath = sock
+        runningScope = wanted
         return sock
     }
 
@@ -111,6 +147,9 @@ final class ComputerHost {
         process?.terminate()
         process = nil
         socketPath = nil
+        // ⚠️ 作用域标记必须跟着清: 留着它, 下次 `start` 会以为"这个名单已经下发过了",
+        //    而实际上进程已经没了 —— 那正好是这条判据要防的反面。
+        runningScope = nil
     }
 
     // MARK: - 环境 (纯函数)
@@ -125,13 +164,15 @@ final class ComputerHost {
     static func environment(existing: [String: String]?,
                             socketPath: String?,
                             allowedBundles: [String],
+                            actBundles: [String] = [],
                             peerPid: pid_t,
                             inherited: [String: String]) -> [String: String]? {
-        let keys = [sockEnvKey, allowedBundlesEnvKey, peerPidEnvKey, parentPidEnvKey]
+        let keys = [sockEnvKey, allowedBundlesEnvKey, actBundlesEnvKey, peerPidEnvKey, parentPidEnvKey]
         if socketPath == nil, keys.allSatisfy({ inherited[$0] == nil }) { return nil }
         var env = existing ?? inherited
         env[sockEnvKey] = socketPath
         env[allowedBundlesEnvKey] = socketPath == nil ? nil : allowedBundles.joined(separator: ",")
+        env[actBundlesEnvKey] = socketPath == nil ? nil : actBundles.joined(separator: ",")
         env[peerPidEnvKey] = socketPath == nil ? nil : String(peerPid)
         env[parentPidEnvKey] = env[peerPidEnvKey]
         return env

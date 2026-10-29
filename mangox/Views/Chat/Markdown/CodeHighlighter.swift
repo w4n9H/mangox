@@ -60,6 +60,52 @@ enum CodeHighlighter {
         return attr
     }
 
+    // MARK: - 逐行版 (长代码块专用)
+
+    private static var lineCache: [String: [AttributedString]] = [:]
+    private static var lineOrder: [String] = []
+
+    /// 按行切好的高亮结果 —— **长代码块**走这一版。
+    ///
+    /// ⚠️ 为什么不直接用 `highlightCached` 再拼一个 `Text`: 见 `Tune.codeBlockSplitLines`。
+    ///    一句话 —— 一个 `Text` 承载 124 行 × 最长 522 字符的横滚文本, 排版是平方级的。
+    /// 键与整块缓存**分开存**(多一个 `L` 前缀), 因为两者类型不同, 混在一个字典里要擦类型。
+    static func highlightLinesCached(_ code: String, language: String?) -> [AttributedString] {
+        if code.count > 100_000 { return splitLines(highlight(code, language: language)) }
+        let key = "L\u{1}\(language ?? "-")\u{1}\(code)"
+        cacheLock.lock(); defer { cacheLock.unlock() }
+        if let hit = lineCache[key] { return hit }
+        let lines = splitLines(highlight(code, language: language))
+        lineCache[key] = lines
+        lineOrder.append(key)
+        if lineOrder.count > cacheLimit, let evict = lineOrder.first {
+            lineOrder.removeFirst()
+            lineCache.removeValue(forKey: evict)
+        }
+        return lines
+    }
+
+    /// 按换行把 AttributedString 切成多段, **属性跟着行一起走**。
+    ///
+    /// ⚠️ 只能按 range 切, 不能"拆成 String 再逐行重新高亮": 高亮用的是
+    ///    `.dotMatchesLineSeparators`, 多行注释 / 跨行字符串的属性是**跨行连续**的 ——
+    ///    逐行重来会把它切成一段段的孤立 token, 颜色当场变。
+    /// ⚠️ 空行要保留成空段(不是丢掉): 丢掉行就等于把代码里的空行吃了, 行号也对不上。
+    static func splitLines(_ attr: AttributedString) -> [AttributedString] {
+        var out: [AttributedString] = []
+        var start = attr.startIndex
+        var i = attr.startIndex
+        while i < attr.endIndex {
+            if attr.characters[i] == "\n" {
+                out.append(AttributedString(attr[start..<i]))
+                start = attr.index(afterCharacter: i)
+            }
+            i = attr.index(afterCharacter: i)
+        }
+        out.append(AttributedString(attr[start..<attr.endIndex]))
+        return out
+    }
+
     // MARK: - Pattern
 
     private static func masterPattern(for language: String?) -> String {

@@ -95,7 +95,14 @@ final class ChatStore: ObservableObject {
     // Sidebar (Codex: projects 嵌套 + chats 平铺)
     @Published var projects: [ProjectGroup] = SampleSession.projects
     @Published var chats: [ConversationItem] = SampleSession.chats
-    @Published var selectedConversationId: UUID? = SampleSession.initialSelectedId
+    @Published var selectedConversationId: UUID? = SampleSession.initialSelectedId {
+        // P18: 切会话就重算一次工具面漂移 —— 这条提示必须**一进来就在**,
+        // 而不是等发了第一条消息才冒出来(那时模型已经撞过墙了)。
+        didSet {
+            guard oldValue != selectedConversationId else { return }
+            refreshToolFaceDrift()
+        }
+    }
     /// Composer 上方 "Choose project" 的当前选择 (nil = 未选项目)。
     @Published var selectedProjectId: UUID? = nil {
         didSet { syncWorkspaceContext() }   // 工作区上下文跟随显式选择的项目
@@ -725,7 +732,8 @@ final class ChatStore: ObservableObject {
             // ⚠️ 落盘口子在这里接: 单例自己不持有 persistence, 冒烟里它是 nil ⇒ 只测纯函数。
             ComputerSettings.shared.restore(
                 enabledRaw: store.loadSettingText(key: ComputerSettings.enabledKey),
-                bundlesRaw: store.loadSettingText(key: ComputerSettings.bundlesKey))
+                bundlesRaw: store.loadSettingText(key: ComputerSettings.bundlesKey),
+                actRaw: store.loadSettingText(key: ComputerSettings.actBundlesKey))
             ComputerSettings.shared.onPersist = { [weak self] key, value in
                 self?.persistence?.saveSettingText(key: key, value: value)
             }
@@ -1049,6 +1057,63 @@ final class ChatStore: ObservableObject {
         let raw = persistence?.loadSettingText(key: agentModeKey)
             ?? AgentMode.standard.storageValue
         agentMode = AgentMode(storageValue: raw)
+    }
+
+    // MARK: - P18 会话工具面漂移 ("这个会话看不到本次该有的工具")
+
+    /// 本会话**看不到**的工具名（空 = 不缺）。
+    ///
+    /// 为什么要有: pi 把工具清单钉在会话首轮的 system message 里（见 `ToolFaceDrift` 文件头），
+    /// 于是**扩展新增的工具只对新会话生效** —— 老会话里模型会说"我没被授予这个工具",
+    /// 而那看起来与"功能没做"一模一样。
+    @Published private(set) var toolFaceMissing: [String] = []
+
+    /// 用户关掉提示的会话。**只在内存** —— 重启后再提示一次是有意的:
+    /// 那时他多半已经忘了, 而这条提示的代价只是一行字。
+    private var toolFaceDismissed: Set<UUID> = []
+
+    /// 每个会话上次算出来的结果 + 当时的文件 mtime。mtime 没变就不重读。
+    /// ⚠️ 长会话的 jsonl 是几 MB ⇒ 每次发消息都全量解析会把"发送"变成可感知的卡顿。
+    private var toolFaceCache: [UUID: (mtime: Date?, missing: [String])] = [:]
+
+    /// 重算当前会话的工具面漂移。调用点: **选中会话**（立即上屏）与**发送前**（勾选可能刚改过）。
+    func refreshToolFaceDrift() {
+        guard let sid = selectedConversationId, !toolFaceDismissed.contains(sid) else {
+            toolFaceMissing = []
+            return
+        }
+        let path = PiRpcTransport.sessionFilePath(for: sid)
+        guard FileManager.default.fileExists(atPath: path) else {
+            // 还没跑过第一轮 = 还没有被钉住的东西 ⇒ 首轮会按当前工具集重新钉一遍, 不存在"缺"。
+            toolFaceCache[sid] = (nil, [])
+            toolFaceMissing = []
+            return
+        }
+        let mtime = (try? FileManager.default.attributesOfItem(atPath: path))?[.modificationDate] as? Date
+        if let cached = toolFaceCache[sid], cached.mtime == mtime {
+            toolFaceMissing = cached.missing
+            return
+        }
+        guard let text = try? String(contentsOfFile: path, encoding: .utf8) else {
+            // 读不出来就**不乱报**: 静默当成"不缺"（宁可少说一句, 不能凭空指着一个会话说它坏了）。
+            toolFaceMissing = []
+            return
+        }
+        let pinned = ToolFaceDrift.pinnedToolNames(jsonl: text)
+        // 与 spawn 的实际挂载条件同源: 作用域为空 ⇒ 不起 helper ⇒ 扩展不挂（见 `ToolFaceDrift`
+        // 那段"不看档位"的注释 —— 这里刻意不判档位, 与实现一致）。
+        let expected = ToolFaceDrift.expectedToolNames(
+            computerMounted: !ComputerSettings.shared.activeBundles.isEmpty)
+        let miss = ToolFaceDrift.missing(pinned: pinned, expected: expected)
+        toolFaceCache[sid] = (mtime, miss)
+        toolFaceMissing = miss
+    }
+
+    /// 关掉提示（不落库）。用户已经知道这件事时, 反复提醒只会变成噪音。
+    func dismissToolFaceDrift() {
+        guard let sid = selectedConversationId else { return }
+        toolFaceDismissed.insert(sid)
+        toolFaceMissing = []
     }
 
     // MARK: - P10.3 会话级配置 (sessions.config 快照 + 跟随选中恢复)
@@ -1630,6 +1695,8 @@ final class ChatStore: ObservableObject {
         ensureConversationForSend() // 无选中会话时隐式建会话, 消息才有归属
         guard let sid = selectedConversationId,
               !runningTurns.contains(sid) else { return } // P4.0.2: 该会话已有回合在途, 防双流竞争
+        // P18: 发送前再算一次 —— 用户可能刚在设置里勾了「可操作」, 而会话的工具面是老早钉的。
+        refreshToolFaceDrift()
         // P4.0.4: 并发上限 —— 拒绝 + 横幅提示 (v1 不排队)
         if atTurnLimit {
             draft = trimmed

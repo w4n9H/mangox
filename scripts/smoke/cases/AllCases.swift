@@ -41,6 +41,10 @@ extension SmokeMain {
             caseSleepGuard,
             caseComputerPure,
             caseApprovalGate,
+            caseComputerAct,
+            caseComputerKind,
+            caseToolFaceDrift,
+            caseCodeBlockLines,
         ]
     }
 

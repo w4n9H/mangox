@@ -5,8 +5,11 @@
 //  ⚠️ 为什么批 1 就得有个开关: 链路全通但作用域恒空 ⇒ 谁也没法真用它一次。
 //     一条从没被真机验证过的链路上去翻审批闸门(批 2a), 出问题分不清是闸门还是链路。
 //
-//  ⚠️ **作用域是"这一轮才存在的凭证", 不是"本机偏好"**: 它每次 spawn 重新读,
-//     关掉开关 ⇒ 下一轮 spawn 不再给 env ⇒ 扩展根本不挂。不存在"关了但还生效"的窗口。
+//  ⚠️ **归属是全局, 生效时机是 spawn** —— 这两件事 2026-10-29 被 boss 指出来过:
+//     名单存在 settings 表里, **一份**, 任何完整模式的会话 spawn 时都读同一份
+//     (所以"只有某个会话能读 Safari"是不成立的)。
+//     但下发给 helper 的动作发生在 spawn 那一刻 ⇒ 改完要等下一次对话才生效。
+//     原来这里写的是"作用域是这一轮才存在的凭证" —— 错, 把"何时生效"说成了"归谁所有"。
 //
 //  ⚠️ 落盘值**不许是容器里的位置**(本仓 10-08 那条纪律: 存序号 ⇒ 插/挪一项 ⇒ 老值
 //     静默改义、零红灯) ⇒ 存 **bundle id 本身**, 反解时按字面认领。
@@ -25,14 +28,20 @@ final class ComputerSettings: ObservableObject {
     static let enabledKey = "computer_enabled"   // "1" / "0"; 缺失 = 关
     /// 逗号分隔的 bundle id。**bundle id 不含逗号**, 所以这个分隔法不会歧义。
     static let bundlesKey = "computer_bundles"
+    /// 操作面(批 2b)。**与读面分开一个键**: 合成一个 `"bundle:act"` 之类会让老库的值
+    /// 静默改义(本仓 10-08 那条纪律), 而且读面与操作面是两档权限, 混着存就没法分别改。
+    static let actBundlesKey = "computer_act_bundles"
 
     // MARK: 状态
 
     /// 总开关。**默认关** —— 批 1 阶段没有作用域 UI 之前默认开 = 悄悄开一个面。
     @Published var enabled: Bool = false { didSet { persist() } }
 
-    /// 勾上的 bundle id。
+    /// 勾上的 bundle id —— **读面**。
     @Published private(set) var selected: Set<String> = [] { didSet { persist() } }
+
+    /// 勾上的 bundle id —— **操作面**。恒为 `selected` 的子集(不变量见 `decode`)。
+    @Published private(set) var actSelected: Set<String> = [] { didSet { persist() } }
 
     /// 设置页里能勾的 App = **已安装的 ∪ 正在运行的**。
     ///
@@ -159,7 +168,7 @@ final class ComputerSettings: ObservableObject {
 
     // MARK: 判据 (纯函数)
 
-    /// 本轮真正下发的作用域。
+    /// 真正下发的作用域 —— 全局配置在这一刻的投影（不是"本轮私有"，见文件头）。
     ///
     /// ⚠️ **排序后**返回: 下发顺序稳定 ⇒ 同样的勾选每次拼出同样的 env 串 ⇒ 可断言、可肉眼看 diff。
     ///    `Set` 的迭代顺序不稳定(且与插入顺序无关), 直接下发会让"改了什么"看不出来。
@@ -168,34 +177,84 @@ final class ComputerSettings: ObservableObject {
         return selected.sorted()
     }
 
+    /// 真正下发的**操作面** —— 同上的投影。
+    ///
+    /// ⚠️ 这里再取一次 `selected` 的交集不是多余的: `actSelected ⊆ selected` 的不变量
+    ///    在 `decode`/`setAct` 都守了, 但这一处是**发出去**的那一刻 —— 双闸门的老规矩,
+    ///    出事的那个方向(多发一个 App 的操作权)不值得省这一行。
+    var activeActBundles: [String] {
+        guard enabled else { return [] }
+        return actSelected.intersection(selected)
+            .filter { !ComputerRedline.actBannedBundles.contains($0) }
+            .sorted()
+    }
+
+    /// 某个 App 能不能开"操作"—— 口令/系统类是硬禁区, 设置页据此把那一格禁用。
+    nonisolated static func canAct(_ bundle: String) -> Bool {
+        !ComputerRedline.actBannedBundles.contains(bundle)
+    }
+
     /// 落盘串 → 状态。**乱值一律按"关/空"算**, 不猜。
     ///
     /// ⚠️ 单独抽出来是因为它既要被 `ChatStore` 在启动时调, 也要能被冒烟断言 ——
     ///    写进 `restore` 里就成了"只有真启动才验得到"的逻辑。
-    static func decode(enabledRaw: String?, bundlesRaw: String?) -> (enabled: Bool, bundles: Set<String>) {
+    ///
+    /// ⚠️ **不变量 `act ⊆ read` 在这里落一次**: 老库(批 1)里根本没有 `act` 这个键;
+    ///    手改过的库、或者"先勾操作再取消读"留下的组合, 都会让操作面里留着一个读不到的 App。
+    ///    那种状态没有意义, 而且它会悄悄把 `MANGOX_COMPUTE_ACT_BUNDLES` 填上。
+    static func decode(enabledRaw: String?,
+                       bundlesRaw: String?,
+                       actRaw: String? = nil) -> (enabled: Bool,
+                                                  bundles: Set<String>,
+                                                  actBundles: Set<String>) {
         let enabled = enabledRaw == "1"
-        guard enabled else { return (false, []) }
+        guard enabled else { return (false, [], []) }
         let bundles = Set((bundlesRaw ?? "").split(separator: ",").map(String.init).filter { !$0.isEmpty })
-        return (true, bundles)
+        let act = Set((actRaw ?? "").split(separator: ",").map(String.init).filter { !$0.isEmpty })
+        return (true, bundles, act.intersection(bundles))
     }
 
-    /// 状态 → 落盘串。
-    static func encode(enabled: Bool, bundles: Set<String>) -> (enabled: String, bundles: String) {
-        (enabled ? "1" : "0", bundles.sorted().joined(separator: ","))
+    /// 状态 → 落盘串。同样再取一次交集 —— `encode` 是另一条入口(测试、将来的导入导出)。
+    static func encode(enabled: Bool,
+                       bundles: Set<String>,
+                       actBundles: Set<String> = []) -> (enabled: String, bundles: String, actBundles: String) {
+        (enabled ? "1" : "0",
+         bundles.sorted().joined(separator: ","),
+         actBundles.intersection(bundles).sorted().joined(separator: ","))
     }
 
     // MARK: 操作
 
-    func restore(enabledRaw: String?, bundlesRaw: String?) {
-        let d = Self.decode(enabledRaw: enabledRaw, bundlesRaw: bundlesRaw)
+    func restore(enabledRaw: String?, bundlesRaw: String?, actRaw: String? = nil) {
+        let d = Self.decode(enabledRaw: enabledRaw, bundlesRaw: bundlesRaw, actRaw: actRaw)
         enabled = d.enabled
+        // ⚠️ 顺序有意义: 先置 `actSelected` 再置 `selected` —— 反过来的话中间那一拍会出现
+        //    "操作面里有、读面里没有"的短暂状态, 而 `didSet` 会把它 persist 出去。
+        actSelected = d.actBundles
         selected = d.bundles
     }
 
     func setSelected(_ bundles: Set<String>) { selected = bundles }
 
     func toggle(_ bundle: String) {
-        if selected.contains(bundle) { selected.remove(bundle) } else { selected.insert(bundle) }
+        if selected.contains(bundle) {
+            selected.remove(bundle)
+            // ⚠️ 取消"可读"必须连带摘掉"可操作": 否则留下一个"动得了但读不到"的组合。
+            if actSelected.contains(bundle) { actSelected.remove(bundle) }
+        } else {
+            selected.insert(bundle)
+        }
+    }
+
+    /// 开/关某个 App 的**操作**权。带上读面(开操作必然要能读), 口令类恒不许开。
+    func setAct(_ bundle: String, _ on: Bool) {
+        guard Self.canAct(bundle) else { return }
+        if on {
+            selected.insert(bundle)
+            actSelected.insert(bundle)
+        } else {
+            actSelected.remove(bundle)
+        }
     }
 
     /// 刷新可勾选列表。
@@ -224,8 +283,9 @@ final class ComputerSettings: ObservableObject {
 
     private func persist() {
         guard let onPersist else { return }
-        let e = Self.encode(enabled: enabled, bundles: selected)
+        let e = Self.encode(enabled: enabled, bundles: selected, actBundles: actSelected)
         onPersist(Self.enabledKey, e.enabled)
         onPersist(Self.bundlesKey, e.bundles)
+        onPersist(Self.actBundlesKey, e.actBundles)
     }
 }

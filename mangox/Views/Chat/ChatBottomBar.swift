@@ -25,7 +25,61 @@ struct ChatBottomBar: View {
         if let notice = store.extensionNotice {
             noticeBanner(notice, clear: { store.extensionNotice = nil })
         }
+        if !store.toolFaceMissing.isEmpty {
+            toolFaceDriftBanner
+        }
         ChatComposer(store: store)
+    }
+
+    /// P18: 会话工具面漂移 —— 这个会话看不到本次该有的工具。
+    ///
+    /// 为什么必须说出来: pi 把工具清单钉在会话首轮, 之后扩展新增的工具**老会话永远拿不到**
+    /// (见 `ToolFaceDrift` 文件头)。不说一句的后果实测过 —— 模型回"这个工具不在我的列表里",
+    /// 而那与"功能压根没做"长得一模一样, 用户唯一的线索是去翻 JSONL。
+    ///
+    /// 常驻 (非 8s 自清): 与引擎横幅同理, 这件事**不会自己好**, 只有新开会话才会;
+    /// 自动消失只会让人以为修好了。关掉是记住的 (内存), 不再重复打扰。
+    private var toolFaceDriftBanner: some View {
+        // 工具名是机器标识符, 不取词; 取词的只有包在外面的那句人话。
+        let names = store.toolFaceMissing.joined(separator: "、")
+        return HStack(spacing: 6) {
+            Image(systemName: "wrench.and.screwdriver.fill")
+                .font(.system(size: 11))
+                .foregroundStyle(CodexTheme.toolRunning)
+            Text(String(format: L("这个对话建立时就钉住了工具表，看不到后来新增的 %@。新建一个会话就能用。"), names))
+                .font(CodexTheme.fontSmall)
+                .foregroundStyle(CodexTheme.textPrimary)
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 0)
+            if let pid = store.selectedProjectId {
+                Button(L("新建会话")) { store.createSession(in: pid) }
+                    .buttonStyle(.plain)
+                    .font(CodexTheme.fontSmall)
+                    .foregroundStyle(CodexTheme.accent)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 2)
+                    .contentShape(Rectangle())
+                    .help(LK("在当前项目下开一个新会话, 它会拿到最新的工具表"))
+            }
+            Button {
+                store.dismissToolFaceDrift()
+            } label: {
+                Image(systemName: "xmark")
+                    .font(.system(size: 9))
+                    .foregroundStyle(CodexTheme.textTertiary)
+                    .frame(width: 16, height: 16)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help(LK("关闭提示"))
+        }
+        .padding(.horizontal, Tune.chatHPadding)
+        .padding(.vertical, 7)
+        .background(CodexTheme.toolRunning.opacity(0.10))
+        .overlay(
+            Rectangle().frame(height: 1).foregroundStyle(CodexTheme.divider),
+            alignment: .bottom
+        )
     }
 
     /// 引擎不可用 / 起不来的横幅: Release 不静默降级 Mock, 缺引擎必须可见。

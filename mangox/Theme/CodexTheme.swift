@@ -414,6 +414,17 @@ enum Tune {
     static let mdTableHeaderVPadding: CGFloat = 6
     static let mdTableRowVPadding: CGFloat    = 5
     static let mdCodeLineSpacing: CGFloat     = 2.5   // 代码块行距 (12px mono ≈1.35 倍)
+    /// 代码块超过**这么多行**就改成逐行渲染。
+    ///
+    /// ⚠️ 为什么要有这条(2026-10-29 boss「读 safari 的那个会话往上拉卡顿严重」): 整块
+    ///    `Text(AttributedString)` 的排版代价对**又宽又长**的代码块是**平方级**的。实测那条
+    ///    消息里是 1 个代码块 / 124 行 / 6592 字符 / 最长单行 522 字符 —— 而横滚态是
+    ///    `.fixedSize(horizontal: true)`(不折行), 等于让 CoreText 排一块约 3600pt 宽、
+    ///    124 行高的文本, 主线程直接卡住。逐行以后每行只算自己那一行, 总量回到线性。
+    ///
+    /// 阈值取 40: 一般贴的代码块都在 40 行以内(那一类**保持整块渲染, 视觉与原来逐字相同**),
+    ///    而踩到这一条的都是"整段日志 / 整页快照"那种真的会卡的。
+    static let codeBlockSplitLines: Int       = 40
 
     // 侧栏
     static let sidebarWidth: CGFloat          = 256

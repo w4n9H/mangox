@@ -11,6 +11,7 @@
 		7A1801000000000000000002 /* mangox/Models/ComputerScope.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A1801000000000000000006 /* mangox/Models/ComputerScope.swift */; };
 		7A1801000000000000000003 /* mangox/Models/ComputerRedline.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A1801000000000000000007 /* mangox/Models/ComputerRedline.swift */; };
 		7A1801000000000000000004 /* mangox/Models/AXSnapshot.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A1801000000000000000008 /* mangox/Models/AXSnapshot.swift */; };
+		7A180100000000000000000A /* mangox/Models/ComputerAct.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A180100000000000000000B /* mangox/Models/ComputerAct.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -59,6 +60,7 @@
 		7A1801000000000000000006 /* mangox/Models/ComputerScope.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = mangox/Models/ComputerScope.swift; sourceTree = "<group>"; };
 		7A1801000000000000000007 /* mangox/Models/ComputerRedline.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = mangox/Models/ComputerRedline.swift; sourceTree = "<group>"; };
 		7A1801000000000000000008 /* mangox/Models/AXSnapshot.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = mangox/Models/AXSnapshot.swift; sourceTree = "<group>"; };
+		7A180100000000000000000B /* mangox/Models/ComputerAct.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = mangox/Models/ComputerAct.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
@@ -125,6 +127,7 @@
 				7A1801000000000000000006 /* mangox/Models/ComputerScope.swift */,
 				7A1801000000000000000007 /* mangox/Models/ComputerRedline.swift */,
 				7A1801000000000000000008 /* mangox/Models/AXSnapshot.swift */,
+				7A180100000000000000000B /* mangox/Models/ComputerAct.swift */,
 			);
 			name = "Recovered References";
 			sourceTree = "<group>";
@@ -340,6 +343,7 @@
 				7A1801000000000000000002 /* mangox/Models/ComputerScope.swift in Sources */,
 				7A1801000000000000000003 /* mangox/Models/ComputerRedline.swift in Sources */,
 				7A1801000000000000000004 /* mangox/Models/AXSnapshot.swift in Sources */,
+				7A180100000000000000000A /* mangox/Models/ComputerAct.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

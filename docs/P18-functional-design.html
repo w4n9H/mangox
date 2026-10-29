@@ -593,7 +593,13 @@ details.fold[open]>summary{margin-bottom:4px}
 </table>
 </div>
 
-<p class="lead"><b>只有两个工具</b> —— 工具越多,模型的选错率越高、说明越长。<b>档位</b>:挂 <code>full</code>;定时任务想在没人看着的情况下驱动界面,<b>任务级档位也要选 <code>full</code></b> —— 这两件事正交(<b>工具面在档位轴,裁决在审批轴</b>),别混;沿用 web-search 的<b>双闸门</b>(挂载闸门 = 设置里开着;env 闸门 = 这一轮真要它)⇒ 别的会话<b>连 socket 路径都拿不到</b>。</p>
+<p class="lead"><b>只有两个工具</b> —— 工具越多,模型的选错率越高、说明越长。<b>档位</b>:挂 <code>full</code>;定时任务想在没人看着的情况下驱动界面,<b>任务级档位也要选 <code>full</code></b> —— 这两件事正交(<b>工具面在档位轴,裁决在审批轴</b>),别混;沿用 web-search 的<b>双闸门</b>(挂载闸门 = 设置里开着;env 闸门 = 这一轮 spawn 时名单非空)⇒ <b>非 <code>full</code> 档</b>的会话连 socket 路径都拿不到。</p>
+
+<div class="call warn">
+  <div class="lbl">⚠️ 别把双闸门读成「每个会话各配一份」</div>
+  <p><b>名单是全局的</b>:存在 settings 表里,<b>一份</b>,所有 <code>full</code> 档的会话 spawn 时都读同一份 —— 一旦在设置里配好,<b>任何 <code>full</code> 档会话都能用</b>,不需要逐会话开启。<b>唯一带「这一轮」味道的是生效时机</b>:名单在 spawn 那一刻下发给 helper ⇒ 改完勾选要等下一次对话才生效(进程复用时会按名单重启 helper,见 <code>ComputerHost.Scope</code>)。</p>
+  <p>2026-10-29 boss 指出原文案在说谎 —— 当时设置页与回执里写的是「本次会话 / 这一轮 / 本次开放」,而事实是全局一份。已全量改为「任何完整模式的会话」,并把「改完下一次对话生效」写在明面上。<b>教训</b>:「什么时候生效」与「归谁所有」是两件事,合成一句话就会把后者说错。</p>
+</div>
 
 <h3>改动九 · 上下文账（待本机实测）</h3>
 
@@ -651,7 +657,7 @@ details.fold[open]>summary{margin-bottom:4px}
     <span class="tn">3</span>
     <div class="tbody">
       <div class="tt">TCC 身份继承验：辅助进程放进 bundle 后是否需单独授权</div>
-      <div class="td"><b>判据</b>：把 helper 放进 <code>MangoX.app/Contents/MacOS/</code> 且随包签名 ⇒ <b>不</b>单独给 helper 授辅助功能权限,MangoX 已授权 ⇒ AX 读直接可用。<b>为什么必须先</b>：若不成立,则多一次授权流程,方案的成本要重算。<b>状态</b>：<span class="chip c-bad">未做</span></div>
+      <div class="td"><b>判据</b>：把 helper 放进 <code>MangoX.app/Contents/MacOS/</code> 且随包签名 ⇒ <b>不</b>单独给 helper 授辅助功能权限，MangoX 已授权 ⇒ AX 读直接可用。<b>为什么必须先</b>：若不成立，则多一次授权流程，方案的成本要重算。<b>状态</b>：<span class="chip c-ok">已验 · 成立（2026-10-29）</span> —— 辅助功能列表里**从来没有** <code>mangox-compute</code> 这个条目，而读一直成功 ⇒ 它跑在 MangoX 的 tccd responsible-process 身份下。<b>连带更正两处</b>：① 设置页原话「勾的是 mangox-compute 这一条」是错的（已改）；② 拆 helper 的理由之一「授权归属清晰」不成立，已从 <code>ComputerHost</code> 头注释里删掉，剩下崩溃隔离 + 作用域收缩两条。<b>另一条顺带验到的事</b>：helper 用 <code>AXIsProcessTrustedWithOptions(nil)</code> ⇒ 只查不索要 ⇒ 系统不会弹窗、也不会把它加进列表；这条与 §03 写的「弹窗索要」不一致，**当前按"不索要"实现**（不打扰人），代价是用户得自己去列表里勾 MangoX。</div>
     </div>
   </div>
 </div>
@@ -698,7 +704,7 @@ details.fold[open]>summary{margin-bottom:4px}
     <span class="tn">9</span>
     <div class="tbody">
       <div class="tt">恒拒判据的反例（存盘确认 / 付款字样 / 删除语义）</div>
-      <div class="td"><b>判据</b>：给判据函数喂三组输入 —— ① 一个带"要保存吗"的 sheet ⇒ 必须返回"取消",且回报文案里有"未保存";② 一个标题含"确认付款"的控件 ⇒ 必须拒;③ 一个 <code>⇧⌘⌫</code> 语义的菜单项 ⇒ 必须拒。<b>三条各造一次反例</b>(把判据改回放行)⇒ 必须变红。<b>注意</b>:这三条是<b>纯函数</b>,不需要真屏幕,也就没有"环境不同所以测不出来"的借口;而且它们挡的正是"模型替人决定不保存"这类事,<b>不该靠人点卡兜</b>。</div>
+      <div class="td"><b>判据</b>：给判据函数喂三组输入 —— ① 一个带"要保存吗"的 sheet ⇒ 必须返回"取消",且回报文案里有"未保存";② 一个标题含"确认付款"的控件 ⇒ 必须拒;③ 一个 <code>⇧⌘⌫</code> 语义的菜单项 ⇒ 必须拒。<b>三条各造一次反例</b>(把判据改回放行)⇒ 必须变红。<b>注意</b>:这三条是<b>纯函数</b>,不需要真屏幕,也就没有"环境不同所以测不出来"的借口;而且它们挡的正是"模型替人决定不保存"这类事,<b>不该靠人点卡兜</b>。<b>状态</b>：<span class="chip c-ok">判据 + 反例已做（未发版）</span> —— 三条判据落在 <code>ComputerActGuard</code> 的第 ⑥⑦ 步（<code>CaseComputerAct</code> 里各有正例 + 顺序断言）；反例 = 把两条恒拒短路 + 拆掉口令类硬禁区 ⇒ <b>6 条红</b>。⚠️ 这三条挡的是<b>动作</b>，动作面本身到批 2b 才有 ⇒ 在此之前它们只是"没人消费的判据表"，现在才真正接在执行前。</div>
     </div>
   </div>
 </div>
@@ -734,6 +740,27 @@ details.fold[open]>summary{margin-bottom:4px}
     <div class="tbody">
       <div class="tt">定时任务档（<code>autoAllow</code>）要不要连 read 也拒</div>
       <div class="td"><b>已定：给完整权限</b> —— 原话「定时任务档（autoAllow）给完整权限」。<b>与我原来的倾向相反</b>(我写的是"默认拒"),记一笔以后别再按旧的推。<b>read 与 act 都放行</b>,不需要特殊分支;改动七那两张表(结构性不可达 + 恒拒判据)仍然一律拒。<b>那"保留只读"的只剩 <code>autoJudge</code></b>,理由不是权限大小,是<b>输入源</b>:定时任务的指令是你写的,邮件正文可能是任何人写的。<b>状态</b>：<span class="chip c-ok">已定</span></div>
+    </div>
+  </div>
+</div>
+
+<h3>补记 · 批 2c：读面的两个真 bug（2026-10-29）</h3>
+
+<p class="lead">两条都是<b>真机读界面时才显形</b>的：一件把字节弄坏了（而报文仍然合法），一件把工具栏当成了整页（而判据说"可读"）。共同点是<b>编译过、纯函数全绿、界面上没有任何异常</b>。</p>
+
+<div class="todos">
+  <div class="todo">
+    <span class="tn">14</span>
+    <div class="tbody">
+      <div class="tt">读到的字节必须与界面同字节（分帧两侧都以「完整行」收尾）</div>
+      <div class="td"><b>症状</b>：一条 483 字的 Safari 脚注里「符合折抵<b>条</b>件」变成 <code>折抵���件</code> —— 坏在<b>字符偏移 199 / 字节偏移 541</b>，连续<b>正好 3 个</b> U+FFFD，也就是一个 3 字节汉字被劈成两半、两半各自解码各自补替换字符。<br><b>根因</b>：<code>ask()</code> 里 <code>buffer += String(chunk)</code>。socket 的 chunk 边界与字符边界无关，<code>String(Buffer)</code> 是<b>逐块</b><code>toString()</code>。<br><b>判据</b>：① App 侧攒<b>字节</b>、拿到 <code>0x0a</code> 才 <code>toString("utf8")</code>；② helper 侧 <code>send</code> 的返回值是"<b>这次写了多少</b>"，不是成功/失败 ⇒ 必须循环写完。<br><b>为什么只能扫源码</b>：坏了之后报文仍是<b>合法 JSON</b>（U+FFFD 是合法字符），长度只差几个字节 ⇒ <b>任何行为断言都拦不住</b>，模型只会以为自己读到的是网页原文。<br><b>反例</b>：两侧各退化一次 ⇒ 各自变红（门在 <code>run.sh</code> ③m，落在编译之前，秒级）。<br><b>状态</b>：<span class="chip c-ok">已做（未发版）</span></div>
+    </div>
+  </div>
+  <div class="todo">
+    <span class="tn">15</span>
+    <div class="tbody">
+      <div class="tt">页面还没建好时自动重读（而不是把工具栏当成整页）</div>
+      <div class="td"><b>症状</b>：第一次读 <code>apple.com.cn</code> 只拿到 <b>20 个节点，全是地址栏与工具栏</b>，正文一个节点都没有；隔几秒再读，整页 4627px 全出来了 ⇒ <b>不是能力缺口，是时序</b>。<br><b>判据</b>：<b>内容角色盖住的面积</b>占窗口的比例 &lt; <code>rereadBelowCoverage</code>(0.15) ⇒ 隔 0.2s / 0.4s 重读，<b>只采纳明显更好</b>的那次，回执里写明"这是重读的结果"。<br><b>为什么不是节点数</b>：小工具窗节点也少。<b>为什么不是"有没有输入框"</b>：Safari 的地址栏本身就是一个 <code>textfield</code> ⇒ 那条判据<b>恒真</b>（这正是漏掉的那一类）。<b>为什么覆盖率不进报警文案</b>：一个 800×600 的对话框里只有一句 700×40 的提示，覆盖率同样几个百分点，但它就是<b>全部内容</b> —— 与"只读到工具栏"在 AX 树上同构，分不开 ⇒ 低覆盖只当<b>触发重读</b>的信号，报不报警仍归 <code>lacksReadableControls</code>（0 内容角色）。<br><b>第三道前提</b>：得有<b>一个内容角色报得出坐标</b>，否则覆盖率恒 0、每次读白等 600ms（连带把微信那种"根本不实现 AX"的树也排除掉 —— 重读一百次还是那 6 个按钮）。<br><b>状态</b>：<span class="chip c-ok">已做（未发版）</span>，8 条断言 + 反例</div>
     </div>
   </div>
 </div>
@@ -774,6 +801,31 @@ details.fold[open]>summary{margin-bottom:4px}
   <div class="lbl">computer use 不得成为"一条远程邮件就能做的事"</div>
   <p>远程驱动档（<code>autoJudge</code>,邮箱哨兵）下,computer <b>只读、不动作</b>。这条不许用"以后加个开关"绕过去 —— 这一档的全部意义就是"没人能点" ⇒ <b>没有人能点的场景里,界面操作必须为零</b>。</p>
   <p>它是<b>唯一</b>一个保留"只读"的档(定时任务档 <code>autoAllow</code> 已拍板给完整权限)。判据不是权限大小,是<b>输入源</b>:定时任务的指令是你自己写的,邮件正文可能是任何人写的。</p>
+</div>
+
+<h3>会话工具面会被钉住:老会话看不到后来加的工具</h3>
+
+<div class="call warn">
+  <div class="lbl">pi 把工具清单钉在会话首轮 —— 新加的工具只对新会话生效</div>
+  <p>pi 把「本会话有哪些工具」写进<b>首轮那条 system 消息</b>的 <code>toolsAdded</code>,之后每次加载会话都用它<b>覆盖</b>当前工具集(<code>_restoreToolsFromTranscript</code> ⇒ <code>_setActiveTools(names)</code>,覆盖而不是合并)。于是批 2b 新加的 <code>computer_act</code> 在<b>存量会话里永远进不来</b>:模型会回「这个工具不在我的列表里」—— 而那与「功能压根没做」长得一模一样。</p>
+  <p>而且它会<b>自锁</b>:pi 本来有「当前工具集 ≠ 会话里那份 ⇒ 追加一条增量声明」的机制(<code>getToolStateChanges</code> + <code>withToolChanges</code>),但恢复那一步先把 active 压回旧清单 ⇒ 变化检测永远看不到差异 ⇒ 那条增量永远不写。</p>
+</div>
+
+<div class="call ok">
+  <div class="lbl">处置:只读不改,然后<b>说出来</b></div>
+  <p>会话文件是 pi 的<b>内部格式</b>,写错就毁会话 ⇒ MangoX <b>不写它</b>,只读其中的 <code>toolsAdded</code> 声明,与 MangoX 自己那几张工具表比对,缺了就在输入框上方常驻一行:「这个对话建立时就钉住了工具表,看不到后来新增的 <code>computer_act</code>。新建一个会话就能用。」并给一个「新建会话」按钮(在<b>当前项目</b>下开,档位按项目级记忆自动继承)。提示可关,关掉只在<b>内存</b>里记住 —— 重启后再提一次是有意的:那时多半已经忘了,而代价只是一行字。</p>
+</div>
+
+<div class="tbl">
+<table class="def">
+  <thead><tr><th>判据</th><th>为什么必须是这一条</th></tr></thead>
+  <tbody>
+    <tr><td>按行序,同一条 system 里<b>先删后加</b></td><td>与 pi 的 <code>getCurrentTools</code> 逐条对齐。反过来(先加后删)会让同一批里刚加的被吃掉 ⇒ 本该「不缺」却报缺。</td></tr>
+    <tr><td>只认 <code>role == "system"</code></td><td>jsonl 里还有 <code>thinking_level_change</code> / user / assistant 等行型,它们不携带工具面;认错就等于「用户把工具名贴进对话 ⇒ 提示闭嘴」。</td></tr>
+    <tr><td>钉住的清单为空 ⇒ <b>不算缺</b></td><td>空 = 这个会话还没被钉住(首轮没写 / 旧格式),那时 spawn 按当前工具集设置 ⇒ 全部可见。少了这一条,<b>每新建一个会话都先弹一句假警报</b>。</td></tr>
+    <tr><td>只说 MangoX 自己知道的工具</td><td>第三方扩展注册了什么,MangoX 不知道 ⇒ 不猜(猜了就是「每装一个扩展都误报」)。web-search 的挂载判据跨模块、dream 只在 fire 那一次挂 ⇒ 都不算进来。</td></tr>
+  </tbody>
+</table>
 </div>
 
 <h3>边界</h3>

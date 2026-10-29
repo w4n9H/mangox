@@ -58,6 +58,43 @@ enum ComputerRedline {
         return r.contains("secure") || r.contains("password") || r == "axtextfieldsecure"
     }
 
+    // MARK: - 操作面的硬禁区 (批 2b)
+
+    /// **永远不给操作权限**的 App。
+    ///
+    /// ⚠️ 这张名单必然漏 —— 但它不是唯一防线: 操作面是**主动勾**的第二档(默认不给),
+    ///    所以漏掉一个 App 的后果是"用户自己给它开了操作", 不是"默认就能动"。
+    ///    名单在这里是为了挡另外两件事: ① 手改过库/老数据里已经勾上的; ② 用户在设置页里
+    ///    稀里糊涂把口令管理器勾成"可操作"。
+    ///
+    /// ⚠️ `系统设置` 为什么在名单里: 它能**关掉辅助功能授权本身** ⇒ 让模型操作它等于
+    ///    把"谁能看界面"这个总开关交给模型, 而我们是靠那个授权活着的(自我提权)。
+    static let actBannedBundles: Set<String> = [
+        "com.1password.1password",
+        "com.agilebits.onepassword7",
+        "com.bitwarden.desktop",
+        "com.apple.keychainaccess",
+        "com.apple.SecurityAgent",
+        "com.apple.systempreferences",
+    ]
+
+    /// `AXMenuItemCmdModifiers` 的位掩码 → 人认识的修饰键名。
+    ///
+    /// ⚠️ 这条看着像个翻译, 其实是**永久删除判据的一半**: `⌘⌫` 是"移到废纸篓"(允许),
+    ///    `⇧⌘⌫` 是"立即删除"(恒拒), 两者只差 shift 一位。位掩码解错 ⇒ 该拦的放过去,
+    ///    而且零信号(编译过、界面正常)。
+    ///
+    /// 位定义来自 AppKit: `Shift=1 · Option=2 · Control=4 · NoCommand=8`;
+    /// **⌘ 是隐含的** —— 只有 `NoCommand` 那位置了才表示这个快捷键不带 ⌘。
+    static func decodedModifiers(_ raw: Int) -> Set<String> {
+        var m: Set<String> = []
+        if raw & 1 != 0 { m.insert("shift") }
+        if raw & 2 != 0 { m.insert("option") }
+        if raw & 4 != 0 { m.insert("control") }
+        if raw & 8 == 0 { m.insert("command") }
+        return m
+    }
+
     // MARK: - 三条恒拒
 
     /// 判一个**控件**(按钮 / 菜单项)。命中就返回决定, 没命中返回 nil(放行)。

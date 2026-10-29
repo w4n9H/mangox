@@ -7,7 +7,8 @@
 //  判断全在这里与 `mangox/Models` 上, 于是判据进得了冒烟。
 //
 //  启动参数只有一个: socket 路径。其余全走 env(路径、peer pid、作用域名单)
-//  —— 因为它们是**这一轮才存在**的凭证, 写进配置就会让别的会话也连得上来。
+//  —— socket 路径与 peer pid 是**这一次 spawn 才存在**的凭证, 写进配置就会让别的
+//  进程也连得上来。⚠️ 名单本身不是凭证, 它是全局配置 (见 `ComputerSettings` 文件头)。
 //
 
 import ApplicationServices

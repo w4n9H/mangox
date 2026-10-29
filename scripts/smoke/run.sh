@@ -250,7 +250,7 @@ fi
 #     必须逐字相同。⚠️ 这两个 target **各自编译**, 改一边不会有任何编译错误, 也不会有断言变红
 #     —— 只是子进程读到 nil, 现象是"工具每次都回未启用"。同 `MANGOX_BOCHA_KEY` 那条纪律:
 #     契约 token 只能靠门钉住, 不能靠类型系统。
-for KEY in MANGOX_COMPUTE_ALLOWED_BUNDLES MANGOX_COMPUTE_PEER_PID MANGOX_COMPUTE_PARENT_PID; do
+for KEY in MANGOX_COMPUTE_ALLOWED_BUNDLES MANGOX_COMPUTE_ACT_BUNDLES MANGOX_COMPUTE_PEER_PID MANGOX_COMPUTE_PARENT_PID; do
     # ⚠️ 模式**必须带引号**: 只子串匹配的话, 把 key 改名成 `..._PIDX` 依然含 `..._PID`
     #    ⇒ 门对着已然对不上的两个名字点头(2026-10-28 反例实测: 注入后 RC=0)。
     if ! has_code mangox/Agent/ComputerHost.swift "\"$KEY\""; then
@@ -280,6 +280,101 @@ COMPUTE_DEPTH="$(awk '/static let maxDepth/ { for (i = 1; i <= NF; i++) if ($i ~
 if [ -z "$COMPUTE_DEPTH" ] || [ "$COMPUTE_DEPTH" -lt 24 ]; then
     echo "FAIL - AXAdapter.maxDepth = ${COMPUTE_DEPTH:-取不到} (< 24)" >&2
     echo "       实测深度: Finder 7 · Chrome 23, 且 Chrome 的正文从 d15 开始 ⇒ 14 会把整页切掉" >&2
+    exit 1
+fi
+
+# ③l 动作面(批 2b)的三条**只在真机上才会出事**的事实 —— 它们全都编译得过、纯函数断言也全绿:
+#    ① 判据(`ComputerActGuard.evaluate`)**必须**排在执行(`AXAdapter.press`)之前。
+#       把它俩调个位置, 界面上没有任何异样, 直到"模型替人点了不保存"那天。
+#    ② 执行只能经 `AXAdapter` 的 `AXUIElementPerformAction` —— 出现 `CGEvent` 就说明有人
+#       偷偷加了坐标兜底, 而那批动作**不经过作用域/编号/红线任何一道**。
+#    ③ 三条恒拒必须真的接在 guard 里(判据写了但没人调 = 一张好看的函数表)。
+if ! has_code mangox-compute/ComputerServer.swift 'ComputerActGuard.evaluate'; then
+    echo "FAIL - ComputerServer 不再调 ComputerActGuard (动作就绕开了全部判据)" >&2
+    exit 1
+fi
+ACT_GUARD_LINE="$(awk '/ComputerActGuard.evaluate\(/ { print NR; exit }' mangox-compute/ComputerServer.swift)"
+ACT_PRESS_LINE="$(awk '/AXAdapter.press\(/ { print NR; exit }' mangox-compute/ComputerServer.swift)"
+if [ -z "$ACT_GUARD_LINE" ] || [ -z "$ACT_PRESS_LINE" ] || [ "$ACT_GUARD_LINE" -ge "$ACT_PRESS_LINE" ]; then
+    echo "FAIL - 判据与执行的顺序不对 (guard@${ACT_GUARD_LINE:-?} press@${ACT_PRESS_LINE:-?})" >&2
+    echo "       执行必须排在判据之后 —— 反了就等于'先按了再问能不能按'" >&2
+    exit 1
+fi
+for f in mangox-compute/*.swift; do
+    if has_code "$f" 'CGEvent'; then
+        echo "FAIL - $f 里出现了 CGEvent" >&2
+        echo "       坐标点击是批 3(人类接管)的事: 它绕开作用域/编号/红线三道判据" >&2
+        exit 1
+    fi
+done
+for NEEDLE in 'ComputerRedline.refusal' 'ComputerRedline.savePromptDecision'; do
+    if ! has_code mangox/Models/ComputerAct.swift "$NEEDLE"; then
+        echo "FAIL - ComputerActGuard 里少了 $NEEDLE (判据表还在, 但没人用它)" >&2
+        exit 1
+    fi
+done
+if ! has_code mangox-compute/AXAdapter.swift 'AXUIElementPerformAction'; then
+    echo "FAIL - AXAdapter 不再调 AXUIElementPerformAction (按不动了, 但它会一直说'按了')" >&2
+    exit 1
+fi
+
+# ③m socket 的**分帧**两侧都以「完整行」收尾 (2026-10-29 boss 截图报「渲染出乱码」)。
+#     症状是一个汉字变成 3 个 U+FFFD —— 实测 483 字的一条 Safari 脚注, 坏在字符 199 / 字节 541,
+#     「条」的 3 个 UTF-8 字节被 socket 的 chunk 边界劈开, 两半各自解码 ⇒ 各自补替换字符。
+#     ⚠️ 这一处**任何断言都拦不住**: 报文仍是合法 JSON(替换字符是合法字符), 长度只差几个字节,
+#        模型只会以为自己读到的是网页原文。⇒ 只能扫源码事实, 而且两侧各一条:
+#        ① App 侧(JS 扩展)攒**字节**, 拿到行尾才 `toString("utf8")`;
+#        ② helper 侧把整行**写完** —— `send` 的返回值是"这次写了多少", 不是成功/失败。
+if has_code mangox/Agent/PiRpcTransport.swift 'String\(chunk\)'; then
+    echo "FAIL - computer 扩展又逐块解码了 (String(chunk) 会把跨块汉字劈成 U+FFFD)" >&2
+    echo "       攒字节、拿到 0x0a 再整体解码 —— 一次 toString 只能作用在**完整行**上" >&2
+    exit 1
+fi
+for NEEDLE in 'Buffer\.concat' 'toString\("utf8"\)'; do
+    if ! has_code mangox/Agent/PiRpcTransport.swift "$NEEDLE"; then
+        echo "FAIL - computer 扩展的读侧少了 $NEEDLE (按字节攒 + 整行解码, 缺一个就会出替换字符)" >&2
+        exit 1
+    fi
+done
+if ! has_code mangox-compute/ComputerServer.swift 'writeAll\(fd:'; then
+    echo "FAIL - helper 不再经 writeAll 回话 (单次 send 只写了半行也当成功)" >&2
+    exit 1
+fi
+if has_code mangox-compute/ComputerServer.swift '_ = out\.withUnsafeMutableBytes \{ send'; then
+    echo "FAIL - helper 又单次 send 整行 (快照几 KB, 缓冲区满时丢掉的那截不报错)" >&2
+    exit 1
+fi
+
+# ③n 滚动路径上**不许每帧写 @State** (2026-10-29 boss「读 safari 的那个会话往上拉卡顿严重」)。
+#     `contentBottomY` 的定义是"内容底相对**视口顶**的 y" —— 滚动时它每帧都在变, 而
+#     `onPreferenceChange` 每帧都会调 `handleContentBottom`。写成 `@State CGFloat` ⇒ 每滚一帧
+#     就标记视图失效一次 ⇒ body 全量重算(`projectedChat` 单独计时 < 5ms, 再加全部可见行重建)
+#     ⇒ 内容越重掉帧越狠。
+#     ⚠️ 这一处**没有任何断言能间接拦住**: 值是对的、判据是对的、滚动逻辑也是对的 ——
+#        唯一的症状是"手感到变差", 而那不会让任何一条 PASS 变红。
+if has_code mangox/Views/Chat/ChatView.swift '@State private var lastBottomY: CGFloat'; then
+    echo "FAIL - lastBottomY 又变回 @State CGFloat 了" >&2
+    echo "       它每滚一帧就变一次 ⇒ 每帧标记视图失效 ⇒ 长会话往上拉必掉帧" >&2
+    echo "       装进引用盒子(改字段不走 setter), 它只在 refreshViewport 里被读一次" >&2
+    exit 1
+fi
+if has_code mangox/Views/Chat/ChatView.swift '^[[:space:]]*lastBottomY = '; then
+    echo "FAIL - 有地方直接给 lastBottomY 赋值了 (盒子应该写 lastBottomY.value)" >&2
+    exit 1
+fi
+
+# ③o helper 的作用域**变了就得重启** (2026-10-29 boss「我明明加了」)。
+#     helper 的作用域是**启动那一刻读 env 定死的**, 进程一起就再也不看 env。而 `start` 原来
+#     只问"进程还在跑吗", 不问"名单还是不是那一批" ⇒ 把 Safari 改成 Calculator 之后, 助手
+#     照旧按 Safari 拒, **拒绝信息里列的也是 Safari** —— 而设置页明明勾着计算器。
+#     ⚠️ 这一处零红灯: 设置对、env 对、作用域判据也对, 唯一错的是"哪一份名单算数"。
+if ! has_code mangox/Agent/ComputerHost.swift 'runningScope == wanted'; then
+    echo "FAIL - ComputerHost.start 复用 socket 时不再比作用域" >&2
+    echo "       助手只在启动时读一次 env ⇒ 改了设置它还是按旧名单拒" >&2
+    exit 1
+fi
+if ! has_code mangox/Agent/ComputerHost.swift 'runningScope = nil'; then
+    echo "FAIL - stop() 不再清 runningScope (留着它, 下次 start 会以为名单已经下发过了)" >&2
     exit 1
 fi
 

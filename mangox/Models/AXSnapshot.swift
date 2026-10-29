@@ -61,6 +61,12 @@ struct AXSnapshot: Equatable {
         let actions: [String]
         /// 差分键: `id:<AXIdentifier>` 优先, 否则 `path:<索引路径>`。
         let key: String
+        /// 在**原始树**上的索引路径(`[]` = 窗口根)。
+        ///
+        /// ⚠️ 批 2b 加它: 动作面要按编号找回那个 `AXUIElement`。原来只有 `key` 一个字符串,
+        ///    从 `"path:0/2/1"` 里反解路径属于"靠字符串前缀猜语义" —— 换个键格式就静默失效。
+        ///    ⚠️ 路径对的是**剪枝前**的树(剪枝不重编号), 所以它和 `key` 是两件事, 不能合并。
+        let path: [Int]
     }
 
     let appName: String
@@ -131,7 +137,8 @@ struct AXSnapshot: Equatable {
                 actions: node.actions,
                 key: node.identifier.isEmpty
                     ? "path:" + path.map(String.init).joined(separator: "/")
-                    : "id:" + node.identifier
+                    : "id:" + node.identifier,
+                path: path
             ))
         }
 
@@ -269,6 +276,104 @@ struct AXSnapshot: Equatable {
     static func lacksReadableControls(root: AXNode) -> Bool {
         guard let f = root.frame, min(f.w, f.h) >= readableMinSide else { return false }
         return !hasReadableControls(root: root)
+    }
+
+    // MARK: - 批 2c: 懒加载兜底
+
+    /// 内容角色**盖住了窗口的多少**(0~1)。
+    ///
+    /// ⚠️ 为什么需要它: `hasReadableControls` 只问"树里有没有一片内容控件", 而 Safari 的
+    ///    **搜索栏**本身就是一个 `textfield` ⇒ 整页正文一个字都没读到, 那条判据照样成立、
+    ///    警告一个字不响。实测(2026-10-29): 第一次读 apple.com.cn 拿到 **20 个节点, 全是地址栏
+    ///    与工具栏**, 判据说"可读", 模型只看见 20 个导航按钮。
+    ///
+    /// 算法: 把每个内容角色的 rect **裁到窗口内**再求和, 除以窗口面积。
+    ///    · 重叠会重复计 ⇒ 只会**高估** ⇒ 偏向判成"有内容", 不会凭空报警;
+    ///    · 超出窗口的 rect 真实存在(实测 Safari 一条 `image` 的 x 是 −579、宽 3009),
+    ///      不裁的话一个跑出屏幕的元素就能把覆盖率刷满。
+    ///
+    /// ⚠️ 这个数**只用来决定"要不要再读一次"**, 不进报警文案 —— 一个 800×600 的对话框里
+    ///    只有一句 700×40 的提示, 覆盖率同样只有几个百分点, 但它就是**全部内容**。
+    ///    两者在 AX 树上同构, 分不开。所以"低覆盖"只当**触发重读**的信号, 报不报警仍归
+    ///    `lacksReadableControls`。
+    static func contentCoverage(root: AXNode) -> Double {
+        guard let win = root.frame, win.w > 0, win.h > 0 else { return 1 }
+        var covered = 0.0
+        func walk(_ node: AXNode) {
+            if contentRoles.contains(cleanRoleName(node.role)), let f = node.frame, f.w > 0, f.h > 0 {
+                let x0 = max(f.x, win.x)
+                let y0 = max(f.y, win.y)
+                let x1 = min(f.x + f.w, win.x + win.w)
+                let y1 = min(f.y + f.h, win.y + win.h)
+                if x1 > x0, y1 > y0 { covered += Double(x1 - x0) * Double(y1 - y0) }
+            }
+            for c in node.children { walk(c) }
+        }
+        walk(root)
+        return min(1, covered / (Double(win.w) * Double(win.h)))
+    }
+
+    /// 覆盖率低于这个数就值得**再读一次**。
+    ///
+    /// 取 0.15 的依据: 工具栏那一层(地址栏 + 按钮)在 1425×4627 的页面上占 **0.2%**,
+    /// 而 Finder / 企业微信那种真读到了的树, 列表与文本占掉大半个窗口。中间没有任何
+    /// 真实样本 —— 0.15 落在两个数量级之间, 怎么挪都不影响这两类。
+    static let rereadBelowCoverage = 0.15
+
+    /// 最多重读几次。
+    ///
+    /// 不再多: 每次重读都要等一个间隔, 而"读界面"是个交互动作 —— 等超过 1 秒, 人就已经
+    /// 自己动手了。两次(0.2s + 0.4s)覆盖到"页面刚打开"的那一段, 再慢就该如实说"没内容"。
+    static let maxRereads = 2
+
+    /// 这次读的树**可能只是没加载完** ⇒ 值得隔一会儿再读一次。
+    ///
+    /// 只在窗口够大时才判(与 `lacksReadableControls` 同一条下限): 小工具窗本来就没多少面积。
+    ///
+    /// ⚠️ 还有一道前提: **得有一个内容角色报得出坐标**。有的 App 只给角色不给 rect, 那样
+    ///    覆盖率恒为 0 ⇒ 每次读都白等; 而"一个内容角色都没有"的树(微信那种)本来就不实现
+    ///    AX, 重读一百次也还是那 6 个按钮。
+    static func worthRereading(root: AXNode) -> Bool {
+        guard let f = root.frame, min(f.w, f.h) >= readableMinSide else { return false }
+        guard hasFramedContent(root: root) else { return false }
+        return contentCoverage(root: root) < rereadBelowCoverage
+    }
+
+    /// 树里有没有**报得出坐标**的内容角色。
+    private static func hasFramedContent(root: AXNode) -> Bool {
+        if contentRoles.contains(cleanRoleName(root.role)), let f = root.frame, f.w > 0, f.h > 0 {
+            return true
+        }
+        return root.children.contains { hasFramedContent(root: $0) }
+    }
+
+    // MARK: - 批 2b: 动作面要的两次转换
+
+    /// 索引路径 → **元素表的键**。
+    ///
+    /// ⚠️ helper 建表用它、按编号查表也用它, 必须是**同一个函数**: 两边各拼一次 `"0/2/1"`,
+    ///    迟早有一天拼得不一样, 而症状是"按了没反应"(零信号 —— 编译过、编号照查得到)。
+    static func pathKey(_ path: [Int]) -> String {
+        path.map(String.init).joined(separator: "/")
+    }
+
+    /// sheet 里的按钮**位置**(下标 = `sheet.children` 里的位置)。
+    ///
+    /// ⚠️ 这是"按哪个键"的唯一判据 —— helper 拿它去元素表里取对应的 `AXUIElement`。
+    ///    如果 helper 自己再筛一遍按钮(比如"role 是 button 且标题非空"), 两边迟早筛得不一样,
+    ///    而错位的后果是**按到了旁边那个键**(存盘弹窗里旁边就是"不保存")。
+    static func buttonIndices(in sheet: AXNode) -> [Int] {
+        sheet.children.indices.filter { i in
+            let c = sheet.children[i]
+            return cleanRoleName(c.role) == "button" && !Self.label(c).isEmpty
+        }
+    }
+
+    /// 一个现场读出来的 sheet 节点 → 存盘判据要的形状(`ComputerActWindow`)。
+    static func actWindow(from sheet: AXNode?) -> ComputerActWindow {
+        guard let s = sheet else { return .none }
+        return ComputerActWindow(sheetTitle: Self.label(s),
+                                 sheetButtons: buttonIndices(in: s).map { Self.label(s.children[$0]) })
     }
 
     // MARK: - 渲染
