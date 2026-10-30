@@ -7,13 +7,14 @@
    **本文件由 scripts/l10n/gen_strings.py --write 生成, 别手改** ——
    译文改 scripts/l10n/en_values.py 的 VALUES, 再跑 --write。
 
-   条数: 909
+   条数: 922
 */
 
 " (值:\"%@\")" = " (value: %@)";
 " [附件: %@]" = " [Attachment: %@]";
 " · 当前前台" = " · frontmost";
 " ⇒ 没动。重新读一次再决定。" = " ⇒ nothing was done. Read again before deciding.";
+" 别反复换节点试。" = " rather than trying one row after another.";
 " 字)" = " chars)";
 " 待重启" = " Restart required";
 " 未选" = " none";
@@ -117,6 +118,7 @@
 "pi 扩展经 spawn 期 --extension 加载, 启停后需重启引擎生效" = "pi extensions are loaded at spawn time via --extension; restart the engine for changes to take effect.";
 "prompt 与 cron 为必填" = "prompt and cron are required";
 "provider (自定义)" = "provider (custom)";
+"scroll 要说清往哪滚(up / down) ⇒ 没动。" = "scroll must say which way (up / down) ⇒ nothing was done.";
 "sort 写文件" = "sort writes a file";
 "tokens" = "tokens";
 "txt / html 没有 frontmatter — 标题就是文件名" = "txt / html have no frontmatter — the filename is the title";
@@ -140,12 +142,14 @@
 "✓ 连通, 勾选后保存" = "✓ Reachable — tick the models and save";
 "✓ 采纳入库" = "✓ Accepted and stored";
 "「%@」不在开放名单里 ⇒ 我不动它。" = "%@ is not on the open list ⇒ I will not touch it.";
+"「%@」不接受聚焦(系统说这个控件的焦点不可设) ⇒ 没动。" = "%@ will not take focus (the system says its focus attribute is not settable) ⇒ nothing was done.";
 "「%@」只开了「读」, 没开「操作」⇒ 我不动它。" = "Only Read is enabled for %@, not Act ⇒ I will not touch it.";
 "「%@」按不了 —— %@ ⇒ 没动。" = "Cannot press %@ — %@ ⇒ nothing was done.";
 "「%@」是 %@, " = "%@ is %@, ";
 "「%@」是口令/系统类应用 ⇒ 我永远不操作它, 只读。" = "%@ is a password manager or a system app ⇒ it stays read-only, always.";
 "「%@」还没勾「可操作」⇒ 没动它。到「设置 → 电脑操作」里给这个 App 勾上" = "%@ is not marked actable ⇒ I did not touch it. Tick it under Settings → Computer actions.";
 "「%@」还没勾「可读」⇒ 没打开它。到「设置 → 电脑操作」里给这个 App 勾上" = "%@ is not marked readable ⇒ I did not open it. Tick it under Settings → Computer actions.";
+"「%@」附近没有可写的滚动条(它自己和上面几层都没有) ⇒ 滚不动。" = "There is no writable scroll bar around %@ (not on it, nor a few levels above it) ⇒ it cannot be scrolled.";
 "一" = "Mon";
 "一行一个地址; 名单外的信静默丢弃并移入 Trash" = "One address per line; mail from anyone else is silently dropped and moved to Trash.";
 "三" = "Wed";
@@ -342,6 +346,8 @@
 "右边是空的 —— 采纳后这篇进系统废纸篓, 还能在那里捞回来。" = "The right side is empty — accepting moves this note to the system Trash, where you can still recover it.";
 "名字" = "Name";
 "名称" = "Name";
+"向上" = "Up";
+"向下" = "Down";
 "含端口, 如 imap.163.com:993" = "Include the port, e.g. imap.163.com:993";
 "含端口, 如 smtp.163.com:465" = "Include the port, e.g. smtp.163.com:465";
 "启停 (重启引擎生效)" = "Enable / disable (restart the engine to apply)";
@@ -365,6 +371,7 @@
 "在当前项目下开一个新会话, 它会拿到最新的工具表" = "Start a new conversation in this project — it will see the latest tool list";
 "在这里输入该做什么…" = "Type what to do…";
 "在途: %@" = "In flight: %@";
+"坐标点击(还没做) —— 那就如实告诉用户。" = "coordinate clicks, which are not implemented yet — tell the user that plainly.";
 "增" = "New";
 "备份中…" = "Backing up…";
 "备份失败" = "Backup failed";
@@ -608,6 +615,7 @@
 "最近提交" = "Recent commits";
 "最近收信 %@" = "Last received %@";
 "最高" = "Max";
+"有些 App(尤其网页内容)不把滚动条交给系统 —— 那就趁早告诉用户这一页我一次读不完," = "Some apps — web content in particular — never hand a scroll bar to the system, so tell the user early that this page cannot be read in one go,";
 "有任务在跑时不让电脑休眠，跑完自动恢复；没任务时照常休眠" = "Keeps the computer awake while a task is running and lets it sleep again afterwards";
 "服务商" = "Provider";
 "服务端未返回该邮件 (UID 已不存在或被移走)" = "The server returned no such message (the UID no longer exists or was moved)";
@@ -693,6 +701,8 @@
 "清除" = "Clear";
 "源会话回合进行中，结束后再发起侧问" = "A turn is running in the source session; wait for it to finish before starting a side chat";
 "源会话快照 · 含 %lld 轮上下文 · %@ fork · 主线新消息不同步" = "Source session snapshot · %lld turns of context · forked %@ · new messages in the main line do not sync";
+"滚动" = "Scroll";
+"滚动 #" = "Scroll #";
 "漏 %lld 次" = "%lld missed";
 "漏跑 %lld 个任务" = "%lld tasks missed";
 "点「常驻」区头的文件夹按钮: 目录不在时会就地建出来; 若那个位置被同名文件占着, 请先移走它" = "Click the folder button in the “Always on” header: it creates the folder if it is missing; if a file of the same name occupies that spot, move it away first";
@@ -762,6 +772,8 @@
 "耗时" = "Duration";
 "联网搜索 (博查 API Key)" = "Web search (Bocha API key)";
 "联网搜索扩展没配博查 API Key —— 挂上它也只会每次调用都回「未启用」, 所以不挂。在 设置 → 联网搜索 里填一个 Key 并保存, 它就会挂上。" = "The web search extension has no Bocha API key set - mounting it would only make every call answer not enabled, so it stays unmounted. Enter a key under Settings - Web search and save; it gets mounted right away.";
+"聚焦" = "Focus";
+"聚焦 #" = "Focus #";
 "自动放行" = "Auto allow";
 "自动裁决" = "Auto judge";
 "自定义" = "Custom";
@@ -774,6 +786,7 @@
 "补跑" = "Catch up";
 "补跑只跑最近一次; 忽略 = 认下这批, 不再提示" = "Catch up runs only the most recent one; Ignore accepts this batch and stops asking";
 "要保存" = "Save";
+"要写内容请直接 setValue; 它连 AXValue 也不吃的话, 说明这类 App 只能靠" = "To write into it, use setValue directly; if it will not take AXValue either, that app only responds to ";
 "要写的内容是空的 ⇒ 没动。清空某一栏请你自己来。" = "The text to write is empty ⇒ nothing was done. Clearing a field is your call.";
 "要写的内容有 %lld 个字, 超过 %@ 的上限 ⇒ 没写。" = "The text is %lld characters, over the %@ limit ⇒ nothing was written.";
 "要让它能动, 请在 设置 › 集成 › 电脑操作 里给它开「可操作」。" = "To let it act, tick Act for it under Settings › Integrations › Computer use.";

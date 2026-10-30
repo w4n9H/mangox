@@ -256,8 +256,9 @@ final class ComputerServer {
             }
             return .success(text: withSeq(rereadNote + snap.rendered(), seq), seq: seq)
 
-        case .act(let app, let opRaw, let index, let seq, let text):
-            return handleAct(app: app, opRaw: opRaw, index: index, seq: seq, text: text)
+        case .act(let app, let opRaw, let index, let seq, let text, let direction):
+            return handleAct(app: app, opRaw: opRaw, index: index, seq: seq,
+                             text: text, directionRaw: direction)
 
         case .open(let app):
             return handleOpen(app: app)
@@ -288,13 +289,17 @@ final class ComputerServer {
 
     /// 一条动作。**判据一行都不在这里** —— 全在 `ComputerActGuard`(那边能造反例)。
     /// 这里只做四件事: 找 App → 找缓存 → 拿现场读数 → 执行并回报。
-    private func handleAct(app: String, opRaw: String, index: Int, seq: Int, text: String) -> ComputerResponse {
+    private func handleAct(app: String, opRaw: String, index: Int, seq: Int,
+                           text: String, directionRaw: String) -> ComputerResponse {
         guard AXIsProcessTrusted() else {
             return .failure("辅助功能权限还没授予 ⇒ 动不了界面。请在 系统设置 › 隐私与安全性 › 辅助功能 里勾上 MangoX。")
         }
         guard let action = ComputerAction.parse(opRaw) else {
-            return .failure("不认识的 op: 「\(opRaw)」。目前只有 press / setValue 两种。")
+            return .failure("不认识的 op: 「\(opRaw)」。目前有 press / setValue / focus / scroll 四种。")
         }
+        // ⚠️ 方向解析失败**不在 helper 填默认值**: 判据那边要把"没说往哪滚"与"滚不动"分开说
+        //    (前者重发一次就好, 后者得换节点或换 App)。空串 ⇒ nil ⇒ 判据里那条 `guard` 拒。
+        let direction = ComputerScrollDirection.parse(directionRaw)
         let candidates = candidatesInScope()
         guard !candidates.isEmpty else {
             return .failure(emptyScopeNote(verb: "动"))
@@ -327,7 +332,8 @@ final class ComputerServer {
                                      requestSeq: seq,
                                      currentSeq: cached.seq,
                                      rowCount: cached.snapshot.rows.count)
-        let request = ComputerActRequest(app: app, action: action, index: index, seq: seq, text: text)
+        let request = ComputerActRequest(app: app, action: action, index: index, seq: seq,
+                                        text: text, direction: direction)
 
         switch ComputerActGuard.evaluate(request: request,
                                          scope: scope,
@@ -357,19 +363,57 @@ final class ComputerServer {
             guard let el = element else {
                 return .failure("#\(index) 在这份快照里查不到对应元素 ⇒ 没动。重新读一次。")
             }
-            let err: AXError = (a == .press)
-                ? AXAdapter.press(el)
-                : AXAdapter.setValue(el, text)
-            guard err == .success else {
-                // ⚠️ **不退到坐标点击**: 按不下去就如实报。坐标兜底是批 3 与人类接管一起做的,
-                //    在那之前"点错地方"比"没点"严重得多。
-                return .failure("按不下去: AX 返回 \(err.rawValue)"
-                                + "(\(a == .press ? "press" : "setValue")) ⇒ 界面没动。")
-            }
             let name = liveTarget.map { $0.title.isEmpty ? AXSnapshot.cleanRoleName($0.role) : $0.title } ?? ""
+            let headline: String
+            switch a {
+            case .press:
+                let err = AXAdapter.press(el)
+                guard err == .success else { return .failure(actFailure(err, "press")) }
+                headline = "按了 #\(index)「\(name)」。"
+
+            case .setValue:
+                let err = AXAdapter.setValue(el, text)
+                guard err == .success else { return .failure(actFailure(err, "setValue")) }
+                headline = "写了 #\(index)「\(name)」。"
+
+            case .focus:
+                let err = AXAdapter.focus(el)
+                guard err == .success else { return .failure(actFailure(err, "focus")) }
+                // ⚠️ **回读**: 有些元素收下写入却没拿到焦点。不查这一步就会回"聚焦了", 而模型
+                //    接下来那次 setValue 写进的是一个没聚焦的控件 —— 它只会以为这 App 坏了。
+                guard AXAdapter.isFocused(el) else {
+                    return .failure("焦点写进去了, 但系统说焦点不在这个控件上 ⇒ 没当成「已聚焦」。"
+                                    + "重读一次看看; 它也可能只是接受写入、实际不可聚焦。")
+                }
+                headline = "聚焦了 #\(index)「\(name)」。"
+
+            case .scroll:
+                // 判据已经拦过"没说方向"与"没有滚动条"; 走到这里还得再取一次, 因为
+                // 判据看的那份现场读数与**执行这一刻**可能已经不同(比如滚动条刚好消失)。
+                guard let dir = request.direction, let bar = AXAdapter.scrollBar(of: el) else {
+                    return .failure("滚不动了: 这个节点上现在找不到可用的滚动条 ⇒ 界面没动。重新读一次。")
+                }
+                guard let before = AXAdapter.scrollValue(bar) else {
+                    return .failure("滚不动: 读不到滚动条当前的位置 ⇒ 界面没动。")
+                }
+                let err = AXAdapter.setScrollValue(bar,
+                                                   before + (dir == .down ? AXAdapter.scrollStep
+                                                                          : -AXAdapter.scrollStep))
+                guard err == .success else { return .failure(actFailure(err, "scroll")) }
+                // ⚠️ **回读**: "收下写入但不动"在网页/自绘列表里很常见。不回读就会回"滚了",
+                //    而模型接着读还是那 120 行 —— 它只会以为这一页本来就这么短。
+                let landed = AXAdapter.scrollValue(bar) ?? before
+                guard abs(landed - before) > 0.001 else {
+                    return .failure("写了滚动位置, 但界面没动(还在 \(percent(before)))"
+                                    + " ⇒ 这个 App 不吃 AX 滚动。别重试同一个节点 —— "
+                                    + "要么换个 scrollarea 试, 要么直接告诉用户这一页我一次读不完。")
+                }
+                headline = "滚了\(dir == .down ? "向下" : "向上") #\(index)「\(name)」: "
+                    + "\(percent(before)) → \(percent(landed))。"
+            }
             return finishAct(bundle: t.bundle, pid: t.pid, name: t.name,
                              previous: cached.snapshot,
-                             headline: "\(a == .press ? "按了" : "写了") #\(index)「\(name)」。")
+                             headline: headline)
         }
     }
 
@@ -398,6 +442,16 @@ final class ComputerServer {
                         + "\n" + diff.rendered()
                         + "\n新快照 seq=\(seq)(一共 \(snap.rows.count) 项), 旧编号全部作废 —— 下一步按这份来。",
                         seq: seq)
+    }
+
+    /// 动作失败的一句话。**不重试、不退到坐标点击** —— 按不下去就如实报。
+    /// 坐标兜底是批 3 与人类接管一起做的: 在那之前"点错地方"比"没点"严重得多。
+    private func actFailure(_ err: AXError, _ op: String) -> String {
+        "\(op) 失败了: AX 返回 \(err.rawValue) ⇒ 界面没动。"
+    }
+
+    private func percent(_ v: Double) -> String {
+        "\(Int((v * 100).rounded()))%"
     }
 
     // MARK: - 打开 App (批 2d)

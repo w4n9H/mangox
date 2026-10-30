@@ -23,7 +23,9 @@ enum ComputerRequest: Decodable {
     ///    回一句"不认识", 而不是在解码阶段变成一句 `dataCorrupted` 的机器话。
     ///    ⚠️ `seq` **没有默认值**: 缺了就是"没读过就想动", 必须拒 —— 给它一个 0 当默认,
     ///    等于给"先读再动"开了一个静默的后门。
-    case act(app: String, op: String, index: Int, seq: Int, text: String)
+    ///    `direction` 只 `scroll` 用(`up` / `down`)。缺了**不在解码阶段填默认值**: "没说往哪滚"
+    ///    与"往下滚"是两件事, 猜一个等于替模型做决定(判据那边会拒并说清)。
+    case act(app: String, op: String, index: Int, seq: Int, text: String, direction: String)
     /// 打开(或切到前台)一个 App —— P18 批 2d。
     ///
     /// ⚠️ 为什么不复用 `act`: 打开一个 App **不动它里面的任何东西**, 与"在 Dock 上点一下图标"
@@ -34,9 +36,9 @@ enum ComputerRequest: Decodable {
     case open(app: String)
 
     private enum CodingKeys: String, CodingKey {
-        case op, app, includeImage, index, seq, text
-        /// 动作本身(`press` / `setValue`)。⚠️ 不能复用 `op` —— 那个位置装的是信封类型
-        /// (`act`), 两个语义塞进一个键, 读代码的人分不清哪个是哪个。
+        case op, app, includeImage, index, seq, text, direction
+        /// 动作本身(`press` / `setValue` / `focus` / `scroll`)。⚠️ 不能复用 `op` ——
+        /// 那个位置装的是信封类型(`act`), 两个语义塞进一个键, 读代码的人分不清哪个是哪个。
         case action
     }
 
@@ -53,7 +55,8 @@ enum ComputerRequest: Decodable {
                         op: try c.decodeIfPresent(String.self, forKey: .action) ?? "",
                         index: try c.decodeIfPresent(Int.self, forKey: .index) ?? 0,
                         seq: try c.decodeIfPresent(Int.self, forKey: .seq) ?? -1,
-                        text: try c.decodeIfPresent(String.self, forKey: .text) ?? "")
+                        text: try c.decodeIfPresent(String.self, forKey: .text) ?? "",
+                        direction: try c.decodeIfPresent(String.self, forKey: .direction) ?? "")
         case "open":
             // 空 `app` 交给 server 拒(并说清"打开哪个"): 解码阶段回一句机器话,
             // 模型只会把 `dataCorrupted` 当成故障重试。

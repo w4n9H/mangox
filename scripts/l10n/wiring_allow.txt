@@ -147,3 +147,21 @@ mangox/Models/ComputerAct.swift|这么长的东西多半是搞错了对象。
 mangox/Models/ComputerAct.swift|要让它能动, 请在 设置 › 集成 › 电脑操作 里给它开「可操作」。
 mangox/Models/ComputerAct.swift| · 当前前台
 mangox/Models/ComputerAct.swift|它能做的只有：
+
+# P18 批 2f: `focus` / `scroll` 两条判据的回执 + 卡片动词 —— 同上一族(进模型上下文, 不是界面),
+# 豁免的只是「必须接线」这一道; 译文仍在词表里。⚠️ 这几行里的字面量**不许以空格结尾**:
+# 本文件逐行 strip, 尾空格登不进来(批 2d 的 `describeComputer` 就为此改了拼法)。
+mangox/Models/ComputerAct.swift|聚焦
+mangox/Models/ComputerAct.swift|滚动
+mangox/Models/ComputerAct.swift|「%@」不接受聚焦(系统说这个控件的焦点不可设) ⇒ 没动。
+mangox/Models/ComputerAct.swift|要写内容请直接 setValue; 它连 AXValue 也不吃的话, 说明这类 App 只能靠
+mangox/Models/ComputerAct.swift|坐标点击(还没做) —— 那就如实告诉用户。
+mangox/Models/ComputerAct.swift|scroll 要说清往哪滚(up / down) ⇒ 没动。
+mangox/Models/ComputerAct.swift|「%@」附近没有可写的滚动条(它自己和上面几层都没有) ⇒ 滚不动。
+mangox/Models/ComputerAct.swift|有些 App(尤其网页内容)不把滚动条交给系统 —— 那就趁早告诉用户这一页我一次读不完,
+mangox/Models/ComputerAct.swift| 别反复换节点试。
+# 卡片那一行同样是扩展 JS 拼的(同 `按 #` / `写 #` 那一组)。
+mangox/Agent/PiRpcTransport.swift|聚焦 #
+mangox/Agent/PiRpcTransport.swift|滚动 #
+mangox/Agent/PiRpcTransport.swift|向上
+mangox/Agent/PiRpcTransport.swift|向下

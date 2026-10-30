@@ -394,6 +394,24 @@ if ! has_code mangox/Agent/ComputerHost.swift 'runningScope = nil'; then
     exit 1
 fi
 
+# ③q 遮蔽的**第二档**不许掉线: `AXAdapter.build` 必须把 `AXProtectedContent` **真读进来**。
+#    2026-10-30 之前那行硬写的是 `isProtected: false` ⇒ 序列化那一步只剩"按角色"一档
+#    (`ComputerRedline.isPasswordRole`), 而文件头注释早写着"按属性名字符串读" —— 注释比事实说得多。
+#    症状: 角色不叫 secure、但被系统标了受保护内容的值**照原文进上下文**; 零红灯、断言全绿
+#    (纯函数那半边喂的是手搓的树, 它不知道 helper 根本没填这个字段)。
+#    ⚠️ 只能扫源码事实: helper 不参与冒烟编译, 而且真机上还没找到一个 `AXProtectedContent=1`
+#    的元素来对照 ⇒ 两条一起: 禁用常量 + 钉住"现场读"这个调用。
+if has_code mangox-compute/AXAdapter.swift 'isProtected: false'; then
+    echo "FAIL - AXAdapter.build 又把 isProtected 硬写成 false 了" >&2
+    echo "       那样遮蔽只剩'按角色'一档 ⇒ 被标了受保护内容的值照原文进模型上下文, 且零红灯" >&2
+    echo "       要写成 !value.isEmpty && isProtected(el) —— 空值不问, 省掉每节点一次 AX 往返" >&2
+    exit 1
+fi
+if ! has_code mangox-compute/AXAdapter.swift 'isProtected: !value\.isEmpty && isProtected\(el\)'; then
+    echo "FAIL - AXAdapter.build 不再从现场读 AXProtectedContent (遮蔽的第二档掉了)" >&2
+    exit 1
+fi
+
 # ④ 冒烟主文件的**体量棘轮** (2026-10-19) —— 判据 = 行数**只减不增**。
 #    为什么要有这条: 冒烟已长到 7000+ 行, 而且几乎全在**一个函数 `run()`** 里
 #    (Swift 函数体不能跨文件 ⇒ 只要它还是一个大函数, 就必然是一个大文件)。

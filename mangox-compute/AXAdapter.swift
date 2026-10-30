@@ -6,13 +6,15 @@
 //     遮蔽、作用域)全部住在 `mangox/Models/` 里的纯函数上, 那边能被冒烟断言。
 //     真 AX 调用在没有屏幕、没有 TCC 授权的机器上测不了 ⇒ 能测的部分不许留在这里。
 //
-//  ⚠️ 两条**已知没做**的事(诚实标注, 不假装完成):
+//  ⚠️ 三条**已知没做**的事(诚实标注, 不假装完成):
 //    ① **超时**: 目标 App 无响应时 `AXUIElementCopyAttributeValue` 会挂住(§05 代价表)。
 //       真超时语义要等批 2 与"跳过"策略一起做 —— 这里先不假装能中断。
-//    ② `AXProtectedContent`: SDK 里没有导出常量, 所以按**属性名字符串**读(见 `isProtected`),
-//       取不到时不算受保护 —— 兜底是角色名(`ComputerRedline.isPasswordRole`), 任一生效即遮。
-//       ⚠️ 这条至今**只在纯函数层验过**, 没在真机上找到过一个 `AXProtectedContent=1` 的元素
-//       来对照 —— 真遇到时要回来记一笔。
+//    ② `AXProtectedContent`: SDK 里没有导出常量, 所以按**属性名字符串**读(见 `isProtected`)。
+//       **两条路都要接**: ① `build`(读给模型看的那棵树) ② `liveTarget`(动作判据)。取不到时
+//       不算受保护 —— 兜底是角色名(`ComputerRedline.isPasswordRole`), 任一生效即遮。
+//       ⚠️ 这里曾经**只在 `liveTarget` 那条路上接**, `build` 硬写了 `false` ⇒ 遮蔽只剩"按角色"
+//       一档, 而头注释已经写着"按属性名字符串读"(注释比事实说得多)。`run.sh` ③q 现在盯着这句。
+//       ⚠️ 仍然没在真机上找到过一个 `AXProtectedContent=1` 的元素来对照 —— 真遇到时回来记一笔。
 //    ③ **网页正文读不到**: 浏览器把网页当独立进程(渲染进程), 主窗口树默认只有外壳。常规解法是
 //       给目标 App 置 `AXManualAccessibility`(Chromium) / `AXEnhancedUserInterface`(WebKit),
 //       但实测(2026-10-28)Chrome 对这两个**都拒绝**: `−25205` / `−25208`, 节点数与深度一字未变
@@ -115,7 +117,11 @@ enum AXAdapter {
                       title: title,
                       detail: detail,
                       value: value,
-                      isProtected: false,
+                      // ⚠️ 2026-10-30 之前这里是**硬写的 `false`** ⇒ 遮蔽只剩"按角色"那一档,
+                      //    而头注释（当时）已经写成"按属性名字符串读" —— 注释比事实说得多。
+                      //    现在真读了，但**只在有值时才问**：这个属性每节点一次 AX 往返
+                      //    (3000 节点 = 3000 次 IPC), 而遮蔽挡的是"值泄出去", 空值没什么可遮的。
+                      isProtected: !value.isEmpty && isProtected(el),
                       identifier: identifier,
                       actions: actions,
                       frame: frame,
@@ -186,7 +192,10 @@ enum AXAdapter {
                                  actions: actionNames(el),
                                  isProtected: isProtected(el),
                                  keyEquivalent: key,
-                                 modifiers: mods)
+                                 modifiers: mods,
+                                 // 这两条**现问系统**, 不按角色猜 —— 见 `ComputerActTarget` 上的注释。
+                                 canFocus: canFocus(el),
+                                 canScroll: scrollBar(of: el) != nil)
     }
 
     /// 目标窗口上此刻挂着的 sheet。**现场读** —— 存盘弹窗是"刚才那一秒"才弹出来的,
@@ -242,6 +251,111 @@ enum AXAdapter {
         AXUIElementSetAttributeValue(el, kAXValueAttribute as CFString, text as CFString)
     }
 
+    // MARK: - 聚焦与滚动 (批 2f)
+
+    /// 把焦点放到这个元素上。**纯 AX** —— 不发任何按键事件。
+    static func focus(_ el: AXUIElement) -> AXError {
+        AXUIElementSetAttributeValue(el, kAXFocusedAttribute as CFString, kCFBooleanTrue)
+    }
+
+    /// 焦点此刻在不在它身上 —— `focus` 的**回读判据**。
+    ///
+    /// ⚠️ 必须有这一问: `AXUIElementSetAttributeValue` 对某些元素返回 `success` 却什么都没做,
+    ///    不回读就会回"聚焦了", 而模型接着 setValue 写进了一个没聚焦的控件。
+    static func isFocused(_ el: AXUIElement) -> Bool {
+        var raw: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(el, kAXFocusedAttribute as CFString, &raw) == .success,
+              let n = raw as? NSNumber else { return false }
+        return n.boolValue
+    }
+
+    /// `AXFocused` 在这个元素上可设吗 —— `focus` 那条判据的**现场**依据。
+    static func canFocus(_ el: AXUIElement) -> Bool {
+        var settable = DarwinBoolean(false)
+        let err = AXUIElementIsAttributeSettable(el, kAXFocusedAttribute as CFString, &settable)
+        return err == .success && settable.boolValue
+    }
+
+    /// `scroll` 一次挪多少(占整段可滚范围的比例)。
+    ///
+    /// ⚠️ 这个数不是"一屏": 我们拿不到内容高度与视口高度, 而且**假装知道**比说不知道更糟
+    ///    (模型会以为一次就到底)。0.1 的含义就是"十分之一段", 回执里会把百分比写出来,
+    ///    要更多就再叫一次。
+    static let scrollStep = 0.1
+
+    /// 这个元素管着的那根**竖向滚动条**(没有就 nil) —— `scroll` 的落点。
+    ///
+    /// ⚠️ 四档依次: ① 自己就是滚动条 ② 自己的 `AXVerticalScrollBar` 属性(常量没导出, 用字面量 ——
+    ///    同 `AXSheets` / `AXProtectedContent` 那两处) ③ 子树里第一个 `AXScrollBar`
+    ///    (有**预算**: 网页的树动辄几千节点, 整棵搜一遍会让一次 scroll 慢到几百毫秒)
+    ///    ④ 再往**上**找四层 —— 模型点名的多半是页面里的控件, 滚动条在它上面的容器上。
+    ///
+    /// ⚠️ `nil` 不等于"这个 App 不能滚", 只等于**它不把滚动条交给系统**(Chrome / Safari 的
+    ///    网页内容常常如此) ⇒ 回执要把这个区别说出来, 别让模型以为是它点错了节点。
+    static func scrollBar(of el: AXUIElement) -> AXUIElement? {
+        if (string(el, kAXRoleAttribute) ?? "") == "AXScrollBar" { return el }
+        if let own = verticalScrollBar(of: el) { return own }
+        if let inTree = firstScrollBar(in: el, depth: 0, budget: 60) { return inTree }
+        // ⚠️ 再**往上**找几层。模型手里有编号的通常不是滚动容器本身, 而是页面里的某个控件
+        //    (正文、链接、输入框), 而滚动条挂在它**上面**那层。只往下找的话, 最常见的
+        //    "长网页滚一屏"永远滚不动, 而回执会把原因说成"这个 App 不交给系统" ——
+        //    那是**说错话**(同一句会让人以为这条路彻底不通), 比不动更糟。
+        var cur = el
+        for _ in 0..<4 {
+            var raw: CFTypeRef?
+            guard AXUIElementCopyAttributeValue(cur, kAXParentAttribute as CFString, &raw) == .success,
+                  let p = raw, CFGetTypeID(p) == AXUIElementGetTypeID() else { return nil }
+            let parent = p as! AXUIElement
+            if (string(parent, kAXRoleAttribute) ?? "") == "AXScrollBar" { return parent }
+            if let bar = verticalScrollBar(of: parent) { return bar }
+            cur = parent
+        }
+        return nil
+    }
+
+    /// 元素自己身上那个 `AXVerticalScrollBar` 属性(没有就不猜)。
+    ///
+    /// ⚠️ 先比 type id 再转, 不用裸 `as!`: 这个属性在自绘 App 里可能回别的类型,
+    ///    而 helper 崩一次 = 整个 computer_* 面到重启前都不可用(同 `frame` 那两处先例)。
+    private static func verticalScrollBar(of el: AXUIElement) -> AXUIElement? {
+        var raw: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(el, "AXVerticalScrollBar" as CFString, &raw) == .success,
+              let bar = raw, CFGetTypeID(bar) == AXUIElementGetTypeID() else { return nil }
+        let barEl = bar as! AXUIElement
+        return (string(barEl, kAXRoleAttribute) ?? "") == "AXScrollBar" ? barEl : nil
+    }
+
+    private static func firstScrollBar(in el: AXUIElement, depth: Int, budget: Int) -> AXUIElement? {
+        guard depth < 3, budget > 0 else { return nil }
+        var raw: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(el, kAXChildrenAttribute as CFString, &raw) == .success,
+              let list = raw as? [AXUIElement] else { return nil }
+        var spent = 0
+        for child in list {
+            spent += 1
+            if spent > budget { return nil }
+            if (string(child, kAXRoleAttribute) ?? "") == "AXScrollBar" { return child }
+            if let hit = firstScrollBar(in: child, depth: depth + 1, budget: budget - spent) {
+                return hit
+            }
+        }
+        return nil
+    }
+
+    /// 滚动条此刻的位置(0 … 1)。读不到就是 nil(调用方据此拒, 不猜 0)。
+    static func scrollValue(_ bar: AXUIElement) -> Double? {
+        var raw: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(bar, kAXValueAttribute as CFString, &raw) == .success,
+              let n = raw as? NSNumber else { return nil }
+        return n.doubleValue
+    }
+
+    static func setScrollValue(_ bar: AXUIElement, _ value: Double) -> AXError {
+        let clamped = min(1.0, max(0.0, value))
+        return AXUIElementSetAttributeValue(bar, kAXValueAttribute as CFString,
+                                            NSNumber(value: clamped))
+    }
+
     /// 菜单项的快捷键 + 修饰键。**永久删除判据的一半** —— 见 `ComputerRedline.decodedModifiers`。
     ///
     /// ⚠️ 用字符串字面量读属性而不是 `kAXMenuItemCmdChar` 常量: 那两个常量在 Swift 里
@@ -260,6 +374,10 @@ enum AXAdapter {
 
     /// AX 的受保护内容标记(`AXProtectedContent`)。取不到就当**不是**受保护 ——
     /// 这条判据的兜底是角色名(`ComputerRedline.isPasswordRole`), 两条任一生效即遮。
+    ///
+    /// ⚠️ **两条路都在用**: ① `build`(进快照, 交给模型看的那份值) ② `liveTarget`(动作判据)。
+    ///    少接一条的后果不一样: 少接 `liveTarget` = 往受保护字段里写; 少接 `build` = **值泄进上下文**
+    ///    (后者更坏, 而且不会有任何红灯 —— 2026-10-30 之前就是这样)。
     private static func isProtected(_ el: AXUIElement) -> Bool {
         var raw: CFTypeRef?
         guard AXUIElementCopyAttributeValue(el, "AXProtectedContent" as CFString, &raw) == .success else {

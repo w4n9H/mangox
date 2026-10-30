@@ -16,21 +16,30 @@ extension SmokeMain {
 
     @MainActor
     static func caseComputerAct() async {
-        print("== T-ACT 动作面判据 (P18 批 2b) ==")
+        print("== T-ACT 动作面判据 (P18 批 2b / 四档 op 在批 2f 补齐) ==")
 
         // MARK: ① op 白名单 —— 认不出来的不许落到任何默认分支
 
         check(ComputerAction.parse("press") == .press, "T-ACT press 认得")
         check(ComputerAction.parse("setValue") == .setValue, "T-ACT setValue 认得")
+        check(ComputerAction.parse("focus") == .focus, "T-ACT focus 认得 (批 2f)")
+        check(ComputerAction.parse("scroll") == .scroll, "T-ACT scroll 认得 (批 2f)")
         check(ComputerAction.parse(" press ") == .press, "T-ACT 两侧空白不算错 (线上偶尔带)")
         check(ComputerAction.parse("click") == nil,
-              "T-ACT 坐标点击不在这一批 ⇒ 认不出来, 不许默默当成 press")
-        check(ComputerAction.parse("scroll") == nil,
-              "T-ACT 滚动是批 3 的事 ⇒ 现在必须认不出来, 否则等于偷偷开了个面")
+              "T-ACT 坐标点击仍然不做 ⇒ 认不出来, 不许默默当成 press")
         check(ComputerAction.parse("PRESS") == nil,
               "T-ACT 大小写敏感: 线上写错了要变红, 不许看着差不多就认")
-        check(ComputerAction.allCases.count == 2,
-              "T-ACT 动作面只有两个 —— 多一个就多一条「模型以为自己能动」的路")
+        check(ComputerAction.allCases.count == 4,
+              "T-ACT 动作面只有四个 —— 多一个就多一条「模型以为自己能动」的路")
+
+        // 方向是 scroll 的**独立参数**, 不是一个 op: 认不出来就必须拒(判据 ⑧ 的第一支),
+        // 不许退回"那就往下滚"。
+        check(ComputerScrollDirection.parse("down") == .down, "T-ACT 方向 down 认得")
+        check(ComputerScrollDirection.parse(" Up ") == .up,
+              "T-ACT 方向两侧空白与大小写都不算错 (它不是 op 那种枚举契约, 宽容一点没有风险)")
+        check(ComputerScrollDirection.parse("left") == nil,
+              "T-ACT 横向滚动不认 (横向多半是表太宽 ⇒ 那是「读」能解决的)")
+        check(ComputerScrollDirection.parse("") == nil, "T-ACT 空方向认不出来")
 
         // MARK: 夹具 —— 一份样样都合格的上下文
 
@@ -50,11 +59,17 @@ extension SmokeMain {
         func req(_ action: ComputerAction = .press,
                  index: Int = 12,
                  seq: Int = 3,
-                 text: String = "") -> ComputerActRequest {
-            ComputerActRequest(app: "Safari", action: action, index: index, seq: seq, text: text)
+                 text: String = "",
+                 direction: ComputerScrollDirection? = nil) -> ComputerActRequest {
+            ComputerActRequest(app: "Safari", action: action, index: index,
+                               seq: seq, text: text, direction: direction)
         }
         let button = ComputerActTarget(role: "AXButton", title: "登录", actions: ["AXPress"])
         let field = ComputerActTarget(role: "AXTextField", title: "搜索", actions: ["AXPress"])
+        // 两种"新 op 用得上"的目标。canFocus / canScroll **缺省都是 false** ——
+        // 这一对夹具和 `button` 的区别只有那两个读数, 正好用来证明判据看的是系统答案, 不是角色。
+        let focusable = ComputerActTarget(role: "AXTextField", title: "搜索", canFocus: true)
+        let scrollable = ComputerActTarget(role: "AXScrollArea", title: "页面", canScroll: true)
 
         // 基线: 什么都没问题 ⇒ 放行。没有这一条, 后面所有拒绝都可能是「反正都拒」。
         check(ComputerActGuard.evaluate(request: req(), scope: scope(),
@@ -255,12 +270,63 @@ extension SmokeMain {
             target: field, window: .none) == .allow(.setValue),
               "T-ACT 基线对照: 文本框 + 正常文本 ⇒ 放行")
 
+        // —— focus / scroll (批 2f) ——
+        // 这两个 op 都不动"按编号寻址"这个前提(判据体系一行没改), 只多了两个现场读数。
+        // ⚠️ 判的是**系统说能不能**, 不是"角色长得像不像": 下面两个 fixture 的 role 都是
+        //    `AXTextField`, 只有 `canFocus` 不同 —— 结论必须不同, 否则就是在按角色猜。
+        if case .refuse(let why, _) = ComputerActGuard.evaluate(
+            request: req(.focus), scope: scope(), target: field, window: .none) {
+            check(why.contains("不接受聚焦"),
+                  "T-ACT 焦点不可设 ⇒ 拒, 用「系统说不可设」这句(不是「好像点不动」) 实际:\(why)")
+        } else {
+            check(false, "T-ACT canFocus=false 必须拒 —— 否则回执只能替一次没反应的动作圆场")
+        }
+        check(ComputerActGuard.evaluate(
+            request: req(.focus), scope: scope(), target: focusable, window: .none) == .allow(.focus),
+              "T-ACT 基线对照: 同样角色但焦点可设 ⇒ 放行 (没有这条, 上面的拒绝可能是「反正都拒」)")
+
+        // 参数错 与 能力不足 是两件事: 前者重发一次就能成, 后者得换节点 —— 回执必须分开。
+        if case .refuse(let why, _) = ComputerActGuard.evaluate(
+            request: req(.scroll, direction: nil), scope: scope(),
+            target: scrollable, window: .none) {
+            check(why.contains("往哪滚"),
+                  "T-ACT scroll 没说方向 ⇒ 拒, 且指名是参数问题 (不许默认往下滚) 实际:\(why)")
+        } else {
+            check(false, "T-ACT scroll 缺 direction 必须拒")
+        }
+        if case .refuse(let why, _) = ComputerActGuard.evaluate(
+            request: req(.scroll, direction: .down), scope: scope(),
+            target: button, window: .none) {
+            check(why.contains("没有可写的滚动条"),
+                  "T-ACT 目标上没滚动条 ⇒ 拒, 且说清「有些 App 不向系统暴露」 实际:\(why)")
+        } else {
+            check(false, "T-ACT canScroll=false 必须拒")
+        }
+        // ⚠️ 顺序: 参数错排在"滚不动"之前 —— 两个都成立时报参数, 因为下一步是重发不是换节点。
+        if case .refuse(let why, _) = ComputerActGuard.evaluate(
+            request: req(.scroll, direction: nil), scope: scope(),
+            target: button, window: .none) {
+            check(why.contains("往哪滚") && !why.contains("滚动条"),
+                  "T-ACT 参数错与滚不动同时成立时报参数 (反过来的话模型会去换节点白试) 实际:\(why)")
+        } else {
+            check(false, "T-ACT 两者同时成立必须拒")
+        }
+        check(ComputerActGuard.evaluate(
+            request: req(.scroll, direction: .up), scope: scope(),
+            target: scrollable, window: .none) == .allow(.scroll),
+              "T-ACT 基线对照: 有滚动条 + 说了方向 ⇒ 放行")
+
         // MARK: ⑨ 审批卡上那一行
 
         check(ComputerActGuard.preview(action: .press, app: "Safari", index: 12) == "按 #12 · Safari",
               "T-ACT 卡片摘要 = 动作 + 编号 + App")
         check(ComputerActGuard.preview(action: .setValue, app: "", index: 7) == "写 #7 · 当前前台",
               "T-ACT 没给 App 时说当前前台, 不写一个空的间隔号")
+        check(ComputerActGuard.preview(action: .focus, app: "Safari", index: 4) == "聚焦 #4 · Safari",
+              "T-ACT focus 那一行 (批 2f)")
+        check(ComputerActGuard.preview(action: .scroll, app: "", index: 4) == "滚动 #4 · 当前前台",
+              "T-ACT scroll 那一行: 只承诺编号 + App, 方向不写在这里 "
+              + "(滚错方向可以再滚回来, 不必占用卡上那一行)")
 
         // MARK: ⑩ sheet 的按钮必须**同源**筛出来 (判据算下标, 执行按元素)
 

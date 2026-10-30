@@ -1095,4 +1095,20 @@ VALUES = {
     # 审批卡那一行 (JS 扩展侧拼的, 与 `按 #` / `写 #` / ` · 当前前台` 同一族)
     '打开': 'Open',
     '打开 (没说哪个 App)': 'Open (no app named)',
+    # P18 批 2f: `focus` / `scroll` 两个 op 的判据话术 + 卡片那一行。
+    # ⚠️ 判据的回执**进的是模型的上下文**, 译文只是为了让「界面语言 = 英文」时词表不留空洞;
+    #    运行时它们照旧走中文(同上面那条"落库文案恒中文"的族)。
+    '「%@」不接受聚焦(系统说这个控件的焦点不可设) ⇒ 没动。': '%@ will not take focus (the system says its focus attribute is not settable) ⇒ nothing was done.',
+    '要写内容请直接 setValue; 它连 AXValue 也不吃的话, 说明这类 App 只能靠': 'To write into it, use setValue directly; if it will not take AXValue either, that app only responds to ',
+    '坐标点击(还没做) —— 那就如实告诉用户。': 'coordinate clicks, which are not implemented yet — tell the user that plainly.',
+    'scroll 要说清往哪滚(up / down) ⇒ 没动。': 'scroll must say which way (up / down) ⇒ nothing was done.',
+    '「%@」附近没有可写的滚动条(它自己和上面几层都没有) ⇒ 滚不动。': 'There is no writable scroll bar around %@ (not on it, nor a few levels above it) ⇒ it cannot be scrolled.',
+    '有些 App(尤其网页内容)不把滚动条交给系统 —— 那就趁早告诉用户这一页我一次读不完,': 'Some apps — web content in particular — never hand a scroll bar to the system, so tell the user early that this page cannot be read in one go,',
+    ' 别反复换节点试。': ' rather than trying one row after another.',
+    '聚焦': 'Focus',
+    '聚焦 #': 'Focus #',
+    '滚动': 'Scroll',
+    '滚动 #': 'Scroll #',
+    '向上': 'Up',
+    '向下': 'Down',
 }

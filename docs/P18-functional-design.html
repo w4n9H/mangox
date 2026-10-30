@@ -591,13 +591,13 @@ details.fold[open]>summary{margin-bottom:4px}
   <thead><tr><th>工具</th><th>作用</th><th>审批</th></tr></thead>
   <tbody>
     <tr><td><code>computer_read</code></td><td>读当前作用域内的界面(元素表 + 差分);可选"给张图"</td><td>作用域内静默</td></tr>
-    <tr><td><code>computer_act</code></td><td>对某个元素做动作(press / setValue)</td><td><b>勾了「可操作」就放行, 没勾就拒</b>(不弹卡, 见 §04 第 5 条)· 远程驱动档一律拒</td></tr>
+    <tr><td><code>computer_act</code></td><td>对某个元素做动作(press / setValue / focus / scroll)</td><td><b>勾了「可操作」就放行, 没勾就拒</b>(不弹卡, 见 §04 第 5 条)· 远程驱动档一律拒</td></tr>
     <tr><td><code>computer_open</code></td><td>打开(或切到前台)名单里的一个 App —— <b>没打开的 App 没有窗口</b>, 读不到也就动不了</td><td><b>勾了「可读」就放行</b>(打开等于替你点一下图标)· 远程驱动档一律拒</td></tr>
   </tbody>
 </table>
 </div>
 
-<p class="lead"><b>三个工具, 一条链</b> —— 打开 → 读 → 动, 每一步各自是最小的一件事: 工具越多,模型的选错率越高、说明越长,所以动作面只开 <code>press</code> / <code>setValue</code>。<b>为什么非要有 <code>computer_open</code></b>: 2026-10-29 boss 实测「帮我用计算器算 100×5」在计算器没开时<b>结构上做不到</b> —— 没有窗口可读 ⇒ 没有编号可动, 而模型手里唯一的出路是"请用户自己打开它"。它不是动作面的一部分: 打开一个 App <b>不动它里面的任何东西</b>, 与"在 Dock 上点一下图标"同一件事 ⇒ 它查的是<b>读面</b>那道门。详见 §04 补记 批 2d。</p>
+<p class="lead"><b>三个工具, 一条链</b> —— 打开 → 读 → 动, 每一步各自是最小的一件事: 工具越多,模型的选错率越高、说明越长,所以动作面只开 <code>press</code> / <code>setValue</code> / <code>focus</code> / <code>scroll</code> 四档(批 2f 补齐后两档; 坐标点击<b>仍然不做</b> —— 它绕开编号,"我看见的节点 = 我点的东西"这个等式就没了)。<b>为什么非要有 <code>computer_open</code></b>: 2026-10-29 boss 实测「帮我用计算器算 100×5」在计算器没开时<b>结构上做不到</b> —— 没有窗口可读 ⇒ 没有编号可动, 而模型手里唯一的出路是"请用户自己打开它"。它不是动作面的一部分: 打开一个 App <b>不动它里面的任何东西</b>, 与"在 Dock 上点一下图标"同一件事 ⇒ 它查的是<b>读面</b>那道门。详见 §04 补记 批 2d / 批 2f。</p>
 
 <p class="lead"><b>档位</b>:<b>挂载与档位无关</b>(<code>extensionArguments</code> 里 computer 与业务扩展<b>并列</b>,10-29 定案),能不能用由 <code>--tools</code> 决定 —— <code>standard</code> / <code>full</code> 能用,<code>minimal</code> 被 allowlist 裁掉、<code>codemode</code> 只剩一个工具;定时任务想在没人看着的情况下驱动界面,<b>任务级档位要选 <code>full</code></b> —— 这两件事正交(<b>能不能用看 <code>--tools</code>,裁决看审批轴</b>),别混;沿用 web-search 的<b>双闸门</b>(挂载闸门 = 设置里开着;env 闸门 = 这一轮 spawn 时名单非空)⇒ <b>名单空</b>的会话连 socket 路径都拿不到。</p>
 
@@ -703,7 +703,7 @@ details.fold[open]>summary{margin-bottom:4px}
     <span class="tn">8</span>
     <div class="tbody">
       <div class="tt">密码框恒被遮蔽</div>
-      <div class="td"><b>判据</b>：构造一棵含密码框的 AX 树 ⇒ 序列化结果里该值恒为 <code>••••</code>;改坏遮蔽代码 ⇒ 必须变红。<b>注意</b>：这条要在<b>序列化边界</b>测,不是测"prompt 里有没有让它别看"。</div>
+      <div class="td"><b>判据</b>：构造一棵含密码框的 AX 树 ⇒ 序列化结果里该值恒为 <code>••••</code>;改坏遮蔽代码 ⇒ 必须变红。<b>注意</b>：这条要在<b>序列化边界</b>测,不是测"prompt 里有没有让它别看"。<br><b>状态</b>：<span class="chip c-ok">已做（未发版）</span> —— <b>两档一起遮</b>：① <b>角色</b>(<code>ComputerRedline.isPasswordRole</code>，认 secure / password / axtextfieldsecure 三种写法) ② <b>受保护内容标记</b>(<code>AXProtectedContent</code>，SDK 没导出常量 ⇒ 按属性名字符串读)。<code>CaseComputerPure</code> 4 条：同角色同值、只有标记不同的两个节点 ⇒ 结论必须不同；渲染出口(<code>rendered()</code>)里不许出现原文；遮蔽只换值、不吞行(否则模型连"那儿有卡号栏"都不知道)。<b>反例</b> = 拆掉 <code>maskedValue</code> 的 <code>isProtected</code> 分支 ⇒ <b>3 条红</b>。<br><b>⚠️ 2026-10-30 补的洞（这一条原来只有一半）</b>：helper 的 <code>AXAdapter.build</code> 把 <code>isProtected</code> <b>硬写成 <code>false</code></b> ⇒ 第 ② 档在真机上<b>从来没生效过</b>，而文件头注释早写着"按属性名字符串读"——<b>注释比事实说得多</b>。症状是"角色不叫 secure、但被系统标了受保护内容的值照原文进上下文"，<b>零红灯</b>(纯函数那半边喂的是手搓的树，它不知道 helper 根本没填这个字段)。已接上，并只在<b>有值</b>时才去问那个属性(每节点一次 AX 往返，3000 节点 = 3000 次 IPC；遮蔽挡的是"值泄出去"，空值没什么可遮的)。<code>run.sh</code> <b>③q</b> 两条源码事实盯着它：禁 <code>isProtected: false</code> + 钉住现场读那个调用(反例 = 改回常量 ⇒ ③q 变红, 退码 1)。⚠️ 至今仍<b>没在真机上找到一个 <code>AXProtectedContent=1</code> 的元素</b>做对照 —— 真遇到时回来记一笔。</div>
     </div>
   </div>
   <div class="todo">
@@ -802,6 +802,27 @@ details.fold[open]>summary{margin-bottom:4px}
     <div class="tbody">
       <div class="tt"><code>NSWorkspace.shared.runningApplications</code> 在没有 run loop 的进程里<b>定格在首次查询那一刻</b></div>
       <div class="td"><b>症状</b>：<code>computer_open</code> 回「已经请系统启动「calculator」, 但 4 秒内还没看到它起来」、<code>computer_read</code> 一路回「它们现在都没在运行 ⇒ 没有可读的窗口」；而同一时刻 <code>pgrep -x Calculator</code> 有 pid、<code>CGWindowList</code> 也看得到那个 232×321 的窗口。<br><b>根因（实测，macOS 14.8.1）</b>：这两个查询靠 <b>LaunchServices 通知</b>刷新，而 helper 是"阻塞在 <code>accept()</code> 上一个 loop 都不跑"的裸进程 ⇒ 它看到的是<b>启动那一刻的快照</b>：起 App 前枚举 0，起 App 后 8 秒仍是 0。同一进程里抽一次 <code>CFRunLoopRunInMode(.defaultMode, 0.06, false)</code> ⇒ 枚举 0→1、frontmost 立刻从 Chrome 变「计算器」；而 <code>NSRunningApplication.runningApplications(withBundleIdentifier:)</code> 是<b>同步查询</b>，不抽也立刻 0→1。<br><b>判据</b>：① 取"谁在跑"一律按 bundle 现问，<b>不许用那两个会定格的查询</b>（<code>run.sh</code> ③p 扫源码事实封住退路）；② 前台 = 名单里 <code>isActive</code> 的那个；名单里一个都不 active（前台是没开放的 App）时，从 <code>CGWindowList</code> 最前面的 layer-0 窗口反查 owner —— 只为把名字说出来，<b>不需要屏幕录制权限</b>；③ "取"与"判"拆开：<code>ComputerTarget.candidates(inScope:running:)</code> 与 <code>openPlan(query:installed:running:)</code>（<code>.activate</code> / <code>.launch</code> / <code>.notInScope</code>）是纯函数，helper 只负责取与执行。<br><b>别跟权限混谈</b>：这次失败<b>不是</b>缺辅助功能 —— helper 早已过 <code>AXIsProcessTrusted()</code> 那道门（否则回执会是那句权限话）。<code>CGPreflightScreenCaptureAccess = false</code> 只影响截图/图像面（批 3），读界面走 AX 树。<br><b>状态</b>：<span class="chip c-ok">已做（未发版）</span> —— 冒烟 1932 / 0；<code>CaseActScope</code> ⑤ 组 9 条（名单 ∩ 在跑 / 名单里有但它没在跑 ⇒ 不进候选 / pid=-1 丢弃 / 名单空 ⇒ 候选空 / activate 取系统那份 pid / launch / 名字对不上不猜 / 空 query）；反例 = 把 <code>runningApp</code> 换回 <code>NSWorkspace.shared.runningApplications</code> ⇒ <code>run.sh</code> ③p <b>变红</b>。</div>
+    </div>
+  </div>
+</div>
+
+<h3>补记 · 批 2f：<code>scroll</code> + <code>focus</code>（2026-10-29，boss 定：别先把话说小）</h3>
+
+<p class="lead">这一批的起点是一句<b>自我更正</b>：批 2b 时我把工具描述里的"滚一下再看"<b>删掉</b>了，理由是"还没做，别空头承诺"。boss 的判据更直接 —— <b>既然现在就落这两个 op，那就不必先把话收回去</b>。空头承诺与如实的失败回执是两件事：前者是"我做不到却说你叫我做"，后者是"做了没动，我告诉你为什么"。</p>
+
+<div class="todos">
+  <div class="todo">
+    <span class="tn">19</span>
+    <div class="tbody">
+      <div class="tt"><code>focus</code>：判"系统说焦点可不可设"，不是判"它长得像不像输入框"</div>
+      <div class="td"><b>为什么要有它</b>：一部分 web / Electron 输入框<b>不吃</b> <code>setValue</code>（AX 返回 <code>success</code>，值没变）；而"先点进去再发按键"要 <code>CGEvent</code>，属于批 3。先把"能不能聚焦"这一半如实交出去，模型才知道该重试还是该放弃。<br><b>判据</b>：<code>ComputerActGuard</code> 第 ⑧ 步新增一支 —— <code>target.canFocus</code>（helper 现问 <code>AXUIElementIsAttributeSettable(AXFocused)</code>）为假即拒，话术<b>点名是系统的答案</b>（"系统说这个控件的焦点不可设"），并给出下一步（改用 <code>setValue</code>；连 AXValue 也不吃 ⇒ 这一类只能靠坐标点击，而它还没做 ⇒ <b>如实告诉用户</b>）。<br><b>⚠️ 必须回读</b>：<code>AXUIElementSetAttributeValue</code> 对某些元素<b>返回成功却什么都没做</b> ⇒ 执行后读 <code>AXFocused</code>，不成立就回"没当成已聚焦"，<b>不许回"聚焦了"</b>。不回读的后果是模型接着 <code>setValue</code> 写进一个没聚焦的控件，然后以为这个 App 坏了。<br><b>状态</b>：<span class="chip c-ok">已做（未发版）</span> —— <code>CaseComputerAct</code> ⑧ 段两支：<code>canFocus=false</code> ⇒ 拒且说"不接受聚焦"；<b>同角色 + <code>canFocus=true</code> ⇒ 放行</b>（没有这条对照，上面那条拒绝可能只是"反正都拒"）。</div>
+    </div>
+  </div>
+  <div class="todo">
+    <span class="tn">20</span>
+    <div class="tbody">
+      <div class="tt"><code>scroll</code>：方向是<b>独立参数</b>，落点是<b>四档搜索</b>，成败靠<b>回读百分比</b></div>
+      <div class="td"><b>方向不许猜</b>：<code>direction</code> 与 <code>op</code> 分开两个参数、解码阶段<b>不填默认值</b>（填了就等于替模型决定"往下滚"，而它可能已经到底了）。判据先判参数、再判能力 —— <b>顺序是判据本身</b>：没说方向是"重发一次就好"，没有滚动条是"换节点或换 App"，两句话导出的下一步不同。<br><b>落点四档</b>（<code>AXAdapter.scrollBar(of:)</code>）：① 自己就是 <code>AXScrollBar</code> ② 自己的 <code>AXVerticalScrollBar</code> 属性（<code>AXVerticalScrollBar</code> 常量在 Swift 里没导出 ⇒ 用字面量，同 <code>AXSheets</code> / <code>AXProtectedContent</code>）③ 子树里第一个滚动条（<b>有预算</b>：网页树几千节点，整棵搜一遍会让一次 scroll 慢到几百毫秒）④ <b>再往上找四层</b>。④ 是<b>实测逼出来的</b>：模型手里有编号的通常不是滚动容器本身，而是页面里的某个控件，滚动条挂在它<b>上面</b>那层 —— 只往下找的话，最常见的"长网页滚一屏"永远滚不动，而回执还会把原因说成"这个 App 不交给系统"（<b>说错话比不动更糟</b>）。<br><b>一步 = 0.1 段</b>：拿不到内容高度与视口高度，<b>假装知道</b>比说不知道更糟（模型会以为一次就到底）⇒ 回执写百分比，要更多就再叫一次。<br><b>⚠️ 必须回读</b>：写完<code>AXValue</code> 后重新读一遍，位移 &lt; 0.001 就回"这个 App 不吃 AX 滚动，<b>别重试同一个节点</b>"。不回读的后果是模型接着读还是那 120 行，它只会以为这一页本来就短。<br><b>状态</b>：<span class="chip c-ok">已做（未发版）</span> —— <code>CaseComputerAct</code> ⑧ 段四支（缺方向 ⇒ 拒且说"往哪滚"；没滚动条 ⇒ 拒且说"它自己和上面几层都没有"；<b>两者同时成立时报参数</b>；有滚动条 + 有方向 ⇒ 放行）+ <code>ComputerScrollDirection.parse</code> 的认/不认（<code>Up</code> 认，<code>left</code> 不认 —— 横向多半是表太宽，那是"读"能解决的）。<b>反例</b>：摘掉方向判据 ⇒ <b>2 条红</b>，退码 1。<br><b>真机端到端</b>（真 helper 二进制 + unix socket + TextEdit 400 行长文档）：<code>focus</code> ⇒ "聚焦了 #1「textarea」"；<code>scroll down</code> ⇒ <code>0% → 10%</code>；再一次 ⇒ <code>10% → 20%</code>；<code>up</code> ⇒ <code>20% → 10%</code>；不带 <code>direction</code> ⇒ "scroll 要说清往哪滚(up / down) ⇒ 没动"。<b>⚠️ 一个诚实的观察</b>：TextEdit 整个文档都在 <code>AXValue</code> 里，滚动<b>不改变</b>那棵树 ⇒ 差分如实回"界面没动"，回执的价值只在百分比。scroll 真正的收益在<b>虚拟化列表</b>（网页 / 大 <code>NSTableView</code>）—— 那里滚出来的行才是新信息。别拿 TextEdit 这类反推"滚动没用"。</div>
     </div>
   </div>
 </div>

@@ -17,14 +17,20 @@ import Foundation
 
 // MARK: - 动作
 
-/// 模型能做的动作。⚠️ **只有两个**: 多一个 op 就多一条"模型以为自己能动"的路
-/// (同 `PiRpcTransport.computerToolNames` 那条注释)。
+/// 模型能做的动作。⚠️ **只有四个**, 而且每一个都必须按**编号**寻址 ——
+/// 多一个 op 就多一条"模型以为自己能动"的路(同 `PiRpcTransport.computerToolNames` 那条注释)。
 ///
-/// 批 2b 故意不含 `focus` / `scroll` / 坐标点击: 前两个靠 `press` 绝大多数时候够用,
-/// 坐标点击要等人类接管那批一起做(抢不回控制权时, 点错一下比按错一个按钮严重得多)。
+/// 批 2b 只有 `press` / `setValue`; 批 2f 补了 `focus` / `scroll`, 两条都是**纯 AX**:
+///   · `focus`: 不少 web / Electron 输入框**不吃** `setValue`(AX 返回成功, 值没变),
+///     而"先点进去再发按键"要 CGEvent ⇒ 先把"能不能聚焦"这一半如实交出去。
+///   · `scroll`: 长页面/长列表读不完 —— `AXSnapshot.rendered` 截断那句"需要的话让我滚动
+///     再看"在批 2f 之前是**空头支票**(根本没有 scroll 这个 op, 模型照做只会撞"不认识的 op")。
+/// 坐标点击仍然不做: 它绕开编号("我看见的节点 = 我点的东西"这个等式没了), 要等人类接管那批。
 enum ComputerAction: String, Equatable, CaseIterable {
     case press
     case setValue
+    case focus
+    case scroll
 
     /// 线上给的 `op` 字符串 → 动作。**不认识的 op 返回 nil**, 由调用方拒掉。
     ///
@@ -32,6 +38,20 @@ enum ComputerAction: String, Equatable, CaseIterable {
     ///    默默落到某个默认分支, 就等于"扩展侧改名之后一切照常"。
     static func parse(_ raw: String) -> ComputerAction? {
         ComputerAction(rawValue: raw.trimmingCharacters(in: .whitespacesAndNewlines))
+    }
+}
+
+/// `scroll` 往哪滚。
+///
+/// ⚠️ 只有上下两档: 横向滚动在真实界面里几乎都是"表格列太宽", 而那是**读**能解决的
+///    (宽表快照里带坐标); 多一个方向就多一条模型点错的路。
+enum ComputerScrollDirection: String, Equatable, CaseIterable {
+    case up
+    case down
+
+    static func parse(_ raw: String) -> ComputerScrollDirection? {
+        ComputerScrollDirection(
+            rawValue: raw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased())
     }
 }
 
@@ -45,6 +65,22 @@ struct ComputerActRequest: Equatable {
     let seq: Int
     /// 只 `setValue` 用。
     let text: String
+    /// 只 `scroll` 用。缺了就是**参数错**, 判据会拒(不是默认往下滚)。
+    let direction: ComputerScrollDirection?
+
+    init(app: String,
+         action: ComputerAction,
+         index: Int,
+         seq: Int,
+         text: String,
+         direction: ComputerScrollDirection? = nil) {
+        self.app = app
+        self.action = action
+        self.index = index
+        self.seq = seq
+        self.text = text
+        self.direction = direction
+    }
 }
 
 // MARK: - 现场读数
@@ -59,19 +95,30 @@ struct ComputerActTarget: Equatable {
     let keyEquivalent: String?
     /// 已经解码过的修饰键(`["command","shift"]`), 不是 AX 的位掩码。
     let modifiers: Set<String>
+    /// `AXFocused` 在这个元素上**可设**吗(helper 现问 `AXUIElementIsAttributeSettable`)。
+    ///
+    /// ⚠️ 为什么不按角色猜"它像不像输入框": 可设与否是**系统给的答案**, 猜错的方向不对称 ——
+    ///    猜"能"就是一次点了没反应的 action, 而回执还得替它圆场。
+    let canFocus: Bool
+    /// 这个元素管着的那根**竖向滚动条**能不能读写(`scroll` 的落点)。
+    let canScroll: Bool
 
     init(role: String,
          title: String,
          actions: [String] = [],
          isProtected: Bool = false,
          keyEquivalent: String? = nil,
-         modifiers: Set<String> = []) {
+         modifiers: Set<String> = [],
+         canFocus: Bool = false,
+         canScroll: Bool = false) {
         self.role = role
         self.title = title
         self.actions = actions
         self.isProtected = isProtected
         self.keyEquivalent = keyEquivalent
         self.modifiers = modifiers
+        self.canFocus = canFocus
+        self.canScroll = canScroll
     }
 }
 
@@ -143,7 +190,7 @@ enum ComputerActGuard {
 
         // ① op 合法性已在 `ComputerAction.parse` 那一步做完(解析不出来就进不到这里),
         //    这里不重复判 —— 但正因为不重复, 那条判据必须有自己的断言:
-        //    `CaseComputerAct` 里 `ComputerAction.parse("scroll") == nil`。
+        //    `CaseComputerAct` 里 `ComputerAction.parse("click") == nil`(坐标点击**还没有**)。
 
         // ② 这个 App 在不在"能读"的名单里。
         //    ⚠️ helper 是先按作用域挑候选再挑 App 的, 所以正常路径下这条恒真 —— **保留它是因为
@@ -240,6 +287,31 @@ enum ComputerActGuard {
                         + "这么长的东西多半是搞错了对象。",
                     refusal: nil)
             }
+        case .focus:
+            // ⚠️ 判据是**这个控件接受不接受聚焦**, 由 helper 现问 `AXUIElementIsAttributeSettable`
+            //    (`target.canFocus`), 不是"它长得像输入框" —— 猜"能"就是一次点了没反应的动作。
+            guard target.canFocus else {
+                return .refuse(
+                    reason: "「\(displayName(target))」不接受聚焦(系统说这个控件的焦点不可设) ⇒ 没动。"
+                        + "要写内容请直接 setValue; 它连 AXValue 也不吃的话, 说明这类 App 只能靠"
+                        + "坐标点击(还没做) —— 那就如实告诉用户。",
+                    refusal: nil)
+            }
+        case .scroll:
+            // 先判参数: 没说方向是**调用方写错了**, 与"这个 App 滚不动"是两件事, 下一步也不同
+            // (前者重发一次, 后者换 App 或告诉用户)。
+            guard request.direction != nil else {
+                return .refuse(reason: "scroll 要说清往哪滚(up / down) ⇒ 没动。", refusal: nil)
+            }
+            guard target.canScroll else {
+                // ⚠️ helper 是「自己 → 子树 → 上面四层」都找过的, 所以这句话说的是**找过**,
+                //    不是"我觉得它没有" —— 回执不能比事实说得多。
+                return .refuse(
+                    reason: "「\(displayName(target))」附近没有可写的滚动条(它自己和上面几层都没有) ⇒ 滚不动。"
+                        + "有些 App(尤其网页内容)不把滚动条交给系统 —— 那就趁早告诉用户这一页我一次读不完,"
+                        + " 别反复换节点试。",
+                    refusal: nil)
+            }
         }
 
         // ⑨ 到此为止都成立。
@@ -282,6 +354,8 @@ enum ComputerActGuard {
         switch action {
         case .press: verb = "按"
         case .setValue: verb = "写"
+        case .focus: verb = "聚焦"
+        case .scroll: verb = "滚动"
         }
         let who = app.trimmingCharacters(in: .whitespacesAndNewlines)
         return verb + " #" + String(index) + (who.isEmpty ? " · 当前前台" : " · " + who)

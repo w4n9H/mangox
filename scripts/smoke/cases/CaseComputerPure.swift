@@ -139,6 +139,25 @@ extension SmokeMain {
         check(snap.rows.first(where: { $0.title == "发送" })?.role == "button",
               "T-COMPUTER 角色名去掉 AX 前缀 (button 而不是 AXButton)")
 
+        // 遮蔽的第二条命根子: **受保护内容标记**(不是角色)。2026-10-30 之前 helper 的 `build`
+        // 把它硬写成 `false` ⇒ 这一档在真机上从来没生效过, 而角色那一档会把断言照顾得很好看。
+        // ⚠️ 这里两个节点**角色完全相同**, 只有 `isProtected` 不同 ⇒ 结论必须不同, 否则就是没读那个标记。
+        let cardTree = AXNode(role: "AXWindow", title: "结账", children: [
+            AXNode(role: "AXTextField", title: "卡号", value: "4111 1111 1111 1111",
+                   isProtected: true),
+            AXNode(role: "AXTextField", title: "备注", value: "用公司卡"),
+        ])
+        let cardSnap = AXSnapshot.build(root: cardTree, appName: "某商店", windowTitle: "结账")
+        check(cardSnap.rows.first(where: { $0.title == "卡号" })?.value == ComputerRedline.mask,
+              "T-COMPUTER 标了受保护内容的字段被遮蔽 (角色看着只是普通 textfield)")
+        check(cardSnap.rows.first(where: { $0.title == "备注" })?.value == "用公司卡",
+              "T-COMPUTER 对照: 同样角色、没标受保护 ⇒ 照原样给 (证明上一条是被**标记**翻转的)")
+        let cardText = cardSnap.rendered()
+        check(!cardText.contains("4111"),
+              "T-COMPUTER 渲染出的那段文本里不许出现受保护内容 (只测 rows 不够: 出口是 rendered)")
+        check(cardText.contains("卡号"),
+              "T-COMPUTER 遮蔽只换值、不吞行 (标题与编号照旧, 否则模型连'那儿有卡号栏'都不知道)")
+
         // 编号稳定: 同一棵树读两次, 编号必须一致 —— 否则差分与动作寻址全废
         let snap2 = AXSnapshot.build(root: tree, appName: "飞书", windowTitle: "与张三的对话")
         check(snap.rows.map(\.number) == snap2.rows.map(\.number),

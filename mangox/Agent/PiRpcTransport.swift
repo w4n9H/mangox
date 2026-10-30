@@ -340,6 +340,11 @@ final class PiRpcTransport: AgentTransport {
               return "写 #" + (input.index ?? "?") + " (" + n + " 字)" + app;
             }
             if (input.op === "press") return "按 #" + (input.index ?? "?") + app;
+            if (input.op === "focus") return "聚焦 #" + (input.index ?? "?") + app;
+            if (input.op === "scroll") {
+              const way = input.direction === "up" ? "向上" : "向下";
+              return way + "滚动 #" + (input.index ?? "?") + app;
+            }
             if (input.op) return String(input.op) + app;
             return "读" + app;
           };
@@ -1204,8 +1209,9 @@ final class PiRpcTransport: AgentTransport {
                 name: "computer_act",
                 label: "Act on a window",
                 description: [
-                    "Do exactly one thing to the window you just read: press a control, or type",
-                    "into a field. Nothing else -- no scrolling, no coordinates, no dragging.",
+                    "Do exactly one thing to the window you just read: press a control, type into a",
+                    "field, put the keyboard focus on a control, or scroll a scroll area. Nothing else",
+                    "-- no coordinates, no dragging.",
                     "",
                     "You must pass `seq` from the read that produced `index`, and `index` must come",
                     "from that same outline. Numbers are only valid for the snapshot that printed",
@@ -1213,7 +1219,15 @@ final class PiRpcTransport: AgentTransport {
                     "number. Never re-use a number across reads, and never guess one.",
                     "",
                     "Type into a field with op \"setValue\" and the `text` to put there. Writing an",
-                    "empty string is refused on purpose: that is a wipe, not a no-op.",
+                    "empty string is refused on purpose: that is a wipe, not a no-op. Some fields",
+                    "accept the write and keep the old value -- if the reply says the value did not",
+                    "change, try op \"focus\" on that row (it only moves the caret), then setValue again.",
+                    "",
+                    "A long outline is truncated: its last line says how many rows were left out.",
+                    "Use op \"scroll\" with direction \"down\" (or \"up\") on the scroll-area row -- any",
+                    "row inside it works -- then read again; one call moves about a tenth of the way",
+                    "and the reply tells you where it landed. If the reply says no scroll bar was",
+                    "found, that app cannot be scrolled this way -- tell the user, do not retry.",
                     "",
                     "The reply is the *change*, not a new outline -- it also carries the new `seq`.",
                     "A few things are always refused no matter who asks: paying or ordering,",
@@ -1230,8 +1244,9 @@ final class PiRpcTransport: AgentTransport {
                         description: "App name or bundle id. Omit to act on the frontmost app.",
                     })),
                     op: Type.String({
-                        enum: ["press", "setValue"],
-                        description: "press = invoke the control; setValue = write text into a field.",
+                        enum: ["press", "setValue", "focus", "scroll"],
+                        description: "press = invoke the control; setValue = write text into a field;"
+                            + " focus = move keyboard focus onto it; scroll = move a scroll area.",
                     }),
                     index: Type.Number({
                         description: "The row number from the outline you are acting on.",
@@ -1241,6 +1256,10 @@ final class PiRpcTransport: AgentTransport {
                     }),
                     text: Type.Optional(Type.String({
                         description: "Only for setValue: the text to write. Must not be empty.",
+                    })),
+                    direction: Type.Optional(Type.String({
+                        enum: ["up", "down"],
+                        description: "Only for scroll, and required there: which way to move.",
                     })),
                 }, { additionalProperties: false }),
 
@@ -1259,6 +1278,7 @@ final class PiRpcTransport: AgentTransport {
                             index: params.index,
                             seq: params.seq,
                             text: params.text || "",
+                            direction: params.direction || "",
                         });
                     } catch (error) {
                         throw new Error("could not reach the window reader: " + String(error));
