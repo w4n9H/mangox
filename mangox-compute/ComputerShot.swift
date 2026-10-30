@@ -94,11 +94,22 @@ enum ComputerShot {
 
     // MARK: - SCK 桥
 
+    /// 等 SCK 的上限(秒)。**必须小于客户端的 10s**(`PiRpcTransport` 里的 `TIMEOUT_MS`):
+    /// 我们得先回一句人话, 而不是让对端先超时 —— 那样用户看到的是"截图超时", 却不知道
+    /// 是"卡住了"还是"权限没给"。
+    static let captureTimeout: TimeInterval = 8
+
     /// 同步拍一张。helper 的 socket 循环是同步的, 而 SCK 只有 async API。
     ///
     /// ⚠️ **实测过**: 这个"主线程 `sem.wait()` + `Task.detached`"的写法在裸可执行里不会死锁
     ///    (权限缺失时能正常抛出 TCC 错误)。如果哪天 SCK 改成必须回主队列, 表现会是**整个
     ///    helper 卡死**而不是报错 —— 那时得把 accept 循环挪到后台线程。
+    ///
+    /// ⚠️ **等待必须有超时**(2026-10-30 补): helper 是**单线程串行**服务(accept → 处理 → 关闭),
+    ///    `captureImage` 一旦不返回(显示器休眠 / TCC 状态异常 / 系统卡顿), 这唯一一个线程就
+    ///    永久阻塞 ⇒ accept 循环再也不转 —— **进程还活着, 但整个 computer use 死了**,
+    ///    用户只能重启 App。客户端 10s 会超时, 所以它看到的是"截图超时", 而**之后每一次读
+    ///    同样超时**, 永远回不来。无超时的 `sem.wait()` 等于把一次故障变成一次永久故障。
     ///
     /// ⚠️ 只截**那一个窗口**(`desktopIndependentWindow`), 不是整个屏幕: 桌面、别的窗口、
     ///    壁纸都不在过滤器里。窗口被别的窗口挡住也照样拍得到 —— 取的是它自己的表面。
@@ -137,7 +148,13 @@ enum ComputerShot {
                       + "里勾上 MangoX, 然后重开 MangoX(改这项要重启才生效)。"))
             }
         }
-        sem.wait()
+        // ⚠️ 带超时等, 而且**超时也算一次明确的失败**: 返回给人话, 让模型换路, 别重试。
+        //    后台那个 Task 之后若还是回来了, 写进 `box` 也没人再读 —— 不会污染下一次请求。
+        guard sem.wait(timeout: .now() + captureTimeout) == .success else {
+            return .failure(ComputerShotRule.ShotFailure(
+                "截图等了 \(Int(captureTimeout)) 秒还没回来 ⇒ 这次没有图"
+                + "(屏幕可能在休眠, 或者捕捉服务卡住了)。换别的路 —— 反复重试也是一样的结果。"))
+        }
         return box.result ?? .failure("截图没有返回结果(内部错误) ⇒ 这次没有图。")
     }
 

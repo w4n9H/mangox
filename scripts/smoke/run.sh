@@ -37,6 +37,16 @@ fi
 [[ -n "$DEV" && -d "$DEV" ]] || { echo "错误: 找不到开发者目录 (xcode-select --install)" >&2; exit 1; }
 SDK="$(DEVELOPER_DIR="$DEV" xcrun --sdk macosx --show-sdk-path)"
 
+# ⚠️ **SDK 主版本必须 ≥ 14**（2026-10-30 review 补的 CI 护栏）: 下面 `-target …-apple-macos14.0`
+#    要求 SDK 能出 14.0 的部署目标。GitHub runner 的镜像一旦回退到老 Xcode, 报错会是
+#    "invalid target / deployment target not supported" —— 那种失败**长得像代码错**, 会把人
+#    引到错的方向。先在这里说清楚。
+SDK_VERSION="$(DEVELOPER_DIR="$DEV" xcrun --sdk macosx --show-sdk-version 2>/dev/null || true)"
+if [ -n "$SDK_VERSION" ] && [ "${SDK_VERSION%%.*}" -lt 14 ]; then
+    echo "错误: SDK $SDK_VERSION 低于 14.0 (部署目标 -target …-apple-macos14.0 需要) —— 换更新的 Xcode" >&2
+    exit 1
+fi
+
 # 架构跟宿主走: 原先硬编码 arm64, 在 Intel Mac 上编出来的二进制跑不了 (门禁直接失效,
 # 而且失败信息是 exec format error, 很难联想到是构建脚本的架构写死了)
 ARCH="$(uname -m)"
@@ -341,7 +351,7 @@ if ! has_code mangox-compute/HumanInputTap.swift '"MANGOX_COMPUTE_TAKEOVER"'; th
     exit 1
 fi
 
-# ③t 图像面(批 3c) —— 六条会**静默**坏掉的地方
+# ③t 图像面(批 3c) —— 七条会**静默**坏掉的地方
 #
 #   ① 截图 API: `CGWindowListCreateImage` 在 macOS 14.0 起被标记弃用。这不是风格问题 ——
 #      本项目门禁要求 **0 warning**, 用它当场就红(实测确认过)。SCK 是唯一干净的路。
@@ -352,6 +362,8 @@ fi
 #      而黑块一旦落错位置(判据放宽 / 两套坐标系不同源 / 受保护容器框住整片), 整张图就废了,
 #      且**遮错的东西长得和遮对的一模一样**。遮蔽只留在文本层。这条要挡住"谁把它加回来"。
 #   ⑤ **只有读面能发图**: 图像对象只许装配一处(finishRead), 动作面永远拿不到像素。
+#   ⑥ 截图等待必须带超时: 无超时会让单线程 helper 永久堵在 sem.wait 上(accept 循环不转)。
+#   ⑦ AX 遍历预算必须是全局的: 每棵子树各一份 ⇒ 深层界面全量走完, 一条 read 卡几十秒。
 for f in mangox-compute/*.swift; do
     if has_code "$f" 'CGWindowListCreateImage|CGDisplayCreateImage'; then
         echo "FAIL - $f 用了已弃用的截图 API (macOS 14.0 起标记弃用 ⇒ 破 0 warning 门禁)" >&2
@@ -409,6 +421,22 @@ SHOT_IMAGE_SITES="$(awk '/ComputerImage\(/ { n++ } END { print n+0 }' mangox-com
 if [ "$SHOT_IMAGE_SITES" != "1" ]; then
     echo "FAIL - 图像对象的装配点不是唯一一处 (实测 $SHOT_IMAGE_SITES 处) ⇒ 图可能从动作面出去" >&2
     echo "       只有 finishRead(读面出口) 允许装配 ComputerImage" >&2
+    exit 1
+fi
+# ⑥ 截图等待**必须带超时**（2026-10-30 review 修的）: 无超时的 `sem.wait()` 会让单线程的
+#    helper 永久阻塞 —— accept 循环不转, 进程活着但整个 computer use 死了, 只能重启 App。
+if ! has_code mangox-compute/ComputerShot.swift 'sem\.wait\(timeout:'; then
+    echo "FAIL - 截图等待又变成无超时的 sem.wait() ⇒ 一次卡住 = 永久卡住" >&2
+    exit 1
+fi
+# ⑦ AX 遍历预算必须是**全局**的（2026-10-30 review 修的）: 原来 `budget: remaining` 只在
+#    兄弟之间递减, 子树烧掉的节点不回流 ⇒ 总量是乘出来的, 深层 DOM 会把整棵树全量走完。
+if ! has_code mangox-compute/AXAdapter.swift 'budget\.left' ; then
+    echo "FAIL - AX 遍历的全局预算计数不见了 (budget.left)" >&2
+    exit 1
+fi
+if has_code mangox-compute/AXAdapter.swift 'budget: remaining'; then
+    echo "FAIL - AX 遍历预算又变成'每棵子树各一份' (budget: remaining) ⇒ 深层界面会全量走完" >&2
     exit 1
 fi
 
@@ -578,13 +606,36 @@ SMOKE_SRC=$(find "$SMOKE_DIR" -name "*.swift" | sort)
 
 SRC=$(find mangox -name "*.swift" ! -name "mangoxApp.swift" | sort)
 
-DEVELOPER_DIR="$DEV" xcrun swiftc \
-    -sdk "$SDK" \
-    -target "$ARCH-apple-macos14.0" \
-    -D DEBUG \
-    -D SMOKE \
-    -o "$OUT/smoke" \
-    $SMOKE_SRC \
-    $SRC
+# ⚠️ `-swift-version 5` 是**钉住的**(2026-10-30 review): 不写它, 语言模式取的是工具链默认值 ——
+#    Xcode 大版本一跳(或 CI 镜像一换), 同一份源码会从 Swift 5 模式变成别的默认,
+#    于是"本地过、CI 挂", 而挂的原因和改的代码毫无关系。本项目按 Swift 5 模式开发, 写死它。
+#
+# ⚠️ **编译告警必须当场红**: 项目一直讲"0 warning", 但原来只是**让人去 grep 日志** ——
+#    CI 上没人看日志 ⇒ 新告警静默通过。实证: `subrole` 那次读到却忘了传进去, 唯一信号就是
+#    一条 `never used` warning, 而语义上它是**静默失效**(值恒空串, 整条遮蔽判据不生效)。
+BUILD_LOG="$OUT/swiftc.log"
+if ! DEVELOPER_DIR="$DEV" xcrun swiftc \
+        -sdk "$SDK" \
+        -target "$ARCH-apple-macos14.0" \
+        -swift-version 5 \
+        -D DEBUG \
+        -D SMOKE \
+        -o "$OUT/smoke" \
+        $SMOKE_SRC \
+        $SRC 2> "$BUILD_LOG"; then
+    cat "$BUILD_LOG" >&2
+    echo "FAIL - 全量编译失败 (见上)" >&2
+    exit 1
+fi
+# 只认**带文件位置**的诊断行: swiftc 会把同一条告警再打一遍(汇总行), 直接 `grep -c 'warning:'`
+# 会把 1 条数成 2 条 —— 计数一旦撒谎, 以后就没人信这个数了。
+WARN_PATTERN='\.swift:[0-9]+:[0-9]+: warning:'
+WARNINGS="$(grep -cE "$WARN_PATTERN" "$BUILD_LOG" 2>/dev/null || true)"
+[ -n "$WARNINGS" ] || WARNINGS=0
+if [ "$WARNINGS" != "0" ]; then
+    grep -E "$WARN_PATTERN" "$BUILD_LOG" >&2
+    echo "FAIL - swiftc 报了 $WARNINGS 条告警 (项目要求 0 warning; 告警常常是静默失效的唯一信号)" >&2
+    exit 1
+fi
 
 "$OUT/smoke"

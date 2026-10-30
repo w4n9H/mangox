@@ -885,6 +885,42 @@ details.fold[open]>summary{margin-bottom:4px}
   </div>
 </div>
 
+<h3>补记 · 代码审查（2026-10-30，四类问题逐条过）</h3>
+
+<p class="lead">上线前把 computer use 的全部新增代码审了一遍：<b>崩溃/内存 · 性能 · 静默失效 · CI 可重复性</b>。结论：<b>没有必然崩溃的写法，但有一处结构性缺陷、一处能把 helper 永久挂死的等待，和三个"靠默认值绿"的 CI 入口</b>。前两条已修并各自钉了门。</p>
+
+<div class="todos">
+  <div class="todo">
+    <span class="tn">25</span>
+    <div class="tbody">
+      <div class="tt">AX 遍历预算不是全局的 —— 深层界面会把整棵树全量走完</div>
+      <div class="td">原写法 <code>build(…, budget: remaining)</code>：<code>remaining</code> 只在<b>同一层兄弟之间</b>递减，子树里烧掉的节点<b>不回流给父级</b> ⇒ <code>maxNodes = 3000</code> 实际变成"每层每个子树各有 3000"，总量是<b>乘出来的</b>。后果不是崩，是<b>一条 read 卡几十秒</b>：深层 DOM（20 层、每层 2~3 个孩子）会把整棵树走完，每个节点一次 AX IPC（~0.5ms），5 万节点就是 25 秒，而 <code>elements</code> 字典还把每个 <code>AXUIElement</code> 留住。
+      <br><b>修法</b>：计数器拎成 <code>Budget</code>（引用类型）全域共享，每访问一个节点减一，到 0 立即返回。
+      <br><b>验证（实测，不是推理）</b>：把 <code>maxNodes</code> 临时压到 <b>24</b> 再看备忘录 —— 输出 <b>16 行 / 734 字符</b>；同一 App 在 <code>3000</code> 下是 <b>83 行 / 3804 字符</b>。预算是"每棵子树各一份"的话，把 3000 压到 24 <b>不会</b>把行数压到 24 以下（总量与这个数无关）⇒ 这一对数就是"它现在是全局的"的证据。
+      <br><b>门</b>：<code>run.sh</code> ③t ⑦ —— 必须出现 <code>budget.left</code>，且不许再出现 <code>budget: remaining</code>。（反例已验：把后者塞回源码 ⇒ 立刻红。）</div>
+    </div>
+  </div>
+  <div class="todo">
+    <span class="tn">26</span>
+    <div class="tbody">
+      <div class="tt">截图等待没有超时 —— 一次卡住会变成永久卡住</div>
+      <div class="td">helper 是<b>单线程串行</b>服务（<code>accept</code> → 处理 → 关闭），而 <code>sem.wait()</code> 没有超时。SCK 的 <code>captureImage</code> 一旦不返回（显示器休眠 / TCC 状态异常 / 系统卡顿），这唯一一个线程就永久阻塞 ⇒ <b>accept 循环再也不转，进程还活着但整个 computer use 死了</b>，用户只能重启 App。更糟的是客户端 10s 会先超时，所以它看到的是"截图超时"，而<b>之后每一次读同样超时</b>。
+      <br><b>修法</b>：<code>sem.wait(timeout: .now() + 8)</code>，超时按"这次没有图"回一句人话（必须 <b>&lt; 客户端的 10s</b>，否则永远是对端先超时，用户就分不清是卡住还是没权限）。
+      <br><b>门</b>：③t ⑥ —— <code>sem.wait(timeout:</code> 必须在。</div>
+    </div>
+  </div>
+  <div class="todo">
+    <span class="tn">27</span>
+    <div class="tbody">
+      <div class="tt">CI 是"靠默认值绿"，不是"靠断言绿"</div>
+      <div class="td"><code>release.yml:120-121</code> 确实跑 <code>scripts/smoke/run.sh</code> ⇒ 这 1999 条要在 runner 上活。核过的好消息：无 GNU 专有命令（<code>sed -i</code> / <code>grep -P</code> / <code>date -d</code> / <code>stat -c</code> 全无）、用例不碰真实 AX / 屏幕录制 / 网络（候选表走 mock，URL 全 <code>.invalid</code>）、架构跟 <code>uname -m</code> 走、唯一外部脚本只用标准库、build job 钉在 <code>macos-15</code>。
+      <br><b>三个入口已堵</b>：① <code>swiftc</code> 加 <code>-swift-version 5</code>（原来取工具链默认值，Xcode 一跳就"本地过 CI 挂"，而且挂的原因和改的代码无关）；② SDK 主版本 &lt; 14 直接报一句人话（否则报错长得像代码错）；③ <b>编译告警变成硬门</b> —— 项目一直讲"0 warning"，但原来只是让人去 grep 日志，<b>CI 上没人看日志</b>。实证：今天那条 <code>subrole</code> 读了没传，唯一信号就是一条 <code>never used</code> warning，而语义上是<b>静默失效</b>。
+      <br>⚠️ 告警计数只认带文件位置的诊断行（<code>.swift:N:M: warning:</code>）：swiftc 会把同一条再打一遍汇总行，直接 <code>grep -c 'warning:'</code> 会把 1 条数成 2 条 —— <b>计数一旦撒谎，以后就没人信这个数</b>。
+      <br><b>低优先、本次未修（如实记）</b>：<code>buffer</code> 无单行上限（入口已由 PeerCheck 收到同 uid 的 pi 子孙，风险低）；<code>HumanInputTap.keyboardVisible</code> 在锁外读写（数据竞争，严格并发下会升级成 error）；<code>signal</code> 处理器注释说"删文件 + 退出"但代码只 <code>exit(0)</code>（socket 文件会留，靠下次启动的 <code>unlink</code> 兜）—— 注释比事实说得多，但行为无害。</div>
+    </div>
+  </div>
+</div>
+
 <h2><span class="n">05</span>风险与边界<span class="en">RISK &amp; BOUNDARY</span></h2>
 
 <h3>代价（如实报，不劝阻）</h3>

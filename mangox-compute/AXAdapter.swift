@@ -62,15 +62,31 @@ enum AXAdapter {
         var windows: CFTypeRef?
         guard AXUIElementCopyAttributeValue(app, kAXWindowsAttribute as CFString, &windows) == .success,
               let raw = windows else { return nil }
-        // `as!` 的结果不是 Optional ⇒ 不用 `if let` 再包一层(编译器会直接判错)。
-        let list = raw as! [AXUIElement]
+        // ⚠️ 用 `as?` 而不是 `as!`: 这是**外部 App 给的数据**, 真有一个 App 把 `AXWindows`
+        //    回成单个元素(而不是数组), `as!` 就是**整个 helper 崩掉** —— 症状是 socket 突然
+        //    断开, 而回执一个字都没有(2026-10-30 review)。
+        guard let list = raw as? [AXUIElement] else { return nil }
         guard let first = list.first else { return nil }
         return buildTree(first)
     }
 
+    /// 遍历预算的**唯一**计数点 —— 全局的, 不是每棵子树各一份。
+    ///
+    /// ⚠️ 2026-10-30 修的一处真缺陷: 原来写的是 `build(..., budget: remaining)`, 而
+    ///    `remaining` 只在**同一层兄弟之间**递减、子树里烧掉的节点**不回流给父级** ⇒
+    ///    `maxNodes = 3000` 实际变成"每层每个子树各有 3000", 总量是**乘出来的**。
+    ///    现实后果不是崩, 是**一条 read 卡几十秒**: 深层 DOM(20 层、每层 2~3 个孩子)会把
+    ///    整棵树全量走完 —— 每个节点一次 AX IPC(~0.5ms), 5 万节点就是 25 秒, 而
+    ///    `elements` 字典还把每个 `AXUIElement` 都留住(内存跟着涨)。
+    ///    小树上看不出来(实测备忘录 128 / Finder 16) ⇒ 这类缺陷只能靠读代码或压力样本发现。
+    private final class Budget {
+        var left: Int
+        init(_ n: Int) { left = n }
+    }
+
     private static func buildTree(_ root: AXUIElement) -> Trees {
         var elements: [String: AXUIElement] = [:]
-        let node = build(root, depth: 0, path: [], budget: maxNodes, elements: &elements)
+        let node = build(root, depth: 0, path: [], budget: Budget(maxNodes), elements: &elements)
         return Trees(root: node, elements: elements)
     }
 
@@ -79,9 +95,9 @@ enum AXAdapter {
     private static func build(_ el: AXUIElement,
                               depth: Int,
                               path: [Int],
-                              budget: Int,
+                              budget: Budget,
                               elements: inout [String: AXUIElement]) -> AXNode {
-        var remaining = budget
+        budget.left -= 1
         elements[AXSnapshot.pathKey(path)] = el
 
         let role = string(el, kAXRoleAttribute) ?? ""
@@ -103,18 +119,17 @@ enum AXAdapter {
         let frame = rect(el)
 
         var children: [AXNode] = []
-        if depth < maxDepth, remaining > 0 {
+        if depth < maxDepth, budget.left > 0 {
             var raw: CFTypeRef?
             if AXUIElementCopyAttributeValue(el, kAXChildrenAttribute as CFString, &raw) == .success,
-               let value = raw {
-                let list = value as! [AXUIElement]
+               let value = raw, let list = value as? [AXUIElement] {
                 for (i, child) in list.enumerated() {
-                    guard remaining > 0 else { break }
-                    remaining -= 1
+                    // 预算**全局递减**: 到 0 就停, 不再往下走(兄弟、以及别人的子树都一样)。
+                    guard budget.left > 0 else { break }
                     children.append(build(child,
                                           depth: depth + 1,
                                           path: path + [i],
-                                          budget: remaining,
+                                          budget: budget,
                                           elements: &elements))
                 }
             }
@@ -232,7 +247,7 @@ enum AXAdapter {
               let el = list.first else { return nil }
         // 路径给 `[0]` 只是占位: 这棵树**不进缓存也不占编号**, 只用来判"要不要保存"。
         var scratch: [String: AXUIElement] = [:]
-        let node = build(el, depth: 0, path: [0], budget: 200, elements: &scratch)
+        let node = build(el, depth: 0, path: [0], budget: Budget(200), elements: &scratch)
         // ⚠️ 按 node.children 的顺序取元素, 不用 `scratch.values`: 字典无序, 取出来的顺序
         //    一旦和 children 不一样, `buttonIndices` 算出的下标就会按到旁边那个键上。
         let kids: [AXUIElement] = node.children.indices.compactMap {
