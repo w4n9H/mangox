@@ -300,13 +300,105 @@ if [ -z "$ACT_GUARD_LINE" ] || [ -z "$ACT_PRESS_LINE" ] || [ "$ACT_GUARD_LINE" -
     echo "       执行必须排在判据之后 —— 反了就等于'先按了再问能不能按'" >&2
     exit 1
 fi
+# ③s 人类接管(批 3b): 三条**只有在真机上才会静默失效**的事实。
+#   ① CGEvent **只许听, 不许注入**: 听(`CGEvent.tapCreate` listenOnly)是"人在动键鼠吗"的唯一来源;
+#      而注入(`event.post(...)` / `CGEventPost`)是按坐标点**任何**地方的**第二套寻址** ——
+#      它绕开编号 ⇒ 三条恒拒(付款 / 永久删除 / 存盘)判不起来。判据因此从"helper 里不许出现
+#      CGEvent"(批 2b 的写法, 那时监听还没做)收窄成"不许**发**事件"。
+#   ② tap 被系统踢掉(`kCGEventTapDisabledByTimeout`)之后必须**自己重装**。不重装不会有任何报错,
+#      只是从那一刻起"人有没有动"永远答"没有" ⇒ 接管这道门**静默消失**, 而门禁里没有一条
+#      断言看得到真机上的 tap 状态。
+#   ③ 这条判据只在 App 说"这一档有人在"时才装 —— 缺省必须是**不装**(无人值守档反过来会误停)。
 for f in mangox-compute/*.swift; do
-    if has_code "$f" 'CGEvent'; then
-        echo "FAIL - $f 里出现了 CGEvent" >&2
-        echo "       坐标点击是批 3(人类接管)的事: 它绕开作用域/编号/红线三道判据" >&2
+    if has_code "$f" '\.post\(|CGEventPost'; then
+        echo "FAIL - $f 里在**发**合成事件 (event.post / CGEventPost)" >&2
+        echo "       发事件 = 按坐标点任何地方的第二套寻址, 三条恒拒判不起来" >&2
         exit 1
     fi
 done
+if ! has_code mangox-compute/HumanInputTap.swift 'options: \.listenOnly'; then
+    echo "FAIL - 人类接管的监听不再是 listenOnly (它就没有资格改/吞用户的事件)" >&2
+    exit 1
+fi
+if ! has_code mangox-compute/HumanInputTap.swift 'tapDisabledByTimeout'; then
+    echo "FAIL - 监听被系统踢掉之后不再自检重装 (接管会静默消失, 零红灯)" >&2
+    exit 1
+fi
+if ! has_code mangox-compute/ComputerServer.swift 'env\[HumanInputTap\.envKey\] == "1"'; then
+    echo "FAIL - helper 不再按 env 决定装不装监听 (缺省必须是'不装')" >&2
+    exit 1
+fi
+if ! has_code mangox-compute/ComputerServer.swift 'if let why = takeoverRefusal\(\)'; then
+    echo "FAIL - act 不再先问'刚才有人动键鼠吗' (接管那道门没人调)" >&2
+    exit 1
+fi
+if ! has_code mangox/Agent/ComputerHost.swift '"MANGOX_COMPUTE_TAKEOVER"'; then
+    echo "FAIL - App 侧不再下发接管开关 (helper 永远收不到 ⇒ 这条能力静默不存在)" >&2
+    exit 1
+fi
+if ! has_code mangox-compute/HumanInputTap.swift '"MANGOX_COMPUTE_TAKEOVER"'; then
+    echo "FAIL - helper 侧的接管 env 名不见了 (两侧必须逐字相同, 编译不会报错)" >&2
+    exit 1
+fi
+
+# ③t 图像面(批 3c) —— 五条会**静默**坏掉的地方
+#
+#   ① 截图 API: `CGWindowListCreateImage` 在 macOS 14.0 起被标记弃用。这不是风格问题 ——
+#      本项目门禁要求 **0 warning**, 用它当场就红(实测确认过)。SCK 是唯一干净的路。
+#   ② env 串两侧必须逐字相同: 编译不报错, 写歪了就是"设置页勾着、helper 说没开"。
+#   ③ 屏幕录制是**另一份 TCC**, 与辅助功能不共享。不探测就只能回一句"截图失败: …",
+#      而用户不知道该去系统设置里勾哪一个 —— 这句话等于没说。
+#   ④ **像素面不涂黑**(2026-10-30 boss 定): 密码框自己就渲染成圆点, 黑块只遮住长度;
+#      而黑块一旦落错位置(判据放宽 / 两套坐标系不同源 / 受保护容器框住整片), 整张图就废了,
+#      且**遮错的东西长得和遮对的一模一样**。遮蔽只留在文本层。这条要挡住"谁把它加回来"。
+for f in mangox-compute/*.swift; do
+    if has_code "$f" 'CGWindowListCreateImage|CGDisplayCreateImage'; then
+        echo "FAIL - $f 用了已弃用的截图 API (macOS 14.0 起标记弃用 ⇒ 破 0 warning 门禁)" >&2
+        echo "       改用 SCScreenshotManager.captureImage (见 ComputerShot.shoot)" >&2
+        exit 1
+    fi
+done
+if ! has_code mangox-compute/ComputerShot.swift 'SCScreenshotManager\.captureImage'; then
+    echo "FAIL - 截图不再走 ScreenCaptureKit" >&2
+    exit 1
+fi
+if ! has_code mangox-compute/ComputerShot.swift 'CGPreflightScreenCaptureAccess'; then
+    echo "FAIL - 不再探测屏幕录制权限 (没有它只会回一句'截图失败', 用户不知道去勾哪个)" >&2
+    exit 1
+fi
+# 单窗口截图必须关掉阴影: 开着一圈半透明阴影会让画面四周多出几十像素透明边,
+# 图看着像"窗口漂在一块透明底上", 也让任何按窗口框做的像素级判断全错位。
+if ! has_code mangox-compute/ComputerShot.swift 'ignoreShadowsSingleWindow = true'; then
+    echo "FAIL - 单窗口截图又带上了阴影 (四周多出几十像素透明边)" >&2
+    exit 1
+fi
+# ⚠️ 判据是"与界面树几何对齐": 尺寸一律取 `SCWindow.frame`, 不取 AX 的窗口框 ——
+#    两者差一个标题栏时, 按 AX 框设宽度会让 SCK 非等比缩放 ⇒ 画面整个变形。
+if ! has_code mangox-compute/ComputerShot.swift 'captureSize\(window: axRect\(win\.frame\)\)'; then
+    echo "FAIL - 输出尺寸不再取自 SCWindow.frame (改回 AX 窗口框 ⇒ 差一个标题栏就非等比缩放)" >&2
+    exit 1
+fi
+if ! has_code mangox/Models/ComputerShotRule.swift '"MANGOX_COMPUTE_IMAGE_BUNDLES"'; then
+    echo "FAIL - 判据侧的图像名单 env 名不见了" >&2
+    exit 1
+fi
+if ! has_code mangox/Agent/ComputerHost.swift '"MANGOX_COMPUTE_IMAGE_BUNDLES"'; then
+    echo "FAIL - App 侧不再下发图像名单 (helper 永远收不到 ⇒ 勾了也没用)" >&2
+    exit 1
+fi
+# ④ 像素面不涂黑 —— 判据是"**结构上没有这个能力**", 不是"这个能力输出为空":
+#    输出为空靠造一条用例就能骗过, 而类型/绘制调用一旦回来, 就是"哪天判据放宽就真动手了"。
+#    ⚠️ 只有源码扫描能抓这条: 纯函数那半边全绿、编译零 warning, 遮错只会体现在图上看不出来。
+if has_code mangox/Models/ComputerShotRule.swift 'Redaction|redactions'; then
+    echo "FAIL - 图像面的涂黑判据又回来了 (2026-10-30 已废除: 遮错会让整张图失去价值)" >&2
+    echo "       遮蔽只留在文本层 (ComputerRedline.maskedValue), 粒度是元素而不是像素" >&2
+    exit 1
+fi
+if has_code mangox-compute/ComputerShot.swift 'ctx\.fill'; then
+    echo "FAIL - ComputerShot 又在往图上填色块 (像素遮蔽已废除)" >&2
+    exit 1
+fi
+
 # ③p helper 取"谁在跑 / 谁在前台"不许用 `NSWorkspace.shared.runningApplications` /
 #     `.frontmostApplication` —— 2026-10-29 实测(macOS 14.8.1), 这两个在**不抽 run loop** 的
 #     进程里返回的是**首次查询那一刻的快照**。helper 正是"阻塞在 accept() 上一个 loop 都不跑"
@@ -411,6 +503,40 @@ if ! has_code mangox-compute/AXAdapter.swift 'isProtected: !value\.isEmpty && is
     echo "FAIL - AXAdapter.build 不再从现场读 AXProtectedContent (遮蔽的第二档掉了)" >&2
     exit 1
 fi
+
+# ③r 坐标点击(批 3a) **不许变成第二套寻址**。
+#    三条恒拒(付款 / 永久删除 / 存盘)判的都是**元素**, 而坐标本身没有元素 ⇒ 若"按坐标直接点",
+#    这三条一条都跑不了, 等于给"模型替我点确认付款"开了一条绕过全部判据的路。
+#    修法是**翻译**: 坐标 → 元素(`AXUIElementCopyElementAtPosition`) → 快照里认回编号 → 走老路。
+#    ⚠️ 这三处任何一处掉了, 现象都是"坐标点击能用", 零红灯 —— 只能扫源码事实。
+if ! has_code mangox-compute/AXAdapter.swift 'AXUIElementCopyElementAtPosition'; then
+    echo "FAIL - AXAdapter 不再把坐标翻译成元素 (坐标那条路就只剩盲点了)" >&2
+    echo "       坐标必须有元素可落脚, 否则三条恒拒判不起来 (它们判的是元素不是点)" >&2
+    exit 1
+fi
+# ⚠️ 2026-10-30 实测补的一条: 用 `AXUIElementCreateApplication(pid)` 当起点的话, 问的其实是
+#    "这个 App 在 (x,y) 上占的是哪块" —— 屏幕外 (-400,-400) / (9999,9999) 也**照样回一个元素**,
+#    于是"没有元素 ⇒ 直接拒"那条永远走不到, 回执还会凭空说"(9999,9999) 上有一个元素"。
+#    起点必须问系统(`AXUIElementCreateSystemWide`)。
+if ! has_code mangox-compute/AXAdapter.swift 'AXUIElementCreateSystemWide'; then
+    echo "FAIL - 坐标命中不再问系统全域 (盲点那条判据会静默失效, 回执开始编造事实)" >&2
+    exit 1
+fi
+if has_code mangox-compute/AXAdapter.swift 'AXUIElementCopyElementAtPosition\(AXUIElementCreateApplication'; then
+    echo "FAIL - element(at:) 又拿 App 元素当起点了 (屏幕外也会回元素 ⇒ 盲点判据永远不触发)" >&2
+    exit 1
+fi
+if ! has_code mangox-compute/ComputerServer.swift 'AXAdapter\.processID\(of:'; then
+    echo "FAIL - 坐标分支不再核对『命中的元素属于哪个进程』(会替名单外的 App 点)" >&2
+    exit 1
+fi
+for NEEDLE in 'ComputerPointRule\.refusal' 'rowIndex\(for:' 'ComputerPointRule\.missKind'; do
+    if ! has_code mangox-compute/ComputerServer.swift "$NEEDLE"; then
+        echo "FAIL - ComputerServer 的坐标分支少了 $NEEDLE" >&2
+        echo "       ① 参数互斥(编号/坐标只能给一个) ② 翻译出的元素必须落回快照里真实的编号" >&2
+        exit 1
+    fi
+done
 
 # ④ 冒烟主文件的**体量棘轮** (2026-10-19) —— 判据 = 行数**只减不增**。
 #    为什么要有这条: 冒烟已长到 7000+ 行, 而且几乎全在**一个函数 `run()`** 里

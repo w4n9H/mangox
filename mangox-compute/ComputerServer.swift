@@ -29,6 +29,15 @@ final class ComputerServer {
     /// 作用域(操作面): 允许动的 bundle id。**空 = 一律拒** —— 读得到不等于动得。
     let actBundles: Set<String>
 
+    /// 作用域(图像面): 允许截图的 bundle id 原始串。**空 = 一张都不拍**。
+    ///
+    /// ⚠️ 存**原始串**而不是 `Set`, 判据一律走 `ComputerShotRule.allowed(bundle:raw:)` ——
+    ///    两处各解析一次就会分叉(一边 trim 空格一边不 trim), 而分叉的表现是"设置页勾着、
+    ///    截图被拒", 零红灯。
+    /// ⚠️ 与上两档同理, 只在启动时读一次 env ⇒ 改了名单必须重启 helper 才生效
+    ///    (App 侧 `ComputerHost.Scope` 已经把 `image` 算进比较, 所以会自动重启)。
+    let imageRaw: String
+
     /// 上一次读的快照 + 编号到元素的表。**按 bundle 存**, 不是全局一个:
     /// 读 Safari 不该让 Finder 的编号失效(同时读两个 App 是常态)。
     struct Cached {
@@ -58,6 +67,11 @@ final class ComputerServer {
         self.allowedBundles = Set(raw.split(separator: ",").map(String.init).filter { !$0.isEmpty })
         let actRaw = env[ComputerServer.actBundlesEnvKey] ?? ""
         self.actBundles = Set(actRaw.split(separator: ",").map(String.init).filter { !$0.isEmpty })
+        // 批 3c: 画面名单。**缺键与空串等价**(都是一张都不拍) —— 但这个键 App 侧恒设,
+        // 所以"缺键"只会出现在手搓 env 的场景里。
+        self.imageRaw = env[ComputerShotRule.envKey] ?? ""
+        // 批 3b: 只有 App 判定"这一档有人在"才下发 "1"。缺省 = 不装(不是"都装")。
+        self.takeoverWanted = env[HumanInputTap.envKey] == "1"
     }
 
     static let allowedBundlesEnvKey = "MANGOX_COMPUTE_ALLOWED_BUNDLES"
@@ -96,6 +110,13 @@ final class ComputerServer {
         chmod(path, 0o600)
 
         installTerminationCleanup()
+        // 批 3b: 人类接管的监听**只在 App 说"这一档有人在"时才装**。
+        // 装不上照常服务 —— 它是一条"让路"的判据, 不是功能前提; 但 act 回执会如实说这一半没有
+        // (见 `takeoverCaveat`)。放进 serve() 而不是 init: 它要起线程 + run loop, 不该在 init 里做。
+        if takeoverWanted {
+            let ok = HumanInputTap.shared.start()
+            print("mangox-compute takeover: \(ok ? "on" : "unavailable")")
+        }
         print("mangox-compute listening: \(path)")
         fflush(stdout)
 
@@ -193,7 +214,10 @@ final class ComputerServer {
     func handle(_ request: ComputerRequest) -> ComputerResponse {
         switch request {
         case .ping:
-            return .pong(trusted: AXIsProcessTrusted())
+            // 屏幕录制是**另一份 TCC**(批 3c): 辅助功能给了不等于能截图, 两者互不覆盖。
+            // `CGPreflightScreenCaptureAccess` 只查询、不弹窗 ⇒ 探活可以放心调。
+            return .pong(trusted: AXIsProcessTrusted(),
+                         screenRecording: ComputerShot.screenRecordingGranted())
 
         case .read(let app, let includeImage):
             guard AXIsProcessTrusted() else {
@@ -214,9 +238,6 @@ final class ComputerServer {
             }
             guard var trees = AXAdapter.frontWindowTree(pid: t.pid) else {
                 return .failure("读不到「\(t.name)」的窗口树(它可能没有窗口, 或者 AX 树太薄)。")
-            }
-            if includeImage {
-                return .failure("图像面还没做(批 3 才接)。这次先按文本读。")
             }
             // ⚠️ 懒加载兜底(2026-10-29 boss 截图: 第一次读 apple.com.cn 只拿到 20 个导航按钮,
             //    页面正文一个节点都没有; 隔几秒再读, 整页 4627px 全出来了)。
@@ -250,18 +271,55 @@ final class ComputerServer {
             //    不区分 ⇒ 模型会把微信那 3 个按钮当成"这个窗口的全部内容"(2026-10-28 实测: 微信
             //    主窗口 1052×754 只暴露 6 个节点, 消息列表/聊天正文/输入框一个都没有)。
             if AXSnapshot.lacksReadableControls(root: tree) {
-                return .success(text: withSeq(rereadNote + lackOfControlsNote(app: t.name, nodes: snap.rows.count)
-                                              + "\n\n" + snap.rendered(), seq),
-                                seq: seq)
+                return finishRead(text: withSeq(rereadNote
+                                                + lackOfControlsNote(app: t.name, nodes: snap.rows.count)
+                                                + "\n\n" + snap.rendered(), seq),
+                                  seq: seq, bundle: t.bundle, pid: t.pid,
+                                  root: tree, includeImage: includeImage)
             }
-            return .success(text: withSeq(rereadNote + snap.rendered(), seq), seq: seq)
+            return finishRead(text: withSeq(rereadNote + snap.rendered(), seq), seq: seq,
+                              bundle: t.bundle, pid: t.pid, root: tree,
+                              includeImage: includeImage)
 
-        case .act(let app, let opRaw, let index, let seq, let text, let direction):
+        case .act(let app, let opRaw, let index, let seq, let text, let direction, let point):
             return handleAct(app: app, opRaw: opRaw, index: index, seq: seq,
-                             text: text, directionRaw: direction)
+                             text: text, directionRaw: direction, point: point)
 
         case .open(let app):
             return handleOpen(app: app)
+        }
+    }
+
+    /// 读的收尾: 要不要附带一张截图(批 3c)。
+    ///
+    /// 两条原则:
+    ///   ① **图是锦上添花, 永不因为拍不成而丢掉文本** —— 文本已经读到了, 那才是模型要的信息;
+    ///      把文本一起吞掉只会让它重试同一个动作。
+    ///   ② 不拍的原因要**说清并给出下一步**, 且不许暗示"再试一次就好": "没开图片"要去设置页,
+    ///      "没有屏幕录制权限"要去系统设置, 这两条都不是重试能解的。
+    private func finishRead(text: String, seq: Int, bundle: String, pid: pid_t,
+                            root: AXNode, includeImage: Bool) -> ComputerResponse {
+        guard includeImage else { return .success(text: text, seq: seq) }
+        guard ComputerShotRule.allowed(bundle: bundle, raw: imageRaw) else {
+            return .success(text: text + "\n\n（这个 App 没开「图片」⇒ 这次没有截图。"
+                            + "要图的话请在 设置 › 集成 › 电脑操作 里给它勾上「图片」, 默认是关的。）",
+                            seq: seq)
+        }
+        switch ComputerShot.capture(pid: pid, root: root, bundle: bundle) {
+        case .failure(let why):
+            // ⚠️ 取 `.message` 而不是直接插值 `why`: `String(describing:)` 会把结构体整个
+            //    打成 `ShotFailure(message: "…")` —— 那句机器话会原样进模型上下文。
+            return .success(text: text + "\n\n（\(why.message)）", seq: seq)
+        case .success(let png):
+            // ⚠️ 必须说"附了一张": 这类图**不落 attachments**(见 App 侧 `isScreenShot`),
+            //    所以卡片上没有缩略图 —— 这句是用户唯一能看到的凭据。
+            // ⚠️ 措辞是"原样画面", 不许写成"已脱敏/已涂黑": 图像面**不做任何像素遮蔽**
+            //    (2026-10-30 boss 定), 标记一旦比事实说得多, 用户就会拿一张带明文的图当安全的用。
+            return .success(text: text + "\n\n（附了一张 \(png.count / 1024) KB 的截图, "
+                            + "是这个窗口的原样画面。）",
+                            seq: seq,
+                            image: ComputerImage(mimeType: "image/png",
+                                                 data: png.base64EncodedString()))
         }
     }
 
@@ -287,10 +345,57 @@ final class ComputerServer {
 
     // MARK: - 动作面 (批 2b)
 
-    /// 一条动作。**判据一行都不在这里** —— 全在 `ComputerActGuard`(那边能造反例)。
-    /// 这里只做四件事: 找 App → 找缓存 → 拿现场读数 → 执行并回报。
+    // MARK: - 人类接管 (批 3b)
+
+    /// 这一轮要不要装"人在动键鼠"的监听 —— **由 App 按档位决定**
+    /// (`ApprovalMode.expectsHumanAtKeyboard`), 只经 env 下发一次。
+    /// helper 不自己猜档位: 它连"这一轮有没有人在"都看不见。
+    private let takeoverWanted: Bool
+
+    /// 人刚动过键鼠 ⇒ 一句拒绝(`nil` = 可以做)。判据本身在 `ComputerTakeover`(纯函数, 能断言)。
+    private func takeoverRefusal() -> String? {
+        ComputerTakeover.refusal(lastHumanInputAt: HumanInputTap.shared.lastHumanInputAt,
+                                 now: ProcessInfo.processInfo.systemUptime,
+                                 installed: HumanInputTap.shared.isInstalled)
+    }
+
+    /// "接管其实弱了"的那句话 —— 每一份 act 回执尾巴上都要有。
+    ///
+    /// ⚠️ **"要装但没装上"与"根本没要装"必须分开**: 后者是产品选择(无人值守档), 对它说
+    ///    "接管检测没装上"就是回执在编一个不存在的故障。前者才是能力缺口, 而它**完全静默**
+    ///    (界面照常动), 所以每一份回执都带, 不是"提醒一次"。
+    /// ⚠️ 键盘那一句同族: 缺「输入监控」权限时 tap 照样装上、鼠标照样看得见, 只有键盘是空的
+    ///    ⇒ 不查就写"你一动键鼠我就让路", 是替系统许诺一件它没做到的事。
+    private func takeoverCaveat() -> String? {
+        guard takeoverWanted else { return nil }
+        guard HumanInputTap.shared.isInstalled else {
+            return "\n— ⚠️ 接管检测没装上(系统不让建事件监听): 你在键鼠上做什么, 我感知不到。"
+                + "要我停下, 直接说。"
+        }
+        guard !HumanInputTap.shared.keyboardVisible else { return nil }
+        return "\n— ⚠️ 接管检测只看得到鼠标: 没给「输入监控」权限, 键盘上的动作我看不见。"
+            + "要我停下, 直接说。"
+    }
+
+    /// act 的入口: **先让路, 再干活, 最后补一句能力缺口**。
     private func handleAct(app: String, opRaw: String, index: Int, seq: Int,
-                           text: String, directionRaw: String) -> ComputerResponse {
+                           text: String, directionRaw: String,
+                           point: ComputerPoint?) -> ComputerResponse {
+        // ⚠️ 这一步**排在最前**: 人手在键鼠上时, 后面的判据跑不跑都没有意义 ——
+        //    而"人刚动过"是会过期的事实, 晚一步判就等于没判。
+        if let why = takeoverRefusal() { return .failure(why) }
+        let r = performAct(app: app, opRaw: opRaw, index: index, seq: seq,
+                           text: text, directionRaw: directionRaw, point: point)
+        // ⚠️ 只往**成功**的回执上补: 失败回执已经在说"没动", 再叠一句能力缺口会把人带向
+        //    "是因为这个才没动" —— 而它不是原因。
+        guard r.ok, let caveat = takeoverCaveat() else { return r }
+        return ComputerResponse(ok: true, text: (r.text ?? "") + caveat,
+                                error: nil, trusted: nil, screenRecording: nil, seq: r.seq)
+    }
+
+    private func performAct(app: String, opRaw: String, index: Int, seq: Int,
+                            text: String, directionRaw: String,
+                            point: ComputerPoint?) -> ComputerResponse {
         guard AXIsProcessTrusted() else {
             return .failure("辅助功能权限还没授予 ⇒ 动不了界面。请在 系统设置 › 隐私与安全性 › 辅助功能 里勾上 MangoX。")
         }
@@ -317,7 +422,58 @@ final class ComputerServer {
             return .failure("「\(t.name)」重启过了, 上次读到的编号已经失效 ⇒ 没动。重新读一次。")
         }
 
-        let row = cached.snapshot.row(index)
+        // 坐标寻址: **翻译回元素 → 认回编号**, 之后走的还是同一条路。
+        // ⚠️ 参数互斥(编号 / 坐标只能给一个)在这里判, 不放进 Guard —— Guard 手上只有编号,
+        //    它看不见"模型到底给的是哪一个", 硬塞进去会让那条判据自己也要维护两套输入。
+        //    `run.sh` ③r 钉着"point 分支必须先过 ComputerPointRule"这一句。
+        var resolvedIndex = index
+        if let point {
+            if let why = ComputerPointRule.refusal(action: action, index: index, point: point) {
+                return .failure(why)
+            }
+            guard let hit = AXAdapter.element(at: CGPoint(x: point.x, y: point.y)) else {
+                // ⚠️ 这一句就是 boss 拍板的那条: **坐标落在没有元素的地方 ⇒ 直接拒**。
+                //    放行等于给"模型替我点确认付款"开一条**绕过所有判据**的路 —— 那一刻手上
+                //    没有任何元素, 三条恒拒一条都跑不了。自绘界面点不了, 那就如实说点不了。
+                return .failure("\(point.short) 上没有我能识别的东西 ⇒ 没动。"
+                                + "屏幕外、或者自绘界面(画布 / 游戏 / 部分 Electron)不把控件交给系统时, "
+                                + "这个坐标底下就是空的 —— 我手上没有任何东西可以判它能不能按。")
+            }
+            // ① 先认"这是谁家的界面": 坐标是**全局屏幕**坐标, 窗口一被挪动, 旧坐标就指到别处。
+            guard AXAdapter.processID(of: hit) == t.pid else {
+                // ⚠️ **不说那到底是哪个 App** —— 名单之外谁在跑, 不是这次任务的信息
+                //    (同 `candidatesInScope` 那条作用域纪律)。模型要知道的只有"这不是它的窗口"。
+                return .failure("\(point.short) 落在别的 App 的界面上, 不是「\(t.name)」⇒ 没动。"
+                                + "这份快照里每行末尾那个 (x,y) 才是「\(t.name)」的坐标。"
+                                + "要么按编号来, 要么重新读一次再取坐标。")
+            }
+            // ② 再认"是不是这一格": 认回编号才有判据可跑(三条恒拒判的都是**元素**)。
+            guard let n = rowIndex(for: hit, in: cached) else {
+                let role = AXAdapter.roleName(of: hit)
+                let head = "\(point.short) 底下是 " + (role.isEmpty ? "一个读不出角色的元素" : role)
+                // ⚠️ 三类分开说 —— 它们的**下一步完全不同**, 合成一句就是骗人:
+                //    见 `ComputerPointRule.missKind` 的头注释。
+                switch ComputerPointRule.missKind(role: role) {
+                case .wholeApp:
+                    return .failure(head + " ⇒ 没动。"
+                                    + "这个 App 把整块界面一起交给系统, 里面没有更细的格子 —— "
+                                    + "坐标在它身上点不了; 这种界面只能截图看, 或者问用户。")
+                case .outerChrome:
+                    return .failure(head + ", 那是这个 App 的菜单栏 / 菜单那一类界面 ⇒ 没动。"
+                                    + "快照只读**窗口**那一棵树, 菜单栏不在里面 —— 这条路上到不了它。"
+                                    + "要用窗口里的按钮; 菜单里才有的功能, 问用户。")
+                case .container:
+                    return .failure(head + ", 容器那一层不在这份快照里(快照只列格子) ⇒ 没动。"
+                                    + "再读一次也不会多出编号; 要按的是它**里面**那一格, 从快照里挑编号。")
+                case .stale:
+                    return .failure(head + ", 它不在这份快照里 ⇒ 没动。"
+                                    + "多半是我读完之后界面变了: 重新读一次, 它就有编号了。")
+                }
+            }
+            resolvedIndex = n
+        }
+
+        let row = cached.snapshot.row(resolvedIndex)
         let element = row.flatMap { AXAdapter.element(cached.trees, at: $0.path) }
         // ⚠️ 现场读数, 不是 `row` 里缓存的文本: 同一个编号指向的元素可能已经从「登录」
         //    变成了「删除」, 而 seq 只保证"编号没指错元素", 保证不了标题。
@@ -332,7 +488,7 @@ final class ComputerServer {
                                      requestSeq: seq,
                                      currentSeq: cached.seq,
                                      rowCount: cached.snapshot.rows.count)
-        let request = ComputerActRequest(app: app, action: action, index: index, seq: seq,
+        let request = ComputerActRequest(app: app, action: action, index: resolvedIndex, seq: seq,
                                         text: text, direction: direction)
 
         switch ComputerActGuard.evaluate(request: request,
@@ -361,20 +517,23 @@ final class ComputerServer {
 
         case .allow(let a):
             guard let el = element else {
-                return .failure("#\(index) 在这份快照里查不到对应元素 ⇒ 没动。重新读一次。")
+                return .failure("#\(resolvedIndex) 在这份快照里查不到对应元素 ⇒ 没动。重新读一次。")
             }
             let name = liveTarget.map { $0.title.isEmpty ? AXSnapshot.cleanRoleName($0.role) : $0.title } ?? ""
+            // 坐标进来的那条, 回执要把"在哪儿"写出来 —— 只给一个编号, 人没法判断
+            // 我点的是不是他在屏幕上看见的那个位置。
+            let atPrefix = point.map { "在 \($0.short) " } ?? ""
             let headline: String
             switch a {
             case .press:
                 let err = AXAdapter.press(el)
                 guard err == .success else { return .failure(actFailure(err, "press")) }
-                headline = "按了 #\(index)「\(name)」。"
+                headline = atPrefix + "按了 #\(resolvedIndex)「\(name)」。"
 
             case .setValue:
                 let err = AXAdapter.setValue(el, text)
                 guard err == .success else { return .failure(actFailure(err, "setValue")) }
-                headline = "写了 #\(index)「\(name)」。"
+                headline = atPrefix + "写了 #\(resolvedIndex)「\(name)」。"
 
             case .focus:
                 let err = AXAdapter.focus(el)
@@ -385,7 +544,7 @@ final class ComputerServer {
                     return .failure("焦点写进去了, 但系统说焦点不在这个控件上 ⇒ 没当成「已聚焦」。"
                                     + "重读一次看看; 它也可能只是接受写入、实际不可聚焦。")
                 }
-                headline = "聚焦了 #\(index)「\(name)」。"
+                headline = atPrefix + "聚焦了 #\(resolvedIndex)「\(name)」。"
 
             case .scroll:
                 // 判据已经拦过"没说方向"与"没有滚动条"; 走到这里还得再取一次, 因为
@@ -408,13 +567,27 @@ final class ComputerServer {
                                     + " ⇒ 这个 App 不吃 AX 滚动。别重试同一个节点 —— "
                                     + "要么换个 scrollarea 试, 要么直接告诉用户这一页我一次读不完。")
                 }
-                headline = "滚了\(dir == .down ? "向下" : "向上") #\(index)「\(name)」: "
+                headline = atPrefix + "滚了\(dir == .down ? "向下" : "向上") #\(resolvedIndex)「\(name)」: "
                     + "\(percent(before)) → \(percent(landed))。"
             }
             return finishAct(bundle: t.bundle, pid: t.pid, name: t.name,
                              previous: cached.snapshot,
                              headline: headline)
         }
+    }
+
+    /// 坐标翻译出来的元素, 在**这份快照里是第几号**。找不到就是 nil。
+    ///
+    /// ⚠️ 比的是 `CFEqual`(同一个 AX 元素引用), **不是标题**: 标题会重复(两行都叫「登录」),
+    ///    拿标题认人会按错一格 —— 而"按错一格"在这里没有任何红灯。
+    /// ⚠️ 编号必须落回快照里真实存在的那一行: 判据的第 ⑤ 条(编号在范围内)就是靠它,
+    ///    给它编一个号等于让那条判据失去意义。
+    private func rowIndex(for element: AXUIElement, in cached: Cached) -> Int? {
+        for row in cached.snapshot.rows {
+            guard let el = AXAdapter.element(cached.trees, at: row.path) else { continue }
+            if CFEqual(el, element) { return row.number }
+        }
+        return nil
     }
 
     /// 动作成功之后: 重读一次, 只回报**变化** + 新序号。

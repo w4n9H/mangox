@@ -12,6 +12,8 @@
 		7A1801000000000000000003 /* mangox/Models/ComputerRedline.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A1801000000000000000007 /* mangox/Models/ComputerRedline.swift */; };
 		7A1801000000000000000004 /* mangox/Models/AXSnapshot.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A1801000000000000000008 /* mangox/Models/AXSnapshot.swift */; };
 		7A180100000000000000000A /* mangox/Models/ComputerAct.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A180100000000000000000B /* mangox/Models/ComputerAct.swift */; };
+		7A1801000000000000000019 /* mangox/Models/ComputerTakeover.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A180100000000000000001A /* mangox/Models/ComputerTakeover.swift */; };
+		7A180100000000000000001B /* mangox/Models/ComputerShotRule.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A180100000000000000001C /* mangox/Models/ComputerShotRule.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -61,6 +63,8 @@
 		7A1801000000000000000007 /* mangox/Models/ComputerRedline.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = mangox/Models/ComputerRedline.swift; sourceTree = "<group>"; };
 		7A1801000000000000000008 /* mangox/Models/AXSnapshot.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = mangox/Models/AXSnapshot.swift; sourceTree = "<group>"; };
 		7A180100000000000000000B /* mangox/Models/ComputerAct.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = mangox/Models/ComputerAct.swift; sourceTree = "<group>"; };
+		7A180100000000000000001A /* mangox/Models/ComputerTakeover.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = mangox/Models/ComputerTakeover.swift; sourceTree = "<group>"; };
+		7A180100000000000000001C /* mangox/Models/ComputerShotRule.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = mangox/Models/ComputerShotRule.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
@@ -128,6 +132,8 @@
 				7A1801000000000000000007 /* mangox/Models/ComputerRedline.swift */,
 				7A1801000000000000000008 /* mangox/Models/AXSnapshot.swift */,
 				7A180100000000000000000B /* mangox/Models/ComputerAct.swift */,
+				7A180100000000000000001A /* mangox/Models/ComputerTakeover.swift */,
+				7A180100000000000000001C /* mangox/Models/ComputerShotRule.swift */,
 			);
 			name = "Recovered References";
 			sourceTree = "<group>";
@@ -344,6 +350,8 @@
 				7A1801000000000000000003 /* mangox/Models/ComputerRedline.swift in Sources */,
 				7A1801000000000000000004 /* mangox/Models/AXSnapshot.swift in Sources */,
 				7A180100000000000000000A /* mangox/Models/ComputerAct.swift in Sources */,
+				7A1801000000000000000019 /* mangox/Models/ComputerTakeover.swift in Sources */,
+				7A180100000000000000001B /* mangox/Models/ComputerShotRule.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

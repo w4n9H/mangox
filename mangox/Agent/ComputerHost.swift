@@ -39,6 +39,14 @@ final class ComputerHost {
     static let peerPidEnvKey = "MANGOX_COMPUTE_PEER_PID"
     /// helper 探活用(父进程没了就自杀, 免得留一个握着辅助功能权限的孤儿)。
     static let parentPidEnvKey = "MANGOX_COMPUTE_PARENT_PID"
+    /// 人类接管(批 3b): "这一档有人在键鼠旁边" ⇒ helper 装那条只看不注入的事件监听。
+    /// 值只写 `"1"` 或删掉 —— 缺省 = **不装**(无人值守档要有这个缺省, 不是反过来)。
+    /// ⚠️ 与 helper 侧 `HumanInputTap.envKey` 是同一个串(`run.sh` ③j 钉着)。
+    static let takeoverEnvKey = "MANGOX_COMPUTE_TAKEOVER"
+    /// 图像面(批 3c): 允许**截图**的 bundle id。空 = 一张都不拍(不是"都能拍")。
+    /// ⚠️ 第三档权限, 与读面/操作面各占一个键 —— 它多一个代价(像素绕过文本遮蔽),
+    ///    所以必须能被人**单独关掉**, 而不是"跟着读面一起开"。
+    static let imageBundlesEnvKey = "MANGOX_COMPUTE_IMAGE_BUNDLES"
 
     static let helperExecutableName = "mangox-compute"
 
@@ -79,10 +87,17 @@ final class ComputerHost {
     struct Scope: Equatable {
         var read: [String]
         var act: [String]
+        /// 批 3c: 允许截图的 App。**也算作用域** —— 同 `read/act`, 只在启动时读一次 env。
+        var image: [String]
+        /// 批 3b: 这一档要不要"人在动键鼠就让路"。**也算作用域的一部分** ——
+        /// 它同样只在 helper 启动时读一次 env ⇒ 换了档位不重启就等于没换(同 `read/act` 那条教训)。
+        var takeover: Bool
 
-        init(read: [String], act: [String]) {
+        init(read: [String], act: [String], image: [String] = [], takeover: Bool = false) {
             self.read = read.sorted()
             self.act = act.sorted()
+            self.image = image.sorted()
+            self.takeover = takeover
         }
     }
 
@@ -94,12 +109,15 @@ final class ComputerHost {
     func start(home: String = NSHomeDirectory(),
                allowedBundles: [String],
                actBundles: [String] = [],
+               imageBundles: [String] = [],
+               takeover: Bool = false,
                peerPid: pid_t = ProcessInfo.processInfo.processIdentifier,
                bundlePath: String = Bundle.main.bundlePath) -> String? {
         guard !allowedBundles.isEmpty else { return nil }
         // ⚠️ **复用之前先比名单**：helper 只在启动时读一次 env，进程活着不等于名单还是那一批。
         //    见 `Scope` 上那段（boss 报「我明明加了」就是这个）。
-        let wanted = Self.Scope(read: allowedBundles, act: actBundles)
+        let wanted = Self.Scope(read: allowedBundles, act: actBundles,
+                                image: imageBundles, takeover: takeover)
         if let socketPath, process?.isRunning == true, runningScope == wanted {
             return socketPath
         }
@@ -119,8 +137,14 @@ final class ComputerHost {
         // ⚠️ 操作面**恒设**, 空串也设: helper 把空当"不许动"。不设的话它读到 nil,
         //    虽然结论一样(都拒), 但"这次 spawn 到底有没有下发操作面"就看不出来了。
         env[Self.actBundlesEnvKey] = actBundles.joined(separator: ",")
+        // ⚠️ 图像面同款: **恒设**, 空串也设 —— "空"对 helper 是"一张都不拍"。
+        env[Self.imageBundlesEnvKey] = imageBundles.joined(separator: ",")
         env[Self.peerPidEnvKey] = String(peerPid)
         env[Self.parentPidEnvKey] = String(peerPid)
+        // ⚠️ 批 3b: **要就写 "1", 不要就删掉** —— 不能只写"要"的那支:
+        //    用户在终端 export 过它再从那个 shell 起 App, 就变成"档位是无人值守, 却在装监听",
+        //    而界面上没有任何地方说得清这件事。
+        env[Self.takeoverEnvKey] = takeover ? "1" : nil
         p.environment = env
 
         do {
@@ -165,16 +189,23 @@ final class ComputerHost {
                             socketPath: String?,
                             allowedBundles: [String],
                             actBundles: [String] = [],
+                            imageBundles: [String] = [],
+                            takeover: Bool = false,
                             peerPid: pid_t,
                             inherited: [String: String]) -> [String: String]? {
-        let keys = [sockEnvKey, allowedBundlesEnvKey, actBundlesEnvKey, peerPidEnvKey, parentPidEnvKey]
+        let keys = [sockEnvKey, allowedBundlesEnvKey, actBundlesEnvKey, imageBundlesEnvKey,
+                    peerPidEnvKey, parentPidEnvKey, takeoverEnvKey]
         if socketPath == nil, keys.allSatisfy({ inherited[$0] == nil }) { return nil }
         var env = existing ?? inherited
         env[sockEnvKey] = socketPath
         env[allowedBundlesEnvKey] = socketPath == nil ? nil : allowedBundles.joined(separator: ",")
         env[actBundlesEnvKey] = socketPath == nil ? nil : actBundles.joined(separator: ",")
+        env[imageBundlesEnvKey] = socketPath == nil ? nil : imageBundles.joined(separator: ",")
         env[peerPidEnvKey] = socketPath == nil ? nil : String(peerPid)
         env[parentPidEnvKey] = env[peerPidEnvKey]
+        // 批 3b: 没 socket(不挂扩展) ⇒ 连这个键一起清掉。"没人用的 env 留着"就是下次
+        // 排查时的一条假线索(它会看起来像"这一档装了监听")。
+        env[takeoverEnvKey] = (socketPath != nil && takeover) ? "1" : nil
         return env
     }
 }

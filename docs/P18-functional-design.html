@@ -591,13 +591,13 @@ details.fold[open]>summary{margin-bottom:4px}
   <thead><tr><th>工具</th><th>作用</th><th>审批</th></tr></thead>
   <tbody>
     <tr><td><code>computer_read</code></td><td>读当前作用域内的界面(元素表 + 差分);可选"给张图"</td><td>作用域内静默</td></tr>
-    <tr><td><code>computer_act</code></td><td>对某个元素做动作(press / setValue / focus / scroll)</td><td><b>勾了「可操作」就放行, 没勾就拒</b>(不弹卡, 见 §04 第 5 条)· 远程驱动档一律拒</td></tr>
+    <tr><td><code>computer_act</code></td><td>对某个元素做动作(press / setValue / focus / scroll; <code>press</code> 也可给屏幕坐标 —— 先翻译回元素再判)</td><td><b>勾了「可操作」就放行, 没勾就拒</b>(不弹卡, 见 §04 第 5 条)· 远程驱动档一律拒</td></tr>
     <tr><td><code>computer_open</code></td><td>打开(或切到前台)名单里的一个 App —— <b>没打开的 App 没有窗口</b>, 读不到也就动不了</td><td><b>勾了「可读」就放行</b>(打开等于替你点一下图标)· 远程驱动档一律拒</td></tr>
   </tbody>
 </table>
 </div>
 
-<p class="lead"><b>三个工具, 一条链</b> —— 打开 → 读 → 动, 每一步各自是最小的一件事: 工具越多,模型的选错率越高、说明越长,所以动作面只开 <code>press</code> / <code>setValue</code> / <code>focus</code> / <code>scroll</code> 四档(批 2f 补齐后两档; 坐标点击<b>仍然不做</b> —— 它绕开编号,"我看见的节点 = 我点的东西"这个等式就没了)。<b>为什么非要有 <code>computer_open</code></b>: 2026-10-29 boss 实测「帮我用计算器算 100×5」在计算器没开时<b>结构上做不到</b> —— 没有窗口可读 ⇒ 没有编号可动, 而模型手里唯一的出路是"请用户自己打开它"。它不是动作面的一部分: 打开一个 App <b>不动它里面的任何东西</b>, 与"在 Dock 上点一下图标"同一件事 ⇒ 它查的是<b>读面</b>那道门。详见 §04 补记 批 2d / 批 2f。</p>
+<p class="lead"><b>三个工具, 一条链</b> —— 打开 → 读 → 动, 每一步各自是最小的一件事: 工具越多,模型的选错率越高、说明越长,所以动作面只开 <code>press</code> / <code>setValue</code> / <code>focus</code> / <code>scroll</code> 四档(批 2f 补齐后两档; <b>批 3a 起 <code>press</code> 还收一个 <code>point</code></b> —— 它<b>不绕开编号</b>: 坐标先翻译回元素、再在这份快照里认回编号, 之后走的是<b>同一条判据链</b>, 详见 §04 补记 批 3a)。<b>为什么非要有 <code>computer_open</code></b>: 2026-10-29 boss 实测「帮我用计算器算 100×5」在计算器没开时<b>结构上做不到</b> —— 没有窗口可读 ⇒ 没有编号可动, 而模型手里唯一的出路是"请用户自己打开它"。它不是动作面的一部分: 打开一个 App <b>不动它里面的任何东西</b>, 与"在 Dock 上点一下图标"同一件事 ⇒ 它查的是<b>读面</b>那道门。详见 §04 补记 批 2d / 批 2f。</p>
 
 <p class="lead"><b>档位</b>:<b>挂载与档位无关</b>(<code>extensionArguments</code> 里 computer 与业务扩展<b>并列</b>,10-29 定案),能不能用由 <code>--tools</code> 决定 —— <code>standard</code> / <code>full</code> 能用,<code>minimal</code> 被 allowlist 裁掉、<code>codemode</code> 只剩一个工具;定时任务想在没人看着的情况下驱动界面,<b>任务级档位要选 <code>full</code></b> —— 这两件事正交(<b>能不能用看 <code>--tools</code>,裁决看审批轴</b>),别混;沿用 web-search 的<b>双闸门</b>(挂载闸门 = 设置里开着;env 闸门 = 这一轮 spawn 时名单非空)⇒ <b>名单空</b>的会话连 socket 路径都拿不到。</p>
 
@@ -823,6 +823,56 @@ details.fold[open]>summary{margin-bottom:4px}
     <div class="tbody">
       <div class="tt"><code>scroll</code>：方向是<b>独立参数</b>，落点是<b>四档搜索</b>，成败靠<b>回读百分比</b></div>
       <div class="td"><b>方向不许猜</b>：<code>direction</code> 与 <code>op</code> 分开两个参数、解码阶段<b>不填默认值</b>（填了就等于替模型决定"往下滚"，而它可能已经到底了）。判据先判参数、再判能力 —— <b>顺序是判据本身</b>：没说方向是"重发一次就好"，没有滚动条是"换节点或换 App"，两句话导出的下一步不同。<br><b>落点四档</b>（<code>AXAdapter.scrollBar(of:)</code>）：① 自己就是 <code>AXScrollBar</code> ② 自己的 <code>AXVerticalScrollBar</code> 属性（<code>AXVerticalScrollBar</code> 常量在 Swift 里没导出 ⇒ 用字面量，同 <code>AXSheets</code> / <code>AXProtectedContent</code>）③ 子树里第一个滚动条（<b>有预算</b>：网页树几千节点，整棵搜一遍会让一次 scroll 慢到几百毫秒）④ <b>再往上找四层</b>。④ 是<b>实测逼出来的</b>：模型手里有编号的通常不是滚动容器本身，而是页面里的某个控件，滚动条挂在它<b>上面</b>那层 —— 只往下找的话，最常见的"长网页滚一屏"永远滚不动，而回执还会把原因说成"这个 App 不交给系统"（<b>说错话比不动更糟</b>）。<br><b>一步 = 0.1 段</b>：拿不到内容高度与视口高度，<b>假装知道</b>比说不知道更糟（模型会以为一次就到底）⇒ 回执写百分比，要更多就再叫一次。<br><b>⚠️ 必须回读</b>：写完<code>AXValue</code> 后重新读一遍，位移 &lt; 0.001 就回"这个 App 不吃 AX 滚动，<b>别重试同一个节点</b>"。不回读的后果是模型接着读还是那 120 行，它只会以为这一页本来就短。<br><b>状态</b>：<span class="chip c-ok">已做（未发版）</span> —— <code>CaseComputerAct</code> ⑧ 段四支（缺方向 ⇒ 拒且说"往哪滚"；没滚动条 ⇒ 拒且说"它自己和上面几层都没有"；<b>两者同时成立时报参数</b>；有滚动条 + 有方向 ⇒ 放行）+ <code>ComputerScrollDirection.parse</code> 的认/不认（<code>Up</code> 认，<code>left</code> 不认 —— 横向多半是表太宽，那是"读"能解决的）。<b>反例</b>：摘掉方向判据 ⇒ <b>2 条红</b>，退码 1。<br><b>真机端到端</b>（真 helper 二进制 + unix socket + TextEdit 400 行长文档）：<code>focus</code> ⇒ "聚焦了 #1「textarea」"；<code>scroll down</code> ⇒ <code>0% → 10%</code>；再一次 ⇒ <code>10% → 20%</code>；<code>up</code> ⇒ <code>20% → 10%</code>；不带 <code>direction</code> ⇒ "scroll 要说清往哪滚(up / down) ⇒ 没动"。<b>⚠️ 一个诚实的观察</b>：TextEdit 整个文档都在 <code>AXValue</code> 里，滚动<b>不改变</b>那棵树 ⇒ 差分如实回"界面没动"，回执的价值只在百分比。scroll 真正的收益在<b>虚拟化列表</b>（网页 / 大 <code>NSTableView</code>）—— 那里滚出来的行才是新信息。别拿 TextEdit 这类反推"滚动没用"。</div>
+    </div>
+  </div>
+</div>
+
+<h3>补记 · 批 3a：坐标点击（2026-10-30，boss 定：盲点直接拒 · 截图不落盘 · 坐标不新增工具）</h3>
+
+<p class="lead">坐标点击的<b>唯一价值</b>是补上"按编号寻址"够不着的那一类控件（自绘按钮、画布里的热区、没有 AX 名字的图标）。它的<b>唯一风险</b>也在这儿：坐标本身<b>不是元素</b>，而三条恒拒（付款 / 永久删除 / 存盘）判的全是元素 —— 一旦"按坐标直接点下去"，这三条一条都跑不了。所以这一批的设计只有一句话：<b>坐标是输入方式，不是第二套寻址</b>。</p>
+
+<div class="todos">
+  <div class="todo">
+    <span class="tn">21</span>
+    <div class="tbody">
+      <div class="tt">坐标 → 元素 → 编号 → <b>还是那条判据链</b></div>
+      <div class="td"><b>形状</b>：<code>computer_act</code> 不新增工具、不新增 op，只多一个可选参数 <code>point:{x,y}</code>。<b>只配 <code>press</code></b>：<code>setValue</code> / <code>focus</code> / <code>scroll</code> 都必须知道"动的是哪一格"，而坐标给不出那一格。<br><b>参数判据独立成纯函数</b>（<code>ComputerPointRule.refusal</code>，冒烟能断言）：非 press 带坐标 ⇒ 拒；<b>编号与坐标同时给 ⇒ 拒</b>（不许挑一个用 —— 挑错方向不对称，"按了错的东西"比"没按"糟；两个都给说明调用方自己没想清楚，退回"重新说一遍"）；<code>|x|&gt;20000</code> ⇒ 拒（多半是把图片坐标当屏幕坐标了）。<b>负坐标必须放行</b>：主屏左侧那块屏就是负值，clamp 到 ≥0 会把它静默挪到主屏上。<br><b>解码不许兜底</b>：<code>point</code> 形状不合法就抛错，<b>不静默退化成"按编号"</b> —— 退化了模型会以为坐标生效了，而它按的是别的格子。<br><b>三道翻译后校验</b>（helper）：① 坐标底下<b>有没有元素</b>（没有 ⇒ 直接拒，见 22）② 那个元素<b>是不是这个 App 的</b>（<code>AXUIElementGetPid</code>；坐标是全局屏幕坐标，窗口一被挪动，旧坐标就指到别人窗口上 ⇒ 那是"替名单外的 App 点"，一次都没读过、也没判过）③ 能不能<b>在这份快照里认回编号</b>（认不回 ⇒ 三条恒拒没有落脚点，拒）。<br><b>状态</b>：<span class="chip c-ok">已做（未发版）</span> —— <code>CaseComputerAct</code> ⑦ 段 7 条（press+坐标成立 / 老路径不受影响 / 非 press 拒 / 双参数拒 / 离屏拒 / <b>负坐标放行</b> / <code>short</code> 四舍五入）。<b>真机端到端</b>（真 helper + 计算器）：<code>press @(1460,302)</code> ⇒ 「在 (1460,302) 按了 #17「7」。」+ 差分 <code>主显示器 "7" → "77"</code>。</div>
+    </div>
+  </div>
+  <div class="todo">
+    <span class="tn">22</span>
+    <div class="tbody">
+      <div class="tt"><b>盲点</b>：命中查询的起点必须是"系统全域"，不是"这个 App"</div>
+      <div class="td"><b>症状（2026-10-30 真机）</b>：屏幕外 <code>(9999,9999)</code>、负值 <code>(-400,-400)</code>、菜单栏 <code>(5,5)</code>、窗口背景 <code>(1433,158)</code> —— 四个坐标<b>全部</b>回「上有一个元素, 但它不在这份快照里」。其中"屏幕外也有元素"是<b>凭空捏造的事实</b>。<br><b>根因</b>：用 <code>AXUIElementCreateApplication(pid)</code> 当起点去问 <code>AXUIElementCopyElementAtPosition</code>，问的其实是"<b>这个 App</b> 在 (x,y) 上占的是哪块" —— 问对了人，问题却是错的：任何坐标都有一个答案（实在没有就是那个 App 自己）。于是"没有元素 ⇒ 直接拒"那条判据<b>永远走不到</b>，成了带注释的死代码。<b>换成 <code>AXUIElementCreateSystemWide()</code></b> 之后：屏幕外 ⇒ 系统报错、命中 nil；别家 App ⇒ 回<b>那个 App 的</b>元素，由 pid 认出来。<br><b>"不在快照里"要分四类说</b>（<code>ComputerPointRule.missKind</code>）：<code>wholeApp</code>（<code>AXApplication</code>：自绘界面只把整窗交给系统，里面没有更细的格子 ⇒ 坐标<b>永远</b>点不了）、<code>outerChrome</code>（菜单栏 / 菜单：<b>不在窗口那棵树里</b>，"往里挑一格"和"重读一次"两句都是错的）、<code>container</code>（窗口背景 / 分组：容器从来不进快照，<b>"重读就有编号"是空话</b>）、<code>stale</code>（真格子：只可能是快照过期，重读一次就有）。合成一句 = 三句里错两句。<br><b>回执里不许说"那是哪个 App"</b>：名单之外谁在跑不是这次任务的信息（同 <code>candidatesInScope</code> 那条作用域纪律），"不是它"就是模型此刻要的全部。<br><b>门</b>：<code>run.sh</code> ③r 四条源码事实（必须调翻译 API / <b>必须问系统全域</b> / <b>不许再拿 App 元素当起点</b> / 必须核对进程）+ 冒烟 7 条纯函数断言。<b>反例</b>：① 退回 App 元素起点 ⇒ ③r <b>变红</b>；② <code>missKind</code> 一律返回 <code>stale</code> ⇒ <b>4 条红</b>。<br><b>状态</b>：<span class="chip c-ok">已做（未发版）</span> —— 冒烟 <b>1963 / 0</b>，<code>xcodebuild</code> <b>BUILD SUCCEEDED / 0 warning</b>；真机五条回执各自走对了分支（盲点 ×2 / 菜单栏 / 别家窗口 / 窗口背景）。</div>
+    </div>
+  </div>
+</div>
+
+<h3>补记 · 批 3b：人类接管（2026-10-30）</h3>
+
+<p class="lead">这一批不是安全边界（安全在作用域 / 编号 / 三条恒拒），而是<b>不添乱</b>：模型正要点一个按钮时人接管了鼠标，两边同时动 ⇒ 落到谁手里是随机的，而"点错地方"的代价可能是不可逆的。判据只有一句 —— <b>人一动，模型让路。</b></p>
+
+<div class="todos">
+  <div class="todo">
+    <span class="tn">23</span>
+    <div class="tbody">
+      <div class="tt"><code>CGEventTap</code> 只<b>看</b>不<b>注入</b>；让路有时间窗；档位决定装不装</div>
+      <div class="td"><b>为什么必须是时间窗</b>：如果改成"置一个待继续的标记"，它<b>永远不会复位</b> —— helper 不认识"用户说继续"这件事（那是自然语言），于是模型从那一刻起<b>永久罢工</b>，而回执只说"人在用电脑"。时间窗的语义是"等这台机器静下来"：人真在干活 ⇒ 一直有输入 ⇒ 一直刷新窗口 ⇒ 模型一直被挡在门外（对）；人停了 ⇒ 窗口过后接着做（也对）。<code>quietSeconds = 6</code>（&lt;2s 挡不住模型下一步，&gt;10s 把正常任务拖成"卡住了"），边界取 <b>&lt;</b> 不是 ≤（到点就放行，别多等一个窗口）。<br><b>为什么 <code>listenOnly</code></b>：要的是"看见人动了"，不是"接管输入"。listenOnly 的 tap <b>不能改事件、不能吞事件</b> ⇒ 回调写错的最坏结果是"没看见"，绝不会是"把用户的按键吃了"。<b>为什么 <code>mouseMoved</code> 不算</b>：光标会因为手搭在触控板上一直动，算进来 ⇒ 人只要没把手拿开模型就永远动不了，而人其实什么都没接管。算接管的是<b>表态性</b>输入：按下 / 抬起 / 打字 / 滚动 / 修饰键 / 拖动。<br><b>为什么必须单独一条线程</b>：helper 的主线程<b>阻塞在 <code>accept()</code></b> 上一个 loop 都不跑（同批 2e 那条冻结的同一个根）；tap 完全靠 run loop 驱动 ⇒ 挂主线程上它一个事件都收不到，<b>而且不会有任何报错</b>。<br><b>⚠️ 被系统踢掉必须自己重装</b>：系统会发一个 <code>tapDisabledByTimeout</code> 就把它禁掉，不重装 ⇒ 从那一刻起"人有没有动"永远答"没有" ⇒ 接管<b>静默消失</b>，而门禁里没有一条断言看得到真机上的 tap 状态 ⇒ 只能扫源码（<code>run.sh</code> ③s）。<br><b>装上/没装上都要说</b>：<b>"要装但没装上"与"根本没要装"分开</b> —— 后者是产品选择（无人值守档），对它说"接管检测没装上"就是回执在编一个不存在的故障。缺「输入监控」权限时 tap 照样装、鼠标照样看得见，<b>只有键盘是空的</b> ⇒ 那一半也要如实说一句。<br><b>只在"有人在"的档位装</b>（<code>ApprovalMode.expectsHumanAtKeyboard</code> = 交互档）：<code>autoAllow</code> 是定时任务、<code>autoJudge</code> 是远程驱动，在那两档装不是"更安全"，而是让<b>无人值守的任务在有人路过碰一下鼠标时莫名停住</b>，人还以为它在跑 —— 零红灯。它是<b>作用域的一部分</b>（只在 spawn 时读一次 env ⇒ 换档不重启就等于没换）。<br><b>状态</b>：<span class="chip c-ok">已做（未发版）</span> —— 冒烟 <b>1974 / 0</b>（+11 条：三档开关 / env 三条 / Scope 一条 / 判据五条边界），<code>xcodebuild</code> <b>BUILD SUCCEEDED / 0 warning</b>。<b>三条反例</b>：① 回调里发 <code>event.post</code> ⇒ ③s 红；② 摘掉 <code>tapDisabledByTimeout</code> 那支 ⇒ ③s 红；③ 让窗口判据失效 ⇒ <b>1 条红</b>。<br><b>真机 A/B</b>（同一份二进制 + 同一个注入的 Shift，只改 env）：<code>TAKEOVER=1</code> ⇒ <code>act</code> 回「刚才有人动了鼠标 / 键盘 ⇒ 这次没动」；等 6.6s ⇒ 恢复；<code>TAKEOVER</code> 不设 ⇒ helper 连 "takeover: on" 都不打，同样注入照样执行。<b>过程行落在工具卡里</b>：拒绝的那句话本身就是那一行，<b>没有另造 UI 元素</b> —— 再加一行会让"没动"这件事在界面上出现两次。</div>
+    </div>
+  </div>
+</div>
+
+<h3>补记 · 批 3c：图像面（2026-10-30，boss 定：设置页在「可读」旁边开一个「图片」，开了才当兜底）</h3>
+
+<p class="lead">图像是<b>读的第二种表示</b>。它进不了动作面 —— 像素里没有编号，三条恒拒判的是<b>元素</b>，图里根本没有元素可判。它存在的理由只有一个：有些 App 的 AX 树薄得只剩窗口外壳（微信 1052×754 只暴露 6 个节点），文本读一百次也读不出消息正文，这时唯一的兜底是"让我看一眼"。</p>
+
+<div class="todos">
+  <div class="todo">
+    <span class="tn">24</span>
+    <div class="tbody">
+      <div class="tt">两把钥匙 + 一条硬禁区：总开关之外还要<b>逐 App</b>勾；<b>像素面不涂黑，遮蔽只留文本层</b></div>
+      <div class="td"><b>为什么是两把钥匙</b>：给某个 App 开「可读」只代表"允许读它的界面"，不代表"允许把它的像素发给我" —— 后者对用户是另一件事（图上能看见的东西比文本多得多）。所以开图片必须<b>单独点一次</b>，默认<b>关</b>；取消「可读」时连带摘掉「图片」（否则留下"拍得了但读不到"的勾选状态，而 helper 侧一定拒它，设置页却还勾着 ⇒ 人只会以为这功能时好时坏）。<br><b>像素面不涂黑（2026-10-30 改定，推翻了本批最初的设计）</b>：最初的方案是把密码框盖成黑块。boss 否掉它的理由是<b>「遮错了会毁掉整张图」</b> —— 而这条路验下来<b>收益近乎为零</b>：密码框本来就渲染成圆点（实测 Safari 那个框的 <code>AXValue</code> 直接就是 <code>••••••</code>），黑块唯一多遮住的是<b>密码长度</b>。代价却有三层：判据放宽会多遮；两套坐标系不同源会让黑块<b>整体偏移到别的内容上</b>；一个被标成受保护的<b>容器</b>框住整片。而且<b>遮错的东西长得和遮对的一模一样，零报错</b>。所以 <b>遮蔽只留在文本层</b>（<code>ComputerRedline.maskedValue</code>），粒度是<b>元素</b>而不是像素 —— 遮错最多丢一个值，丢不掉整张图。代价要认：<b>用户自己把秘密显示在屏幕上</b>（终端里的 token、笔记里的验证码、助记词、卡号）在图里就是明明白白，这条判据认不出来 ⇒ 唯一防线是「图像面默认关 + 逐 App 勾」。
+      <br><b>遮蔽判据同时收紧到「只认精确的密码框」</b>：原来的 <code>contains("secure") || contains("password")</code> 是<b>子串匹配</b>，名字里带这两个词的<b>任何</b>角色都会被当成密码框 ⇒ 一整个分组／面板的文字全变 <code>••••</code>，而模型<b>看不出少了什么</b>（遮蔽是单向的：少遮还能被发现，多遮发现不了）。现在只认 <code>role == AXSecureTextField</code> 或 <code>subrole == AXSecureTextField</code>，外加系统自己标的 <code>AXProtectedContent</code>（属性是系统的答案，不是猜）。<b>subrole 必须一起看</b>：网页密码框的 <code>AXRole</code> 是 <code>AXTextField</code>、<code>AXProtectedContent</code> 为 <code>nil</code>，身份只在 <code>AXSubrole</code> 里 —— 只看 role 的话网页密码框一条判据都不命中。<br><b>为什么硬禁区与操作面同一批</b>（<code>ComputerRedline.actBannedBundles</code>）：理由不同，名单相同 —— 操作面怕"替人按了付款"，图像面怕"替人把密码拍成图"。判据在状态层（<code>canImage</code>），不靠视图禁用：视图那层被改坏不会有任何红灯。<br><b>为什么 <code>CGWindowListCreateImage</code> 不能用</b>：它在 macOS 14.0 起被标记弃用，而本项目门禁要求 <b>0 warning</b>（实测确认）⇒ 只有 ScreenCaptureKit 一条干净路。代价是 SCK 只有 async API，而 helper 的 socket 循环是同步的 ⇒ 用"主线程 <code>sem.wait()</code> + <code>Task.detached</code>"桥接（<b>实测不死锁</b>：权限缺失时能正常抛出 TCC 错误）。⚠️ 若哪天 SCK 改成必须回主队列，表现会是 <b>helper 整个卡死</b>而不是报错。<br><b>两张 TCC，别混</b>：屏幕录制与辅助功能<b>互不覆盖</b>，而且 helper 是裸可执行、按 responsible process（MangoX）记账 ⇒ 用户要授权的是 MangoX，改完要<b>重开 App</b>。<code>ping</code> 回 <code>screenRecording</code> 字段（<code>CGPreflightScreenCaptureAccess</code> 只查询不弹窗）。<br><b>"不落盘"能兑现到哪一步（如实说）</b>：图要进模型上下文就必须作为 <code>ImageContent</code> 进 tool result，这是 pi 的机制、不由我们选 ⇒ <b>它一定会随会话存在</b>。MangoX 侧能改的那一半是：截图<b>不在 attachments 再存一份</b>（附件目录里的东西都该是"用户的东西"，截图不是）。代价要认：这类卡<b>没有缩略图</b>，用户在卡片上只能读到回执里"附了一张 N KB 的截图"那句话。<br><b>只截那一个窗口，不是整个屏幕</b>：<code>SCContentFilter(desktopIndependentWindow:)</code> 只把那一个窗口喂进去，桌面 / 别的窗口 / 壁纸都<b>不在过滤范围</b>；窗口被别的窗口挡住也照样拍得到（取的是它自己的表面）。尺寸也取自窗口，不是屏幕。<br><b>输出尺寸必须取 <code>SCWindow.frame</code>，不能取 AX 的窗口框</b>：两者差一个标题栏（典型 28pt），按 AX 框设宽度会让 SCK <b>非等比缩放</b> ⇒ 整个画面变形（这条与黑块无关，是"图本身对不对"的问题）。同时打开 <code>ignoreShadowsSingleWindow</code>：开着一圈半透明阴影会让画面四周多出几十像素透明边。两条都扫进 <code>run.sh</code> ③t —— 它们是"值退回去门只打已知破线而不变红"的高危位，只能钉源码。<b>「像素面不涂黑」本身也钉在 ③t</b>：判据是<b>结构上没有这个能力</b>（源码里不许再出现 <code>Redaction</code> / <code>ctx.fill</code>），不是"这个能力输出为空" —— 后者造一条用例就能骗过。<br><b>为什么是 1 倍逻辑尺寸</b>：图是"看一眼长什么样"的兜底，不是给人看的成品；2 倍让 PNG 体积翻四倍，而这些字节要进模型上下文 —— 省下来的额度更有用。<br><b>失败永不吞掉文本</b>：图是锦上添花。名单没开、没权限、找不到窗口 —— 三种都<b>照常把文本交回去</b>，再把原因说清并给出下一步（"没开图片"去设置页／"没权限"去系统设置／"找不到窗口"别重试）。把文本一起吞掉只会让模型重试同一个动作。<br><b>状态</b>：<span class="chip c-acc">已做，真机未验</span> —— 冒烟 <b>1998 / 0</b>（图像面：名单五条 + 尺寸两条；遮蔽收紧：三条 + 子串护栏一条），<code>xcodebuild</code> <b>BUILD SUCCEEDED / 0 warning</b>（App 与 helper 两个 target 各跑一轮）。<b>真机已验的是三条失败路径</b>（本机没有屏幕录制授权，正好验它）：<code>ping</code> 回 <code>screenRecording=false</code>；名单空 ⇒ 回「没开「图片」…请在 设置 › 集成 › 电脑操作 里给它勾上」且<b>文本照常</b>；名单有它 ⇒ 回「屏幕录制权限还没给 ⇒ …请到 系统设置 › 隐私与安全性 › 屏幕录制 里勾上 MangoX」。<b>反例已验三次</b>：① 把 <code>ignoreShadowsSingleWindow</code> 从 <code>true</code> 改成 <code>false</code>（<b>改值不删行</b>）⇒ ③t 立刻红，说明门认的是值不是那一行的存在；② 把 <code>struct Redaction</code> 塞回 <code>ComputerShotRule</code> ⇒ ③t 红（判据是"结构上没有这个能力"，不是"输出为空"）；③ 把 <code>isPasswordRole</code> 退回 <code>contains</code> ⇒ 用例<b>恰好红 1 条</b>，说明那一条就是专门盯着这件事的。<b>图像面在真机上还没跑通过一次</b>（卡在屏幕录制 TCC：本机 ad-hoc 签名 ⇒ 授权按 cdhash 记，重装就清）—— 但<b>遮蔽那半边现在就能验，而且必须验</b>。<b>最小用例</b>：Safari 打开一个本地页，放 <code>&lt;input type="text"&gt;</code>（账号）与 <code>&lt;input type="password"&gt;</code>（密码）。断言三条：① 密码框那行值恒为 <code>••••</code>；② 账号框那行值<b>原样可见</b>（遮过头模型就看不见自己在填什么）；③ 两行的 role 都是 <code>AXTextField</code> 而 <b>subrole 是 <code>AXSecureTextField</code></b> —— 这条就是"网页密码框只有 subrole 认得出"的现场证据。<b>⚠️ 前置门不能省</b>：先用一次普通读确认密码框那行的 <code>AXSubrole</code> 确实是 <code>AXSecureTextField</code>（2026-10-30 实测是），否则这个用例<b>什么都没验</b>。这一步不需要屏幕录制权限。</div>
     </div>
   </div>
 </div>

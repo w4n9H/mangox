@@ -36,6 +36,10 @@ struct AXNode: Equatable {
     var value: String = ""
     /// AX 的受保护内容标记(`kAXProtectedContentAttribute`)。
     var isProtected: Bool = false
+    /// `AXSubrole`。**网页密码框唯一的身份标记就在这儿**（实测 Safari：`AXRole` 是
+    /// `AXTextField`、`AXProtectedContent` 为 nil、`AXSubrole` 才是 `AXSecureTextField`）⇒
+    /// 只读 role 的话，**网页里的密码框一条判据都不命中**（遮蔽与动作判定都会把它当普通输入框）。
+    var subrole: String = ""
     /// `AXIdentifier` —— 有它就用它当差分键(比索引路径稳)。
     var identifier: String = ""
     /// 支持的动作名(`AXPress` / `AXConfirm` …), 空 = 不可交互。
@@ -132,7 +136,8 @@ struct AXSnapshot: Equatable {
                 title: text,
                 value: ComputerRedline.maskedValue(node.value,
                                                    role: node.role,
-                                                   isProtected: node.isProtected),
+                                                   isProtected: node.isProtected,
+                                                   subrole: node.subrole),
                 frame: node.frame,
                 actions: node.actions,
                 key: node.identifier.isEmpty
@@ -200,7 +205,7 @@ struct AXSnapshot: Equatable {
     static func label(_ node: AXNode) -> String {
         let t = node.title.trimmingCharacters(in: .whitespacesAndNewlines)
         if !t.isEmpty { return t }
-        if ComputerRedline.isPasswordRole(node.role) { return "" }
+        if ComputerRedline.isPasswordRole(node.role, subrole: node.subrole) { return "" }
         return node.detail.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 

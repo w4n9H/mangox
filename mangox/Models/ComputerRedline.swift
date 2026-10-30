@@ -46,16 +46,35 @@ enum ComputerRedline {
     ///
     /// ⚠️ 判据放这里而不是放 helper 的拼串处: 那是"用到它的地方", 这里才是"能被断言的地方"
     ///    (同 `NoteProposal` 那套"判据全部留在纯函数里, 那里能造反例")。
-    static func maskedValue(_ raw: String, role: String, isProtected: Bool) -> String {
+    ///
+    /// ⚠️ 为什么 `isProtected` 这条**不算"误遮"**: 它不是按名字猜, 是系统自己标的
+    ///    `AXProtectedContent`(语义就是"这块内容不该被读出来"), 而 helper 只在
+    ///    **有值**的元素上才置它(见 `AXAdapter.build`) ⇒ 唯一会被遮掉的就是"一个受保护元素里的值",
+    ///    那正好是遮蔽要遮的东西。
+    static func maskedValue(_ raw: String, role: String, isProtected: Bool,
+                            subrole: String = "") -> String {
         if isProtected { return mask }
-        if isPasswordRole(role) { return mask }
+        if isPasswordRole(role, subrole: subrole) { return mask }
         return raw
     }
 
-    /// 这个角色是不是密码框。AX 的角色名在不同 App 里不统一, 三种写法都认。
-    static func isPasswordRole(_ role: String) -> Bool {
-        let r = role.lowercased()
-        return r.contains("secure") || r.contains("password") || r == "axtextfieldsecure"
+    /// 这个角色是不是密码框。**只认系统给的精确身份, 不做任何模糊匹配**。
+    ///
+    /// ⚠️ 2026-10-30 从 `contains("secure") || contains("password")` 收紧到这里(boss 定:
+    ///    "只遮蔽 password, 防止误遮")。子串匹配会把名字里带这两个词的**任何**角色都算成
+    ///    密码框, 而遮蔽是**单向**的 —— 多遮一格, 模型就少一条它该看见的信息, 而且
+    ///    **看不出少了什么**(它只会以为自己读到的是全部)。少遮还能靠别的手段发现, 多遮发现不了。
+    ///
+    /// ⚠️ **必须把 `subrole` 一起看** (2026-10-30 实测 Safari): 网页里的密码框
+    ///    `AXRole` 是 **`AXTextField`**(不含 secure)、`AXProtectedContent` 为 **nil**、
+    ///    真正的身份在 **`AXSubrole = AXSecureTextField`**。只看 role 的话, 网页密码框
+    ///    两条判据全落空。
+    ///
+    /// ⚠️ 为什么敢用 `==` 而不是"宽松一点": AppKit 的 `NSSecureTextField` 与 WebKit /
+    ///    Chromium 的密码输入框**报的是同一个常量**(`AXTextField` + `AXSecureTextField`),
+    ///    两边实测一致。真遇到报别的名字的 App, 结果是"没遮"而不是"遮错" —— 方向是对的。
+    static func isPasswordRole(_ role: String, subrole: String = "") -> Bool {
+        role == "AXSecureTextField" || subrole == "AXSecureTextField"
     }
 
     // MARK: - 操作面的硬禁区 (批 2b)

@@ -92,6 +92,13 @@ enum AXAdapter {
         let detail = string(el, kAXDescriptionAttribute) ?? ""
         let identifier = string(el, kAXIdentifierAttribute) ?? ""
         let value = string(el, kAXValueAttribute) ?? ""
+        // ⚠️ `AXSubrole` **只对文本类问**: 它是每节点一次 IPC(3000 节点 = 3000 次往返), 而
+        //    密码框的身份只可能出现在文本类元素上(实测 Safari / AppKit 都是
+        //    `AXRole = AXTextField` + `AXSubrole = AXSecureTextField`)。
+        //    ⚠️ 漏了它, 网页密码框两条判据(role 名 / AXProtectedContent)全落空 ——
+        //    文本靠 WebKit 自己返回 `••••••` 侥幸没泄, 而**图像面一点没涂**(2026-10-30 实测)。
+        let subrole = role.localizedCaseInsensitiveContains("textfield")
+            ? (string(el, kAXSubroleAttribute) ?? "") : ""
         let actions = actionNames(el)
         let frame = rect(el)
 
@@ -122,6 +129,7 @@ enum AXAdapter {
                       //    现在真读了，但**只在有值时才问**：这个属性每节点一次 AX 往返
                       //    (3000 节点 = 3000 次 IPC), 而遮蔽挡的是"值泄出去", 空值没什么可遮的。
                       isProtected: !value.isEmpty && isProtected(el),
+                      subrole: subrole,
                       identifier: identifier,
                       actions: actions,
                       frame: frame,
@@ -183,11 +191,19 @@ enum AXAdapter {
     ///    而症状是"同一个按钮, 快照里叫『登录』, 判据看它叫空"。
     static func liveTarget(_ el: AXUIElement) -> ComputerActTarget {
         let role = string(el, kAXRoleAttribute) ?? ""
+        // ⚠️ 与 `build` 同一套判据、同一处读取: 现场判定若漏了 subrole, 症状是"快照里认得出
+        //    这是密码框(已遮), 一到 act 就认不出来" —— 同一份界面, 两条路给出不同结论。
+        let subrole = role.localizedCaseInsensitiveContains("textfield")
+            ? (string(el, kAXSubroleAttribute) ?? "") : ""
+        // `subrole` 一起塞进 `AXNode`: `AXSnapshot.label` 靠它认密码框, 而下面那行用的正是
+        // 同一个 `label` —— 少传一个字段, 两条路就分叉了。
         let node = AXNode(role: role,
                           title: string(el, kAXTitleAttribute) ?? "",
-                          detail: string(el, kAXDescriptionAttribute) ?? "")
+                          detail: string(el, kAXDescriptionAttribute) ?? "",
+                          subrole: subrole)
         let (key, mods) = menuKey(el)
         return ComputerActTarget(role: role,
+                                 subrole: subrole,
                                  title: AXSnapshot.label(node),
                                  actions: actionNames(el),
                                  isProtected: isProtected(el),
@@ -370,6 +386,52 @@ enum AXAdapter {
             mods = ComputerRedline.decodedModifiers(n.intValue)
         }
         return (char, mods)
+    }
+
+    /// 屏幕坐标 → 那个坐标**底下**的元素(批 3a)。
+    ///
+    /// ⚠️ 它存在的唯一理由是**别开第二套寻址**: 坐标点击原本会绕开"按编号寻址"这个前提 ——
+    ///    "我看见的节点 = 我点的东西"那个等式就没了, 三条恒拒(付款 / 永久删除 / 存盘)也无处落脚
+    ///    (它们判的是**元素**)。把坐标翻译回元素之后, 坐标只是一种**输入方式**, 不是一种绕过。
+    ///
+    /// ⚠️ 坐标系是**全局屏幕坐标, 左上原点**(与快照里每行末尾那个 `frame` 同一套) ——
+    ///    这也正是 `AXUIElementCopyElementAtPosition` 要的坐标。多显示器下原点左侧的屏是负值,
+    ///    所以**不许把坐标 clamp 到 ≥0**。
+    ///
+    /// ⚠️ 返回 nil 不等于"那儿是空白": 自绘界面(画布 / 游戏)也有元素, 只是不交给系统。
+    ///    调用方的话术要把这两种可能都说出来, 别替系统下结论。
+    ///
+    /// ⚠️⚠️ **起点必须问系统(`AXUIElementCreateSystemWide()`), 不能拿 `AXUIElementCreateApplication(pid)`
+    ///    去问。** 用 App 元素当起点时, 问的其实是"**这个 App** 在 (x,y) 上占的是哪块" ——
+    ///    落在**别的 App 的窗口**上、甚至落在屏幕外 `(-400,-400)` / `(9999,9999)`,
+    ///    **照样回一个元素**(那个 App 自己) ⇒ 于是"坐标上没有东西 ⇒ 直接拒"那条判据
+    ///    **永远走不到**, 而回执会说"`(9999,9999)` 上有一个元素" —— 一句凭空捏造的事实。
+    ///    2026-10-30 真机探针实测: 四个坐标(屏幕外 / 负值 / 菜单栏 / 窗口背景)全撞上同一句。
+    ///    换成 systemWide 后: 屏幕外 ⇒ 系统报错, 命中 nil; 别家 App ⇒ 回**那个 App 的**元素,
+    ///    由 `processID(of:)` 认出来"这不是我在读的那个 App"。
+    static func element(at point: CGPoint) -> AXUIElement? {
+        var hit: AXUIElement?
+        let err = AXUIElementCopyElementAtPosition(AXUIElementCreateSystemWide(),
+                                                   Float(point.x), Float(point.y), &hit)
+        guard err == .success else { return nil }
+        return hit
+    }
+
+    /// 元素属于哪个进程 —— 坐标寻址的第二道判据(命中的是不是**这次在读的那个 App**)。
+    ///
+    /// ⚠️ `AXUIElementCopyElementAtPosition` 问的是**整块屏幕**, 所以模型给的坐标很容易落在
+    ///    别的窗口上(它看的是快照里的 frame, 而窗口会被它挪动)。不判这一步, "在 (x,y) 上按一下"
+    ///    就成了替**另一个 App** 点 —— 那个 App 我一次都没读过, 也没判过。
+    static func processID(of el: AXUIElement) -> pid_t {
+        var pid: pid_t = -1
+        AXUIElementGetPid(el, &pid)
+        return pid
+    }
+
+    /// 元素的角色名(`AXButton` / `AXGroup` / `AXApplication`…)。
+    /// 坐标没落进快照里的某一格时, 靠它说清"那底下到底是什么", 而不是含糊地说"有一个元素"。
+    static func roleName(of el: AXUIElement) -> String {
+        string(el, kAXRoleAttribute) ?? ""
     }
 
     /// AX 的受保护内容标记(`AXProtectedContent`)。取不到就当**不是**受保护 ——

@@ -75,6 +75,23 @@ extension SmokeMain {
                 == "好的, 我看一下",
               "T-COMPUTER 普通输入框不遮蔽 (遮蔽过宽 = 模型看不见自己在填什么)")
 
+        // 遮蔽**只认精确的密码框身份** (2026-10-30 收紧: 只遮 password, 防止误遮)。
+        //
+        // ⚠️ 为什么值得单列三条: 遮蔽是**单向**的 —— 多遮一格, 模型就少一条它该看见的信息,
+        //    而且**看不出少了什么**。少遮还能靠别的手段发现, 多遮发现不了。
+        check(ComputerRedline.maskedValue("hunter2", role: "AXTextField", isProtected: false,
+                                          subrole: "AXSecureTextField") == ComputerRedline.mask,
+              "T-COMPUTER 网页密码框(role=AXTextField + subrole=AXSecureTextField)照遮")
+        // ⚠️ 这条是"收紧"本身的护栏: 旧判据是子串匹配, 名字里带 secure 的**任何**角色都会被
+        //    当成密码框 ⇒ 一整个分组/面板的文字全变 ••••。收紧后它必须原样出来。
+        //    反例: 把 `isPasswordRole` 改回 `contains("secure")` ⇒ 这条立刻红。
+        check(ComputerRedline.maskedValue("公开说明", role: "AXSecureGroup", isProtected: false)
+                == "公开说明",
+              "T-COMPUTER 只是名字里带 secure 的角色不遮 (子串匹配会整片变 ••••, 且零报错)")
+        check(ComputerRedline.maskedValue("hunter2", role: "AXSecureTextField", isProtected: false,
+                                          subrole: "AXUnknownSubrole") == ComputerRedline.mask,
+              "T-COMPUTER subrole 认不出也不影响: role 本身是密码框照遮 (两条路各管一半)")
+
         // MARK: 红线 —— 三条恒拒
 
         check(ComputerRedline.refusal(forControl: "确认付款", role: "AXButton")?.refusal == .payment,
@@ -299,6 +316,57 @@ extension SmokeMain {
         check(e4?["A"] == "1" && e4?[ComputerHost.sockEnvKey] == "/tmp/b.sock",
               "T-COMPUTER 已有环境字典时在它上面补键 (不能覆盖掉别人刚写进去的东西)")
 
+        // MARK: 人类接管(批 3b) —— 每个失效点都**没有红灯**, 所以各要一条判据
+
+        // ① 开关只在"这一档有人在"时为真, 而且**缺省是关**。
+        check(ApprovalMode.interactive.expectsHumanAtKeyboard,
+              "T-COMPUTER 交互档有人在键鼠旁 (接管监听只在这一档装)")
+        check(!ApprovalMode.autoAllow.expectsHumanAtKeyboard
+              && !ApprovalMode.autoJudge.expectsHumanAtKeyboard,
+              "T-COMPUTER 定时任务 / 远程驱动两档不装 —— 装了会让无人值守的任务在有人路过"
+              + "碰一下鼠标时莫名停住, 而人以为它还在跑")
+
+        let e5 = ComputerHost.environment(existing: nil, socketPath: "/tmp/c.sock",
+                                          allowedBundles: ["x"], takeover: true,
+                                          peerPid: me, inherited: [:])
+        check(e5?[ComputerHost.takeoverEnvKey] == "1",
+              "T-COMPUTER 有人在的档位把接管开关下发给 helper")
+        let e6 = ComputerHost.environment(existing: nil, socketPath: "/tmp/c.sock",
+                                          allowedBundles: ["x"], takeover: false,
+                                          peerPid: me, inherited: [:])
+        check(e6?[ComputerHost.takeoverEnvKey] == nil,
+              "T-COMPUTER 没人在的档位必须**删掉**这个键 (父进程残留会让它看起来装了监听)")
+        let e7 = ComputerHost.environment(existing: nil, socketPath: nil,
+                                          allowedBundles: [], takeover: true, peerPid: me,
+                                          inherited: [ComputerHost.takeoverEnvKey: "1"])
+        check(e7?[ComputerHost.takeoverEnvKey] == nil,
+              "T-COMPUTER 没挂扩展时连这个键一起清 (没人用的 env 是下次排查的假线索)")
+
+        // ② 换档位必须重启 helper —— 它同样只在启动时读一次 env。
+        check(ComputerHost.Scope(read: ["a"], act: [], takeover: false)
+                != ComputerHost.Scope(read: ["a"], act: [], takeover: true),
+              "T-COMPUTER 接管开关算作用域的一部分 (换档位不重启 ⇒ 监听还是老那一份)")
+
+        // ③ "让路"的判据: 人一动就停, 但**会自己过期** —— 过期的反面是"永久罢工"。
+        //    ⚠️ 反例: 把 `quiet < quietSeconds` 改成"只要有人动过就一直拒" ⇒ 下面第 2 条
+        //    与第 4 条会红, 而真机上表现为"模型从此再也不动, 回执只说人在用电脑"。
+        let t0 = 10_000.0
+        check(ComputerTakeover.refusal(lastHumanInputAt: nil, now: t0, installed: true) == nil,
+              "T-COMPUTER 装好之后一直没人碰 ⇒ 照做")
+        if let why = ComputerTakeover.refusal(lastHumanInputAt: t0 - 0.5, now: t0, installed: true) {
+            check(why.contains("动了鼠标") && why.contains("让"),
+                  "T-COMPUTER 人刚动过 ⇒ 拒, 且说清「让路」与下一步 (实际:\(why))")
+        } else {
+            check(false, "T-COMPUTER 人刚动过键鼠必须拒 —— 否则模型会和人的手抢同一个鼠标")
+        }
+        check(ComputerTakeover.refusal(lastHumanInputAt: t0 - ComputerTakeover.quietSeconds,
+                                       now: t0, installed: true) == nil,
+              "T-COMPUTER 静默窗口**到期就恢复** (判据是 < 不是 ≤: 到点放行, 别多等一个窗口)")
+        check(ComputerTakeover.refusal(lastHumanInputAt: t0 - 0.1, now: t0, installed: false) == nil,
+              "T-COMPUTER 监听没装上 ⇒ 放行, 不假装判断过 (能力缺口由回执如实说)")
+        check(ComputerTakeover.refusal(lastHumanInputAt: t0 + 5, now: t0, installed: true) != nil,
+              "T-COMPUTER 时间戳比此刻还晚(两次取了不同时钟) ⇒ 当刚动过, 别把负静默期当'很久没动'")
+
         // MARK: 契约 token —— 改一边不会编译报错, 只会静默读到 nil
 
         let csrc = PiRpcTransport.computerExtensionSource
@@ -341,6 +409,120 @@ extension SmokeMain {
         cs.enabled = false
         check(cs.activeBundles.isEmpty,
               "T-COMPUTER 关掉 ⇒ 立刻回到空 (不存在'关了但在途会话还开着'的窗口)")
+
+        // MARK: 图像面(批 3c) —— 两把钥匙 + 一条硬禁区
+        //
+        // 图像是**读的第二种表示**: 它进不了动作面(像素里没有编号), 却是遮蔽机制唯一的
+        // 绕过口(文本值被换成 `••••`, 像素里是原样)。所以下面每条都在守同一件事 ——
+        // "默认一张都不拍; 拍了的那几个必须是用户逐个点过的"。
+
+        // ① 两把钥匙缺一不可: 总开关开了只代表"允许读/操作", 图片要**额外**勾。
+        //    ⚠️ 反例: 让 `activeImageBundles` 直接返回 `selected` ⇒ 这条立刻红。
+        let ci = ComputerSettings()
+        ci.enabled = true
+        ci.setSelected(["com.apple.Safari"])
+        check(ci.activeImageBundles.isEmpty,
+              "T-COMPUTER 总开关开着但没勾图片 ⇒ 一张都不拍 (图片是独立的一把钥匙)")
+
+        ci.setImage("com.apple.Safari", true)
+        check(ci.activeImageBundles == ["com.apple.Safari"],
+              "T-COMPUTER 勾了才下发图像面")
+        check(ci.activeBundles == ["com.apple.Safari"],
+              "T-COMPUTER 勾图片要连带勾上读面 (拍得了但读不到没有意义)")
+
+        // ② 不变量 `图像 ⊆ 读`: 摘掉读面, 图片必须跟着消失。
+        ci.toggle("com.apple.Safari")
+        check(ci.activeImageBundles.isEmpty && ci.selected.isEmpty,
+              "T-COMPUTER 取消可读必须连带摘掉图片 (否则设置页勾着、helper 却必拒, 人以为时好时坏)")
+
+        // ③ 排序在**投影层**(`activeImageBundles`)做过一次, env 那层照原样拼 ——
+        //    与 `allowedBundles` / `actBundles` 同待遇。`Set` 的迭代顺序不稳定且与插入序
+        //    无关 ⇒ 不在投影层排, 同样的勾选每次会拼出不同的 env 串, "改了什么"看不出来。
+        ci.setImage("com.z", true)
+        ci.setImage("com.a", true)
+        check(ci.activeImageBundles == ["com.a", "com.z"],
+              "T-COMPUTER 图像面按字典序下发 (Set 迭代序不稳 ⇒ 不排序就没法 diff)")
+
+        // ④ 硬禁区: 口令/系统类一个像素都不许拍。视图置灰之外还得有这一道 ——
+        //    视图那层被改坏不会有任何红灯, 只会在真机上把密码拍成图。
+        check(!ComputerSettings.canImage("com.1password.1password"),
+              "T-COMPUTER 口令类恒不许截图 (文本遮蔽在像素里不成立)")
+        ci.setImage("com.1password.1password", true)
+        check(!ci.activeImageBundles.contains("com.1password.1password")
+              && !ci.selected.contains("com.1password.1password"),
+              "T-COMPUTER 硬禁区连勾都勾不上 (判据在状态层, 不靠视图禁用)")
+
+        // ⑤ 两档互不牵连 —— "能看"与"能按"是两个开关, 互相带上是上一批特意避开的错。
+        ci.setAct("com.apple.mail", true)
+        ci.setImage("com.apple.mail", false)
+        check(ci.activeActBundles == ["com.apple.mail"],
+              "T-COMPUTER 关图片不许动操作面 (setImage 不碰 actSelected)")
+
+        // ⑥ 落盘: 图片同样存**身份**且落在读面内; 空集写成空串。
+        check(ComputerSettings.decode(enabledRaw: "1",
+                                      bundlesRaw: "com.apple.Safari",
+                                      imageRaw: "com.apple.Safari,com.apple.mail").imageBundles
+                == ["com.apple.Safari"],
+              "T-COMPUTER 反解时图片取与读面的交集 (手改过的库写成超集 ⇒ 剪掉)")
+        check(ComputerSettings.encode(enabled: true,
+                                      bundles: ["com.apple.mail", "com.apple.Safari"],
+                                      imageBundles: ["com.apple.Safari"]).imageBundles
+                == "com.apple.Safari",
+              "T-COMPUTER 图片落盘串排序稳定")
+        check(ComputerSettings.encode(enabled: true, bundles: ["x"]).imageBundles.isEmpty,
+              "T-COMPUTER 没勾图片 ⇒ 落盘是**空串**而不是缺键 (缺键读不出'用户明确关了')")
+
+        // ⑦ 下发: 这个键**恒设**, 空串 = 一张都不拍 —— 与 `takeover` 的"不要就删"不同。
+        //    区别在于 `takeover` 缺键只影响"要不要监听", 而这里缺键会让 helper 以为
+        //    "这一版 App 根本没有图像功能", 于是把用户明确关掉的事说成"不支持"。
+        let eImg = ComputerHost.environment(existing: nil, socketPath: "/tmp/c.sock",
+                                            allowedBundles: ["x"], imageBundles: [],
+                                            takeover: false, peerPid: me, inherited: [:])
+        check(eImg?[ComputerHost.imageBundlesEnvKey] == "",
+              "T-COMPUTER 勾选为空也下发空串 (缺键 ≠ 用户关了, 回执会说错)")
+        // ⚠️ 这里传**已排序**的 ["a", "b"]: `environment` 只 `joined`, 不重排(同 allowedBundles)。
+        //    排序责任在 `activeImageBundles` —— 上面第 ③ 条守的就是它, 别在这里重复断言。
+        let eImg2 = ComputerHost.environment(existing: nil, socketPath: "/tmp/c.sock",
+                                             allowedBundles: ["x"], imageBundles: ["a", "b"],
+                                             takeover: false, peerPid: me, inherited: [:])
+        check(eImg2?[ComputerHost.imageBundlesEnvKey] == "a,b",
+              "T-COMPUTER 图像面原样拼进 env (排序已在投影层做过, 这一层不重排)")
+        let eImg3 = ComputerHost.environment(existing: nil, socketPath: nil,
+                                             allowedBundles: [], imageBundles: ["x"],
+                                             takeover: false, peerPid: me,
+                                             inherited: [ComputerHost.imageBundlesEnvKey: "x"])
+        check(eImg3?[ComputerHost.imageBundlesEnvKey] == nil,
+              "T-COMPUTER 没挂扩展时连图像键一起清 (否则下次启动读到一条假授权)")
+
+        // MARK: 图像面的判据 (批 3c) —— 只判"能不能拍、拍多大", **不判涂哪儿**
+
+        // ① 名单匹配。**空串与缺键都是"一张都不拍"**, 不做模糊匹配。
+        //    ⚠️ 反例: 把 `allowed` 的 `guard let raw, !raw.isEmpty` 去掉 ⇒ 第一条红。
+        check(!ComputerShotRule.allowed(bundle: "com.apple.Safari", raw: ""),
+              "T-COMPUTER 名单是空串 ⇒ 一张都不拍 (空 = 没勾, 不是全勾)")
+        check(!ComputerShotRule.allowed(bundle: "com.apple.Safari", raw: nil),
+              "T-COMPUTER 名单缺键 ⇒ 一张都不拍")
+        check(ComputerShotRule.allowed(bundle: "com.apple.Safari", raw: "com.apple.Safari"),
+              "T-COMPUTER 名单里有它就允许")
+        check(ComputerShotRule.allowed(bundle: "com.apple.Safari",
+                                       raw: "com.apple.mail, com.apple.Safari"),
+              "T-COMPUTER 多值名单按逗号切, 且吃掉两侧空格")
+        check(!ComputerShotRule.allowed(bundle: "com.apple.Safar", raw: "com.apple.Safari"),
+              "T-COMPUTER 不做前缀/模糊匹配 (少一个字母就是不在名单里)")
+
+        // ② 像素面**不涂黑**(2026-10-30 boss 定) —— 所以这里连一条矩形用例都没有。
+        //    ⚠️ 这条决定不能只写在注释里: 谁把 `redactions` / `ctx.fill` 加回来, `run.sh` ③t
+        //    的源码扫描会红(判据是"结构里没有这个能力", 不是"这个能力输出为空")。
+        let cw = AXRect(x: 100, y: 200, w: 800, h: 600)
+
+        // ③ 截图按 1 倍逻辑尺寸 —— 2 倍会让 PNG 体积翻四倍, 而它要进模型上下文。
+        let capSize = ComputerShotRule.captureSize(window: cw)
+        check(capSize.width == 800 && capSize.height == 600,
+              "T-COMPUTER 截图尺寸 = 窗口逻辑尺寸 (1 倍: 这是兜底, 不是给人看的成品)")
+        // ⚠️ 零尺寸不能让 0 漏到 SCK: 那边收到 0 是**抛错**, 而我们会在回执里把它说成"截图失败"。
+        let zeroSize = ComputerShotRule.captureSize(window: AXRect(x: 0, y: 0, w: 0, h: 0))
+        check(zeroSize.width == 1 && zeroSize.height == 1,
+              "T-COMPUTER 零尺寸窗口算出 1×1 而不是 0 (SCK 收到 0 直接抛错)")
 
         // MARK: 落盘串 —— 存 bundle id 本身, 不存位置
 

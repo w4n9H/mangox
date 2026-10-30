@@ -73,6 +73,12 @@ final class PiRpcTransport: AgentTransport {
     private var thinkMessageID: UUID?
     private var toolCards: [String: ToolCall] = [:]   // pi toolCallId → 卡片
     private var toolStartAt: [String: Date] = [:]
+    /// callId → 工具真名。只为了 `tool_execution_end` 那一步能分辨"这张图是现场截图"。
+    ///
+    /// ⚠️ 不用 `card.title` 判断: `title` 早被 `toolHead` 换成了给人看的抬头(如「按 #12 · Safari」),
+    ///    工具名在里面已经不存在了。
+    /// ⚠️ 用完即 `removeValue`(在 end 里) —— 否则这个字典随整个会话单调增长。
+    private var toolNamesByCallId: [String: String] = [:]
     private var requestId = 0
 
     // 审批 (P3.3): pi 侧 permission-gate 扩展对敏感工具发 extension_ui_request,
@@ -339,7 +345,12 @@ final class PiRpcTransport: AgentTransport {
               const n = input.text === undefined ? 0 : String(input.text).length;
               return "写 #" + (input.index ?? "?") + " (" + n + " 字)" + app;
             }
-            if (input.op === "press") return "按 #" + (input.index ?? "?") + app;
+            if (input.op === "press") {
+              if (input.point) {
+                return "按 (" + String(input.point.x) + "," + String(input.point.y) + ")" + app;
+              }
+              return "按 #" + (input.index ?? "?") + app;
+            }
             if (input.op === "focus") return "聚焦 #" + (input.index ?? "?") + app;
             if (input.op === "scroll") {
               const way = input.direction === "up" ? "向上" : "向下";
@@ -1102,6 +1113,24 @@ final class PiRpcTransport: AgentTransport {
             return { content: [{ type: "text", text: text }], details: undefined };
         }
 
+        // Same answer plus a screenshot. The block shape mirrors pi's ImageContent
+        // ({ type: "image", data: base64, mimeType }); get a key wrong here and the result
+        // is "no image" with no error anywhere -- the model just never sees it.
+        //
+        // Text always comes first: the outline carries the row numbers, and a picture
+        // without numbers is something the model can look at but cannot act on.
+        function okImage(text, image) {
+            const parts = [{ type: "text", text: text }];
+            if (image && typeof image.data === "string" && image.data) {
+                parts.push({
+                    type: "image",
+                    data: image.data,
+                    mimeType: typeof image.mimeType === "string" ? image.mimeType : "image/png",
+                });
+            }
+            return { content: parts, details: undefined };
+        }
+
         // Framing is one JSON object per line (ComputerFraming on the Swift side): a request
         // is one line, a reply is one line. No length prefix -- one round trip carries exactly
         // one message, and newline framing stays readable in `nc` when things go wrong.
@@ -1169,10 +1198,21 @@ final class PiRpcTransport: AgentTransport {
                     "received -- read again after anything changes, and never reuse a number",
                     "from an earlier call. Values behind password fields are masked before they",
                     "reach you; treat a masked value as something you were never given.",
+                    "",
+                    "If the outline is nearly empty (some apps expose almost nothing through",
+                    "accessibility), pass `includeImage: true` to also get a screenshot of the",
+                    "window. That only works for apps the user ticked \"image\" for; otherwise the",
+                    "text comes back with a note saying why there is no picture -- do not retry",
+                    "it in a loop. A screenshot has no numbered rows, so it never replaces a",
+                    "read: act only after an outline.",
                 ].join("\n"),
                 parameters: Type.Object({
                     app: Type.Optional(Type.String({
                         description: "App name or bundle id. Omit to read the frontmost app.",
+                    })),
+                    includeImage: Type.Optional(Type.Boolean({
+                        description: "Also return a screenshot of the window (only if the user"
+                            + " enabled images for this app).",
                     })),
                 }, { additionalProperties: false }),
 
@@ -1187,7 +1227,11 @@ final class PiRpcTransport: AgentTransport {
                     }
                     let reply;
                     try {
-                        reply = await ask(sock, { op: "read", app: params.app || "" });
+                        reply = await ask(sock, {
+                            op: "read",
+                            app: params.app || "",
+                            includeImage: params.includeImage === true,
+                        });
                     } catch (error) {
                         // A transport failure is a failure, not an answer.
                         throw new Error("could not reach the window reader: " + String(error));
@@ -1199,9 +1243,9 @@ final class PiRpcTransport: AgentTransport {
                         // A refusal IS an answer. Hand back the app's own wording verbatim.
                         return ok("Refused: " + (reply.error || "no reason given."));
                     }
-                    return ok(typeof reply.text === "string"
+                    return okImage(typeof reply.text === "string"
                         ? reply.text
-                        : "(the reader returned no text)");
+                        : "(the reader returned no text)", reply.image);
                 },
             });
 
@@ -1211,10 +1255,17 @@ final class PiRpcTransport: AgentTransport {
                 description: [
                     "Do exactly one thing to the window you just read: press a control, type into a",
                     "field, put the keyboard focus on a control, or scroll a scroll area. Nothing else",
-                    "-- no coordinates, no dragging.",
+                    "-- no dragging, no typing raw keystrokes.",
                     "",
-                    "You must pass `seq` from the read that produced `index`, and `index` must come",
-                    "from that same outline. Numbers are only valid for the snapshot that printed",
+                    "You must pass `seq` from the read that produced `index`, and the target is",
+                    "either `index` or, for press only, `point`. A point is resolved back to an",
+                    "outline row before any check runs, so every refusal still applies -- the",
+                    "reply names the row it landed on. A point is refused when there is nothing",
+                    "under it (that app draws its own UI, and clicking blind would skip every",
+                    "check), when what is under it is not a row of this outline (window",
+                    "background, or another app's window), and when that row only exists after a",
+                    "re-read. Use `index` from that same outline whenever you have one.",
+                    "Numbers are only valid for the snapshot that printed",
                     "them: if the reply says the snapshot is stale, read again and take a fresh",
                     "number. Never re-use a number across reads, and never guess one.",
                     "",
@@ -1238,6 +1289,11 @@ final class PiRpcTransport: AgentTransport {
                     "Only apps the user marked as actable can be touched. A refusal names the app",
                     "and says whether the block was permission or policy; do not retry the same",
                     "call hoping for a different answer.",
+                    "",
+                    "If the reply says a human just touched the mouse or keyboard, **nothing happened**",
+                    "-- the person has the machine, and you stepped aside on purpose. Stop there,",
+                    "tell the user what you were about to do, and do not retry in a loop: wait until",
+                    "they tell you to go on.",
                 ].join("\n"),
                 parameters: Type.Object({
                     app: Type.Optional(Type.String({
@@ -1248,9 +1304,19 @@ final class PiRpcTransport: AgentTransport {
                         description: "press = invoke the control; setValue = write text into a field;"
                             + " focus = move keyboard focus onto it; scroll = move a scroll area.",
                     }),
-                    index: Type.Number({
-                        description: "The row number from the outline you are acting on.",
-                    }),
+                    index: Type.Optional(Type.Number({
+                        description: "The row number from the outline you are acting on."
+                            + " Give either `index` or `point`, never both.",
+                    })),
+                    point: Type.Optional(Type.Object({
+                        x: Type.Number(),
+                        y: Type.Number(),
+                    }, { additionalProperties: false,
+                         description: "Only for press, instead of `index`: the screen point to"
+                            + " click, in the same global coordinates as the (x,y) printed at the"
+                            + " end of each outline row. It is resolved back to a row, so the"
+                            + " usual checks still apply -- and a point with no element under it"
+                            + " is refused." })),
                     seq: Type.Number({
                         description: "The snapshot sequence number returned by that read.",
                     }),
@@ -1275,10 +1341,11 @@ final class PiRpcTransport: AgentTransport {
                             op: "act",
                             app: params.app || "",
                             action: params.op,
-                            index: params.index,
+                            index: params.index ?? 0,
                             seq: params.seq,
                             text: params.text || "",
                             direction: params.direction || "",
+                            point: params.point,
                         });
                     } catch (error) {
                         throw new Error("could not reach the window reader: " + String(error));
@@ -1655,7 +1722,9 @@ final class PiRpcTransport: AgentTransport {
         // 操作面(批 2b)单独读一次: 它是**第二档权限**, 与读面不同源(见 `activeActBundles`)。
         let computerActBundles = ComputerSettings.shared.activeActBundles
         let computerSock = computerHost.start(allowedBundles: computerBundles,
-                                             actBundles: computerActBundles)
+                                             actBundles: computerActBundles,
+                                             imageBundles: ComputerSettings.shared.activeImageBundles,
+                                             takeover: approvalMode.expectsHumanAtKeyboard)
         let computerExtPath = computerSock != nil ? Self.ensureComputerExtensionFile() : nil
         var args = spec.scriptArgs + ["--mode", "rpc"]
         // P12.1b + P13: 扩展参数 (关自动发现 + 补回内置 provider + 挂托管扩展 + codemode 层)。
@@ -1766,6 +1835,8 @@ final class PiRpcTransport: AgentTransport {
                                               socketPath: computerSock,
                                               allowedBundles: computerBundles,
                                               actBundles: computerActBundles,
+                                              imageBundles: ComputerSettings.shared.activeImageBundles,
+                                              takeover: approvalMode.expectsHumanAtKeyboard,
                                               peerPid: ProcessInfo.processInfo.processIdentifier,
                                               inherited: ProcessInfo.processInfo.environment) {
             p.environment = env
@@ -2100,6 +2171,7 @@ final class PiRpcTransport: AgentTransport {
             card.parentId = parentCardId(dict)
             toolCards[callId] = card
             toolStartAt[callId] = arrivedAt
+            toolNamesByCallId[callId] = name
             emit(.toolUpdated(card))
 
         case "tool_execution_update":
@@ -2119,6 +2191,8 @@ final class PiRpcTransport: AgentTransport {
             guard let callId = dict["toolCallId"] as? String,
                   var card = toolCards[callId] else { return }
             let isError = dict["isError"] as? Bool ?? false
+            // 取完即删: 这个字典只为这一行服务, 留着就是随会话单调增长的泄漏。
+            let toolName = toolNamesByCallId.removeValue(forKey: callId)
             let parsed = parseToolResult(dict["result"])
             if isError {
                 // 失败的 result 也是 AgentToolResult (content[0].text = 真错误文本,
@@ -2132,7 +2206,16 @@ final class PiRpcTransport: AgentTransport {
                 if parsed.text == nil, let det = parsed.detailsSummary {
                     rows.append(ToolDetail("细节", det))
                 }
-                let images = persistToolImages(parsed.images, owner: imageOwnerId)
+                // 批 3c: 现场截图**不在 attachments 留副本**。
+                //
+                // 图已经作为 tool result 的一部分随会话存在(那是 pi 的机制, 不由我们选),
+                // 再落一份就成了双份; 而且它没有源文件 —— 附件目录里的东西都该是"用户的东西",
+                // 截图不是。⇒ 这类卡只有文字, 没有缩略图。
+                // ⚠️ 代价要认: 用户看不到模型看到的那张图, 只能在回执里读到我拍了多大一张。
+                let isScreenShot = toolName == Self.computerReadToolName && !parsed.images.isEmpty
+                let images = isScreenShot
+                    ? []
+                    : persistToolImages(parsed.images, owner: imageOwnerId)
                 // P12.3: 时长**优先用引擎上报值** —— pi 1.1.0 起 `tool_execution_end` 带
                 // `durationMs`（`Math.round(performance.now() - startedAt)`，**单调时钟**、
                 // 只测 `execute()` 本体）；缺席时回落自算墙钟（含排队 / 流式 / 审批等待 ⇒ 偏大）。

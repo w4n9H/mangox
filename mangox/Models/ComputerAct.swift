@@ -55,6 +55,91 @@ enum ComputerScrollDirection: String, Equatable, CaseIterable {
     }
 }
 
+/// 屏幕坐标 —— **全局坐标, 左上原点**, 与快照里每行的 `frame`(`x,y w×h`)是同一套。
+///
+/// ⚠️ 它存在的前提是**坐标能被翻译回元素**(helper 的 `AXUIElementCopyElementAtPosition`)。
+///    翻译不回来的时候(自绘画布上没有可识别的元素)一律拒 —— 见 `ComputerPointRule`。
+struct ComputerPoint: Equatable, Decodable {
+    let x: Double
+    let y: Double
+
+    /// 回执里写给人看:`(420,300)`。
+    var short: String { "(\(Int(x.rounded())),\(Int(y.rounded())))" }
+}
+
+/// 坐标寻址的**参数合法性**(批 3a)。**纯函数**, 因为"坐标能不能用在这个动作上"是判据不是实现。
+///
+/// ⚠️ 这里不判"坐标底下有没有元素" —— 那要问系统, 判不了。它只判**请求本身有没有自相矛盾**:
+///    坐标配了个只能按编号的动作 / 同时给了编号和坐标 / 坐标明显不在屏幕上。
+///    ⚠️ 同时给编号和坐标**不许挑一个用**: 挑错了方向不对称(按了错的东西比没按更糟),
+///       而两个都给说明调用方自己没想清楚, 那就退回"重新说一遍"。
+enum ComputerPointRule {
+
+    /// 坐标超出这个范围就不像屏幕上的点(27 寸 5K 也才 5120×2880; 多屏拼接留足余量)。
+    static let maxAbsCoordinate: Double = 20000
+
+    /// 返回拒绝原因(`nil` = 参数没问题)。**只判参数, 不判能力**。
+    static func refusal(action: ComputerAction,
+                        index: Int,
+                        point: ComputerPoint?) -> String? {
+        guard let point else { return nil }
+        guard action == .press else {
+            return "坐标只能配 press(在那个点上按一下) ⇒ 没动。"
+                + "\(action.rawValue) 得按编号来 —— 它要知道动的是哪一格。"
+        }
+        if index > 0 {
+            return "编号和坐标只能给一个(给了 #\(index) 又给了 \(point.short)) ⇒ 没动。"
+                + "两个都说, 我不知道该按哪个。"
+        }
+        if abs(point.x) > maxAbsCoordinate || abs(point.y) > maxAbsCoordinate {
+            return "\(point.short) 不像屏幕上的点(超出 ±\(Int(maxAbsCoordinate))) ⇒ 没动。"
+                + "坐标是全局屏幕坐标, 左上原点, 和快照里每行末尾那个 (x,y) 同一套。"
+        }
+        return nil
+    }
+
+    /// 坐标底下的那个元素**没进快照**时, 它属于哪一类。
+    ///
+    /// ⚠️ 这不是"给回执加个形容词" —— 四类对应的**下一步完全不同**, 合成一句就是在骗人:
+    ///    ① `container`: 窗口背景 / 分组 / 滚动区这类**容器**从来不进快照(快照只列格子) ⇒
+    ///       跟模型说"重新读一次, 它就带上编号了"是**空话**, 再读一百次也没有;
+    ///    ② `wholeApp`: 自绘界面(游戏 / 画布 / 微信那种)只把**整块窗口**交给系统, 里面没有
+    ///       更细的格子 ⇒ 坐标在这类 App 上**永远**点不了, 只能截图看;
+    ///    ③ `outerChrome`: 菜单栏 / 菜单**不在窗口那棵树里** ⇒ 跟容器一样"重读也没编号",
+    ///       但方向相反: 它不是"往里挑一格", 而是"这条路到不了它";
+    ///    ④ `stale`: 按钮 / 文本这些真格子 ⇒ 唯一说得通的原因是**快照过期**, 重新读一次就有了。
+    enum PointMissKind {
+        case wholeApp
+        case outerChrome
+        case container
+        case stale
+    }
+
+    /// AX 的纯容器角色 —— 只是**窗口里面**的布局层(不承载"一格")。
+    static let containerRoles: Set<String> = [
+        "AXWindow", "AXSheet", "AXGroup", "AXSplitGroup", "AXScrollArea",
+        "AXLayoutArea", "AXToolbar", "AXTabGroup", "AXWebArea", "AXUnknown",
+    ]
+
+    /// 菜单栏 / 菜单 —— 它们**根本不在窗口那棵树里**(快照只读窗口), 所以跟模型说
+    /// "重新读一次就有编号了"是句错话, 它再读一百次也不会有。
+    /// ⚠️ 实测来源(2026-10-30): `(5,5)` 命中的是**当前 App 自己的**菜单栏(pid 对得上,
+    ///    所以进程那一关放行), 落到这里。**别把它并进 `container`** —— 容器是"窗口里面",
+    ///    而菜单栏在窗口外面, 那一刻正确的下一步是"换窗口里的按钮", 不是"往里挑一格"。
+    static let outerChromeRoles: Set<String> = [
+        "AXMenuBar", "AXMenuBarItem", "AXMenu", "AXMenuItem", "AXMenuItemCustom",
+    ]
+
+    /// - Parameter role: 现场读到的 `AXRole`。读不出角色时给空串。
+    static func missKind(role: String) -> PointMissKind {
+        if role == "AXApplication" { return .wholeApp }
+        if outerChromeRoles.contains(role) { return .outerChrome }
+        // 读不出角色 ⇒ 当容器: 说"重读就有编号"比说"那是背景"更容易把人带错方向。
+        if role.isEmpty || containerRoles.contains(role) { return .container }
+        return .stale
+    }
+}
+
 /// 一条动作请求 —— 与 `ComputerRequest.act` 的字段一一对应。
 struct ComputerActRequest: Equatable {
     let app: String
@@ -88,6 +173,10 @@ struct ComputerActRequest: Equatable {
 /// 目标元素的**现场**属性。由 helper 在动作执行前一刻读, 不是快照里的缓存值。
 struct ComputerActTarget: Equatable {
     let role: String
+    /// `AXSubrole` —— **网页密码框的身份只在这里**(2026-10-30 实测 Safari:
+    /// `AXRole = AXTextField`、`AXProtectedContent = nil`、`AXSubrole = AXSecureTextField`)。
+    /// 默认空串 ⇒ 旧调用点与 Mock 不用改。
+    let subrole: String
     let title: String
     let actions: [String]
     let isProtected: Bool
@@ -104,6 +193,7 @@ struct ComputerActTarget: Equatable {
     let canScroll: Bool
 
     init(role: String,
+         subrole: String = "",
          title: String,
          actions: [String] = [],
          isProtected: Bool = false,
@@ -112,6 +202,7 @@ struct ComputerActTarget: Equatable {
          canFocus: Bool = false,
          canScroll: Bool = false) {
         self.role = role
+        self.subrole = subrole
         self.title = title
         self.actions = actions
         self.isProtected = isProtected
@@ -267,7 +358,8 @@ enum ComputerActGuard {
             // ⚠️ 密码框那条**必须排在"能不能写"之前**: `securetextfield` 本来就不在可写白名单里,
             //    先判角色会把它报成「不是能写字的地方」—— 结论一样但话术完全不同, 而模型看到
             //    前者会换个控件再试, 看到后者才知道"这一栏根本不许碰"。
-            if target.isProtected || ComputerRedline.isPasswordRole(target.role) {
+            if target.isProtected
+                || ComputerRedline.isPasswordRole(target.role, subrole: target.subrole) {
                 return .refuse(reason: "这是密码框 ⇒ 我不往里写任何东西。", refusal: nil)
             }
             guard isWritableRole(target.role) else {

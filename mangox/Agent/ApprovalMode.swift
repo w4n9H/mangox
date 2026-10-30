@@ -53,6 +53,16 @@ enum ApprovalMode: String, Codable, CaseIterable, Identifiable {
     /// 是否需要人点击 (只有交互档会挂起在途回合等人)。
     var waitsForUser: Bool { self == .interactive }
 
+    /// 这个档位下**人是否就在键鼠旁边** —— P18 批 3b 的人类接管监听只在这一档装。
+    ///
+    /// ⚠️ 判据是"这一档会不会停下来等人点卡"(= `waitsForUser`), 因为那是唯一能推出"有人"的档位。
+    ///    另两档的产品前提**正好相反**: `autoAllow` 是定时任务(无人点击, 弹卡即死锁)、
+    ///    `autoJudge` 是远程驱动(指令可能来自任何人发来的邮件正文)。在那两档装监听不是"更安全",
+    ///    而是让**无人值守的任务在有人路过碰一下鼠标时莫名其妙停住** —— 人以为它还在跑, 零红灯。
+    /// ⚠️ 语义边界: 这一档也只是"可能有人", 不是"一定有人" —— 所以监听给的是**让路**, 不是"停工"
+    ///    (时间窗过后自己恢复, 见 `ComputerTakeover`)。
+    var expectsHumanAtKeyboard: Bool { waitsForUser }
+
     /// 是否走风险分级 (autoAllow 不做判定, 直接放行)。
     var judgesByRisk: Bool { self != .autoAllow }
 }

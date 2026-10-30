@@ -328,6 +328,60 @@ extension SmokeMain {
               "T-ACT scroll 那一行: 只承诺编号 + App, 方向不写在这里 "
               + "(滚错方向可以再滚回来, 不必占用卡上那一行)")
 
+        // MARK: ⑨b 坐标寻址的参数合法性 (批 3a) —— 坐标是**输入方式**, 不是第二套寻址
+
+        // 坐标这条路的全部价值: 翻译回元素之后走的还是同一条判据链。所以这里只判参数本身。
+        check(ComputerPointRule.refusal(action: .press, index: 0, point: ComputerPoint(x: 420, y: 300)) == nil,
+              "T-ACT press + 坐标 + 没给编号 ⇒ 参数成立 (helper 之后会把它翻译成编号)")
+        check(ComputerPointRule.refusal(action: .press, index: 12, point: nil) == nil,
+              "T-ACT 老路径 (只给编号) 不受影响")
+        if let why = ComputerPointRule.refusal(action: .setValue, index: 0,
+                                               point: ComputerPoint(x: 420, y: 300)) {
+            check(why.contains("坐标只能配 press"),
+                  "T-ACT 坐标配 setValue ⇒ 拒 (写字得知道动的是哪一格) 实际:\(why)")
+        } else {
+            check(false, "T-ACT 非 press 带坐标必须拒 —— 否则就是把坐标当成了通用寻址")
+        }
+        if let why = ComputerPointRule.refusal(action: .press, index: 12,
+                                               point: ComputerPoint(x: 420, y: 300)) {
+            check(why.contains("只能给一个"),
+                  "T-ACT 编号与坐标同时给 ⇒ 拒, 不许挑一个用 (挑错方向不对称) 实际:\(why)")
+        } else {
+            check(false, "T-ACT 编号与坐标同时给必须拒")
+        }
+        if let why = ComputerPointRule.refusal(action: .press, index: 0,
+                                               point: ComputerPoint(x: 999_999, y: 300)) {
+            check(why.contains("不像屏幕上的点"),
+                  "T-ACT 离屏的坐标 ⇒ 拒 (多半是把图片坐标当屏幕坐标了) 实际:\(why)")
+        } else {
+            check(false, "T-ACT 离屏坐标必须拒")
+        }
+        check(ComputerPointRule.refusal(action: .press, index: 0,
+                                        point: ComputerPoint(x: -1200, y: 400)) == nil,
+              "T-ACT 负坐标放行 —— 主屏左侧那块屏就是负值, clamp 到 ≥0 会把它挪到主屏上")
+        check(ComputerPoint(x: 420.4, y: 300.6).short == "(420,301)",
+              "T-ACT 回执里的坐标是四舍五入后的整数 (420.4/300.6 ⇒ (420,301))")
+
+        // ⚠️ 2026-10-30 真机实测的教训落在这一段: 坐标命中的元素**不在快照里**时分四类,
+        //    四类的下一步完全不同 —— 合成一句("重新读一次就有编号了")对容器是**空话**
+        //    (容器从来不进快照), 对自绘 App 是**错话**(里面根本没有更细的格子),
+        //    对菜单栏是**方向错**(它在窗口树外面, 往窗口里挑格子挑不到)。
+        check(ComputerPointRule.missKind(role: "AXApplication") == .wholeApp,
+              "T-ACT 命中整窗元素 ⇒ 自绘 App (再读也没有更细的格子, 只能截图看)")
+        check(ComputerPointRule.missKind(role: "AXGroup") == .container,
+              "T-ACT 命中分组 ⇒ 容器 (它从来就不在快照里, 重读一万次也没编号)")
+        check(ComputerPointRule.missKind(role: "") == .container,
+              "T-ACT 读不出角色 ⇒ 当容器 (说'重读就有编号'更容易把人带错方向)")
+        check(ComputerPointRule.missKind(role: "AXButton") == .stale,
+              "T-ACT 命中按钮却不在快照里 ⇒ 只可能是快照过期 (重读一次就有编号)")
+        check(ComputerPointRule.missKind(role: "AXMenuBar") == .outerChrome,
+              "T-ACT 命中菜单栏 ⇒ 单独一类 (它在窗口树外面: '往里挑一格'和'重读'两句都是错的)")
+        check(!ComputerPointRule.containerRoles.contains("AXMenuBar"),
+              "T-ACT 菜单栏不许被并进容器类 —— 容器是窗口里面, 菜单栏在窗口外面")
+        check(!ComputerPointRule.containerRoles.contains("AXButton")
+              && !ComputerPointRule.containerRoles.contains("AXStaticText"),
+              "T-ACT 真格子(按钮/文本)不许被归成容器 —— 归错了就吞掉'重读一次'这个正确答案")
+
         // MARK: ⑩ sheet 的按钮必须**同源**筛出来 (判据算下标, 执行按元素)
 
         let sheet = AXNode(role: "AXSheet", title: "保存更改", children: [

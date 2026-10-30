@@ -165,3 +165,21 @@ mangox/Agent/PiRpcTransport.swift|聚焦 #
 mangox/Agent/PiRpcTransport.swift|滚动 #
 mangox/Agent/PiRpcTransport.swift|向上
 mangox/Agent/PiRpcTransport.swift|向下
+
+# P18 批 3a/3b: 坐标点击与「人一动手就让路」的回执 —— 与批 2b / 2f 同一族:
+# 住在 `ComputerAct.refusal` / `ComputerTakeover.refusal` 这两条**纯函数**里, 由 socket
+# 回给扩展再交给模型 ⇒ 进的是**模型上下文, 不是界面**。包 L() 会让"界面语言 = 英文"时
+# 给模型发英文回执, 而模型判断"这一栏叫什么"依据的是中文界面 / 中文推断。
+# 豁免的只是「必须接线」这一道, 译文仍在词表里, gen_strings 照收。
+# ⚠️ `按 (` 那条在注入给 pi 的扩展 JS 里(多行字符串字面量), 包 L() 会变成非法代码 ——
+#    与上方 `按 #` / `写 #` 同待遇。它写成 `"按 (" + …` 而非 `"按 " + …`, 正是为了
+#    **不以空格结尾**的拼法(本文件逐行 strip, 尾空格条目登不进来)。
+mangox/Models/ComputerAct.swift|坐标只能配 press(在那个点上按一下) ⇒ 没动。
+mangox/Models/ComputerAct.swift|%@ 得按编号来 —— 它要知道动的是哪一格。
+mangox/Models/ComputerAct.swift|编号和坐标只能给一个(给了 #%@ 又给了 %@) ⇒ 没动。
+mangox/Models/ComputerAct.swift|两个都说, 我不知道该按哪个。
+mangox/Models/ComputerAct.swift|%@ 不像屏幕上的点(超出 ±%lld) ⇒ 没动。
+mangox/Models/ComputerAct.swift|坐标是全局屏幕坐标, 左上原点, 和快照里每行末尾那个 (x,y) 同一套。
+mangox/Models/ComputerTakeover.swift|刚才有人动了鼠标 / 键盘 ⇒ 这次没动(界面一下都没动)。
+mangox/Models/ComputerTakeover.swift|人手还在键鼠上时我不抢 —— 你让我继续, 我下一步接着来。
+mangox/Agent/PiRpcTransport.swift|按 (

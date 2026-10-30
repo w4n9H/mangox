@@ -745,7 +745,7 @@ struct SettingsView: View {
     private var computerSection: some View {
         VStack(alignment: .leading, spacing: 12) {
             settingRow(title: "电脑操作",
-                       detail: "全局开关: 开 = 常规与完整模式的会话都能读你勾过的应用的界面, 不是只对当前会话生效 (极简与 codemode 档看不到这些工具)。再给某个 App 勾上「可操作」它才能按按钮/填输入框 —— 勾上就是允许, 不再逐次问你; 没勾的一律只读。让助手打开一个 App 只需要「可读」(那等于替你点一下图标)") {
+                       detail: "全局开关: 开 = 常规与完整模式的会话都能读你勾过的应用的界面, 不是只对当前会话生效 (极简与 codemode 档看不到这些工具)。再给某个 App 勾上「可操作」它才能按按钮/填输入框 —— 勾上就是允许, 不再逐次问你; 没勾的一律只读。再给某个 App 勾上「图片」, 我在文本读不出内容时才会截这个窗口的图当兜底 (默认关: 图里是像素, 会绕过输入框的遮蔽)。让助手打开一个 App 只需要「可读」(那等于替你点一下图标)") {
                 Toggle("", isOn: $computer.enabled)
                     .toggleStyle(.switch)
                     .controlSize(.small)
@@ -827,7 +827,9 @@ struct SettingsView: View {
     private func computerRow(_ app: ComputerSettings.Option) -> some View {
         let readable = computer.selected.contains(app.bundle)
         let actable = computer.actSelected.contains(app.bundle)
+        let shootable = computer.imageSelected.contains(app.bundle)
         let mayAct = ComputerSettings.canAct(app.bundle)
+        let mayShoot = ComputerSettings.canImage(app.bundle)
         return HStack(spacing: 8) {
             VStack(alignment: .leading, spacing: 1) {
                 HStack(spacing: 6) {
@@ -851,6 +853,21 @@ struct SettingsView: View {
             Toggle(L("可读"), isOn: Binding(get: { readable },
                                            set: { _ in computer.toggle(app.bundle) }))
                 .toggleStyle(.checkbox)
+            // 批 3c 第三档: **图片**。紧挨着「可读」是因为它属于读面的一种(像素表示),
+            // 但**默认关**: 截图会带上整个窗口的像素, 包括文本层已经遮掉的那些 ⇒
+            // 它必须是逐个 App 明确开, 不许"跟着读面一起开"。
+            if mayShoot {
+                Toggle(L("图片"), isOn: Binding(get: { shootable },
+                                               set: { computer.setImage(app.bundle, $0) }))
+                    .toggleStyle(.checkbox)
+                    .disabled(!readable)
+                    .help(L("开了它, 文本读不出内容时我才会去截这个窗口的图当兜底。截图带的是整个窗口的像素, 所以默认关"))
+            } else {
+                Text(L("不可截图"))
+                    .font(.system(size: 10))
+                    .foregroundStyle(CodexTheme.textMuted)
+                    .help(L("口令 / 系统设置类应用: 一张都不拍 —— 像素会绕过输入框的遮蔽"))
+            }
             if mayAct {
                 Toggle(L("可操作"), isOn: Binding(get: { actable },
                                                 set: { computer.setAct(app.bundle, $0) }))
@@ -901,6 +918,17 @@ struct SettingsView: View {
                     Text(verbatim: "\(computer.activeActBundles.count) 个")
                         .font(.system(size: 11))
                         .foregroundStyle(computer.activeActBundles.isEmpty
+                                         ? CodexTheme.textMuted : CodexTheme.toolDone)
+                    // 图像面也单独报数: 三档代价不同(读最便宜 / 动最危险 / 截图最贵),
+                    // 只报前两个会让人以为"没开图片就是没开", 而它恰恰是绕过遮蔽的那一档。
+                    Text("图片")
+                        .font(.system(size: 11))
+                        .padding(.leading, 6)
+                        .foregroundStyle(computer.activeImageBundles.isEmpty
+                                         ? CodexTheme.textMuted : CodexTheme.toolDone)
+                    Text(verbatim: "\(computer.activeImageBundles.count) 个")
+                        .font(.system(size: 11))
+                        .foregroundStyle(computer.activeImageBundles.isEmpty
                                          ? CodexTheme.textMuted : CodexTheme.toolDone)
                 }
                 // ⚠️ 这一行是 boss 2026-10-29 那条的落点: 名单存在全局 settings 表里,

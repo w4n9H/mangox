@@ -25,7 +25,11 @@ enum ComputerRequest: Decodable {
     ///    等于给"先读再动"开了一个静默的后门。
     ///    `direction` 只 `scroll` 用(`up` / `down`)。缺了**不在解码阶段填默认值**: "没说往哪滚"
     ///    与"往下滚"是两件事, 猜一个等于替模型做决定(判据那边会拒并说清)。
-    case act(app: String, op: String, index: Int, seq: Int, text: String, direction: String)
+    ///    🔺 批 3a 加 `point`: **坐标只是一种输入方式, 不是一种绕过** —— helper 会先把它翻译回
+    ///    元素(`AXUIElementCopyElementAtPosition`), 再在快照里认出那是第几号, 之后判据照旧跑在
+    ///    元素上。所以 `index` 与 `point` 互斥(两个都给直接拒, 见 `ComputerPointRule`)。
+    case act(app: String, op: String, index: Int, seq: Int, text: String,
+             direction: String, point: ComputerPoint?)
     /// 打开(或切到前台)一个 App —— P18 批 2d。
     ///
     /// ⚠️ 为什么不复用 `act`: 打开一个 App **不动它里面的任何东西**, 与"在 Dock 上点一下图标"
@@ -36,7 +40,7 @@ enum ComputerRequest: Decodable {
     case open(app: String)
 
     private enum CodingKeys: String, CodingKey {
-        case op, app, includeImage, index, seq, text, direction
+        case op, app, includeImage, index, seq, text, direction, point
         /// 动作本身(`press` / `setValue` / `focus` / `scroll`)。⚠️ 不能复用 `op` ——
         /// 那个位置装的是信封类型(`act`), 两个语义塞进一个键, 读代码的人分不清哪个是哪个。
         case action
@@ -56,7 +60,11 @@ enum ComputerRequest: Decodable {
                         index: try c.decodeIfPresent(Int.self, forKey: .index) ?? 0,
                         seq: try c.decodeIfPresent(Int.self, forKey: .seq) ?? -1,
                         text: try c.decodeIfPresent(String.self, forKey: .text) ?? "",
-                        direction: try c.decodeIfPresent(String.self, forKey: .direction) ?? "")
+                        direction: try c.decodeIfPresent(String.self, forKey: .direction) ?? "",
+                        // ⚠️ 形状不合法(比如 `point: 3`)在这里就**抛解码错** ——
+                        //    不能让"坐标读坏了"悄悄退化成"按编号"(那条路 index=0 会被判据拒,
+                        //    但报的原因会是"没有 #0", 与真实原因无关)。
+                        point: try c.decodeIfPresent(ComputerPoint.self, forKey: .point))
         case "open":
             // 空 `app` 交给 server 拒(并说清"打开哪个"): 解码阶段回一句机器话,
             // 模型只会把 `dataCorrupted` 当成故障重试。
@@ -69,6 +77,15 @@ enum ComputerRequest: Decodable {
     }
 }
 
+/// 一张截图。**base64 走 JSON** —— 协议是一行 JSON + `\n`, 没有二进制帧。
+///
+/// ⚠️ `mimeType` 不是废话: 扩展侧要把它原样填进 `ImageContent.mimeType`, 填错了 pi 那边
+///    会当成损坏的附件(而错误信息与"图拍坏了"长得一样)。
+struct ComputerImage: Encodable {
+    let mimeType: String
+    let data: String
+}
+
 /// 一条应答。`ok == false` 时 `error` **必须**非空 —— 回执是给模型看的, 空错误会让它重试同一个动作。
 struct ComputerResponse: Encodable {
     let ok: Bool
@@ -78,26 +95,47 @@ struct ComputerResponse: Encodable {
     let error: String?
     /// `ping` 时回: 本机辅助功能权限是否已授予。
     let trusted: Bool?
+    /// `ping` 时回: 屏幕录制权限是否已授予(批 3c)。**另一份 TCC** —— 与辅助功能互不覆盖。
+    let screenRecording: Bool?
     /// `read` / `act` 之后, 这个 App 的**最新快照序号**。模型下一次动作必须带它。
     ///
     /// ⚠️ 没有这个字段, "编号过期"这件事就只能靠模型自己记时间 —— 它记不住,
     ///    也没人会因此看到红灯, 只会看到"点了没反应"。
     let seq: Int?
+    /// `read` 且用户给这个 App 勾了「图片」时的截屏(批 3c)。
+    ///
+    /// ⚠️ 图**不参与**任何授权判断: 它是读的第二种表示, 像素里没有编号 ⇒ 进不了动作面。
+    ///    它带回来的唯一目的是"文本读不出时让模型看一眼"。
+    /// ⚠️ 必须是 `var` 而不是 `let`: `let` 带初值的属性**不会**进 memberwise init,
+    ///    于是 `.success(text:seq:image:)` 报 `extra argument 'image'`(实测踩过)。
+    var image: ComputerImage? = nil
 
     static func success(text: String) -> ComputerResponse {
-        ComputerResponse(ok: true, text: text, error: nil, trusted: nil, seq: nil)
+        ComputerResponse(ok: true, text: text, error: nil, trusted: nil,
+                         screenRecording: nil, seq: nil)
     }
 
     static func success(text: String, seq: Int) -> ComputerResponse {
-        ComputerResponse(ok: true, text: text, error: nil, trusted: nil, seq: seq)
+        ComputerResponse(ok: true, text: text, error: nil, trusted: nil,
+                         screenRecording: nil, seq: seq)
+    }
+
+    /// 带图的那一条: 文本照旧, 图附在后面。
+    ///
+    /// ⚠️ 图与文本**必须同时给**: 只给图 ⇒ 模型失去了编号(动不了); 只给文本 ⇒ 兜底没发生。
+    static func success(text: String, seq: Int, image: ComputerImage) -> ComputerResponse {
+        ComputerResponse(ok: true, text: text, error: nil, trusted: nil,
+                         screenRecording: nil, seq: seq, image: image)
     }
 
     static func failure(_ message: String) -> ComputerResponse {
-        ComputerResponse(ok: false, text: nil, error: message, trusted: nil, seq: nil)
+        ComputerResponse(ok: false, text: nil, error: message, trusted: nil,
+                         screenRecording: nil, seq: nil)
     }
 
-    static func pong(trusted: Bool) -> ComputerResponse {
-        ComputerResponse(ok: true, text: nil, error: nil, trusted: trusted, seq: nil)
+    static func pong(trusted: Bool, screenRecording: Bool) -> ComputerResponse {
+        ComputerResponse(ok: true, text: nil, error: nil, trusted: trusted,
+                         screenRecording: screenRecording, seq: nil)
     }
 }
 

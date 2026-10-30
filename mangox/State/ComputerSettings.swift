@@ -31,6 +31,11 @@ final class ComputerSettings: ObservableObject {
     /// 操作面(批 2b)。**与读面分开一个键**: 合成一个 `"bundle:act"` 之类会让老库的值
     /// 静默改义(本仓 10-08 那条纪律), 而且读面与操作面是两档权限, 混着存就没法分别改。
     static let actBundlesKey = "computer_act_bundles"
+    /// 图像面(批 3c)。第三档, **默认空** —— 截图会绕过文本遮蔽(像素里没有 `••••`),
+    /// 所以它必须是**逐个 App 显式开**, 不许"跟着读面一起开"。
+    /// ⚠️ 又一个独立的键: 与上面同一条纪律(合成一个键 ⇒ 老值静默改义), 而且
+    ///    "能读文本"与"能拍像素"是两档不同代价的权限。
+    static let imageBundlesKey = "computer_image_bundles"
 
     // MARK: 状态
 
@@ -42,6 +47,12 @@ final class ComputerSettings: ObservableObject {
 
     /// 勾上的 bundle id —— **操作面**。恒为 `selected` 的子集(不变量见 `decode`)。
     @Published private(set) var actSelected: Set<String> = [] { didSet { persist() } }
+
+    /// 勾上的 bundle id —— **图像面**(批 3c)。同样恒为 `selected` 的子集。
+    ///
+    /// ⚠️ 与操作面不同, 它是"更贵的一档": 截图会带上**整个窗口的像素**, 包括文本层已经
+    ///    遮掉的那些 ⇒ 用户必须**逐个 App 明确开**, 默认一个都不开(空 = 一张都不拍)。
+    @Published private(set) var imageSelected: Set<String> = [] { didSet { persist() } }
 
     /// 候选表注入 —— **只给冒烟用**(真机上恒 nil)。
     ///
@@ -205,6 +216,24 @@ final class ComputerSettings: ObservableObject {
         !ComputerRedline.actBannedBundles.contains(bundle)
     }
 
+    /// 真正下发的**图像面** —— 同上的投影。
+    ///
+    /// ⚠️ 这里是 `activeImageBundles` **再取一次交集 + 再过一遍硬禁区**: 图像是唯一能绕过
+    ///    遮蔽的通道(文本值被换成 `••••`, 像素里是原样) ⇒ 凭据 / 系统设置类 App **一个像素
+    ///    都不许拍**。这条不是"顺手加个过滤", 它是图像面能存在的前提。
+    var activeImageBundles: [String] {
+        guard enabled else { return [] }
+        return imageSelected.intersection(selected)
+            .filter { Self.canImage($0) }
+            .sorted()
+    }
+
+    /// 能不能拍这个 App 的像素。与 `canAct` 用同一批硬禁区, 但理由不同:
+    /// 操作面怕"替人按了付款", 图像面怕"替人把密码拍成图"。
+    nonisolated static func canImage(_ bundle: String) -> Bool {
+        !ComputerRedline.actBannedBundles.contains(bundle)
+    }
+
     /// 落盘串 → 状态。**乱值一律按"关/空"算**, 不猜。
     ///
     /// ⚠️ 单独抽出来是因为它既要被 `ChatStore` 在启动时调, 也要能被冒烟断言 ——
@@ -215,33 +244,44 @@ final class ComputerSettings: ObservableObject {
     ///    那种状态没有意义, 而且它会悄悄把 `MANGOX_COMPUTE_ACT_BUNDLES` 填上。
     static func decode(enabledRaw: String?,
                        bundlesRaw: String?,
-                       actRaw: String? = nil) -> (enabled: Bool,
-                                                  bundles: Set<String>,
-                                                  actBundles: Set<String>) {
+                       actRaw: String? = nil,
+                       imageRaw: String? = nil) -> (enabled: Bool,
+                                                    bundles: Set<String>,
+                                                    actBundles: Set<String>,
+                                                    imageBundles: Set<String>) {
         let enabled = enabledRaw == "1"
-        guard enabled else { return (false, [], []) }
+        guard enabled else { return (false, [], [], []) }
         let bundles = Set((bundlesRaw ?? "").split(separator: ",").map(String.init).filter { !$0.isEmpty })
         let act = Set((actRaw ?? "").split(separator: ",").map(String.init).filter { !$0.isEmpty })
-        return (true, bundles, act.intersection(bundles))
+        let image = Set((imageRaw ?? "").split(separator: ",").map(String.init).filter { !$0.isEmpty })
+        return (true, bundles, act.intersection(bundles), image.intersection(bundles))
     }
 
     /// 状态 → 落盘串。同样再取一次交集 —— `encode` 是另一条入口(测试、将来的导入导出)。
     static func encode(enabled: Bool,
                        bundles: Set<String>,
-                       actBundles: Set<String> = []) -> (enabled: String, bundles: String, actBundles: String) {
+                       actBundles: Set<String> = [],
+                       imageBundles: Set<String> = []) -> (enabled: String,
+                                                            bundles: String,
+                                                            actBundles: String,
+                                                            imageBundles: String) {
         (enabled ? "1" : "0",
          bundles.sorted().joined(separator: ","),
-         actBundles.intersection(bundles).sorted().joined(separator: ","))
+         actBundles.intersection(bundles).sorted().joined(separator: ","),
+         imageBundles.intersection(bundles).sorted().joined(separator: ","))
     }
 
     // MARK: 操作
 
-    func restore(enabledRaw: String?, bundlesRaw: String?, actRaw: String? = nil) {
-        let d = Self.decode(enabledRaw: enabledRaw, bundlesRaw: bundlesRaw, actRaw: actRaw)
+    func restore(enabledRaw: String?, bundlesRaw: String?, actRaw: String? = nil,
+                 imageRaw: String? = nil) {
+        let d = Self.decode(enabledRaw: enabledRaw, bundlesRaw: bundlesRaw,
+                            actRaw: actRaw, imageRaw: imageRaw)
         enabled = d.enabled
-        // ⚠️ 顺序有意义: 先置 `actSelected` 再置 `selected` —— 反过来的话中间那一拍会出现
-        //    "操作面里有、读面里没有"的短暂状态, 而 `didSet` 会把它 persist 出去。
+        // ⚠️ 顺序有意义: 先置两档子集再置 `selected` —— 反过来的话中间那一拍会出现
+        //    "子集里有、读面里没有"的短暂状态, 而 `didSet` 会把它 persist 出去。
         actSelected = d.actBundles
+        imageSelected = d.imageBundles
         selected = d.bundles
     }
 
@@ -271,8 +311,11 @@ final class ComputerSettings: ObservableObject {
     func toggle(_ bundle: String) {
         if selected.contains(bundle) {
             selected.remove(bundle)
-            // ⚠️ 取消"可读"必须连带摘掉"可操作": 否则留下一个"动得了但读不到"的组合。
+            // ⚠️ 取消"可读"必须连带摘掉"可操作"与"图片": 否则留下"动得了但读不到"
+            //    / "拍得了但读不到"两种组合, 而它们在 helper 侧一定是被拒的 ——
+            //    设置页却还勾着, 人只会以为"这个功能时好时坏"。
             if actSelected.contains(bundle) { actSelected.remove(bundle) }
+            if imageSelected.contains(bundle) { imageSelected.remove(bundle) }
         } else {
             selected.insert(bundle)
         }
@@ -286,6 +329,20 @@ final class ComputerSettings: ObservableObject {
             actSelected.insert(bundle)
         } else {
             actSelected.remove(bundle)
+        }
+    }
+
+    /// 开/关某个 App 的**图像**面(批 3c)。同样带上读面; 硬禁区恒不许开。
+    ///
+    /// ⚠️ 与 `setAct` 的差别: 这里**不动** `actSelected` —— "能看"和"能按"是两件事,
+    ///    互相带上是上一批特意避开的错(会让人以为自己只开了一档)。
+    func setImage(_ bundle: String, _ on: Bool) {
+        guard Self.canImage(bundle) else { return }
+        if on {
+            selected.insert(bundle)
+            imageSelected.insert(bundle)
+        } else {
+            imageSelected.remove(bundle)
         }
     }
 
@@ -315,9 +372,11 @@ final class ComputerSettings: ObservableObject {
 
     private func persist() {
         guard let onPersist else { return }
-        let e = Self.encode(enabled: enabled, bundles: selected, actBundles: actSelected)
+        let e = Self.encode(enabled: enabled, bundles: selected,
+                            actBundles: actSelected, imageBundles: imageSelected)
         onPersist(Self.enabledKey, e.enabled)
         onPersist(Self.bundlesKey, e.bundles)
         onPersist(Self.actBundlesKey, e.actBundles)
+        onPersist(Self.imageBundlesKey, e.imageBundles)
     }
 }
