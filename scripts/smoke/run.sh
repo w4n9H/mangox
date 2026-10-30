@@ -13,6 +13,10 @@
 #   运行之前), 而 `^PASS`/`^FAIL`/`tail` 全在尾部 ⇒ 只抓尾就漏掉编译告警。
 #   **一轮门禁只跑两次**: 正例 (上面这一跑就把读数吃全) + 反例 (改坏 → 确认红的恰好是你动的
 #   那几处); **反例还原后即结束**, 不再跑正例 —— 正例刚刚才跑过。
+#   ⚠️ **本脚本（以及任何 `set -o pipefail` 的脚本）内禁用 `| grep -q`**（2026-10-30 CI 实测）:
+#   `-q` 命中即退 ⇒ 左边的 awk / echo 还在写，写进一条已经关闭的管道 ⇒ BSD awk 报
+#   "i/o error occurred while closing /dev/stdout" 并**非零**退出 ⇒ `pipefail` 于是把"命中"
+#   变成"红"。判命中一律写 `grep -cE … >/dev/null`（它必须读完才数得出来）。细节见 `has_code`。
 set -euo pipefail
 
 cd "$(dirname "$0")/../.."
@@ -113,7 +117,7 @@ if [[ "$SCROLL_N" -ne 1 ]]; then
     echo "       四个入口请一律走 scrollToTail —— 它带复核拍, 漏了它 = 回车后白屏会一直亮着" >&2
     exit 1
 fi
-if grep -nE 'withAnimation' -A2 mangox/Views/Chat/ChatView.swift | grep -qE 'scrollTo'; then
+if grep -nE 'withAnimation' -A2 mangox/Views/Chat/ChatView.swift | grep -cE 'scrollTo' >/dev/null; then
     echo "FAIL - 滚到底又带上补间了 (补间按动画插值的布局算落点, 实测差 100~260pt, 且没法复核)" >&2
     exit 1
 fi
@@ -123,8 +127,15 @@ fi
 #    对着注释里的同一串字点头, 反例注入之后照样 RC=0(2026-10-28 实测踩到: 注释掉 socket 权限那行,
 #    ③i 一条没红)。⇒ 这类门当前全是**假门**, 判据改成"有效代码行里有这串字"。
 #    ⚠️ 已知边界: 只挡「整行注释」这一种; 行尾注释 `let x = 1 // chmod(...)` 仍会误命中。
+#    ⚠️ 右端必须写成 `grep -c … >/dev/null`，**不许 `grep -q`**（2026-10-30 CI 实测）:
+#       `-q` 命中即退 ⇒ 左边的 awk / echo 还在写，写进一条已经关闭的管道 ⇒ BSD awk 报
+#       "i/o error occurred while closing /dev/stdout" 并以**非零**退出 ⇒ `pipefail` 于是把
+#       **"命中"变成"红"**。CI 那次就是这样：判据 225 行就命中了，报出来的却是
+#       「滚到底的锚点不是内容末尾哨兵」。而本地跑三十次全绿 —— 这个 bug 只在"谁先跑完"
+#       这件事上分胜负，**本地永远复现不了**。`-c` 要读完才数得出来，生产者看不到关闭的管道
+#       ⇒ 同一句话在任何 runner 上都是同一个答案。
 has_code() {
-    awk '!/^[ \t]*\/\//' "$1" | grep -qE -- "$2"
+    awk '!/^[ \t]*\/\//' "$1" | grep -cE -- "$2" >/dev/null
 }
 
 # ③d 「滚到底」的锚点必须是**恒实例化**的末尾哨兵 (2026-10-23 boss 报「打开后默认会话不在最底、
@@ -157,7 +168,7 @@ if ! has_code mangox/Views/Chat/ChatView.swift 'projectedChat\.blocks\.last\.map
     exit 1
 fi
 if ! grep -A9 -E 'for \(i, delay\) in Self\.followBeats\.enumerated\(\)' mangox/Views/Chat/ChatView.swift \
-        | grep -qE 'if i == 0'; then
+        | grep -cE 'if i == 0' >/dev/null; then
     echo "FAIL - 「滚到底」的节拍没有分两段 (followBeats 循环里第一拍 i == 0 必须锚 materializeTarget)" >&2
     echo "       顺序反了 = 每一拍都按虚高文档落点 = 白屏; 只改注释不算, 这门看的是真源码" >&2
     exit 1
@@ -170,7 +181,7 @@ fi
 #     （boss 报「回车后白屏，连对话完成后都不显示，切一次会话才好」）。
 #     ⚠️ 两条写法都编译得过、没有任何数值会变、也没有断言会红 ⇒ 只能扫源码事实。
 FOLLOW_LOOP=$(grep -A20 'for (i, delay) in Self.followBeats.enumerated()' mangox/Views/Chat/ChatView.swift)
-if ! echo "$FOLLOW_LOOP" | grep -qE 'target = Self\.streamingAnchor'; then
+if ! echo "$FOLLOW_LOOP" | grep -cE 'target = Self\.streamingAnchor' >/dev/null; then
     echo "FAIL - 流式期的锚点不是 Self.streamingAnchor (锚哨兵 = 吃总高估算 = 白屏, 实测差 9018pt)" >&2
     echo "       指示器是懒栈的孩子才量得出真实落点; 只改注释不算, 这门看的是真源码" >&2
     exit 1
@@ -183,7 +194,7 @@ fi
 #     不是"要不要量"的布尔开关 —— 开关在回车那一刻早就 false 了，尾块却换了（多一条用户消息）
 #     ⇒ 只锚哨兵 ⇒ 落进估算出来的空尾。0.1.30 实测：改成身份判据前，回车必白。
 #     反过来的写法（无判据、每拍都先锚尾行）会让流式期每个 token 都 28pt 来回弹 = **刷屏**。
-if ! echo "$FOLLOW_LOOP" | grep -qE 'materialize != materializedTail'; then
+if ! echo "$FOLLOW_LOOP" | grep -cE 'materialize != materializedTail' >/dev/null; then
     echo "FAIL - 静止态第一拍缺尾块身份判据 (应为 `materialize != materializedTail`)" >&2
     echo "       少了它 = 每拍都先锚尾行再锚哨兵, 28pt 来回弹 = 刷屏 (0.1.30 实测)" >&2
     exit 1
