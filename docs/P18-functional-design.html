@@ -642,7 +642,7 @@ details.fold[open]>summary{margin-bottom:4px}
     <span class="tn">0</span>
     <div class="tbody">
       <div class="tt">helper socket 的 peer 校验（本版补齐时新增,建议排在最前）</div>
-      <div class="td"><b>判据</b>：socket 在 <code>0700</code> 目录、文件 <code>0600</code>;连上来先 <code>getsockopt(LOCAL_PEERCRED)</code> 取 pid，<b>只接受本轮 pi 进程或其子孙</b>，其余断开并记一笔。<b>反例</b>：删掉 peer 判据 ⇒ 冒烟里「陌生进程连上来发 <code>ui_act</code>」必须被拒(现在会通过 ⇒ 必须红)。<b>为什么必须先</b>：env 把路径交给 pi，而 unix socket 默认<b>同用户任何进程都能连</b> ⇒ 作用域/遮蔽/红线挡的是模型，<b>挡不住本地进程</b>。详细见 §03 改动一末段。<b>状态</b>：<span class="chip c-bad">未做</span></div>
+      <div class="td"><b>判据</b>：socket 在 <code>0700</code> 目录、文件 <code>0600</code>;连上来先 <code>getsockopt(LOCAL_PEERCRED)</code> 取 pid，<b>只接受本轮 pi 进程或其子孙</b>，其余断开并记一笔。<b>反例</b>：删掉 peer 判据 ⇒ 冒烟里「陌生进程连上来发 <code>ui_act</code>」必须被拒(现在会通过 ⇒ 必须红)。<b>为什么必须先</b>：env 把路径交给 pi，而 unix socket 默认<b>同用户任何进程都能连</b> ⇒ 作用域/遮蔽/红线挡的是模型，<b>挡不住本地进程</b>。详细见 §03 改动一末段。<b>状态</b>：<span class="chip c-ok">已做（未发版）</span> —— <b>2026-10-30 校准</b>：这条一直挂着「未做」，实际 <code>mangox-compute/PeerCheck.swift</code> 早已实现并接在 <code>ComputerServer:168</code>：<code>getsockopt(SOL_LOCAL, LOCAL_PEERCRED)</code> 从**内核**取对端身份（不依赖对端自报）、只接受 <code>MANGOX_COMPUTE_PEER_PID</code> 及其子孙、目录 0700 + socket 文件 0600。⚠️ <b>反向失真的代价</b>：读到「未做」的人会把它重写一遍，而重写十有八九只验 uid、漏掉 pid —— 那等于把一个做对的东西做坏。</div>
     </div>
   </div>
   <div class="todo">
@@ -656,7 +656,12 @@ details.fold[open]>summary{margin-bottom:4px}
     <span class="tn">2</span>
     <div class="tbody">
       <div class="tt">本机 AX 实测：树有多大、多快、覆盖多少 App</div>
-      <div class="td"><b>判据</b>：拿一个真实 App(飞书 / Safari / 备忘录)跑一次 AX 读 ⇒ 记下①原始树节点数 ②剪枝后节点数 ③单次耗时 ④压缩后字符数。<b>没有这四个数,§03 改动九的账就是猜的</b>。<b>为什么必须先</b>：本仓至今零 AX 代码,而所有性能数字都来自二手综述。<b>状态</b>：<span class="chip c-bad">未做</span></div>
+      <div class="td"><b>判据</b>：拿一个真实 App(飞书 / Safari / 备忘录)跑一次 AX 读 ⇒ 记下①原始树节点数 ②剪枝后节点数 ③单次耗时 ④压缩后字符数。<b>没有这四个数,§03 改动九的账就是猜的</b>。<b>为什么必须先</b>：本仓至今零 AX 代码,而所有性能数字都来自二手综述。<b>状态</b>：<span class="chip c-ok">已测（2026-10-30）</span> —— 真机对两个 App 各跑一次 <code>read</code>（同一份 helper 二进制、直连 socket、<code>includeImage:false</code>）：
+      <br>· <b>备忘录</b>（主窗口 + 侧栏列表）：原始树 <b>128</b> 节点 → 剪枝后 <b>83</b> 行 → 快照 <b>3804</b> 字符 → <b>118 ms</b>／次
+      <br>· <b>Finder</b>（桌面）：原始 <b>16</b> → 剪枝后 <b>16</b> → <b>765</b> 字符 → <b>70 ms</b>／次
+      <br>⇒ 剪枝比约 <b>65%</b>（128→83），<b>不是</b>"砍掉绝大部分"那种量级 —— 这条数字本身就是结论：上下文账的大头不是"剪得不狠"，是<b>每次读都要重发一遍</b>。3.8k 字符粗估 <b>1.5~2k token</b>（中文按字、ASCII 按 4:1），一场 20 次读的任务 ≈ 30~40k ⇒ 这才是"差分"要解决的问题量级。
+      <br>⚠️ <b>「覆盖多少 App」这一项填不满</b>：只有零散证据（微信主窗口 1052×754 只暴露 6 个节点，是最薄的一档，见批 2e），没有系统统计。这是产品侧的客观事实（自绘／画布不暴露），不是我们能改的 ⇒ 如实留空，别拿它当已完成。
+      <br>⚠️ <b>量的时候踩到的一个坑（会再踩）</b>：本仓 <code>xcodebuild -target … </code> 的产物落在<b>仓库内 <code>build/Debug/</code></b>（<code>.gitignore</code> 第 81 行），而 Xcode Run 用的那份在 <code>DerivedData/…/Build/Products/Debug/</code>。<b>两边不是同一个文件</b> —— 我第一轮拿 DerivedData 那份量，量的是 12:51 的旧二进制，症状是"instrument 一行都不打，但读照样成功"。⇒ <b>真机验证前必须先说清"用哪一份产物"</b>。</div>
     </div>
   </div>
   <div class="todo">
@@ -689,21 +694,24 @@ details.fold[open]>summary{margin-bottom:4px}
     <span class="tn">6</span>
     <div class="tbody">
       <div class="tt">远程驱动档（autoJudge）下 computer 一律被拒且留痕</div>
-      <div class="td"><b>判据</b>：<code>autoJudge</code> 档发起 <code>computer_act</code>（工具名契约见下）⇒ 断言①被拒 ②<b>落一条记原因</b>(同 <code>autoJudgeBlocks</code> 的形态)③<b>没有任何 image / 像素被发出</b>。<b>反例</b>：把该分支改回落进"一律放行" ⇒ 必须变红。<b>状态</b>：<span class="chip c-ok">① ② 已做（未发版）</span> —— ③ 目前是<b>结构性</b>保证（图像面还没接，<code>includeImage</code> 一律回"批 2 才接"），<b>等批 3 接上图像时必须补一条真断言</b>，不许靠"现在还读不到像素"这件事撑着。<br><b>工具名契约</b>：<code>computer_read</code> / <code>computer_act</code> / <code>computer_open</code>（前缀 <code>computer_</code> 才是判据 —— 以后加 <code>computer_scroll</code> 自动落入要审批那一侧，本文早期草稿里的 <code>ui_read</code>/<code>ui_act</code> 作废）。</div>
+      <div class="td"><b>判据</b>：<code>autoJudge</code> 档发起 <code>computer_act</code>（工具名契约见下）⇒ 断言①被拒 ②<b>落一条记原因</b>(同 <code>autoJudgeBlocks</code> 的形态)③<b>没有任何 image / 像素被发出</b>。<b>反例</b>：把该分支改回落进"一律放行" ⇒ 必须变红。<b>状态</b>：<span class="chip c-ok">① ② ③ 都已做（未发版）</span> —— <b>③ 于 2026-10-30 补上</b>（批 3c 接上图像之后才敢补）。两条分工：① <code>run.sh</code> ③t <b>计数</b> —— <code>ComputerImage(</code> 在整个 helper 里必须<b>恰好出现 1 次</b>，且那次在 <code>finishRead</code>（读面的唯一出口）⇒ 动作面<b>结构上拿不到像素</b>；② <code>CaseActScope</code> ③f <b>转录断言</b> —— 远程驱动档那一次的<b>所有下行命令</b>里不许出现 <code>image</code>/<code>data</code>/<code>png</code>/<code>base64</code> 字段。前者管"以后谁都加不了第二个出口"，后者管"这一次确实没发"。
+      <br>⚠️ <b>同族事实写下来免得被当 bug</b>：autoJudge <b>只拦 act，不拦 read</b>（<code>computer_read</code> 在只读白名单里，请求连桥都到不了）⇒ 远程驱动档下 <b>read 仍然能发图</b>，前提是用户给那个 App 单独勾过「图片」。这是<b>有意的</b>：图片那把钥匙是逐 App 的显式授权，与"要不要人拍板"是两根轴。<br><b>工具名契约</b>：<code>computer_read</code> / <code>computer_act</code> / <code>computer_open</code>（前缀 <code>computer_</code> 才是判据 —— 以后加 <code>computer_scroll</code> 自动落入要审批那一侧，本文早期草稿里的 <code>ui_read</code>/<code>ui_act</code> 作废）。</div>
     </div>
   </div>
   <div class="todo">
     <span class="tn">7</span>
     <div class="tbody">
-      <div class="tt">人类接管可中止</div>
-      <div class="td"><b>判据</b>：动作进行中注入一次人类鼠标位移 ⇒ 断言①动作中止 ②给模型的回执里出现"用户接管"字样 ③模型不得凭旧快照继续动作(下一次读必须重新取)。</div>
+      <div class="tt">人类接管可让路（原写「可中止」，2026-10-30 改写）</div>
+      <div class="td"><b>判据（改写后）</b>：<b>每一个动作之前</b>注入一次人类鼠标位移 ⇒ 断言①这次动作没有发生（界面一下都没动）②给模型的回执里出现「刚才有人动了鼠标 / 键盘」并点明「人还在键鼠上时我不抢」③模型不得凭旧快照继续动作（下一次 act 必须重新读，seq 会挡住它）。
+      <br><b>⚠️ 为什么把「动作进行中」改成「动作之前」</b>：实现是 <code>handleAct</code> <b>开头</b>调一次 <code>ComputerTakeover.refusal(...)</code>（静默窗口 6s），<b>没有中途打断机制</b>。对单个 act（一次 press、一次 type）两者差在毫秒级；而「中途打断」需要一条可取消的动作队列，可当前 <code>ComputerAct</code> 全是<b>单步同步</b>调用 —— 为一个不存在的粒度引入队列，成本远大于收益。★ 这属于<b>按实现改写判据</b>，理由必须留在这里（不许悄悄改）。哪天出现多步动作（连续滚动、拖拽轨迹），这条判据要<b>连实现一起重开</b>。
+      <br><b>状态</b>：<span class="chip c-ok">已做（未发版）</span> —— 判据纯函数化在 <code>ComputerTakeover.refusal(lastHumanInputAt:now:installed:)</code>，<code>CaseComputerPure</code> 5 条钉边界（没人碰 ⇒ 照做 / 刚动过 ⇒ 拒且说清「让路」与下一步 / <b>到期就恢复</b>（判据是 <code>&lt;</code> 不是 <code>&lt;=</code>）/ 监听没装上 ⇒ 放行且不假装判断过 / 时间戳比此刻还晚 ⇒ 当刚动过）。真机 A/B 也验过：同一二进制同一注入，只改 <code>MANGOX_COMPUTE_TAKEOVER</code>。</div>
     </div>
   </div>
   <div class="todo">
     <span class="tn">8</span>
     <div class="tbody">
       <div class="tt">密码框恒被遮蔽</div>
-      <div class="td"><b>判据</b>：构造一棵含密码框的 AX 树 ⇒ 序列化结果里该值恒为 <code>••••</code>;改坏遮蔽代码 ⇒ 必须变红。<b>注意</b>：这条要在<b>序列化边界</b>测,不是测"prompt 里有没有让它别看"。<br><b>状态</b>：<span class="chip c-ok">已做（未发版）</span> —— <b>两档一起遮</b>：① <b>角色</b>(<code>ComputerRedline.isPasswordRole</code>，认 secure / password / axtextfieldsecure 三种写法) ② <b>受保护内容标记</b>(<code>AXProtectedContent</code>，SDK 没导出常量 ⇒ 按属性名字符串读)。<code>CaseComputerPure</code> 4 条：同角色同值、只有标记不同的两个节点 ⇒ 结论必须不同；渲染出口(<code>rendered()</code>)里不许出现原文；遮蔽只换值、不吞行(否则模型连"那儿有卡号栏"都不知道)。<b>反例</b> = 拆掉 <code>maskedValue</code> 的 <code>isProtected</code> 分支 ⇒ <b>3 条红</b>。<br><b>⚠️ 2026-10-30 补的洞（这一条原来只有一半）</b>：helper 的 <code>AXAdapter.build</code> 把 <code>isProtected</code> <b>硬写成 <code>false</code></b> ⇒ 第 ② 档在真机上<b>从来没生效过</b>，而文件头注释早写着"按属性名字符串读"——<b>注释比事实说得多</b>。症状是"角色不叫 secure、但被系统标了受保护内容的值照原文进上下文"，<b>零红灯</b>(纯函数那半边喂的是手搓的树，它不知道 helper 根本没填这个字段)。已接上，并只在<b>有值</b>时才去问那个属性(每节点一次 AX 往返，3000 节点 = 3000 次 IPC；遮蔽挡的是"值泄出去"，空值没什么可遮的)。<code>run.sh</code> <b>③q</b> 两条源码事实盯着它：禁 <code>isProtected: false</code> + 钉住现场读那个调用(反例 = 改回常量 ⇒ ③q 变红, 退码 1)。⚠️ 至今仍<b>没在真机上找到一个 <code>AXProtectedContent=1</code> 的元素</b>做对照 —— 真遇到时回来记一笔。</div>
+      <div class="td"><b>判据</b>：构造一棵含密码框的 AX 树 ⇒ 序列化结果里该值恒为 <code>••••</code>;改坏遮蔽代码 ⇒ 必须变红。<b>注意</b>：这条要在<b>序列化边界</b>测,不是测"prompt 里有没有让它别看"。<br><b>状态</b>：<span class="chip c-ok">已做（未发版）</span> —— <b>两档一起遮</b>：① <b>角色</b>(<code>ComputerRedline.isPasswordRole</code>，<b>2026-10-30 收紧成精确匹配</b>：<code>role</code> 或 <b><code>subrole</code></b> 等于 <code>AXSecureTextField</code> 才算；原来的子串匹配 <code>contains("secure")||contains("password")</code> 已废 —— 它会把名字里带这两个词的<b>任何</b>角色当成密码框，一整片文字变 <code>••••</code> 而模型<b>看不出少了什么</b>) ② <b>受保护内容标记</b>(<code>AXProtectedContent</code>，SDK 没导出常量 ⇒ 按属性名字符串读)。<code>CaseComputerPure</code> 4 条：同角色同值、只有标记不同的两个节点 ⇒ 结论必须不同；渲染出口(<code>rendered()</code>)里不许出现原文；遮蔽只换值、不吞行(否则模型连"那儿有卡号栏"都不知道)。<b>反例</b> = 拆掉 <code>maskedValue</code> 的 <code>isProtected</code> 分支 ⇒ <b>3 条红</b>。<br><b>⚠️ 2026-10-30 补的洞（这一条原来只有一半）</b>：helper 的 <code>AXAdapter.build</code> 把 <code>isProtected</code> <b>硬写成 <code>false</code></b> ⇒ 第 ② 档在真机上<b>从来没生效过</b>，而文件头注释早写着"按属性名字符串读"——<b>注释比事实说得多</b>。症状是"角色不叫 secure、但被系统标了受保护内容的值照原文进上下文"，<b>零红灯</b>(纯函数那半边喂的是手搓的树，它不知道 helper 根本没填这个字段)。已接上，并只在<b>有值</b>时才去问那个属性(每节点一次 AX 往返，3000 节点 = 3000 次 IPC；遮蔽挡的是"值泄出去"，空值没什么可遮的)。<code>run.sh</code> <b>③q</b> 两条源码事实盯着它：禁 <code>isProtected: false</code> + 钉住现场读那个调用(反例 = 改回常量 ⇒ ③q 变红, 退码 1)。⚠️ 至今仍<b>没在真机上找到一个 <code>AXProtectedContent=1</code> 的元素</b>做对照 —— 真遇到时回来记一笔。</div>
     </div>
   </div>
   <div class="todo">

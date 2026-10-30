@@ -192,6 +192,20 @@ extension SmokeMain {
               "T-ACTSCOPE 远程驱动档仍然拒 (实测 blocks=\(t5.autoJudgeBlocks.count)) —— 作用域不是后门")
         check(responded(t5) == "Deny", "T-ACTSCOPE 远程驱动档回 Deny")
 
+        // ③f **没有任何像素从动作面出去**（验收项 6 的 ③，2026-10-30 到期补上）。
+        //    文档原话是"③ 目前是结构性保证（图像面还没接）……等批 3 接上图像时必须补一条真断言，
+        //    不许靠'现在还读不到像素'这件事撑着"。批 3c 已经接上了 ⇒ 这条不能再空着。
+        //    ⚠️ 分工: 这里盯**这一次的转录**（act 这一路的下行命令里不许出现图像字段）;
+        //    更强的结构性一条在 `run.sh` ③t（`ComputerImage(` 只许装配一处）——
+        //    那条管"以后谁都加不了第二个出口", 这条管"这一次确实没发"。
+        let pixelKeys: Set<String> = ["image", "data", "png", "base64"]
+        let leakedPixels = t5.sentCommands.contains { cmd in pixelKeys.contains { cmd[$0] != nil } }
+        // ⚠️ 非空前提必须一起判: 转录是空的时候 `contains` 恒为假 ⇒ 这条会变成"恒真的废话"
+        //    (feed 哪天坏掉, 它还照样绿)。
+        check(!t5.sentCommands.isEmpty && !leakedPixels,
+              "T-ACTSCOPE 远程驱动档的动作回执里没有任何图像字段 "
+              + "(实测下行 \(t5.sentCommands.count) 条; 像素从动作面出去 = 授权与遮蔽一起被绕过)")
+
         // MARK: ④ computer_open 查的是**读面** (两档权限不许被合成一档)
 
         // ④a 只勾「可读」、没勾「可操作」⇒ 打开它**必须放行**

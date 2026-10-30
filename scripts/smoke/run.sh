@@ -341,7 +341,7 @@ if ! has_code mangox-compute/HumanInputTap.swift '"MANGOX_COMPUTE_TAKEOVER"'; th
     exit 1
 fi
 
-# ③t 图像面(批 3c) —— 五条会**静默**坏掉的地方
+# ③t 图像面(批 3c) —— 六条会**静默**坏掉的地方
 #
 #   ① 截图 API: `CGWindowListCreateImage` 在 macOS 14.0 起被标记弃用。这不是风格问题 ——
 #      本项目门禁要求 **0 warning**, 用它当场就红(实测确认过)。SCK 是唯一干净的路。
@@ -351,6 +351,7 @@ fi
 #   ④ **像素面不涂黑**(2026-10-30 boss 定): 密码框自己就渲染成圆点, 黑块只遮住长度;
 #      而黑块一旦落错位置(判据放宽 / 两套坐标系不同源 / 受保护容器框住整片), 整张图就废了,
 #      且**遮错的东西长得和遮对的一模一样**。遮蔽只留在文本层。这条要挡住"谁把它加回来"。
+#   ⑤ **只有读面能发图**: 图像对象只许装配一处(finishRead), 动作面永远拿不到像素。
 for f in mangox-compute/*.swift; do
     if has_code "$f" 'CGWindowListCreateImage|CGDisplayCreateImage'; then
         echo "FAIL - $f 用了已弃用的截图 API (macOS 14.0 起标记弃用 ⇒ 破 0 warning 门禁)" >&2
@@ -396,6 +397,18 @@ if has_code mangox/Models/ComputerShotRule.swift 'Redaction|redactions'; then
 fi
 if has_code mangox-compute/ComputerShot.swift 'ctx\.fill'; then
     echo "FAIL - ComputerShot 又在往图上填色块 (像素遮蔽已废除)" >&2
+    exit 1
+fi
+# ⑤ **只有读面能发图**（验收项 6 的 ③, 2026-10-30 到期补上）。
+#    做法是"图像对象只许装配一处": `ComputerImage(` 在整个 helper 里必须恰好出现 1 次,
+#    而且那次必须在 `finishRead` 里(读面的唯一出口)。
+#    ⚠️ 为什么用计数而不是"act 分支里搜 image": 坏法不止一种 —— 有人可能在 act 的**回执文本**
+#    里塞 base64、或者新加一个 `shot` 操作直接返回像素, 那些都绕过了"act 分支"这个字面。
+#    计数管的是"这扇门只有一把钥匙"。
+SHOT_IMAGE_SITES="$(awk '/ComputerImage\(/ { n++ } END { print n+0 }' mangox-compute/ComputerServer.swift)"
+if [ "$SHOT_IMAGE_SITES" != "1" ]; then
+    echo "FAIL - 图像对象的装配点不是唯一一处 (实测 $SHOT_IMAGE_SITES 处) ⇒ 图可能从动作面出去" >&2
+    echo "       只有 finishRead(读面出口) 允许装配 ComputerImage" >&2
     exit 1
 fi
 
