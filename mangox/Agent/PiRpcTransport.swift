@@ -1184,27 +1184,23 @@ final class PiRpcTransport: AgentTransport {
                 name: "computer_read",
                 label: "Read window",
                 description: [
-                    "Read the front window of a macOS app as a text outline: each control with",
-                    "its role, title, value and the actions it offers, numbered row by row.",
+                    "Read the front window of a macOS app as a numbered outline: role, title, value and the",
+                    "actions each control offers. Row numbers and the snapshot `seq` -- the only things",
+                    "computer_act accepts -- come from here and nowhere else.",
                     "",
-                    "Pass `app` as a name or bundle id (\"Safari\" or \"com.apple.Safari\");",
-                    "leave it out to read whatever is frontmost right now. Only apps the user",
-                    "opened for this session are readable -- everything else is refused by the",
-                    "app itself, and the refusal names the apps you can read, so do not guess",
-                    "your way through a list of candidates.",
+                    "Only apps the user allowed for this session are readable; a refusal names the ones you",
+                    "can read, so never guess through candidates.",
                     "",
-                    "This is a description, not a screenshot: it tells you what is there, not",
-                    "what it looks like. Row numbers are valid only for the outline you just",
-                    "received -- read again after anything changes, and never reuse a number",
-                    "from an earlier call. Values behind password fields are masked before they",
-                    "reach you; treat a masked value as something you were never given.",
+                    "Numbers are valid for this outline only. Once anything changes they are stale, and an old",
+                    "number is refused rather than approximated: read again, never reuse or guess one.",
                     "",
-                    "If the outline is nearly empty (some apps expose almost nothing through",
-                    "accessibility), pass `includeImage: true` to also get a screenshot of the",
-                    "window. That only works for apps the user ticked \"image\" for; otherwise the",
-                    "text comes back with a note saying why there is no picture -- do not retry",
-                    "it in a loop. A screenshot has no numbered rows, so it never replaces a",
-                    "read: act only after an outline.",
+                    "A long window is cut off and the outline's last line says how many rows are missing --",
+                    "scroll with computer_act, then read again. Values in password fields arrive masked; a",
+                    "masked value is one you were never given.",
+                    "",
+                    "`includeImage` adds a screenshot: only when the user allowed images for that app, and only",
+                    "when the outline is nearly empty. A picture carries no row numbers, so it never replaces a",
+                    "read. When there is no picture, the text says why -- do not retry it in a loop.",
                 ].join("\n"),
                 parameters: Type.Object({
                     app: Type.Optional(Type.String({
@@ -1253,47 +1249,28 @@ final class PiRpcTransport: AgentTransport {
                 name: "computer_act",
                 label: "Act on a window",
                 description: [
-                    "Do exactly one thing to the window you just read: press a control, type into a",
-                    "field, put the keyboard focus on a control, or scroll a scroll area. Nothing else",
-                    "-- no dragging, no typing raw keystrokes.",
+                    "One action on the window you just read. The target is `index` from that read, or -- press",
+                    "only -- the `point` printed at the end of an outline row, which is resolved back to a row",
+                    "so the same checks apply (prefer `index`). Nothing else: no dragging, no raw keystrokes.",
                     "",
-                    "You must pass `seq` from the read that produced `index`, and the target is",
-                    "either `index` or, for press only, `point`. A point is resolved back to an",
-                    "outline row before any check runs, so every refusal still applies -- the",
-                    "reply names the row it landed on. A point is refused when there is nothing",
-                    "under it (that app draws its own UI, and clicking blind would skip every",
-                    "check), when what is under it is not a row of this outline (window",
-                    "background, or another app's window), and when that row only exists after a",
-                    "re-read. Use `index` from that same outline whenever you have one.",
-                    "Numbers are only valid for the snapshot that printed",
-                    "them: if the reply says the snapshot is stale, read again and take a fresh",
-                    "number. Never re-use a number across reads, and never guess one.",
+                    "`seq` must come from the read that printed that row: numbers from an earlier snapshot are",
+                    "refused as stale, and nothing is guessed for you. The reply is the *change* plus the new",
+                    "`seq`, not a fresh outline.",
                     "",
-                    "Type into a field with op \"setValue\" and the `text` to put there. Writing an",
-                    "empty string is refused on purpose: that is a wipe, not a no-op. Some fields",
-                    "accept the write and keep the old value -- if the reply says the value did not",
-                    "change, try op \"focus\" on that row (it only moves the caret), then setValue again.",
+                    "setValue refuses empty text on purpose (that is a wipe, not a no-op). If the reply says the",
+                    "value did not change, \"focus\" that row first, then setValue again. scroll moves about a",
+                    "tenth of the way per call -- read again to see where you landed; if it says no scroll bar",
+                    "was found, that app cannot be scrolled this way, so tell the user instead of retrying.",
                     "",
-                    "A long outline is truncated: its last line says how many rows were left out.",
-                    "Use op \"scroll\" with direction \"down\" (or \"up\") on the scroll-area row -- any",
-                    "row inside it works -- then read again; one call moves about a tenth of the way",
-                    "and the reply tells you where it landed. If the reply says no scroll bar was",
-                    "found, that app cannot be scrolled this way -- tell the user, do not retry.",
+                    "Always refused, whoever asks: paying or ordering, permanent deletion (Shift-Cmd-Delete",
+                    "included), typing into password fields, and confirming a save sheet (it is cancelled and",
+                    "the document stays untouched -- that call is the person's).",
                     "",
-                    "The reply is the *change*, not a new outline -- it also carries the new `seq`.",
-                    "A few things are always refused no matter who asks: paying or ordering,",
-                    "permanent deletion (Shift-Cmd-Delete included), and typing into password",
-                    "fields. When a \"do you want to save\" sheet is up, the save is cancelled and",
-                    "the document is left untouched -- that decision belongs to the person, not you.",
+                    "If the reply says a human just touched the mouse or keyboard, nothing happened: you stepped",
+                    "aside on purpose. Say what you were about to do and wait -- do not retry in a loop.",
                     "",
-                    "Only apps the user marked as actable can be touched. A refusal names the app",
-                    "and says whether the block was permission or policy; do not retry the same",
-                    "call hoping for a different answer.",
-                    "",
-                    "If the reply says a human just touched the mouse or keyboard, **nothing happened**",
-                    "-- the person has the machine, and you stepped aside on purpose. Stop there,",
-                    "tell the user what you were about to do, and do not retry in a loop: wait until",
-                    "they tell you to go on.",
+                    "Only apps the user marked actable can be touched; a refusal says whether it was permission",
+                    "or policy, so do not retry the same call.",
                 ].join("\n"),
                 parameters: Type.Object({
                     app: Type.Optional(Type.String({
@@ -1366,22 +1343,15 @@ final class PiRpcTransport: AgentTransport {
                 name: "computer_open",
                 label: "Open an app",
                 description: [
-                    "Open a macOS app, or bring it to the front if it is already running.",
+                    "Open a macOS app, or bring it to the front if it is already running. An app with no window",
+                    "has nothing to read or act on, so open it first.",
                     "",
-                    "Use this when the app you need is not running: an app that is not open has no",
-                    "window, so computer_read has nothing to read and computer_act has nothing to",
-                    "act on. Only apps the user opened for this session can be launched -- the",
-                    "refusal names the launchable ones, with their bundle ids.",
+                    "`app` is required -- a name or bundle id, matched against the bundle id, its last segment",
+                    "and the display name (prefer the bundle id when a plain name is not recognised). It never",
+                    "guesses.",
                     "",
-                    "Pass `app` as a name or bundle id (\"Calculator\" or \"com.apple.calculator\").",
-                    "Names are matched against the bundle id, its last segment, and the app's",
-                    "display name, so on a non-English system prefer the bundle id when a plain",
-                    "name is not recognised. There is no default: this tool never guesses which",
-                    "app you meant.",
-                    "",
-                    "This only launches. It does not read or touch anything inside the app: after",
-                    "it succeeds, call computer_read to get an outline (and a seq) before acting.",
-                    "Launching is gated by the same permission as reading, not by the acting one.",
+                    "Gated by the reading permission, not the acting one. It only launches: call computer_read",
+                    "afterwards for an outline and a `seq`.",
                 ].join("\n"),
                 parameters: Type.Object({
                     app: Type.String({
@@ -1721,10 +1691,14 @@ final class PiRpcTransport: AgentTransport {
         let computerBundles = ComputerSettings.shared.activeBundles
         // 操作面(批 2b)单独读一次: 它是**第二档权限**, 与读面不同源(见 `activeActBundles`)。
         let computerActBundles = ComputerSettings.shared.activeActBundles
+        // 接管检测(2026-11-02): 原来是"档位对了就装", 而 `interactive` 是默认档 ⇒ 用户什么都
+        // 还没要, 系统先弹「MangoX 想监听你的键盘输入」。现在是三段与门(档位 ∧ 显式开关 ∧ 已有
+        // 权限), 判据与 `granted` 的取法全在 `ComputerSettings.shouldInstallTakeover` 里。
         let computerSock = computerHost.start(allowedBundles: computerBundles,
                                              actBundles: computerActBundles,
                                              imageBundles: ComputerSettings.shared.activeImageBundles,
-                                             takeover: approvalMode.expectsHumanAtKeyboard)
+                                             takeover: ComputerSettings.shared.shouldInstallTakeover(
+                                                 expectsHuman: approvalMode.expectsHumanAtKeyboard))
         let computerExtPath = computerSock != nil ? Self.ensureComputerExtensionFile() : nil
         var args = spec.scriptArgs + ["--mode", "rpc"]
         // P12.1b + P13: 扩展参数 (关自动发现 + 补回内置 provider + 挂托管扩展 + codemode 层)。
@@ -1777,6 +1751,21 @@ final class PiRpcTransport: AgentTransport {
         // P3.7: 知识注入块挂在 spawn 参数上 (--append-system-prompt 可重复传; 会话内不可改)
         if let knowledge = desiredKnowledge, !knowledge.isEmpty {
             args += ["--append-system-prompt", knowledge]
+        }
+        // P19: **第二条**注入通道 = 应用操作手册 (SOP)。刻意不并进上面那一块:
+        //   知识块的语义是"我是谁/我知道什么", 有 persona 首位与段序两条结构性不变量;
+        //   SOP 是"在这个 App 里怎么下手", 生命周期跟着**开关与名单**走。
+        // ⚠️ 判据必须是 `computerSock`（不是"名单非空"）—— 与挂载走**同一个 nil**:
+        //   扩展没挂上就没有那套工具, 却把手册教给模型 = 教它用手边不存在的东西。
+        // ⚠️ 手册正文是**代码常量**（`SopManual.text`）, 不读盘; 现算的只有名单与档位 ——
+        //   两样都在这一处定格 ⇒ 不存在"改了设置但提示词还是旧的"的窗口。
+        if computerSock != nil {
+            let sop = SopInjection.block(bundles: computerBundles,
+                                         actBundles: computerActBundles,
+                                         codemode: desiredMode == .codemode)
+            if let text = sop.text, !text.isEmpty {
+                args += ["--append-system-prompt", text]
+            }
         }
         // per-turn: 模型/思考级别 spawn 期定格 (回合内 set_model/set_thinking_level 仍可即时切换)
         if let model = desiredModel {
@@ -1836,7 +1825,8 @@ final class PiRpcTransport: AgentTransport {
                                               allowedBundles: computerBundles,
                                               actBundles: computerActBundles,
                                               imageBundles: ComputerSettings.shared.activeImageBundles,
-                                              takeover: approvalMode.expectsHumanAtKeyboard,
+                                              takeover: ComputerSettings.shared.shouldInstallTakeover(
+                                                  expectsHuman: approvalMode.expectsHumanAtKeyboard),
                                               peerPid: ProcessInfo.processInfo.processIdentifier,
                                               inherited: ProcessInfo.processInfo.environment) {
             p.environment = env

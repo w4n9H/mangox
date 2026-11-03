@@ -40,6 +40,7 @@ extension SmokeMain {
             caseSettingsWindow,
             caseSleepGuard,
             caseComputerPure,
+            caseSopInjection,
             caseApprovalGate,
             caseComputerAct,
             caseComputerKind,

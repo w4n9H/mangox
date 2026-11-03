@@ -7,7 +7,7 @@
    **本文件由 scripts/l10n/gen_strings.py --write 生成, 别手改** ——
    译文改 scripts/l10n/en_values.py 的 VALUES, 再跑 --write。
 
-   条数: 935
+   条数: 949
 */
 
 " (值:\"%@\")" = " (value: %@)";
@@ -167,6 +167,7 @@
 "上下文自动压缩（溢出恢复）· %lld → %lld tokens" = "Context auto-compacted (overflow recovery) · %lld → %lld tokens";
 "上次 %@" = "%@ last time";
 "上次收信 %@" = "Last received %@";
+"上次没读完(已置灰):" = "Not fully read last time (greyed out):";
 "上次退出时回合还在跑, 重启后无法结算" = "A turn was still running when you last quit; it cannot be settled after restart.";
 "下单" = "Place order";
 "下载落盘/上传文件" = "downloading or uploading files";
@@ -316,6 +317,7 @@
 "刷新工作区" = "Refresh workspace";
 "刷新文件树与 git 状态" = "Refresh the file tree and git status";
 "前往源会话" = "Go to the source session";
+"前往系统设置" = "Open System Settings";
 "功能完整的编码 Agent, 内置 7 个工具 (读/写/Shell + grep/find/ls 检索三件套), 不挂业务扩展 — 日常默认档。" = "A full-featured coding agent with seven built-in tools (read / write / shell plus the grep/find/ls search trio) and no business extensions — the everyday default.";
 "加入白名单" = "Add to allowlist";
 "加载中…" = "Loading…";
@@ -344,6 +346,7 @@
 "只出提案，不改任何文件" = "Proposals only, no files touched";
 "只收 .md (大小写敏感); 若你刚要删或改名, 这条就是唯一的线索" = "Only .md is picked up (case-sensitive); if you just deleted or renamed something, this line is the only trace of it";
 "只是不再挂载, 目录与里面的文件一个都不动。" = "It is only unmounted — the directory and every file inside stay untouched.";
+"只有勾了「图片」的 App 才会截窗口。给完要重启 MangoX 才生效 —— 灯不会当场变, 别以为没给成。" = "Only apps with \"Image\" ticked get a window screenshot. Granting it takes effect only after you restart MangoX - the lamp will not flip right away, so do not read that as a failure.";
 "只读命令静默放行, 其余弹审批卡等待点击。" = "Read-only commands pass silently; anything else raises an approval card and waits for a click.";
 "只读命令静默放行, 危险命令自动拒绝并记下原因 (回执告知) — 远程驱动用。" = "Read-only commands pass silently; dangerous ones are refused automatically with the reason recorded (and sent back in the receipt) — for remote-driven work.";
 "只读显示本轮真正发出去的注入块 —— 门禁绿 ≠ 改对了" = "Read-only view of the injection block actually sent this turn — a green gate does not mean it is right";
@@ -426,6 +429,7 @@
 "尚未收信" = "No mail received yet";
 "尚未请求通知授权, 打开开关后首次完成时会请求" = "Notification permission has not been requested yet; the first completed turn after you enable this will ask.";
 "尚未配置邮箱。点下方「添加邮箱」开始 —— 建议用一个专用个人邮箱, 不要用企业邮箱。" = "No mailbox configured yet. Start with “Add mailbox” below — a dedicated personal mailbox is recommended, not a work one.";
+"屏幕录制" = "Screen Recording";
 "展开侧栏" = "Expand sidebar";
 "展开这一段过程" = "Show these steps";
 "工作区中查找" = "Find in workspace";
@@ -470,6 +474,7 @@
 "并发回合上限" = "Concurrent turn limit";
 "并发已达上限 (%lld), 捕获未发送" = "Concurrency limit reached (%lld); capture not sent";
 "并发已达上限 (%lld), 请等待任务结束或在设置中调高" = "Concurrency limit reached (%lld) — wait for a task to finish or raise the limit in settings";
+"开: 你一动键鼠我就停下让路。关着时我不会让路 —— 我正要点一个按钮、你同时动了鼠标, 落到谁手里是随机的。给完权限要重启 MangoX 才生效。" = "On: the moment you touch the mouse or keyboard I stop and get out of the way. Off: I do not yield - if I am about to click a button while you are moving the mouse, it is a coin toss which of us lands it. Granting the permission takes effect only after you restart MangoX.";
 "开了但一个都没勾 ⇒ 所有会话都用不了 (空 = 不开放, 不是全都行)" = "On, but nothing is ticked, so no session can use it (empty means not open, not everything)";
 "开了它, 文本读不出内容时我才会去截这个窗口的图当兜底。截图带的是整个窗口的像素, 所以默认关" = "With this on, I fall back to a screenshot of this window only when the text read comes back empty. A screenshot carries the whole window as pixels, so it stays off by default";
 "开启电脑操作" = "Turn on computer use";
@@ -763,6 +768,7 @@
 "第 %lld 轮" = "Turn %lld";
 "等待" = "Waiting";
 "等待审批" = "Awaiting approval";
+"系统权限" = "System permissions";
 "索引宁缺勿残 — 残缺的索引会让你以为资料只有这些; 摘掉或停用一两个库即可恢复" = "A partial index is worse than none — it would read as “these are all the materials”. Unmount or disable a base or two to restore it";
 "索引预览" = "Index preview";
 "细节" = "Details";
@@ -794,6 +800,7 @@
 "自定义…" = "Custom…";
 "自定义回答…" = "Custom answer…";
 "自定义模型与模式" = "Custom model and mode";
+"节点上限" = "node cap";
 "草稿还没保存 —— 下面的索引预览显示的是已保存的那句" = "Draft not saved yet — the index preview below shows the saved sentence";
 "行标题是文件名加上一句固定说明（如 SOUL.md - 我是谁）；表外的文件就只有文件名" = "A row title is the file name plus a fixed description (e.g. SOUL.md - Who I Am); files outside the list show only the file name";
 "补跑" = "Catch up";
@@ -829,13 +836,16 @@
 "请选择" = "Choose one";
 "请选择邮箱" = "Choose a mailbox";
 "读" = "Read";
+"读不动" = "Can't read";
 "读与操作哪些应用" = "Which apps can be read or acted on";
-"读界面要用「辅助功能」权限: 到 系统设置 › 隐私与安全性 › 辅助功能 里勾上 MangoX —— 列表里不会有 mangox-compute 这个名字, 它跟着 MangoX 的身份走。没勾就读不到界面, 工具会把原因直接说出来" = "Reading windows needs the Accessibility permission: tick MangoX under System Settings › Privacy & Security › Accessibility. There is no mangox-compute entry to look for — it runs under the identity of MangoX. Without it nothing can be read, and the tool says exactly why.";
+"读任何 App 的界面都靠它。没有它, 读界面会直接报错。" = "Reading any app's interface depends on it. Without it, a read fails outright.";
+"读到一次完整的就会自动恢复 —— 这条不是黑名单, 是实测记录" = "One complete read clears this on its own - it is an observation, not a blocklist";
 "调用" = "Calls";
 "账号不存在" = "Account does not exist";
 "账号已删除" = "Account deleted";
 "账号缺授权码" = "Account has no app password";
 "超出预算：只会做最近 %@ 字，前面的回合会被省略。" = "Over budget: only the latest %@ chars are used, earlier turns are skipped.";
+"超时" = "timed out";
 "超过上限时: 会话发送被拒绝并提示; 定时任务到点会跳过并在日志会话记录原因。" = "When over the limit: sends in sessions are refused with a message, and scheduled tasks skip that run and record the reason in the log session.";
 "超高" = "Extra High";
 "跟随系统" = "Follow system";
@@ -844,7 +854,9 @@
 "轨迹" = "Trace";
 "轮次" = "Turns";
 "轮询间隔" = "Check interval";
+"辅助功能" = "Accessibility";
 "输入" = "In";
+"输入监控" = "Input Monitoring";
 "输出" = "Output";
 "迁移" = "Migrate";
 "过滤文件…" = "Filter files…";
@@ -867,6 +879,7 @@
 "这一段会进每轮 prompt 的索引段, 逐字就是 agent 收到的" = "This section goes into the index of every prompt, word for word as the agent receives it";
 "这一篇还是空的…" = "This note is still empty…";
 "这一轮花了什么" = "What this turn cost";
+"这三把钥匙各管一件事，缺哪个哪件事就不工作。系统只会问你一次，拒绝之后不会再来问。" = "Each of these three keys covers one thing, and whatever it covers stops working without it. macOS asks only once - after a refusal it never asks again.";
 "这个会话还没说过话，侧问会带一个空上下文。" = "This session has no messages yet — the side chat will start empty.";
 "这个对话建立时就钉住了工具表，看不到后来新增的 %@。新建一个会话就能用。" = "This conversation pinned its tool list when it started, so it never sees %@ added later. Start a new conversation to pick them up.";
 "这个目录里没有可读的文档" = "No readable documents in this directory";
@@ -918,6 +931,7 @@
 "重启引擎生效" = "Restart the engine to apply";
 "重启引擎生效 (知识改动将注入)" = "Restart the engine to apply (knowledge changes are injected)";
 "重命名" = "Rename";
+"重新检测" = "Check again";
 "重新生成" = "Regenerate";
 "重新读取" = "Reread";
 "重新载入（丢掉我的改动）" = "Reload (discard my changes)";

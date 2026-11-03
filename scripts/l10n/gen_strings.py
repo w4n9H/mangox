@@ -148,6 +148,16 @@ EXCLUDE_FILES = {
     #         换一个 key ⇒ 流水里堆出十几行同一个标题, 而且**零红灯**。
     #    代价同上面几行: 在此文件里写 `L()` 的 key 永远进不了词表。**UI 文案请写在 View 侧**。
     'mangox/Models/TimelineDoc.swift',             # 时间线落盘字节 + 注入段头 (无 UI 文案)
+    # ⚠️ P19 (2026-11-02): SOP 是**第二条注入通道** —— 段头 `[SOP]`、节头(`可操作`/`只读`)、
+    #    "这次没带上"的点名句全部逐字进 `--append-system-prompt`。本地化它们 = 让用户的
+    #    界面语言改掉注入给模型的字节(`KnowledgeBaseScan.token` 同一条理由), 而且
+    #    段头一旦随语言变, 前缀缓存的稳定性也跟着变。整份文件**没有一句 UI 文案**。
+    'mangox/Models/SopInjection.swift',            # 注入 pi 的 SOP 段字节 (无 UI 文案)
+    # ⚠️ P19 (2026-11-02): 手册正文从 `~/.mangox/note/sop/*.md` 搬进代码后落在这里。
+    #    它**整份**都是注入给模型的文本(`outline "文件夹"` / `cell "收件箱"` 这些是要模型
+    #    照着认界面元素的锚), 一个字都不上屏。进了词表就会被翻译, 而翻译过的锚点在真界面上
+    #    一个都命中不了 —— 那正是这份手册唯一的用处。
+    'mangox/Models/SopManual.swift',               # 注入 pi 的内置应用手册正文 (无 UI 文案)
     'mangox/State/SchedulerService.swift',         # 注入 pi 的指令文本
     'mangox/mangoxApp.swift',                      # 不参与冒烟编译, 无文案
     # 语言名自带 (中文 / English 必须原样), 故整体跳过。**但其 `AppLanguage.label` 里的 `L("跟随系统")`

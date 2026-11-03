@@ -236,6 +236,7 @@ final class ComputerServer {
             guard isInScope(pid: t.pid) else {
                 return .failure("「\(t.name)」不在开放名单里 ⇒ 我不读它。")
             }
+            let readStarted = Date()
             guard var trees = AXAdapter.frontWindowTree(pid: t.pid) else {
                 return .failure("读不到「\(t.name)」的窗口树(它可能没有窗口, 或者 AX 树太薄)。")
             }
@@ -249,7 +250,10 @@ final class ComputerServer {
                 reread += 1
                 // 单连接顺序处理 ⇒ 这个等待只挡住自己这一个请求, 不挡别的。
                 Thread.sleep(forTimeInterval: 0.2 * Double(reread))
-                guard let again = AXAdapter.frontWindowTree(pid: t.pid),
+                // 重读吃的是**这一次读剩下的**时间: 每次重读都给满 12 秒的话, 一次 read 的
+                // 最坏耗时是 (1 + maxRereads) × 12 秒。
+                let left = max(1, AXAdapter.readTimeout - Date().timeIntervalSince(readStarted))
+                guard let again = AXAdapter.frontWindowTree(pid: t.pid, timeout: left),
                       AXSnapshot.contentCoverage(root: again.root)
                         > AXSnapshot.contentCoverage(root: trees.root)
                 else { break }
@@ -259,6 +263,19 @@ final class ComputerServer {
             let snap = AXSnapshot.build(root: tree,
                                         appName: t.bundle,
                                         windowTitle: tree.title)
+            let elapsed = Date().timeIntervalSince(readStarted)
+            // 没读完就**当面说**, 并把这次观测记下来 —— 两条都不能省:
+            //   不说 ⇒ 模型把"前 120 项"当成全部(它没法从快照里看出被截断了);
+            //   不记 ⇒ 设置页每次都得重新试一遍那 12 秒, 而人要的就是"别再试它"。
+            let partialNote = Self.partialReadNote(trees.stop,
+                                                   app: t.name,
+                                                   rows: snap.rows.count,
+                                                   elapsed: elapsed)
+            Self.recordReadHealth(bundle: t.bundle,
+                                  name: t.name,
+                                  stop: trees.stop,
+                                  rows: snap.rows.count,
+                                  elapsed: elapsed)
             // 读数成功才记缓存: 失败的那次什么都没给模型, 也就不该让任何编号"有效"。
             let seq = remember(bundle: t.bundle, pid: t.pid, name: t.name, trees: trees, snapshot: snap)
             // ⚠️ 重读过的必须说出来: 否则模型会以为"这个页面本来就这么空", 于是换个做法去猜,
@@ -271,13 +288,13 @@ final class ComputerServer {
             //    不区分 ⇒ 模型会把微信那 3 个按钮当成"这个窗口的全部内容"(2026-10-28 实测: 微信
             //    主窗口 1052×754 只暴露 6 个节点, 消息列表/聊天正文/输入框一个都没有)。
             if AXSnapshot.lacksReadableControls(root: tree) {
-                return finishRead(text: withSeq(rereadNote
+                return finishRead(text: withSeq(partialNote + rereadNote
                                                 + lackOfControlsNote(app: t.name, nodes: snap.rows.count)
                                                 + "\n\n" + snap.rendered(), seq),
                                   seq: seq, bundle: t.bundle, pid: t.pid,
                                   root: tree, includeImage: includeImage)
             }
-            return finishRead(text: withSeq(rereadNote + snap.rendered(), seq), seq: seq,
+            return finishRead(text: withSeq(partialNote + rereadNote + snap.rendered(), seq), seq: seq,
                               bundle: t.bundle, pid: t.pid, root: tree,
                               includeImage: includeImage)
 
@@ -784,6 +801,60 @@ final class ComputerServer {
     /// ⚠️ **两种可能都要写**("自绘不暴露" / "确实是空的"): 判据分不出它们, 而且分错了
     ///    的代价不对称 —— 说成"空的"会让模型以为读成功了, 然后基于"这个窗口只有三个按钮"
     ///    去推断用户想干什么。那是本轮最坏的一种错。
+    // MARK: - 读不完的两件事: 说清 / 记住 (2026-11-02)
+
+    /// 没读完时的开场白。**必须给下一步**, 否则模型只会原地重读一次 —— 那正是最贵的动作。
+    ///
+    /// 数字必须带上: "只给了前 N 项"是模型唯一能据以改策略的信息 —— 它**看不到截断点**,
+    /// 一棵被截断的树与一棵完整的树在快照上长得一模一样。
+    static func partialReadNote(_ stop: AXAdapter.StopReason,
+                               app: String,
+                               rows: Int,
+                               elapsed: TimeInterval) -> String {
+        switch stop {
+        case .complete:
+            return ""
+        case .timeout:
+            return "⚠️「\(app)」这次没读完: 走到 \(Int(elapsed)) 秒(上限 \(Int(AXAdapter.readTimeout)) 秒)"
+                + "就停了, 快照里那 \(rows) 项只是**前面一部分**, 不是全部。"
+                + "这个窗口的界面很大(几百封邮件、上千行列表都算)。别在这里反复重读 —— 那要再等于同样久;"
+                + " 要么先在已读到的部分里找(你要的也许就在前几项), 要么让这个 App 先切到/滚到你关心的位置再读。\n\n"
+        case .budget:
+            return "⚠️「\(app)」这次只读到 \(AXAdapter.maxNodes) 个节点就到上限了, 快照里那 \(rows) 项"
+                + "只是**前面一部分**, 不是全部。要么在已读到的部分里动手, 要么让这个 App 先缩小范围"
+                + "(切到具体文件夹 / 收起列表)再读。\n\n"
+        }
+    }
+
+    /// 把这次读的结果记一行给 App 侧看 —— `~/.mangox/computer/health/<bundle>.json`。
+    ///
+    /// ⚠️ 为什么走**文件**而不是给协议加字段: 这条观测的消费者是**设置页**(App 进程),
+    ///   它只需要"最近一次读成什么样", 不需要实时。加字段要同时改协议、两侧解析、冒烟夹具;
+    ///   写文件是单向的, 坏了大不了不显示, 不会把"读"这条路本身弄挂。
+    /// ⚠️ **每次读都写(包括成功)**: 成功那条会把之前"读爆了"的标记自动盖掉 ——
+    ///   这就是"名单自己长出来、也自己退回去", 不需要谁记得去删黑名单。
+    static func recordReadHealth(bundle: String,
+                                 name: String,
+                                 stop: AXAdapter.StopReason,
+                                 rows: Int,
+                                 elapsed: TimeInterval) {
+        let dir = NSHomeDirectory() + "/.mangox/computer/health"
+        try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+        let payload: [String: Any] = [
+            "bundle": bundle,
+            "name": name,
+            "at": Date().timeIntervalSince1970,
+            "elapsedMs": Int(elapsed * 1000),
+            "rows": rows,
+            "stop": stop.rawValue,
+        ]
+        guard let data = try? JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys])
+        else { return }
+        // bundle 里的点号当文件名没问题; 只防 `/`(理论上不会有, 但拼路径就得防)。
+        let path = dir + "/" + bundle.replacingOccurrences(of: "/", with: "_") + ".json"
+        try? data.write(to: URL(fileURLWithPath: path), options: .atomic)
+    }
+
     private func lackOfControlsNote(app: String, nodes: Int) -> String {
         "⚠️「\(app)」的这个窗口里读不到可读的控件: 只拿到 \(nodes) 个节点, 没有任何文本/输入/列表。"
         + "两种可能: ① 这个 App 是自绘的、不向系统暴露界面(微信就是这样), 那样的 App 只能截图看;"

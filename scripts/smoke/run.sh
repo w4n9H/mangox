@@ -451,6 +451,46 @@ if has_code mangox-compute/AXAdapter.swift 'budget: remaining'; then
     exit 1
 fi
 
+# ⑧ AX 遍历必须**每个节点都查一次墙钟**（2026-11-02 实测逼出来的）。
+#    背景: 邮件收件箱(799 封)一次 read 走 3000 节点、**200 秒**, 而 helper 是单线程串行
+#    (accept → 处理 → 关闭) ⇒ 那 200 秒里连 accept() 都不转, 别的会话全排队。
+#    没有超时 = 一个 App 能让整条 computer use 失效, 而且**零红灯**: 编译过、纯函数全绿,
+#    只有真机点下去才发现"卡住了"。
+#    ⚠️ 判据是**两处**: 外层 `if depth < maxDepth, …` 与内层 `guard … else { break }`。
+#       只留一处 = 深层递归里仍会连续走完整层兄弟（每层 2~3 个、20 层 DOM 就是几十次 IPC），
+#       超时从"12 秒止损"退化成"12 秒后还得把当前层走完"。⇒ 少于 2 处就红。
+EXPIRED_N="$(awk '!/^[ \t]*\/\//' mangox-compute/AXAdapter.swift | grep -cE '!budget\.expired')"
+if [ "${EXPIRED_N:-0}" -lt 2 ]; then
+    echo "FAIL - AX 遍历的墙钟检查只剩 ${EXPIRED_N:-0} 处 (需要 2: 外层 if + 内层 guard)" >&2
+    echo "       缺一处 ⇒ 超时只在外层生效, 深层循环里仍会一层层走完 ⇒ 又是一次几十秒的卡死" >&2
+    exit 1
+fi
+# ⑨ 一次 read 的墙钟预算必须是**同一个数**从常量流过去的（不许 read 路径自己写个 10/30）。
+#    否则超时逻辑看着在, 实际量的是另一个上限; 而且 `readTimeout` 是回执里那句
+#    "只读完了一部分"的话术来源 —— 两处不等时, 说出来的数和做出来的事对不上。
+if ! has_code mangox-compute/ComputerServer.swift 'AXAdapter\.readTimeout'; then
+    echo "FAIL - read 路径没用 AXAdapter.readTimeout (自己写死了超时?) ⇒ 回执里的秒数与实际止损点会不一致" >&2
+    exit 1
+fi
+# ⑩ 每次 read 都必须**记一笔观测**（2026-11-02 的 A 方案）。
+#    设置页的"读不动 · Ns"完全靠它, 而它是 helper 写的、App 侧只读 —— 中间任何一环断了
+#    (没调 / 路径变了 / 缺 .atomic) 都**没有任何红灯**: 设置页就是一直空着, 看起来像"全都好用"。
+#    ⚠️ 这条同时是"名单自己长出来"的地基: 读成功也写(覆盖坏标记) ⇒ 不写就没有自动恢复。
+if ! has_code mangox-compute/ComputerServer.swift 'recordReadHealth\(bundle:'; then
+    echo "FAIL - read 的出口没有再记读健康观测 ⇒ 设置页永远不会显示'读不动', 也不会自动恢复" >&2
+    exit 1
+fi
+# ⑪ 观的**落盘目录**必须在 helper 与 App 两侧是同一个字面量。
+#    它们是两个 target, 不能共享常量 ⇒ 路径只能各写一份, 而写错的那一侧**零红灯**:
+#    helper 照常写、设置页照常读, 只是一直读到空目录 ⇒ 页面看起来像"全都好用"。
+for f in mangox-compute/ComputerServer.swift mangox/State/ComputerSettings.swift; do
+    if ! has_code "$f" '"\/\.mangox/computer/health"'; then
+        echo "FAIL - $f 里没有 \"/.mangox/computer/health\" 这个落盘路径" >&2
+        echo "       helper 写、App 读, 两个 target 各写一份 ⇒ 改了一边就等于观测静默断链" >&2
+        exit 1
+    fi
+done
+
 # ③p helper 取"谁在跑 / 谁在前台"不许用 `NSWorkspace.shared.runningApplications` /
 #     `.frontmostApplication` —— 2026-10-29 实测(macOS 14.8.1), 这两个在**不抽 run loop** 的
 #     进程里返回的是**首次查询那一刻的快照**。helper 正是"阻塞在 accept() 上一个 loop 都不跑"

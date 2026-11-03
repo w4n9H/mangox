@@ -494,6 +494,18 @@ enum Tune {
     // 知识库 (P3.7, 阈值留人工调整; 2026-09-10 用户拍板上调)
     static let knowledgeItemCharLimit: Int   = 16000   // 单条内容截断
     static let knowledgeTotalCharLimit: Int  = 64000   // 注入块总量预算
+    /// P19: **SOP 段**的预算 —— 与知识块**完全分账**（两条 `--append-system-prompt`）。
+    ///
+    /// 为什么单开一本账: 知识块的 64000 是"我是谁 + 我知道什么"的额度, 把它让给工具手册
+    /// 等于用"人格"的预算去装"操作步骤"; 而且 SOP 的份数跟着 computer use 的名单变,
+    /// 两件事共用一个数时, 谁都不能单独调。
+    ///
+    /// 取值 5000: 手册一律**精简**（`SopManual.swift` 文件头钉了单节 ≤700 字），六个内置应用全带上
+    /// 也只有 ~3500 字 + 段头 ~650 ⇒ 5000 是"全都装得下"的量级, 不是"可以写长"的许可。
+    /// ⚠️ 这个数在 `block` 里只卡**各节**, 段头（通则 / codemode 段 / 日期 / 点名句）不算在内;
+    ///    所以"真注入量 ≤ 5000"不能由这里推出 —— 那一条由冒烟用真手册 + 真段头直接断言。
+    /// 超出的**逐节跳过并点名**（要用时 read）, 不截断单节。
+    static let sopTotalCharLimit: Int        = 5000
     static let distillMaterialCharLimit: Int = 12000   // 记忆提炼: 对话材料总量截断
     static let distillTimeoutSeconds: Double = 60      // 记忆提炼: 一次性 pi 轮超时
     /// P12.1a: 引擎启动后"一句话都没说"的容忍时长。pi spawn 后正常会立刻回

@@ -825,5 +825,145 @@ extension SmokeMain {
         check(sameBoth == "[7] statictext \"设置\"",
               "T-COMPUTER 值与名字相同时不许写两遍 (Safari 整页都是 desc==value ⇒ "
               + "以前渲染成 `\"设置\" (值:\"设置\")`) 实际:\(sameBoth)")
+
+        // MARK: 读健康 —— "读不动"由观测长出来 (2026-11-02)
+        //
+        // 背景: 邮件收件箱(799 封)一次 read 走 3000 节点 / **200 秒**, 而 helper 是单线程串行
+        // (accept → 处理 → 关闭) ⇒ 那 200 秒里连 `accept()` 都不转, 别的会话全排队。
+        // 手写一个 mail 黑名单能挡这一次, 但挡不住下一个"界面很大"的 App, 而且剪枝修好后
+        // 没人记得回来删它。所以名单由**观测**长出来: helper 每次 read 覆盖写一行,
+        // 读成功就把坏标记盖掉。下面这三态就是"设置页该不该置灰"的全部判据。
+
+        let now = Date()
+        let okHealth = ComputerSettings.ReadHealth(stop: "complete", rows: 2524,
+                                                   elapsedMs: 900, at: now)
+        let slowHealth = ComputerSettings.ReadHealth(stop: "timeout", rows: 3000,
+                                                     elapsedMs: 12000, at: now)
+        let staleHealth = ComputerSettings.ReadHealth(stop: "timeout", rows: 3000,
+                                                      elapsedMs: 12000,
+                                                      at: now.addingTimeInterval(-8 * 24 * 3600))
+        check(!okHealth.isPartial && !okHealth.isBlocking,
+              "T-COMPUTER 读过一次完整的 ⇒ 不当成读不动 (观测记的是'最近一次', 不是历史最差; "
+              + "否则邮件这种'某种界面大、大多数界面正常'的 App 会被一次坏读数永久钉死)")
+        check(slowHealth.isPartial && slowHealth.isBlocking,
+              "T-COMPUTER 超时的那次要被标成读不动 (邮件收件箱实测 3000 节点 / 200 秒; "
+              + "不许把它继续摆在'可用列表'里让模型一头撞上去)")
+        check(staleHealth.isPartial && !staleHealth.isBlocking,
+              "T-COMPUTER 观测过期(>7 天)就不再据此劝退 (过期 ≠ 变好了, 只 ≠ 能代表现在 ⇒ "
+              + "过期的坏标记只降级成提示, 不删标记: 删了就等于假装它好了)")
+        check(!slowHealth.isStale && staleHealth.isStale,
+              "T-COMPUTER isStale 只看时间, 不看 stop (两条判据不许合述: 陈旧是 mtime 的事, "
+              + "读不动是 stop 的事)")
+
+        // budget 与 timeout 是两种"没读完", 归因分开说、结论一样 —— 都没拿到全貌。
+        // 若哪天只把 timeout 当读不动, 撞节点上限的 App 就会静默回到可用列表。
+        let cappedHealth = ComputerSettings.ReadHealth(stop: "budget", rows: 3000,
+                                                       elapsedMs: 300, at: now)
+        check(cappedHealth.isBlocking,
+              "T-COMPUTER 撞节点上限也算没读完 (budget 与 timeout 归因不同、结论相同: "
+              + "手里那份都是截断的树, 模型会把它当全部)")
+
+        // 落盘一侧: helper 写的是 JSON 文件, App 侧只认 bundle/stop/at。
+        // 这一段同时钉住**两侧的契约** —— 字段名对不上时这里立刻红, 而不是等设置页永远空着。
+        let healthDir = fixtureDir("readhealth")
+        func writeHealth(_ bundle: String, _ stop: String?, _ at: Date?) {
+            var obj: [String: Any] = ["bundle": bundle, "name": bundle,
+                                      "rows": 12, "elapsedMs": 8000]
+            if let stop { obj["stop"] = stop }
+            if let at { obj["at"] = at.timeIntervalSince1970 }
+            guard let data = try? JSONSerialization.data(withJSONObject: obj, options: [.sortedKeys])
+            else { return }
+            try? data.write(to: URL(fileURLWithPath: healthDir + "/" + bundle + ".json"))
+        }
+        writeHealth("com.apple.mail", "timeout", now)
+        writeHealth("com.apple.iCal", "complete", now)
+        // 半截文件(写到一半断电 / 手改坏了)不许把整张表拖垮 —— 跳过那一份, 其余照读。
+        writeHealth("com.apple.finder", nil, now)
+        try? Data("not json".utf8).write(to: URL(fileURLWithPath: healthDir + "/junk.json"))
+        let loaded = ComputerSettings.loadReadHealth(dir: healthDir)
+        check(loaded.count == 2,
+              "T-COMPUTER 缺字段/坏 JSON 的那几份要跳过, 不能拖垮整张表 (实际读到 \(loaded.count) 条: "
+              + "\(loaded.keys.sorted().joined(separator: ",")))")
+        check(loaded["com.apple.mail"]?.isBlocking == true,
+              "T-COMPUTER helper 写的 timeout 记录能被设置页读成'读不动' "
+              + "(字段名 bundle/stop/at 就是两侧的契约, 对不上时设置页会永远空着而零红灯)")
+        check(loaded["com.apple.iCal"]?.isBlocking == false,
+              "T-COMPUTER 读过完整的记录读回来不算读不动")
+        check(loaded["com.apple.mail"]?.rows == 12 && loaded["com.apple.mail"]?.elapsedMs == 8000,
+              "T-COMPUTER rows / elapsedMs 要能读回来 (设置页要显示'读不动 · Ns', 数字得是真的)")
+        check(ComputerSettings.loadReadHealth(dir: healthDir + "/missing").isEmpty,
+              "T-COMPUTER 健康目录整不存在时返回空表, 不报错 (第一次用还没读过任何 App)")
+
+        // MARK: 三把系统钥匙 (2026-11-02)
+        //
+        // 这一组的由来是一次实测反馈: 三个权限的申请时机相隔很远(输入监控一 spawn 就要、
+        // 辅助功能第一次读才要、录屏第一次截图才要), 而界面上只有一句讲辅助功能。
+        // 判据分两半: ① 接管检测的**三段与门**(它决定"会不会偷偷把权限带出来");
+        // ② 三个深链 token 与文案(它决定"用户能不能自己补回来")。
+
+        // ① 唯一为真的组合 —— 档位是交互档 ∧ 用户显式开了 ∧ 系统已经给了权限。
+        check(ComputerSettings.shouldInstallTakeover(expectsHuman: true,
+                                                     persisted: true,
+                                                     granted: true),
+              "T-COMPUTER 三个条件齐了才装接管检测")
+        // ⚠️ 这一条就是"别再偷偷弹输入监控"本身: 去掉纯函数里的 `&& granted` ⇒ 立刻红。
+        check(!ComputerSettings.shouldInstallTakeover(expectsHuman: true,
+                                                      persisted: true,
+                                                      granted: false),
+              "T-COMPUTER 没有「输入监控」权限时**不许**去装事件监听 "
+              + "(装了就会当场弹系统窗, 而那一下正是用户什么都还没要的时候)")
+        check(!ComputerSettings.shouldInstallTakeover(expectsHuman: true,
+                                                      persisted: false,
+                                                      granted: true),
+              "T-COMPUTER 用户没开这个开关就不装 (默认关 = 不再在 spawn 时索要权限)")
+        check(!ComputerSettings.shouldInstallTakeover(expectsHuman: false,
+                                                      persisted: true,
+                                                      granted: true),
+              "T-COMPUTER 无人值守档(D)不装 (有人在旁边碰一下鼠标就停住, 人以为它在跑)")
+
+        // ② 落盘: 开关是"意图", "1"/"0" 恒写; 缺失与乱值一律按关算, 不猜。
+        let tcs = ComputerSettings()
+        var written: [String: String] = [:]
+        tcs.onPersist = { key, value in written[key] = value }
+        tcs.takeoverEnabled = true
+        check(written[ComputerSettings.takeoverKey] == "1",
+              "T-COMPUTER 接管检测开关打开要落 \"1\" (实际 \(written[ComputerSettings.takeoverKey] ?? "nil"))")
+        tcs.takeoverEnabled = false
+        check(written[ComputerSettings.takeoverKey] == "0",
+              "T-COMPUTER 关掉要留下明确的 \"0\", 不是删键 (否则看不出'是谁关的')")
+        tcs.onPersist = nil
+
+        let rcs = ComputerSettings()
+        rcs.restore(enabledRaw: "1", bundlesRaw: "com.apple.Safari", takeoverRaw: "1")
+        check(rcs.takeoverEnabled, "T-COMPUTER 落盘串反解: \"1\" ⇒ 开")
+        rcs.restore(enabledRaw: "1", bundlesRaw: "com.apple.Safari")
+        check(!rcs.takeoverEnabled,
+              "T-COMPUTER 老库没有这个键 ⇒ 关 (不许写成 `?? true` 把权限偷偷带出来)")
+        rcs.restore(enabledRaw: "1", bundlesRaw: "com.apple.Safari", takeoverRaw: "yes")
+        check(!rcs.takeoverEnabled, "T-COMPUTER 乱值 ⇒ 关 (宁可不给, 不猜着给)")
+
+        // ③ 三个深链: token 是契约串, 拼错不报错、只会静默打开「隐私与安全性」首页。
+        check(ComputerPermission.accessibility.settingsURL
+                == "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility",
+              "T-COMPUTER 辅助功能的深链逐字 (拼错会静默落在首页, 用户以为没有这一项)")
+        check(ComputerPermission.inputMonitoring.settingsURL
+                == "x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent",
+              "T-COMPUTER 输入监控的深链逐字 (是 ListenEvent, 不是 InputMonitoring)")
+        check(ComputerPermission.screenRecording.settingsURL
+                == "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture",
+              "T-COMPUTER 屏幕录制的深链逐字")
+        // 复制粘贴最典型的错不是"拼错", 而是"三行都指向同一页" —— 那样灯灭了点一下就去了别的地方。
+        let tokens = ComputerPermission.allCases.map(\.paneToken)
+        check(Set(tokens).count == tokens.count,
+              "T-COMPUTER 三把钥匙必须去三个不同的页 (实际 \(tokens))")
+
+        // ④ 文案: 每条都得说"缺了会怎样"。空串在本地化回落时不会报错, 只会让那一行变成哑巴。
+        for p in ComputerPermission.allCases {
+            check(!p.title.isEmpty && !p.consequence.isEmpty,
+                  "T-COMPUTER \(p.rawValue) 的标题与后果文案都不许为空")
+        }
+        check(ComputerPermission.allCases.map(\.rawValue)
+                == ["accessibility", "inputMonitoring", "screenRecording"],
+              "T-COMPUTER 三把钥匙的顺序 = 显示顺序 (缺了它先坏哪件事), 不按弹窗出现的先后")
     }
 }

@@ -36,6 +36,13 @@ final class ComputerSettings: ObservableObject {
     /// ⚠️ 又一个独立的键: 与上面同一条纪律(合成一个键 ⇒ 老值静默改义), 而且
     ///    "能读文本"与"能拍像素"是两档不同代价的权限。
     static let imageBundlesKey = "computer_image_bundles"
+    /// 接管检测(批 3b 的"人在键鼠旁时让路")。**默认关** —— 2026-11-02 改。
+    ///
+    /// ⚠️ 它要「输入监控」那把钥匙, 而钥匙只能由系统弹窗索要一次 ⇒ 原来在 `interactive` 档
+    ///    (默认档)无条件下发, 等于"用户什么都还没要, 先弹一个「MangoX 想监听你的键盘输入」"。
+    ///    boss 的原话是三个权限申请时机相隔很远、体验不好 —— 这一下是最刺眼的那一下,
+    ///    因为另两把都发生在"你要了某个具体东西"之后, 只有它发生在 spawn 时。
+    static let takeoverKey = "computer_takeover"   // "1" / 缺失 = 关
 
     // MARK: 状态
 
@@ -53,6 +60,13 @@ final class ComputerSettings: ObservableObject {
     /// ⚠️ 与操作面不同, 它是"更贵的一档": 截图会带上**整个窗口的像素**, 包括文本层已经
     ///    遮掉的那些 ⇒ 用户必须**逐个 App 明确开**, 默认一个都不开(空 = 一张都不拍)。
     @Published private(set) var imageSelected: Set<String> = [] { didSet { persist() } }
+
+    /// 接管检测的**意图**(不等于生效: 还要有「输入监控」权限, 见 `shouldInstallTakeover`)。
+    ///
+    /// ⚠️ 与设置页那盏灯是**两件事**(P11 判据④的同族): 开关说"我打算用", 灯说"系统给没给"。
+    ///    权限没给时开关照样可以开着 —— 用户点完允许要重启才生效, 那时若把开关弹回去,
+    ///    他只会以为"点了没反应"; 而 helper 侧有 `granted` 那道与门 ⇒ 没权限就不装监听、不弹窗。
+    @Published var takeoverEnabled: Bool = false { didSet { persist() } }
 
     /// 候选表注入 —— **只给冒烟用**(真机上恒 nil)。
     ///
@@ -211,6 +225,58 @@ final class ComputerSettings: ObservableObject {
             .sorted()
     }
 
+    // MARK: 读健康 (2026-11-02)
+
+    /// 某个 App **最近一次"读"**的结果。数据源是 helper 写的 `~/.mangox/computer/health/<bundle>.json`。
+    ///
+    /// ⚠️ 为什么这条观测不是"手写黑名单": 2026-11-02 实测邮件收件箱(799 封)一次 read
+    ///    走了 **3000 节点 / 200 秒**, 而 helper 是单线程串行 —— 那 200 秒里整个 computer use
+    ///    挂住。手写一个 `mail` 黑名单能挡住这一次, 但挡不住下一个"界面很大"的 App, 而且
+    ///    **剪枝修好之后没人记得回来删它**。所以名单由**观测**长出来: 每次 read 覆盖写一行,
+    ///    读成功就把之前的坏标记盖掉 ⇒ 它自己会退回去。
+    struct ReadHealth: Equatable {
+        // 三个取值 = helper 侧 `AXAdapter.StopReason` 的 rawValue。两侧各是一个 target,
+        // **不能互相 import** ⇒ 这份契约只有字符串。改名要同时改两侧;
+        // `scripts/smoke/cases/CaseComputerPure.swift` 的「读健康」那一组钉住了解析与三态。
+        let stop: String        // complete / budget / timeout —— 后两个都是"没读完"
+        let rows: Int
+        let elapsedMs: Int
+        let at: Date
+
+        /// 上次没读完。
+        var isPartial: Bool { stop != "complete" }
+        /// 观测过期(7 天) ⇒ 不再据此劝退。**只影响提示, 不阻断能力** ——
+        /// 过期不等于变好了, 只等于"这条观测已经不能代表现在"。
+        var isStale: Bool { Date().timeIntervalSince(at) > 7 * 24 * 3600 }
+        /// 该不该在设置页把它标成"读不动"。
+        var isBlocking: Bool { isPartial && !isStale }
+    }
+
+    nonisolated static var readHealthDir: String {
+        NSHomeDirectory() + "/.mangox/computer/health"
+    }
+
+    /// 全量读一遍健康目录 —— **设置页打开时调一次**, 别每行调(几百个 App 就是几百次文件 IO)。
+    ///
+    /// `dir` 可传 —— 冒烟要在临时目录里造样本, 而真机的路径是固定的。
+    nonisolated static func loadReadHealth(dir: String = readHealthDir) -> [String: ReadHealth] {
+        guard let names = try? FileManager.default.contentsOfDirectory(atPath: dir) else { return [:] }
+        var out: [String: ReadHealth] = [:]
+        for name in names where name.hasSuffix(".json") {
+            let path = dir + "/" + name
+            guard let data = try? Data(contentsOf: URL(fileURLWithPath: path)),
+                  let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let bundle = obj["bundle"] as? String,
+                  let stop = obj["stop"] as? String,
+                  let at = obj["at"] as? Double else { continue }
+            out[bundle] = ReadHealth(stop: stop,
+                                     rows: obj["rows"] as? Int ?? 0,
+                                     elapsedMs: obj["elapsedMs"] as? Int ?? 0,
+                                     at: Date(timeIntervalSince1970: at))
+        }
+        return out
+    }
+
     /// 某个 App 能不能开"操作"—— 口令/系统类是硬禁区, 设置页据此把那一格禁用。
     nonisolated static func canAct(_ bundle: String) -> Bool {
         !ComputerRedline.actBannedBundles.contains(bundle)
@@ -232,6 +298,31 @@ final class ComputerSettings: ObservableObject {
     /// 操作面怕"替人按了付款", 图像面怕"替人把密码拍成图"。
     nonisolated static func canImage(_ bundle: String) -> Bool {
         !ComputerRedline.actBannedBundles.contains(bundle)
+    }
+
+    // MARK: 接管检测 (批 3b, 2026-11-02 改成显式开关)
+
+    /// 这一档 + 这个开关 + 系统有没有给权限 —— 三者都成立才装那条只看不注入的事件监听。
+    ///
+    /// ⚠️ 三个条件缺一不可, 而**缺 `granted` 那一支是有代价的**: 没权限还去 `CGEvent.tapCreate`,
+    ///    系统会当场弹一次"要不要允许 MangoX 监听你的键盘输入"。这道与门的作用就是
+    ///    "不许再偷偷把权限带出来"本身 —— 少写一个 `&&` 就退回老行为, 且**不会有任何红灯**
+    ///    (`CaseComputerPure` 里有一条专门盯它)。
+    ///
+    /// ⚠️ `granted` **必须由调用方在 spawn 那一刻现场查**(`ComputerPermission.isGranted`),
+    ///    不许复用设置页那盏灯: 灯是 `@Published` 快照, helper 是另一条进程, 两者分叉会出现
+    ///    "灯是亮的、helper 没装" —— 那是所有失败里最难查的一种。
+    nonisolated static func shouldInstallTakeover(expectsHuman: Bool,
+                                                  persisted: Bool,
+                                                  granted: Bool) -> Bool {
+        expectsHuman && persisted && granted
+    }
+
+    /// 上面那条的实例版(真机上只走这个)。`granted` 现场读, 理由见纯函数注释。
+    func shouldInstallTakeover(expectsHuman: Bool) -> Bool {
+        Self.shouldInstallTakeover(expectsHuman: expectsHuman,
+                                   persisted: takeoverEnabled,
+                                   granted: ComputerPermission.inputMonitoring.isGranted)
     }
 
     /// 落盘串 → 状态。**乱值一律按"关/空"算**, 不猜。
@@ -274,7 +365,7 @@ final class ComputerSettings: ObservableObject {
     // MARK: 操作
 
     func restore(enabledRaw: String?, bundlesRaw: String?, actRaw: String? = nil,
-                 imageRaw: String? = nil) {
+                 imageRaw: String? = nil, takeoverRaw: String? = nil) {
         let d = Self.decode(enabledRaw: enabledRaw, bundlesRaw: bundlesRaw,
                             actRaw: actRaw, imageRaw: imageRaw)
         enabled = d.enabled
@@ -283,6 +374,10 @@ final class ComputerSettings: ObservableObject {
         actSelected = d.actBundles
         imageSelected = d.imageBundles
         selected = d.bundles
+        // 接管检测**放最后**: 它的 `didSet` 会 persist 一次, 落在最后 ⇒ 那一次写出去的
+        // 是已经全部就位的状态(放前面写的就是半截, 而半截也会被真落库)。
+        // "不写 `?? true`" 是有意的: 老库没有这个键 ⇒ 关, 不是"沿用旧的偷偷开"。
+        takeoverEnabled = takeoverRaw == "1"
     }
 
     /// 把模型给的 `app`(名字或 bundle id)落到 bundle 上 —— **认不出就 nil, 不猜**。
@@ -378,5 +473,8 @@ final class ComputerSettings: ObservableObject {
         onPersist(Self.bundlesKey, e.bundles)
         onPersist(Self.actBundlesKey, e.actBundles)
         onPersist(Self.imageBundlesKey, e.imageBundles)
+        // ⚠️ 恒写 "1"/"0" 而不是"只在开的时候写": 关掉时必须留下一个明确的 "0",
+        //    否则下次启动读不到键 ⇒ 走"缺失 = 关"那条, 结论一样但看不出"是谁关的"。
+        onPersist(Self.takeoverKey, takeoverEnabled ? "1" : "0")
     }
 }

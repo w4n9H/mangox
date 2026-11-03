@@ -35,7 +35,33 @@ enum AXAdapter {
     struct Trees {
         let root: AXNode
         let elements: [String: AXUIElement]
+        /// 这次走完没有。**回执必须据此说话** —— 一棵被截断的树与一棵完整的树在
+        /// `AXSnapshot` 上长得一样, 模型分不出来, 就会把"读到的前 120 项"当成全部。
+        var stop: StopReason = .complete
     }
+
+    /// 遍历为什么停下。
+    enum StopReason: String {
+        /// 树走完了 —— 下面就是全部。
+        case complete
+        /// 撞了节点上限(`maxNodes`)。
+        case budget
+        /// 撞了墙钟上限(`readTimeout`)。
+        case timeout
+    }
+
+    /// **一次 read 的墙钟上限**(秒)。2026-11-02 实测逼出来的数:
+    ///   备忘录 129 节点 268ms · 日历 625 节点 781ms · 音乐 155 节点 243ms —— 正常 App 都在
+    ///   1 秒以内; 而**邮件收件箱(799 封)走了 3000 节点、花了 200 秒**(67ms/节点)。
+    ///   12 秒 = 对正常 App 留 15 倍余量, 对读不动的 App 立刻止损。
+    ///
+    /// ⚠️ 这不是"体验优化", 是**安全项**: helper 是单线程串行(accept → 处理 → 关闭),
+    ///   一次 200 秒的 read 会把整个 computer use 挂住 —— 期间连 `accept()` 都不转,
+    ///   别的会话发来的请求全部排队等着。没有超时 = 一个 App 能让整条能力失效。
+    /// ⚠️ 为什么是**协作式**（每节点查 deadline）而不是把遍历甩到后台线程 + 信号量等:
+    ///   甩出去的那个线程没法中断, 它照样在 IPC 上跑, 只是没人等它 —— 既省不了时间,
+    ///   又多一个会和 `elements` 表抢的元素所有权问题。协作式在这里是唯一干净的做法。
+    static let readTimeout: TimeInterval = 12
 
     /// 遍历深度上限。不是性能考虑, 是**防失控**: 有些 App 的 AX 树会自引用或极深。
     ///
@@ -49,14 +75,17 @@ enum AXAdapter {
     static let maxNodes = 3000
 
     /// 取某个 pid 的**前台窗口**树。取不到返回 nil(调用方负责说人话)。
-    static func frontWindowTree(pid: pid_t) -> Trees? {
+    ///
+    /// `timeout` 可传 —— 重读那一路要给它**剩下的**时间, 否则一次 read 的最坏耗时是
+    /// (1 + maxRereads) × `readTimeout`。
+    static func frontWindowTree(pid: pid_t, timeout: TimeInterval = readTimeout) -> Trees? {
         let app = AXUIElementCreateApplication(pid)
         var focused: CFTypeRef?
         if AXUIElementCopyAttributeValue(app, kAXFocusedWindowAttribute as CFString, &focused) == .success,
            let w = focused {
             // ⚠️ 必须是 `as!` 而不是 `as?`: AXUIElement 是 CF 类型, 条件转换"永远成功",
             //   编译器直接判错。上游 `success` 已经保证这里拿得到元素。
-            return buildTree(w as! AXUIElement)
+            return buildTree(w as! AXUIElement, timeout: timeout)
         }
         // 没有"聚焦窗口"就退到第一个窗口: 有些 App 的 focusedWindow 是 nil, 但它有窗口。
         var windows: CFTypeRef?
@@ -67,7 +96,7 @@ enum AXAdapter {
         //    断开, 而回执一个字都没有(2026-10-30 review)。
         guard let list = raw as? [AXUIElement] else { return nil }
         guard let first = list.first else { return nil }
-        return buildTree(first)
+        return buildTree(first, timeout: timeout)
     }
 
     /// 遍历预算的**唯一**计数点 —— 全局的, 不是每棵子树各一份。
@@ -81,13 +110,36 @@ enum AXAdapter {
     ///    小树上看不出来(实测备忘录 128 / Finder 16) ⇒ 这类缺陷只能靠读代码或压力样本发现。
     private final class Budget {
         var left: Int
-        init(_ n: Int) { left = n }
+        let deadline: Date
+        /// 到过点没有。**粘住** —— 一旦为真就不再回落, 免得后面赶巧跑快了, "停过"这件事
+        /// 在回执里凭空消失。
+        private(set) var timedOut = false
+
+        init(_ n: Int, timeout: TimeInterval) {
+            left = n
+            deadline = Date().addingTimeInterval(timeout)
+        }
+
+        /// 到点了吗(每节点查一次)。
+        var expired: Bool {
+            if timedOut { return true }
+            if Date() > deadline {
+                timedOut = true
+                return true
+            }
+            return false
+        }
     }
 
-    private static func buildTree(_ root: AXUIElement) -> Trees {
+    private static func buildTree(_ root: AXUIElement, timeout: TimeInterval = readTimeout) -> Trees {
         var elements: [String: AXUIElement] = [:]
-        let node = build(root, depth: 0, path: [], budget: Budget(maxNodes), elements: &elements)
-        return Trees(root: node, elements: elements)
+        let budget = Budget(maxNodes, timeout: timeout)
+        let node = build(root, depth: 0, path: [], budget: budget, elements: &elements)
+        // 两个上限先后无所谓, 但**超时优先报**: 撞节点是"这棵树本来就大"(可预期),
+        // 超时是"这个 App 慢到读不了"(要人管), 后者更该被看见。
+        let stop: StopReason = budget.timedOut ? .timeout
+            : (budget.left <= 0 ? .budget : .complete)
+        return Trees(root: node, elements: elements, stop: stop)
     }
 
     // MARK: - 翻译
@@ -119,13 +171,15 @@ enum AXAdapter {
         let frame = rect(el)
 
         var children: [AXNode] = []
-        if depth < maxDepth, budget.left > 0 {
+        if depth < maxDepth, budget.left > 0, !budget.expired {
             var raw: CFTypeRef?
             if AXUIElementCopyAttributeValue(el, kAXChildrenAttribute as CFString, &raw) == .success,
                let value = raw, let list = value as? [AXUIElement] {
                 for (i, child) in list.enumerated() {
                     // 预算**全局递减**: 到 0 就停, 不再往下走(兄弟、以及别人的子树都一样)。
-                    guard budget.left > 0 else { break }
+                    // 墙钟同理 —— 到点就收手, **已经走完的那部分照样留着**(树是完整遍历的前缀,
+                    // 与撞预算同一种形态), 回执再说明它不完整。
+                    guard budget.left > 0, !budget.expired else { break }
                     children.append(build(child,
                                           depth: depth + 1,
                                           path: path + [i],
@@ -247,7 +301,7 @@ enum AXAdapter {
               let el = list.first else { return nil }
         // 路径给 `[0]` 只是占位: 这棵树**不进缓存也不占编号**, 只用来判"要不要保存"。
         var scratch: [String: AXUIElement] = [:]
-        let node = build(el, depth: 0, path: [0], budget: Budget(200), elements: &scratch)
+        let node = build(el, depth: 0, path: [0], budget: Budget(200, timeout: readTimeout), elements: &scratch)
         // ⚠️ 按 node.children 的顺序取元素, 不用 `scratch.values`: 字典无序, 取出来的顺序
         //    一旦和 children 不一样, `buttonIndices` 算出的下标就会按到旁边那个键上。
         let kids: [AXUIElement] = node.children.indices.compactMap {

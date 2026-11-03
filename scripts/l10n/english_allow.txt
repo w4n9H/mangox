@@ -26,3 +26,10 @@ English
 
 # 同上：locale 标识（注入 environment 用），不是给人看的文案。
 zh-Hans
+
+# 系统设置深链的**锚**（`ComputerPermission.paneToken`）：`x-apple.systempreferences:…?Privacy_<这段>`
+# 由 macOS 按**字面**认页，翻成中文不会报错，只会静默落在「隐私与安全性」首页 —— 用户在那儿
+# 找不到这一项，只会以为功能坏了。属于判据①（换语言时它应当保持不变）+ ③（中文化更糟）。
+Accessibility
+ListenEvent
+ScreenCapture

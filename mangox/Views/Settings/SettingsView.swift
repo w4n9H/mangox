@@ -5,6 +5,7 @@
 //  P7-M3: 模型区改版 — 自管模型 (预设库 + 测试连接 + 勾选), 真源 models 表物化给 pi。
 //
 
+import ApplicationServices
 import SwiftUI
 
 struct SettingsView: View {
@@ -44,6 +45,12 @@ struct SettingsView: View {
     @ObservedObject private var computer = ComputerSettings.shared
     /// 应用列表的搜索词（已安装的 App 有几百个，没有搜索翻不动）。
     @State private var computerQuery = ""
+    /// 「这个 App 上次读成什么样」—— helper 写在磁盘上的观测, 打开设置页时读一次。
+    /// ⚠️ 一次读全, 不在行里读: 列表几百行, 每行一次文件 IO 会把设置页拖住。
+    @State private var computerHealth: [String: ComputerSettings.ReadHealth] = [:]
+    /// 三把系统钥匙的**事实**(给没给)。与 `computer.takeoverEnabled` 分得很清:
+    /// 那个是"我打算用", 这个是"系统给没给" —— 两者分叉时界面必须说得出是哪一种。
+    @State private var permissionLamps: [ComputerPermission: Bool] = [:]
 
     enum TestState: Equatable { case idle, testing, done }
 
@@ -753,14 +760,7 @@ struct SettingsView: View {
                     .fixedSize()
             }
             Divider().overlay(CodexTheme.divider)
-            // ⚠️ 2026-10-29 实测更正: 系统**不会**弹窗(helper 用 `AXIsProcessTrustedWithOptions(nil)`
-            //    只查不索要), 所以它也不会作为条目出现在列表里 —— 一直用的是 MangoX 自己的授权
-            //    (helper 是 MangoX 的子进程, TCC 按 responsible process 记账)。
-            //    原文案「勾的是 mangox-compute 这一条」是**错的**, 会让人在列表里白找。
-            Text("读界面要用「辅助功能」权限: 到 系统设置 › 隐私与安全性 › 辅助功能 里勾上 MangoX —— 列表里不会有 mangox-compute 这个名字, 它跟着 MangoX 的身份走。没勾就读不到界面, 工具会把原因直接说出来")
-                .font(.system(size: 11))
-                .foregroundStyle(CodexTheme.textMuted)
-                .fixedSize(horizontal: false, vertical: true)
+            computerPermissionCard
             Divider().overlay(CodexTheme.divider)
             HStack(spacing: 8) {
                 Text("读与操作哪些应用")
@@ -774,7 +774,106 @@ struct SettingsView: View {
             computerStatusLine
         }
         .settingsCard()
-        .onAppear { computer.refresh() }
+        .onAppear {
+            computer.refresh()
+            // 读健康只在页面打开这一刻取一次: 它描述的是"上一次读成什么样", 本来就不会实时变。
+            computerHealth = ComputerSettings.loadReadHealth()
+            refreshPermissionLamps()
+        }
+    }
+
+    // MARK: 三把钥匙 (2026-11-02)
+
+    /// 三把系统钥匙的一处总账。
+    ///
+    /// ⚠️ 以前这里只有一句讲辅助功能的静态文案 —— 输入监控与录屏**一个字都没有**, 而 TCC 的
+    ///    弹窗**只会弹一次**: 拒绝过之后所有调用静默失败, 用户既不知道差哪把、也不知道去哪补。
+    ///    这张卡解决的是"事后补得回来", 不是"把三个弹窗挪到同一秒"(后者会把"授权后要重启"
+    ///    塞进首次体验, 那是用一个新问题换旧问题)。
+    private var computerPermissionCard: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .top, spacing: 12) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("系统权限")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(CodexTheme.textPrimary)
+                    Text("这三把钥匙各管一件事，缺哪个哪件事就不工作。系统只会问你一次，拒绝之后不会再来问。")
+                        .font(.system(size: 11))
+                        .foregroundStyle(CodexTheme.textMuted)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                Button("重新检测") { refreshPermissionLamps() }
+                    .fixedSize()
+            }
+            // 顺序 = `ComputerPermission.allCases`(按"缺了它先坏哪件事"排), 不按弹窗出现的先后。
+            ForEach(ComputerPermission.allCases) { p in
+                Divider().overlay(CodexTheme.divider)
+                permissionRow(p)
+            }
+        }
+    }
+
+    /// 一行 = 灯 + 标题 + 「没给会怎样」+ 出口。
+    ///
+    /// ⚠️ 灯与开关是**两个事实**: 灯说"系统给没给", 开关说"我打算用"。缺权限时开关照样可以开着
+    ///    (用户点完允许要重启才生效, 那时把开关弹回去只会让人以为"点了没反应")。
+    private func permissionRow(_ p: ComputerPermission) -> some View {
+        let granted = permissionLamps[p] ?? false
+        return HStack(alignment: .center, spacing: 10) {
+            Circle()
+                .fill(granted ? CodexTheme.toolDone : CodexTheme.textMuted.opacity(0.45))
+                .frame(width: 7, height: 7)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(p.title)
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(CodexTheme.textPrimary)
+                Text(p.consequence)
+                    .font(.system(size: 11))
+                    .foregroundStyle(CodexTheme.textMuted)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            if p == .inputMonitoring {
+                Toggle("", isOn: takeoverBinding)
+                    .toggleStyle(.switch)
+                    .controlSize(.small)
+                    .labelsHidden()
+                    .fixedSize()
+            }
+            if !granted {
+                // 已给就不画按钮: 一个点了没用的按钮比没有更让人困惑。
+                Button("前往系统设置") { openPermissionSettings(p) }
+                    .fixedSize()
+            }
+        }
+    }
+
+    /// 接管检测的开关 —— **只表达意图**, 不负责判断"给成了没有"(那是灯的事)。
+    ///
+    /// ⚠️ 打开这一拍主动索要一次「输入监控」(`CGRequestListenEventAccess`): 这句会**弹系统窗**,
+    ///    所以它只能挂在用户点开关的时刻, 不能挂在 spawn 上 —— 那正是"用户什么都还没要就先被
+    ///    问要不要监听键盘"的来源。系统只问一次; 已经拒绝过再调用不会重弹(返回 false)⇒ 幂等。
+    /// ⚠️ 授权后要重启 MangoX 才生效 ⇒ 这里**不**因"没立刻变 true"把开关弹回去。真正挡住
+    ///    "没权限还去装监听"的是 spawn 那道三段与门(`ComputerSettings.shouldInstallTakeover`)。
+    private var takeoverBinding: Binding<Bool> {
+        Binding(get: { computer.takeoverEnabled },
+                set: { on in
+                    if on { _ = CGRequestListenEventAccess() }
+                    computer.takeoverEnabled = on
+                    refreshPermissionLamps()
+                })
+    }
+
+    private func refreshPermissionLamps() {
+        permissionLamps = ComputerPermission.snapshot()
+    }
+
+    /// 深链到系统设置里的**那一页**。⚠️ token 拼错不会报错, 只会静默打开首页
+    /// ⇒ 那三个 token 由 `CaseComputerPure` 逐字钉住, 别凭记忆改。
+    private func openPermissionSettings(_ p: ComputerPermission) {
+        guard let url = URL(string: p.settingsURL) else { return }
+        NSWorkspace.shared.open(url)
     }
 
     /// 列表 = **已安装 ∪ 运行中**（合并逻辑在 `ComputerSettings.merge`，纯函数，冒烟守着）。
@@ -830,6 +929,10 @@ struct SettingsView: View {
         let shootable = computer.imageSelected.contains(app.bundle)
         let mayAct = ComputerSettings.canAct(app.bundle)
         let mayShoot = ComputerSettings.canImage(app.bundle)
+        // 上次没读完 ⇒ 这一行要说出来(理由见 `ComputerSettings.ReadHealth`: 这不是黑名单,
+        // 是"上次读它花了 N 秒还没完"的**实测记录**, 读成功一次就自动消失)。
+        let health = computerHealth[app.bundle]
+        let blocked = health?.isBlocking ?? false
         return HStack(spacing: 8) {
             VStack(alignment: .leading, spacing: 1) {
                 HStack(spacing: 6) {
@@ -842,6 +945,12 @@ struct SettingsView: View {
                             .font(.system(size: 9))
                             .foregroundStyle(CodexTheme.toolDone)
                     }
+                    // 文案走词表、数字 verbatim 拼上(`L()` 里不许插值 —— 见本地化那条禁令)。
+                    if blocked, let h = health {
+                        Text(L("读不动") + " · \(max(1, h.elapsedMs / 1000))s")
+                            .font(.system(size: 9))
+                            .foregroundStyle(CodexTheme.toolRunning)
+                    }
                 }
                 Text(verbatim: app.bundle)
                     .font(.system(size: 10))
@@ -853,6 +962,9 @@ struct SettingsView: View {
             Toggle(L("可读"), isOn: Binding(get: { readable },
                                            set: { _ in computer.toggle(app.bundle) }))
                 .toggleStyle(.checkbox)
+                // 上次读爆了 ⇒ **不许再勾上**(勾了也只是再等一次 12 秒);
+                // 但已经勾着的仍可取消 —— 否则人想去掉它都去不掉。
+                .disabled(!readable && blocked)
             // 批 3c 第三档: **图片**。紧挨着「可读」是因为它属于读面的一种(像素表示),
             // 但**默认关**: 截图会带上整个窗口的像素, 包括文本层已经遮掉的那些 ⇒
             // 它必须是逐个 App 明确开, 不许"跟着读面一起开"。
@@ -943,6 +1055,24 @@ struct SettingsView: View {
                     .font(.system(size: 10))
                     .foregroundStyle(CodexTheme.textMuted)
                     .fixedSize(horizontal: false, vertical: true)
+                // 「上次没读完」的那几个: 说清是哪几个、多久、为什么灰。
+                // ⚠️ 只提**真观测到**的(有健康文件且未过期), 不猜任何 App —— 这条一旦靠猜,
+                //    就会变成一张没人维护的黑名单。
+                let blockedRows = computer.options.compactMap { app -> String? in
+                    guard let h = computerHealth[app.bundle], h.isBlocking else { return nil }
+                    let why = h.stop == "timeout" ? L("超时") : L("节点上限")
+                    return "\(app.name) · \(max(1, h.elapsedMs / 1000))s · \(why)"
+                }
+                if !blockedRows.isEmpty {
+                    Text(L("上次没读完(已置灰):") + " " + blockedRows.joined(separator: " / "))
+                        .font(.system(size: 10))
+                        .foregroundStyle(CodexTheme.toolRunning)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Text(L("读到一次完整的就会自动恢复 —— 这条不是黑名单, 是实测记录"))
+                        .font(.system(size: 10))
+                        .foregroundStyle(CodexTheme.textMuted)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
         }
     }
