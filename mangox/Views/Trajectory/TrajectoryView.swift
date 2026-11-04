@@ -534,7 +534,11 @@ struct TrajectoryView: View {
                 if isExpanded {
                     ScrollView(.vertical, showsIndicators: true) {
                         LazyVStack(alignment: .leading, spacing: 2) {
-                            ForEach(Array(s.components(separatedBy: "\n").enumerated()),
+                            // ⚠️ 切行走 `SplitLines.rows`（返回 `Substring`，不逐行复制字符）——
+                            //    原先的 `components(separatedBy: "\n")` 每行分配一个 `String`，
+                            //    而且 CRLF 切完每行尾巴留一个 `\r`（渲染成方框）。
+                            //    门槛/口径与 Chat 面**同一份**，见 `SplitLines`。
+                            ForEach(Array(SplitLines.rows(s).enumerated()),
                                     id: \.offset) { _, line in
                                 traceLine(line, font: font, color: color)
                             }
@@ -543,7 +547,7 @@ struct TrajectoryView: View {
                     .frame(maxHeight: UserMessageFold.expandedMaxHeight)
                 } else {
                     VStack(alignment: .leading, spacing: 2) {
-                        ForEach(Array(UserMessageFold.preview(s).components(separatedBy: "\n").enumerated()),
+                        ForEach(Array(UserMessageFold.previewLines(s).enumerated()),
                                 id: \.offset) { _, line in
                             traceLine(line, font: font, color: color)
                         }
@@ -577,7 +581,7 @@ struct TrajectoryView: View {
         if UserMessageFold.shouldFold(s) {
             ScrollView(.vertical, showsIndicators: true) {
                 LazyVStack(alignment: .leading, spacing: 2) {
-                    ForEach(Array(s.components(separatedBy: "\n").enumerated()),
+                    ForEach(Array(SplitLines.rows(s).enumerated()),
                             id: \.offset) { _, line in
                         traceLine(line, font: font, color: color)
                     }
@@ -590,8 +594,13 @@ struct TrajectoryView: View {
     }
 
     /// 一行。**空行写成一个空格** —— `Text("")` 高度为 0, 空行会被吃掉, 与原文不符。
-    private func traceLine(_ line: String, font: Font, color: Color) -> some View {
-        Text(line.isEmpty ? " " : line)
+    ///
+    /// 收 `some StringProtocol`（`Substring` 也能进）: 逐行分配 `String` 是原先那条路径上
+    /// 最大的一笔开销（轨迹面一次展开就是上万行）。行尾 `\r` 在这里兜底剥掉 ——
+    /// `SplitLines.rows` 认的是 CRLF 整对, 但文末可能留一个孤立的 `\r`（那份文档就是 CRLF）。
+    private func traceLine(_ line: some StringProtocol, font: Font, color: Color) -> some View {
+        let trimmed = SplitLines.trimmed(line)
+        return (trimmed.isEmpty ? Text(" ") : Text(trimmed))
             .font(font)
             .foregroundStyle(color)
             .textSelection(.enabled)

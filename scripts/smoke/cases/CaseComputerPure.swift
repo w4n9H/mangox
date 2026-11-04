@@ -392,6 +392,23 @@ extension SmokeMain {
               && ((try? String(contentsOfFile: cePath, encoding: .utf8)) ?? "") == ceText,
               "T-COMPUTER 再调一次是幂等的 (每轮 spawn 都会保底落一次)")
 
+        // MARK: 语法门 —— 真拿 node 解析一遍**写出去的那份**
+
+        // 为什么这条必须存在: 上面几条只钉"名字对不对得上", **语法错一条都抓不到**。而扩展是
+        // 一个 289 行的 TypeScript 字符串 —— 少一个括号/多一个逗号, 编译期零信号、冒烟全绿,
+        // 症状只是 pi 侧**静默加载失败** ⇒ 模型那个会话看不到 computer 工具。
+        //
+        // ⚠️ 为什么是 node 而不是"自己数括号": 那只是一个更差的解析器。扩展带 `import type`
+        //    与类型标注, node 22 的 `--experimental-strip-types --check` 只做语法解析 + 类型擦除、
+        //    不解析 import, 正好够用, 而且是**别人写好的真解析器**。
+        // ⚠️ 找不到 node 就**红**, 不跳过: 一条会自己消失的门 = 没有门 (这条判据的全部价值
+        //    就在于它真的跑过)。
+        let syntax = runNodeSyntaxCheck(cePath)
+        check(syntax.found,
+              "T-COMPUTER 扩展语法门跑得起来 (需要 node; 找不到就红, 不静默跳过)")
+        check(syntax.ok,
+              "T-COMPUTER 扩展源码语法正确 (node --experimental-strip-types --check; \(syntax.detail))")
+
         // MARK: 开关与作用域 —— 关 ⇒ 空, 无论勾过什么
 
         // ⚠️ 用**独立实例**而不是 `.shared`: 单例改了会污染后面登记的用例
@@ -965,5 +982,38 @@ extension SmokeMain {
         check(ComputerPermission.allCases.map(\.rawValue)
                 == ["accessibility", "inputMonitoring", "screenRecording"],
               "T-COMPUTER 三把钥匙的顺序 = 显示顺序 (缺了它先坏哪件事), 不按弹窗出现的先后")
+    }
+
+    /// 拿 node 真解析一遍扩展源码。
+    ///
+    /// 走 `/usr/bin/env node`（跟用户 shell 同一套 PATH 解析），**不硬编码 node 路径**：
+    /// 那台机器上 node 可能来自 nvm / homebrew / 宿主自带的运行时，写死一个就等于换台机器就静默失效。
+    ///
+    /// 返回值三态分开（`found` / `ok` / `detail`）是刻意的：**"没跑起来"与"跑起来但语法错"
+    /// 必须是两条断言** —— 合成一条的话，node 不在的机器上会显示"语法正确"（假绿）。
+    @MainActor
+    static func runNodeSyntaxCheck(_ file: String) -> (found: Bool, ok: Bool, detail: String) {
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+        p.arguments = ["node", "--experimental-strip-types", "--check", file]
+        let pipe = Pipe()
+        p.standardError = pipe
+        p.standardOutput = pipe
+        do {
+            try p.run()
+        } catch {
+            return (false, false, "起不来: \(error.localizedDescription)")
+        }
+        // 先读完再 wait：输出量很小, 但顺序反了在大输出上会卡死管道。
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        p.waitUntilExit()
+        // `env` 找不到命令时退出码是 127 —— 那是"这台机器没有 node", 不是"源码有语法错"。
+        if p.terminationStatus == 127 { return (false, false, "env 里找不到 node") }
+        let out = (String(data: data, encoding: .utf8) ?? "")
+            .split(separator: "\n")
+            .prefix(2)
+            .joined(separator: " ⏎ ")
+        return (true, p.terminationStatus == 0,
+                "exit \(p.terminationStatus)" + (out.isEmpty ? "" : ": \(out)"))
     }
 }

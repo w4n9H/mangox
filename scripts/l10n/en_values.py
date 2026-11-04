@@ -539,7 +539,6 @@ VALUES = {
 
     # ---- P11.1 注入与记忆 (载荷表 / 五类标签 / key 保留集合) ----
     '(无注入内容)': '(no injected content)',
-    '复制全文': 'Copy full text',
     '整篇拿走 —— markdown 预览里的选中是逐块的, 没有一次选完整篇的选法': 'Take the whole thing — selection in the markdown preview is per block, so there is no way to select it all in one go',
     '用户': 'User',
     '事实': 'Fact',
@@ -839,6 +838,9 @@ VALUES = {
     '还有 %lld 行 · 展开': '%lld more lines · Expand',
     '内容较长 · 展开': 'Long content · Expand',
     '收起': 'Collapse',
+    # 2026-11-04 · 长代码块的展开/收起（C3）。「收起」上面已有，这里只补另一半。
+    '全文': 'Full text',
+    '展开整段代码': 'Expand the whole code block',
 
     # ── 2026-10-19 · 中英文切换不生效的那批串 (硬编码英文 / 档位名 / 页眉) ──
     # 背景: 两道本地化门都只扫**含汉字**的字面量 ⇒ 硬编码英文在中文模式下是漏译、
@@ -879,6 +881,8 @@ VALUES = {
         'Cache hit rate for this call = cached ÷ (input + cached)',
     '计划提问': 'Plan question',
     '确认计划': 'Confirm plan',
+    #  2026-11-04：卡上两个按钮都还没接引擎 ⇒ 禁用 + 明说（禁用的按钮不带原因就是无声死胡同）。
+    '计划确认还没接上引擎 —— 目前只作展示': 'Plan confirmation is not wired up yet — this card is display only for now',
     '推荐': 'Recommended',
     '自定义回答…': 'Custom answer…',
     '第 %lld 轮': 'Turn %lld',
@@ -973,8 +977,10 @@ VALUES = {
     '本会话还没有改动': 'No changes in this session yet',
     'agent 每改一个文件, 这里就会多一行': 'Every file the agent touches adds a row here',
     #  逐行渲染之后跨行拖选没了 ⇒ 整篇复制的出口是这个按钮, 它得在标题栏上说得清。
+    #  ⚠️ 同一个 key 在 `KnowledgeView`（笔记预览）与 `FilePreviewView`（文件预览）两处用 ——
+    #     两边都是"整篇拿走"，所以译文取 "Copy all"。**这个 key 只许有一条**, 字面意思不同就该
+    #     换 key, 不许在同一张表里写两条不同译文（后来那条会静默取胜, 而先看源码的人以为它是另一句）。
     '复制全文': 'Copy all',
-    '已复制': 'Copied',
     '还没有打开文件': 'No file open',
     '在「文件」或「改动」里点一行': 'Pick a row under File or Changes',
 

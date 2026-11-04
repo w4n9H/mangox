@@ -30,6 +30,35 @@ enum MessageImageShare {
         case failed
     }
 
+    // MARK: - 提前拒（省掉白排版）
+
+    /// 字符数**密到极致也装不下**时返回真 —— 连排版都不必做。
+    ///
+    /// 为什么要有这一步：出图前那趟 `NSHostingView` 排版（4 拍 RunLoop + 两趟布局）实测
+    /// 180ms(短回复) ~ 460ms(顶到上限)；而**超长的那些恰恰更久** —— 一个 `Text` 承载整段
+    /// 是平方级的，一屏装不下的正文能把这一步拖到秒级。用户点了「分享」干等几秒换回一句
+    /// "太长"，而这件事一次 O(n) 数数就能当场说清。
+    ///
+    /// ⚠️ 这是**下界**，不是预估：取"比任何真实字形都窄 / 比任何真实行距都矮"的假设算出来
+    ///    仍旧超过 `shareMaxHeight`，那真排版只会更高 ⇒ **不可能误拒**。
+    ///    反过来，低于下界**不说明能出图** —— 判决仍然只属于排版后的真高度。
+    ///    （源码下面那句"按字符数预估会说谎"，说的是拿它当**判决**，不是当下界的反证。）
+    static func certainlyTooLong(_ text: String) -> Bool {
+        lowerBoundHeight(text) > Tune.shareMaxHeight
+    }
+
+    /// 高度下界（pt）。想调门槛就动下面两个常量，但**只能往更松的方向调**（见上）。
+    static func lowerBoundHeight(_ text: String) -> CGFloat {
+        guard !text.isEmpty else { return 0 }
+        let lines = (CGFloat(text.count) / charsPerLineUpperBound).rounded(.up)
+        return lines * minLineAdvance
+    }
+
+    /// 一行最多塞多少字符 —— **上界**。2.8pt/字比 10pt 字号的任何字形都窄。
+    private static var charsPerLineUpperBound: CGFloat { Tune.shareWidth / 2.8 }
+    /// 一行至少占多高 —— **下界**。正文实际行距 ≈ 18pt，取 11 留近一倍余量。
+    private static let minLineAdvance: CGFloat = 11
+
     // MARK: - 渲染
 
     /// 正文 (markdown) → PNG。
@@ -40,6 +69,10 @@ enum MessageImageShare {
     static func png(text: String, basePath: String?, caption: String?, dark: Bool) throws -> Data {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { throw Failure.empty }
+        // 密到极致也装不下 ⇒ 连排版都别做（下界，不会误拒；见 `certainlyTooLong`）。
+        guard !certainlyTooLong(trimmed) else {
+            throw Failure.tooLong(height: lowerBoundHeight(trimmed))
+        }
 
         let card = ShareCardText(text: trimmed, basePath: basePath, caption: caption)
             .frame(width: Tune.shareWidth, alignment: .topLeading)
@@ -104,10 +137,25 @@ enum MessageImageShare {
     static func copyToPasteboard(_ png: Data, to pb: NSPasteboard = .general) throws {
         pb.clearContents()
         pb.declareTypes([.png, .tiff], owner: nil)
-        let tiff = NSImage(data: png)?.tiffRepresentation
-        let ok = pb.setData(png, forType: .png)
-            || (tiff.map { pb.setData($0, forType: .tiff) } ?? false)
-        guard ok else { throw Failure.clipboardFailed }
+        // ⚠️ 两个 setData **都要执行**：写成 `pngOK || tiffOK` 会短路，
+        //    声明了 `.tiff` 却不写数据 ⇒ 只认 TIFF 的老 IM 拿到空图（2026-11-04 评审发现）。
+        let wrote = writeBothFormats(
+            png: png,
+            writePNG: { pb.setData($0, forType: .png) },
+            writeTIFF: { pb.setData($0, forType: .tiff) })
+        guard wrote else { throw Failure.clipboardFailed }
+    }
+
+    /// 两种格式的写入策略：**两个 writer 都必须被调用**，成功条件是至少一个写成。
+    ///
+    /// 单独抽出来是为了能被冒烟判据钉住 —— `NSPasteboard` 会按需把 PNG 合成 TIFF，
+    /// 直接读 `.tiff` 的端到端断言在旧 `||` 写法下**照样绿**（2026-11-04 反例实测）。
+    static func writeBothFormats(png: Data,
+                                 writePNG: (Data) -> Bool,
+                                 writeTIFF: (Data) -> Bool) -> Bool {
+        let pngOK = writePNG(png)
+        let tiffOK = NSImage(data: png)?.tiffRepresentation.map(writeTIFF) ?? false
+        return pngOK || tiffOK
     }
 
     /// 一步到位 —— 按钮直接调它。返回值决定按钮那三态, **失败不许静默**。

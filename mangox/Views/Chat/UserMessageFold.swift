@@ -38,25 +38,43 @@ enum UserMessageFold {
     }
 
     static func lineCount(_ text: String) -> Int {
-        text.isEmpty ? 0 : text.components(separatedBy: "\n").count
+        // **不在这里另写一份数行**：换行判据（LF / CRLF、不认孤立 `\r`）只在
+        // `SplitLines` 里定义一次。两份判据分家的症状是"说还有 14 行、展开后是 13 行"，
+        // 而两边都不报错。
+        SplitLines.count(text)
     }
 
-    /// 折叠态要渲染的那段: 按行取前 `collapsedLineLimit` 行, 并受 `previewCharCap` 约束。
-    static func preview(_ text: String) -> String {
-        var lines: [String] = []
+    /// 折叠态要渲染的那几行。
+    ///
+    /// ⚠️ `maxSplits` 是**承重**的：原来先 `components(separatedBy:)` 把**全文**切开、
+    ///    再 `prefix(collapsedLineLimit)` 取前 6 行 —— 为了显示 6 行先分配 3000 个 `String`。
+    ///    `maxSplits` 在第 6 个换行处就停，尾部剩下的一整段只作为一个**切片**返回，
+    ///    不再扫描、也不再复制。（切片指向原文，调用方渲染完就丢，不留存。）
+    static func previewLines(_ text: String) -> [Substring] {
+        if text.isEmpty { return [] }
+        var out: [Substring] = []
         var used = 0
-        for line in text.components(separatedBy: "\n").prefix(collapsedLineLimit) {
+        let head = text.split(maxSplits: collapsedLineLimit,
+                              omittingEmptySubsequences: false,
+                              whereSeparator: SplitLines.isBreak)
+        for line in head.prefix(collapsedLineLimit) {
             let room = previewCharCap - used
             if room <= 0 { break }
             if line.count <= room {
-                lines.append(line)
+                out.append(line)
                 used += line.count + 1          // +1 = 换行符
             } else {
-                lines.append(String(line.prefix(room)))   // 单行超长: 截在这一行
+                out.append(line.prefix(room))   // 单行超长: 截在这一行
                 break
             }
         }
-        return lines.joined(separator: "\n")
+        return out
+    }
+
+    /// 折叠态要渲染的那段（字符串形态）。视图侧请优先用 `previewLines` —— 它省掉一次拼接
+    /// 再切开的往返。
+    static func preview(_ text: String) -> String {
+        previewLines(text).joined(separator: "\n")
     }
 
     /// 折叠态**没显示**的行数。`0` = 行数没超 (只可能是被字符上限截的, 即单行超长)。

@@ -7,7 +7,7 @@
    **本文件由 scripts/l10n/gen_strings.py --write 生成, 别手改** ——
    译文改 scripts/l10n/en_values.py 的 VALUES, 再跑 --write。
 
-   条数: 949
+   条数: 952
 */
 
 " (值:\"%@\")" = " (value: %@)";
@@ -250,6 +250,7 @@
 "全局串行 (同一时刻只跑一个远程任务)" = "Global serial (only one remote task runs at a time)";
 "全局唤起捕获输入条: 输入后回车即以无人值守模式开跑 (关审批 + Minimal 档); Esc 或点击外部关闭" = "Global hotkey opens the capture bar: type and press Enter to run unattended (approval off, Minimal mode); Esc or clicking outside closes it.";
 "全局开关: 开 = 常规与完整模式的会话都能读你勾过的应用的界面, 不是只对当前会话生效 (极简与 codemode 档看不到这些工具)。再给某个 App 勾上「可操作」它才能按按钮/填输入框 —— 勾上就是允许, 不再逐次问你; 没勾的一律只读。再给某个 App 勾上「图片」, 我在文本读不出内容时才会截这个窗口的图当兜底 (默认关: 图里是像素, 会绕过输入框的遮蔽)。让助手打开一个 App 只需要「可读」(那等于替你点一下图标)" = "Global switch: on means sessions in the standard and full modes can read the apps you ticked, not just the current conversation (the minimal and codemode modes do not see these tools). Ticking \"Act\" for an app is what lets it press buttons and fill fields - a tick is permission, it will not ask again; anything unticked is read-only. Ticking \"Image\" is what lets me fall back to a screenshot of that window when the text read comes back empty (off by default: a screenshot is pixels, and pixels bypass the mask on input fields). Opening an app only needs \"Read\" (it is the same as clicking its icon for you)";
+"全文" = "Full text";
 "全部丢弃" = "Discard all";
 "全部采纳" = "Accept all";
 "六" = "Sat";
@@ -431,6 +432,7 @@
 "尚未配置邮箱。点下方「添加邮箱」开始 —— 建议用一个专用个人邮箱, 不要用企业邮箱。" = "No mailbox configured yet. Start with “Add mailbox” below — a dedicated personal mailbox is recommended, not a work one.";
 "屏幕录制" = "Screen Recording";
 "展开侧栏" = "Expand sidebar";
+"展开整段代码" = "Expand the whole code block";
 "展开这一段过程" = "Show these steps";
 "工作区中查找" = "Find in workspace";
 "工作区改动" = "Working tree";
@@ -814,6 +816,7 @@
 "触发条件 (每轮轻检查)" = "Trigger condition (checked lightly each round)";
 "触发条件与动作为必填" = "Trigger condition and action are required";
 "计划提问" = "Plan question";
+"计划确认还没接上引擎 —— 目前只作展示" = "Plan confirmation is not wired up yet — this card is display only for now";
 "认下这批漏跑, 不再提示" = "Accept these misses and stop asking";
 "认证失败, 检查授权码%@" = "Authentication failed — check the app password%@";
 "记忆" = "Memory";

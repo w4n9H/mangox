@@ -91,6 +91,15 @@ extension SmokeMain {
               "T-BILL 绝对路径剥 root 前缀")
         check(workspaceRelativePath("rel/c.swift", root: root) == "rel/c.swift",
               "T-BILL 相对路径原样返回")
+        // root 只做字符串前缀 ⇒ `/tmp/billproj2` 会被误认成项目内（2026-11-04 评审）。
+        check(workspaceRelativePath(root + "2/z.swift", root: root).isEmpty,
+              "T-BILL 不得把 root 的兄弟目录当项目内 (实测 \(workspaceRelativePath(root + "2/z.swift", root: root)))")
+        check(workspaceRelativePath(root, root: root).isEmpty,
+              "T-BILL 路径正好等于 root 时不算项目内文件")
+        check(workspaceRelativePath(root + "/sub/../a.swift", root: root) == "a.swift",
+              "T-BILL 先标准化 .. 再判断归属 (实测 \(workspaceRelativePath(root + "/sub/../a.swift", root: root)))")
+        check(workspaceRelativePath(root + "/a/b.swift", root: root + "/") == "a/b.swift",
+              "T-BILL root 末尾带斜杠也能正确剥前缀")
 
         // ⑥ 空账不画行 —— 但"只有耗时"是一条真账 (最后一轮只有一句话也有时长)。
         let nothing = TurnBillBuilder.bill(group: [textMsg("嗯", role: .user)], elapsed: nil, root: root)

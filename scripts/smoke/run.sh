@@ -138,6 +138,12 @@ has_code() {
     awk '!/^[ \t]*\/\//' "$1" | grep -cE -- "$2" >/dev/null
 }
 
+# 计数版（有些判据要的不是"有没有"而是"几处都接上了"，例如同一个组件在两条分支里各出现一次）。
+# ⚠️ 与 `has_code` 同一条纪律：**只用 `-c`，不用 `-q`** —— 见上面那段 CI 翻车的来龙去脉。
+count_code() {
+    awk '!/^[ \t]*\/\//' "$1" | grep -cE -- "$2" || true
+}
+
 # ③d 「滚到底」的锚点必须是**恒实例化**的末尾哨兵 (2026-10-23 boss 报「打开后默认会话不在最底、
 #     ｜也没有《跳转最新》按钮，切一次会话才正常」)。
 #     锚在 `LazyVStack` 的行 id 上时，那个行在初屏**还没实例化** ⇒ `scrollTo` 只能按**估算**的
@@ -167,9 +173,9 @@ if ! has_code mangox/Views/Chat/ChatView.swift 'projectedChat\.blocks\.last\.map
     echo "       只锚末尾哨兵会在切换后落进估算出来的空尾 = 白屏 (实测 y=50719 纯白)" >&2
     exit 1
 fi
-if ! grep -A9 -E 'for \(i, delay\) in Self\.followBeats\.enumerated\(\)' mangox/Views/Chat/ChatView.swift \
-        | grep -cE 'if i == 0' >/dev/null; then
-    echo "FAIL - 「滚到底」的节拍没有分两段 (followBeats 循环里第一拍 i == 0 必须锚 materializeTarget)" >&2
+if ! grep -A20 -E 'for \(i, delay\) in Self\.followBeats\.enumerated\(\)' mangox/Views/Chat/ChatView.swift \
+        | grep -cE 'let candidate = i == 0 \? materializeCandidate : nil' >/dev/null; then
+    echo "FAIL - 「滚到底」的节拍没有分两段 (followBeats 循环里第一拍必须取 materializeCandidate)" >&2
     echo "       顺序反了 = 每一拍都按虚高文档落点 = 白屏; 只改注释不算, 这门看的是真源码" >&2
     exit 1
 fi
@@ -190,13 +196,24 @@ if ! has_code mangox/Views/Chat/ChatView.swift '\.id\(Self\.streamingAnchor\)'; 
     echo "FAIL - 流式指示器上没有 .id(Self.streamingAnchor) (锚一个不存在的 id = 静默不滚 = 白屏)" >&2
     exit 1
 fi
-# ③g 静止态那一拍必须先锚尾块，而且判据是**尾块身份**（`materialize != materializedTail`），
-#     不是"要不要量"的布尔开关 —— 开关在回车那一刻早就 false 了，尾块却换了（多一条用户消息）
-#     ⇒ 只锚哨兵 ⇒ 落进估算出来的空尾。0.1.30 实测：改成身份判据前，回车必白。
+# ③g 静止态那一拍必须先锚尾块，而且判据是**尾块身份**（`ChatTailLedger.candidate` 比
+#     `lastMaterialized`），不是"要不要量"的布尔开关 —— 开关在回车那一刻早就 false 了，
+#     尾块却换了（多一条用户消息）⇒ 只锚哨兵 ⇒ 落进估算出来的空尾。0.1.30 实测：改判据前回车必白。
 #     反过来的写法（无判据、每拍都先锚尾行）会让流式期每个 token 都 28pt 来回弹 = **刷屏**。
-if ! echo "$FOLLOW_LOOP" | grep -cE 'materialize != materializedTail' >/dev/null; then
-    echo "FAIL - 静止态第一拍缺尾块身份判据 (应为 `materialize != materializedTail`)" >&2
+#     ⚠️ 2026-11-04 补：账必须**滚动之后**才记，否则被 veto 的那一拍也会记"量过" ⇒ 点「回到最新」
+#        跳过实体化 ⇒ 同一片白屏从另一条路回来。
+if ! has_code mangox/Views/Chat/ChatView.swift 'target != lastMaterialized'; then
+    echo "FAIL - 静止态第一拍缺尾块身份判据 (ChatTailLedger.candidate 必须比 lastMaterialized)" >&2
     echo "       少了它 = 每拍都先锚尾行再锚哨兵, 28pt 来回弹 = 刷屏 (0.1.30 实测)" >&2
+    exit 1
+fi
+# 记账必须排在滚动**之后**（2026-11-04 评审）：veto 拒绝时提前记账 ⇒ 之后「回到最新」
+# 跳过尾块实体化 ⇒ 重新落进估算高度 = 白屏。两条行号缺一不可。
+SCROLL_LINE="$(awk '/proxy\.scrollTo\(materialize \?\? target/ { print NR; exit }' mangox/Views/Chat/ChatView.swift)"
+CONFIRM_LINE="$(awk '/tailLedger\.confirm\(materialize\)/ { print NR; exit }' mangox/Views/Chat/ChatView.swift)"
+if [ -z "$SCROLL_LINE" ] || [ -z "$CONFIRM_LINE" ] || [ "$CONFIRM_LINE" -le "$SCROLL_LINE" ]; then
+    echo "FAIL - 尾块记账没有排在滚动执行之后 (scroll@${SCROLL_LINE:-?} confirm@${CONFIRM_LINE:-?})" >&2
+    echo "       提前记账 = veto 拒绝也记 '量过' ⇒ 「回到最新」跳过实体化 = 白屏" >&2
     exit 1
 fi
 
@@ -560,6 +577,240 @@ if has_code mangox/Views/Chat/ChatView.swift '@State private var lastBottomY: CG
 fi
 if has_code mangox/Views/Chat/ChatView.swift '^[[:space:]]*lastBottomY = '; then
     echo "FAIL - 有地方直接给 lastBottomY 赋值了 (盒子应该写 lastBottomY.value)" >&2
+    exit 1
+fi
+
+# ③n2 输入框高度必须用**参数里的** scrollView，不许缓存成 coordinator 的属性 (2026-11-04 评审)。
+#    旧版 `attachedScrollView` 全仓从未赋值 ⇒ `updateNSView` 的 guard 恒早退：
+#    从外部改 draft（@ 插入 / 附加文件）后高度停在旧值，键盘输入那条路却能走 ⇒ 日常看不出来。
+#    ⚠️ 编译得过、断言也全绿（键盘路径另有一条），只能扫源码事实。
+if has_code mangox/Views/Chat/ChatComposer.swift 'attachedScrollView'; then
+    echo "FAIL - 输入框又把 scrollView 缓存进 coordinator 了 (死字段一出现, 外部改 draft 高度就静默失效)" >&2
+    exit 1
+fi
+if ! has_code mangox/Views/Chat/ChatComposer.swift 'coordinator\?\.reportHeight\(scrollView: scrollView\)'; then
+    echo "FAIL - updateNSView 没有用参数里的 scrollView 调 reportHeight" >&2
+    exit 1
+fi
+
+# ③n3 分享图片必须两个 writer 都调用 (2026-11-04 评审)。
+#    写成 `setData(png) || setData(tiff)` 会短路：声明了 .tiff 却没有写。
+#    ⚠️ 端到端读 `.tiff` 抓不到 —— NSPasteboard 会按需用 PNG 合成 TIFF，断言照样绿。
+if [ "$(awk '!/^[ \t]*\/\// && /writeBothFormats\(/ { n++ } END { print n+0 }' \
+        mangox/Views/Chat/MessageImageShare.swift)" -lt 2 ]; then
+    echo "FAIL - MessageImageShare 不再走 writeBothFormats (或只有定义没有调用点)" >&2
+    echo "       两个 writer 必须都执行; 端到端 TIFF 断言会被 NSPasteboard 的自动转换骗绿" >&2
+    exit 1
+fi
+
+# ③n4 流式跟随必须比**轻量 revision**，不许比 `[ChatMessage]` (2026-11-04，B 批)。
+#    `ChatMessage` 的合成 == 会深比正文 / 工具输出 / 思考；每个 chunk 一次 = 长会话平方级。
+#    ⚠️ 换回数组比较照样编译、照样能滚，只是慢 —— 只能扫源码事实。
+if has_code mangox/Views/Chat/ChatView.swift 'onChange\(of: store\.messages\)'; then
+    echo "FAIL - 流式跟随又在比 [ChatMessage] 了 (每 chunk 深比全部历史)" >&2
+    echo "       触发值必须是 store.messagesRevision，尾 id 判断也只留一个 UUID" >&2
+    exit 1
+fi
+if ! has_code mangox/Views/Chat/ChatView.swift 'onChange\(of: store\.messagesRevision\)'; then
+    echo "FAIL - 流式跟随没有接 messagesRevision" >&2
+    exit 1
+fi
+if ! has_code mangox/State/ChatStore.swift 'messagesRevision &\+='; then
+    echo "FAIL - messages.didSet 不再推进 messagesRevision (所有写路径都会失去跟随)" >&2
+    exit 1
+fi
+
+# ③n5 工具输出 / 思考卡 = **一个 `Text` 承载整段** (2026-11-04 评审 C1)。
+#    `ToolOutputBox` 只是一个 180pt 的滚动区, 但它的内容原先**一次性全部实例化** ——
+#    bash 输出五千行 = 先建五千个视图再截断。而 `Text(整段)` 本身是**平方级**的:
+#    `render_probe.py` 实测 139 行 199ms / 561 行 4.2s / 3341 行 **36s**。
+#    ⚠️ 工具输出**上游没有任何截断**(bash / read 整文件都照单全收) ⇒ 这是常态, 不是极端场景。
+#    ⚠️ 编译得过、数值不变、断言也不会红 ⇒ 只能扫源码事实。
+if ! has_code mangox/Views/Chat/ToolCallCardView.swift 'LazyVStack\(alignment: \.leading, spacing: 4\)'; then
+    echo "FAIL - 工具输出区不是惰性的 (ToolOutputBox 内容必须是 LazyVStack, spacing 4)" >&2
+    echo "       一次性实例化 ⇒ 五千行输出会先建五千个视图再截断" >&2
+    exit 1
+fi
+if has_code mangox/Views/Chat/ToolCallCardView.swift 'Text\(d\.value\)'; then
+    echo "FAIL - 工具输出又是整段一个 Text 了 (平方级: 3341 行实测 36 秒)" >&2
+    exit 1
+fi
+if [ "$(count_code mangox/Views/Chat/ToolCallCardView.swift 'SplitLineText\(text: d\.value')" -lt 2 ]; then
+    echo "FAIL - 工具输出的值没走 SplitLineText (键值对与纯正文两条路都要接)" >&2
+    exit 1
+fi
+if has_code mangox/Views/Chat/ThinkingCardView.swift 'Text\(text\)'; then
+    echo "FAIL - 思考卡正文又是整段一个 Text 了 (高强度思考时几万字, 平方级)" >&2
+    exit 1
+fi
+if ! has_code mangox/Views/Chat/ThinkingCardView.swift 'SplitLineText\(text: text'; then
+    echo "FAIL - 思考卡正文没接 SplitLineText" >&2
+    exit 1
+fi
+
+# ③n6 长代码块必须**限高内滚 + 可展开全文** (2026-11-04 boss 拍板 320pt)。
+#    ⚠️ 限高门槛与"逐行渲染"门槛**必须是同一个数**: 分家就会出现
+#    "按行渲染了但还能无限长"或"限高了却整块一个 Text"这两种错配档。
+if ! has_code mangox/Theme/CodexTheme.swift 'static let codeBlockMaxHeight'; then
+    echo "FAIL - 长代码块限高常量不见了 (2026-11-04 boss 拍板 320pt; 数值由 T-SPLIT 断言)" >&2
+    exit 1
+fi
+if ! has_code mangox/Views/Chat/Markdown/CodeBlockView.swift 'frame\(maxHeight: Tune\.codeBlockMaxHeight\)'; then
+    echo "FAIL - 长代码块没有限高内滚 (800 行代码会把整屏铺满)" >&2
+    exit 1
+fi
+if ! has_code mangox/Views/Chat/Markdown/CodeBlockView.swift 'lineCount > Tune\.codeBlockSplitLines'; then
+    echo "FAIL - 限高门槛与逐行渲染门槛分家了 (必须都取 Tune.codeBlockSplitLines)" >&2
+    exit 1
+fi
+if ! has_code mangox/Views/Chat/Markdown/CodeBlockView.swift 'expandedFull'; then
+    echo "FAIL - 长代码块没有「展开全文」出口 (限高就成了截断)" >&2
+    exit 1
+fi
+
+# ③n7 长文本切行**只许走 `SplitLines`** (2026-11-04 评审 C2/C4/C5)。
+#    四处各写一份 `split(...)`/`components(...)` 的症状不是错, 是**慢性分家**:
+#    空行保不保、`\r` 剥不剥、门槛怎么算, 各自改各自的 —— 而界面上只会"少几行字"。
+if has_code mangox/Views/Chat/ChatView.swift 'components\(separatedBy: "\\n"\)' \
+   || has_code mangox/Views/Chat/ToolCallCardView.swift 'components\(separatedBy: "\\n"\)' \
+   || has_code mangox/Views/Chat/ThinkingCardView.swift 'components\(separatedBy: "\\n"\)' \
+   || has_code mangox/Views/Chat/UserMessageFold.swift 'components\(separatedBy: "\\n"\)' \
+   || has_code mangox/Views/Trajectory/TrajectoryView.swift 'components\(separatedBy: "\\n"\)'; then
+    echo "FAIL - 又有渲染路径用 components(separatedBy: \"\\n\") 切行了 (逐行分配 String)" >&2
+    echo "       长文本切行统一走 SplitLines.rows (返回 [Substring], 不复制字符)" >&2
+    echo "       ⚠️ 只扫渲染面: MarkdownParser 的切分是**解析**(要 [String], 且带缓存), 不算。" >&2
+    exit 1
+fi
+if ! has_code mangox/Views/Chat/UserMessageFold.swift 'maxSplits: collapsedLineLimit'; then
+    echo "FAIL - 折叠预览又把全文切开了 (为了显示 6 行先分配 3000 个 String)" >&2
+    exit 1
+fi
+if ! has_code mangox/Views/Chat/ToolCallCardView.swift 'LazyVStack\(alignment: \.leading, spacing: 0\)'; then
+    echo "FAIL - diff 预览不是惰性的 (整文件重写上万行会全部实例化)" >&2
+    exit 1
+fi
+if ! has_code mangox/Views/Chat/ChatView.swift 'SplitLines\.rows\(s\)'; then
+    echo "FAIL - 用户消息展开态没走 SplitLines.rows (逐行复制字符)" >&2
+    exit 1
+fi
+
+# ③n8 三处「缓存」必须是**真 LRU**, 图片必须分**两条通路** (2026-11-04, D 批)。
+#     FIFO 冒充 LRU 的症状是**静默**的: 有上限、有逐出、`count` 永远 ≤ 容量, 而"每拍都在用"
+#     的那一条照样按**插入顺序**被挤掉 ⇒ 反复逐出、反复重算, 缓存等于没起作用。
+#     三处各写一份同款循环 (`MarkdownParser` / `CodeHighlighter` ×2) ⇒ 收进 `LRUCache`,
+#     并且**不许再长出第二份** —— 判据只认"命中要提键", 那正是 FIFO 与 LRU 的唯一差别。
+if [ "$(count_code mangox/Views/Chat/Markdown/LRUCache.swift 'order\.append\(key\)')" -lt 1 ]; then
+    echo "FAIL - LRUCache 里没有「命中提键」(order.append) —— 那它还是 FIFO" >&2
+    echo "       命中不提键 ⇒ 每拍在用的那条按插入顺序被逐出 ⇒ 历史块反复重解析, 而一切看起来正常" >&2
+    exit 1
+fi
+for f in mangox/Views/Chat/Markdown/MarkdownParser.swift \
+         mangox/Views/Chat/Markdown/CodeHighlighter.swift; do
+    if [ "$(count_code "$f" 'order\.append\(')" -ne 0 ]; then
+        echo "FAIL - $f 又手写了一份「append + 满了摘队首」的缓存 (那必然是 FIFO)" >&2
+        echo "       统一走 LRUCache (命中提键 + 内部加锁); 语义由 T-CACHE 钉住" >&2
+        exit 1
+    fi
+    if [ "$(count_code "$f" 'cacheLimit')" -ne 0 ]; then
+        echo "FAIL - $f 又有自己的 cacheLimit (容量只许住在 LRUCache)" >&2
+        exit 1
+    fi
+    if [ "$(count_code "$f" '\.value\(for:')" -lt 1 ]; then
+        echo "FAIL - $f 的缓存不再被查 (只写不读 = 每次照样重算)" >&2
+        exit 1
+    fi
+done
+if [ "$(count_code mangox/Views/Chat/Markdown/CodeHighlighter.swift 'LRUCache<')" -lt 2 ]; then
+    echo "FAIL - 高亮的两份缓存 (整块 / 逐行) 没有各自独立 — 混一个字典要擦类型, 也会互相顶掉" >&2
+    exit 1
+fi
+# 图片: 缩略尺寸展示**必须**走降采样那条; 原图那条留给"要原图像素"的地方 (正文图/大图 sheet)。
+# ⚠️ 反过来同样要守: 只留 `cachedThumbnail` 而无 `cachedImage` ⇒ 说明行 `宽×高` 会开始说谎。
+if [ "$(count_code mangox/Views/Chat/ChatView.swift 'cachedThumbnail\(atPath')" -lt 1 ] \
+   || [ "$(count_code mangox/Views/Chat/ToolOutputImages.swift 'cachedThumbnail\(atPath')" -lt 1 ]; then
+    echo "FAIL - 缩略槽位又直接拿原图了 (88pt 的坑位塞全尺寸位图, 每次重绘都重采样)" >&2
+    echo "       缩略一律走 ImagePipeline.cachedThumbnail(atPath:maxPixels:)" >&2
+    exit 1
+fi
+if [ "$(count_code mangox/Views/Chat/Markdown/MarkdownImageView.swift 'cachedImage\(atPath')" -lt 1 ]; then
+    echo "FAIL - 正文图不再取原图 (naturalCap 按原图像素定宽, 说明行读的也是 pixelsWide)" >&2
+    exit 1
+fi
+# 分享出图: 提前拒必须在**排版之前**。顺序反了就等于没做 (排版已经跑完才判"太长")。
+early=$(awk '/certainlyTooLong\(trimmed\)/ { print NR; exit }' mangox/Views/Chat/MessageImageShare.swift)
+host=$(awk '/NSHostingView\(rootView/ { print NR; exit }' mangox/Views/Chat/MessageImageShare.swift)
+if [ -z "$early" ] || [ -z "$host" ] || [ "$early" -ge "$host" ]; then
+    echo "FAIL - 分享出图的「提前拒」不在排版之前 (early=$early host=$host)" >&2
+    echo "       超长正文在排版那一步是**秒级**的, 排完再说太长 = 用户干等" >&2
+    echo "       ⚠️ 判据是下界 (certainlyTooLong), 不是预估 —— 预估会误拒" >&2
+    exit 1
+fi
+# 工具栏提示语: **不许拿已翻译的标题去比中文**。英文环境下 `actionTitle` 是 `Review`,
+# 比 `== "去审核"` 永远为假 ⇒ 提示静默变空 (2026-11-04 评审发现)。
+if has_code mangox/Views/Chat/ChatBottomBar.swift 'actionTitle =='; then
+    echo "FAIL - ChatBottomBar 又在拿已翻译的标题比中文字面量了 (英文环境下提示静默消失)" >&2
+    echo "       提示语要跟着**动作**传 (actionHelp:), 不能从标题反推" >&2
+    exit 1
+fi
+if ! has_code mangox/Views/Chat/ChatBottomBar.swift '\.help\(actionHelp'; then
+    echo "FAIL - 通知横幅的按钮又没有提示语了" >&2
+    exit 1
+fi
+# 时间格式器: 每次 body 重算 `DateFormatter()` 是毫秒级的 (**建实例**贵, 改 dateFormat 不贵)。
+# ⚠️ 这里只守接线 —— 开销本身量不出来 (冒烟里没有"每秒重算 60 次"的场景)。
+if ! has_code mangox/Views/Chat/ChatView.swift 'static let hmFormatter'; then
+    echo "FAIL - 侧问横幅的时间格式器又变成每次现建 (DateFormatter() 要读 locale/日历/时区)" >&2
+    exit 1
+fi
+
+# ③n9 换行判据**只许有一份** (2026-11-04 残留补齐)。
+#     `"\r\n"` 在 Swift 里是**一个 `Character`** ⇒ `== "\n"` 认不出 CRLF。代码块那条路曾经
+#     自己写了一份 `$1 == "\n"`: CRLF 代码块被当成 **1 行** ⇒ 既不逐行也不限高
+#     (一个 `Text` 承载整段, 平方级), 而正文明明画了 n 行 —— 零信号。
+#     C 批修了四个渲染面, 漏了代码块与轨迹面这两处; 这条门就是那道缝。
+if [ "$(count_code mangox/Views/Chat/Markdown/CodeHighlighter.swift '== "\\n"')" -ne 0 ]; then
+    echo "FAIL - CodeHighlighter 又自己比对 \"\\n\" 了 (CRLF 是一个 Character, 认不出)" >&2
+    echo "       换行只认 SplitLines.isBreak（LF / CRLF, 不认孤立 \\r）" >&2
+    exit 1
+fi
+if ! has_code mangox/Views/Chat/Markdown/CodeBlockView.swift 'SplitLines\.count'; then
+    echo "FAIL - 代码块的行数又自己数了 (CRLF 代码块会被当成 1 行 ⇒ 不限高也不逐行)" >&2
+    echo "       行数取 SplitLines.count, 与 CodeHighlighter.splitLines 同源" >&2
+    exit 1
+fi
+if ! has_code mangox/Views/Trajectory/TrajectoryView.swift 'SplitLines\.rows'; then
+    echo "FAIL - 轨迹面又用 components(separatedBy:) 切行 (逐行分配 String + 行尾留 \\r)" >&2
+    exit 1
+fi
+
+# ③n10 计划卡的两个按钮**还没接引擎** —— 禁用 + 明说 (2026-11-04 boss 拍板)。
+#     ⚠️ 这是**过渡态**的门: 哪天真接上了它会红, 那时把这条门连同「未接入」文案一起删掉。
+#        留一条永远绿的门, 下一个人就会以为它还在守着什么。
+if has_code mangox/Views/Chat/PlanQuestionCardView.swift 'Button\("确认计划"\) \{\}'; then
+    if [ "$(count_code mangox/Views/Chat/PlanQuestionCardView.swift '\.disabled\(true\)')" -lt 2 ]; then
+        echo "FAIL - 计划卡有按钮是空动作却**没禁用** (点了没反应的按钮 = 无声死胡同)" >&2
+        exit 1
+    fi
+    if ! has_code mangox/Views/Chat/PlanQuestionCardView.swift '还没接上引擎'; then
+        echo "FAIL - 按钮禁用了却没说原因 (禁用态必须自带「还差什么」)" >&2
+        exit 1
+    fi
+else
+    echo "FAIL - 计划卡已经接上动作 —— 请删掉 ③n10 这条过渡门和「未接入」文案" >&2
+    exit 1
+fi
+
+# ③n11 自禁的那个 bundle 必须与 App 自己的 `PRODUCT_BUNDLE_IDENTIFIER` 同源。
+#     ⚠️ 硬编码一个字符串挡的是"操作自己"; 改 App 标识之后它**静默失效** ——
+#        名单里那条从此指向一个不存在的 App, 而设置页照样能勾。
+APP_BUNDLE_ID="$(awk -F'= ' '/PRODUCT_BUNDLE_IDENTIFIER = / { gsub(/[ ;]/,"",$2); print $2; exit }' mangox.xcodeproj/project.pbxproj)"
+if [ -z "$APP_BUNDLE_ID" ]; then
+    echo "FAIL - 读不到 PRODUCT_BUNDLE_IDENTIFIER (③n11 无法判定)" >&2
+    exit 1
+fi
+if ! has_code mangox/Models/ComputerRedline.swift "\"$APP_BUNDLE_ID\""; then
+    echo "FAIL - ComputerRedline.actBannedBundles 里没有 \"$APP_BUNDLE_ID\" (MangoX 自己能点掉自己的确认卡)" >&2
+    echo "       操作自己 = 自我提权: 确认卡、作用域、审批档全在它自己手里" >&2
     exit 1
 fi
 

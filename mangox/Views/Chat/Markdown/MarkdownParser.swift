@@ -31,32 +31,34 @@ enum MarkdownBlock: Equatable {
 
 enum MarkdownParser {
 
-    // MARK: - P9-#7 解析缓存 (LRU)
+    // MARK: - P9-#7 解析缓存 (真 LRU)
     // 流式期 messages 数组每 chunk 变更 → 全部 MarkdownView 重渲染;
     // 历史消息文本不变 → 命中缓存, 每 chunk 只重解析流式中那一条 (其余全量重解析是 O(n²) 根因)。
-
-    private static let cacheLock = NSLock()
-    private static var cache: [String: [MarkdownBlock]] = [:]
-    private static var order: [String] = []
-    private static let cacheLimit = 64
+    //
+    // ⚠️ 必须是**真 LRU** —— 原先手写的"`cache[k]=v; order.append(k); 满了摘队首`"是 FIFO:
+    //    历史块每拍命中但顺序不动 ⇒ 照样按插入顺序被流式那条挤出去 ⇒ 反复重解析。
+    //    见 `LRUCache` 的类型注释。
+    // ⚠️ 解析在**锁外**跑: 原实现 `lock()` 之后才 `parse`, 一条流式长消息解析全程攥着
+    //    全局锁, 期间所有 MarkdownView 连"命中缓存"都要排队。
+    private static let cache = LRUCache<[MarkdownBlock]>(capacity: 64)
 
     static func parseCached(_ raw: String) -> [MarkdownBlock] {
         if raw.count > 200_000 { return parse(raw) }   // 超长不进缓存, 限内存
-        cacheLock.lock(); defer { cacheLock.unlock() }
-        if let hit = cache[raw] { return hit }
+        if let hit = cache.value(for: raw) { return hit }
         let blocks = parse(raw)
-        cache[raw] = blocks
-        order.append(raw)
-        if order.count > cacheLimit, let evict = order.first {
-            order.removeFirst()
-            cache.removeValue(forKey: evict)
-        }
+        cache.insert(blocks, for: raw)
         return blocks
     }
 
+#if SMOKE
+    /// 只给冒烟用: 把缓存对象本身露出来, 判"第二次同文本真的**命中**了", 而不是又解析了一遍。
+    /// 判据不能是"两次结果相等"(不缓存也相等), 必须是"这条真的躺在缓存里"。
+    static var smokeCache: LRUCache<[MarkdownBlock]> { cache }
+#endif
+
     static func parse(_ raw: String) -> [MarkdownBlock] {
         var blocks: [MarkdownBlock] = []
-        let lines = raw.components(separatedBy: "\n")
+        let lines = splitLines(raw)
         var paragraph: [String] = []
         var i = 0
 
@@ -169,6 +171,24 @@ enum MarkdownParser {
     }
 
     // MARK: Helpers
+
+    /// 切成**行**（解析要 `[String]`，不能是切片 —— 后面各分支都在建新的 `String`）。
+    ///
+    /// ⚠️ `components(separatedBy: "\n")` 会把 CRLF 切成 `"行\r"`：那个 `\r` 会一路进到
+    ///    渲染面 —— 段落里渲染成一个方框，围栏代码里**重新拼出 `\r\n`**（把代码块那条
+    ///    "按行渲染"的路堵掉，见 `CodeHighlighter.splitLines`）。
+    ///    所以这里顺手把**行尾**的 `\r` 剥掉。只剥行尾：孤立的 `\r`（进度条中间那种）
+    ///    留着 —— 与 `SplitLines.isBreak` 的口径一致，不认它当换行。
+    /// ⚠️ 只在真含 `\r` 时才走第二条分支：常见路径（纯 LF）一次额外遍历都不加。
+    /// ⚠️ 判"含不含 `\r`"要用 **unicodeScalars**，不能用 `raw.contains("\r")` ——
+    ///    `\r\n` 在 String 里是**一个 `Character`**，`"\r"` 不是它的子串（canonical equivalence
+    ///    也不认），于是"含 CRLF 的文档"会被判成"不含 `\r`"，剥 `\r` 的分支**静默不执行**
+    ///    （2026-11-04 第一次改就是这么错的，被 T-CBL 当场抓住：解析出来仍是 `"a\r\nb\r"`）。
+    private static func splitLines(_ raw: String) -> [String] {
+        let parts = raw.components(separatedBy: "\n")
+        guard raw.unicodeScalars.contains(where: { $0 == "\r" }) else { return parts }
+        return parts.map { $0.hasSuffix("\r") ? String($0.dropLast()) : $0 }
+    }
 
     private static func isTableSeparator(_ line: String) -> Bool {
         let t = line.trimmingCharacters(in: .whitespaces)

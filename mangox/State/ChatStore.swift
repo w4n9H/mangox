@@ -82,7 +82,15 @@ final class ChatStore: ObservableObject {
     let modelKeyStore: any ModelKeyStore
 
     // Chat
-    @Published var messages: [ChatMessage] = []
+    /// 消息变化版本 — 给滚动跟随用的**轻量触发值**。
+    ///
+    /// ⚠️ 不要在视图里 `onChange(of: store.messages)`：`ChatMessage` 的合成 `==`
+    ///    会把历史正文、工具输出、思考文本全部深比一遍，流式每 chunk 一次 = 长会话累积平方级。
+    ///    这里在**唯一写入口**（这个属性本身）记账，视图只比一个整数。
+    private(set) var messagesRevision: UInt64 = 0
+    @Published var messages: [ChatMessage] = [] {
+        didSet { messagesRevision &+= 1 }
+    }
     @Published var draft: String = ""
     /// P7-M6b: 图片附件暂存区 (随 draft 生命周期, 发送即清; ≤4 张)。
     @Published var pendingImages: [PendingImage] = []

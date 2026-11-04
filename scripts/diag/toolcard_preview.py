@@ -50,6 +50,8 @@ SOURCES = [
     'mangox/Views/Chat/ImagePresentation.swift',
     'mangox/Views/Chat/ToolOutputImages.swift',
     'mangox/Views/Chat/ToolCallCardView.swift',
+    # 2026-11-04（C1）：工具输出 / 思考卡 / diff 的切行都在这里 —— 卡片的展开态直接依赖它。
+    'mangox/Views/Chat/SplitLineText.swift',
     # 「段收据」那一层（2026-10-26 加的）—— 判「段折叠 + codemode 折叠」是不是叠成三层，
     # 必须让**真的** `ToolRunBuilder` / `ToolRunReceiptRow` 参与编译，不能靠手搭。
     'mangox/Models/PlanQuestion.swift',
@@ -264,6 +266,9 @@ let shot  = "\(OUT)/shot.png"
 // ⚠️ P16 之前这里是 8 行 + "必须出展开箭头"；那条断言连同 `hasLongOutput` 一起删了，
 //    8 行封不了顶，留着会让"封顶 + 内部滚动"变成一句谎话。
 let bashOut = (1...40).map { "row \($0)  channel=dau  value=\($0*137)" }.joined(separator: "\n")
+// 2026-11-04（C1）：40 行是**整块渲染**的最后一行（`Tune.textSplitLines`），41 行起逐行 + 惰性。
+// 这两档必须**看起来一模一样** —— 不一样就说明逐行路径的行距 / 基线没对齐。
+let bashOut400 = (1...400).map { "row \($0)  channel=dau  value=\($0*137)" }.joined(separator: "\n")
 
 MainActor.assumeIsolated {
     try? FileManager.default.createDirectory(atPath: OUT, withIntermediateDirectories: true)
@@ -315,6 +320,13 @@ MainActor.assumeIsolated {
         sample("bash  ·  待审批 · 40 行输出", ToolCall(
             kind: .bash, title: "mysql",
             command: "-h 10.251.72.10 -D basic_warehouse", details: [ToolDetail("输出", bashOut)],
+            phase: .awaitingApproval))
+
+        caption("①b 长输出 · 400 行（逐行 + 惰性）",
+                "C1 之后：>40 行按行拆、`LazyVStack` 只建可见行。与 ① 必须**看不出差别** —— 盒子高度仍是 180pt 封顶")
+        sample("bash  ·  待审批 · 400 行输出", ToolCall(
+            kind: .bash, title: "mysql",
+            command: "-h 10.251.72.10 -D basic_warehouse", details: [ToolDetail("输出", bashOut400)],
             phase: .awaitingApproval))
 
         caption("② 短输出 · 1 行", "盒子只占一行高 —— `maxHeight` 是**上界**不是定高")

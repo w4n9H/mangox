@@ -48,8 +48,22 @@ enum ImagePresentation {
     /// `文件名 · 宽×高` —— 无汉字, 调用方用 `Text(verbatim:)` (不被当成 LocalizedStringKey)。
     static func caption(_ path: String, _ img: NSImage) -> String {
         let name = (path as NSString).lastPathComponent
-        guard let rep = img.representations.first, rep.pixelsWide > 0 else { return name }
-        return "\(name) · \(rep.pixelsWide)×\(rep.pixelsHigh)"
+        let (w, h) = pixelSize(of: img)
+        guard w > 0 else { return name }
+        return "\(name) · \(w)×\(h)"
+    }
+
+    /// **真像素**尺寸。
+    ///
+    /// ⚠️ 不能读 `rep.pixelsWide`：`NSImage(cgImage:size:)` 造出来的快照 rep 会把**屏幕缩放**
+    ///    算进去 —— 同一张 50×25 的位图在 2x 屏上报成 100×50，1x 屏上报 50×25（2026-11-04 实测）。
+    ///    说明行是给用户读的事实，不能随显示器变。`cgImage(forProposedRect:)` 两条通路都是真像素。
+    static func pixelSize(of img: NSImage) -> (w: Int, h: Int) {
+        if let cg = img.cgImage(forProposedRect: nil, context: nil, hints: nil) {
+            return (cg.width, cg.height)
+        }
+        guard let rep = img.representations.first else { return (0, 0) }
+        return (rep.pixelsWide, rep.pixelsHigh)
     }
 }
 

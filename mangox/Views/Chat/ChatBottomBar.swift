@@ -17,6 +17,10 @@ struct ChatBottomBar: View {
             noticeBanner(outcome,
                          clear: { store.distillOutcome = nil },
                          actionTitle: outcome.isError ? nil : L("去审核"),
+                         // ⚠️ 提示语**跟着动作走**, 不能靠"拿已翻译的标题比中文"来判：
+                         //    英文环境下 `actionTitle` 是 `Review`，比 `== "去审核"` 永远为假
+                         //    ⇒ 提示静默变空（2026-11-04 评审发现）。
+                         actionHelp: outcome.isError ? nil : L("打开知识面板的待审核分组"),
                          action: outcome.isError ? nil : { store.openKnowledgePanel() })
         }
         if let notice = store.turnLimitNotice {
@@ -122,6 +126,7 @@ struct ChatBottomBar: View {
     private func noticeBanner(_ outcome: (text: String, isError: Bool),
                               clear: @escaping () -> Void,
                               actionTitle: String? = nil,
+                              actionHelp: String? = nil,
                               action: (() -> Void)? = nil) -> some View {
         HStack(spacing: 6) {
             Image(systemName: outcome.isError ? "exclamationmark.circle.fill" : "checkmark.circle.fill")
@@ -139,7 +144,7 @@ struct ChatBottomBar: View {
                     .padding(.horizontal, 8)
                     .padding(.vertical, 2)
                     .contentShape(Rectangle())
-                    .help(LK(actionTitle == "去审核" ? "打开知识面板的待审核分组" : ""))
+                    .help(actionHelp ?? "")
             }
             Button {
                 clear()

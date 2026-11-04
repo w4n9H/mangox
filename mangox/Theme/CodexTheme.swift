@@ -426,6 +426,21 @@ enum Tune {
     ///    而踩到这一条的都是"整段日志 / 整页快照"那种真的会卡的。
     static let codeBlockSplitLines: Int       = 40
 
+    /// 长代码块的**高度上限**（"展开全文"之前）—— 2026-11-04 boss 拍板：**320pt**。
+    ///
+    /// 与 `toolOutputMaxHeight`(180) / `toolDiffMaxHeight`(260) /
+    /// `UserMessageFold.expandedMaxHeight`(260) 是**同一族判据**：**高度与内容长度脱钩**。
+    /// 给到 320（比工具输出多 140）的理由：工具输出是"跑完看一眼结果"，代码块是"要读"；
+    /// mono 12pt 大约 20 行。
+    static let codeBlockMaxHeight: CGFloat    = 320
+
+    /// **纯文本**按行渲染的行数门槛（工具输出 / 思考卡）。
+    ///
+    /// 与 `codeBlockSplitLines` **同值不同义**：那个管代码块（逐行 `AttributedString` 高亮），
+    /// 这个管纯文本。取同一个数不是巧合 —— 两处要的是同一种观感：40 行以内整块渲染
+    /// 与原来**逐字相同**，超过就逐行 + 惰性。
+    static let textSplitLines: Int            = 40
+
     // 侧栏
     static let sidebarWidth: CGFloat          = 256
     /// 侧栏滚动内容的左右内缩 (原为硬编码的 8)。

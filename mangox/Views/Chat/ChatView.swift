@@ -36,6 +36,27 @@ enum ChatFollowBeats {
     static let plan: [Double] = [0, 0.04, 0.12, 0.30]
 }
 
+/// 尾块实体化的**账本** —— 只记录“真的已经滚过去量过”的那个块。
+///
+/// ⚠️ 候选与消费必须拆成两步：`candidate` 只回答“这一拍该不该先锚真实行”，
+///    `confirm` 才记账。写成一件事（先记账再问 veto）就会出现：
+///    用户上滑时跟随被否决，账上却已记“量过” ⇒ 之后点「回到最新」跳过实体化，
+///    重新落进 `LazyVStack` 的估算高度 = 白屏。
+/// ⚠️ 必须是**引用类型**：账本只在滚动闭包里读写，body 从不读它。
+///    写成 `@State struct` 时每次记账都会让整个 ChatView 失效一次（B 批要消掉的就是这笔）。
+final class ChatTailLedger {
+    private(set) var lastMaterialized: AnyHashable?
+
+    func candidate(_ target: AnyHashable?, allowed: Bool) -> AnyHashable? {
+        guard allowed, let target, target != lastMaterialized else { return nil }
+        return target
+    }
+
+    func confirm(_ target: AnyHashable) {
+        lastMaterialized = target
+    }
+}
+
 // MARK: - 折叠时机
 
 /// 一组的工具行**什么时候**折成一行收据 —— 纯函数，判据只住这里。
@@ -75,6 +96,13 @@ final class BottomYBox {
     var value: CGFloat = 0
 }
 
+/// 非视觉标量的通用引用盒子 —— 同 `BottomYBox` 的判据：body 不读、只给闭包读写，
+/// 就不该用 `@State` 的 struct 去做（一次赋值 = 一次全量 body 失效）。
+final class RefBox<Value> {
+    var value: Value
+    init(_ value: Value) { self.value = value }
+}
+
 struct ChatView: View {
     @ObservedObject var store: ChatStore
     @State private var viewportHeight: CGFloat = 0
@@ -90,13 +118,21 @@ struct ChatView: View {
     @State private var lastBottomY = BottomYBox()
     @State private var nearBottom = true   // 初始视为在底部 (初屏定位 = scrollContent 的 onAppear)
     /// 自动滚动同帧合并标记: 流式期同帧多个 chunk 只调度一次滚动 (防 "update multiple times per frame")。
-    @State private var scrollScheduled = false
+    ///
+    /// ⚠️ 引用盒子：每次 chunk 翻转两次，写成 `@State Bool` 就是**每个 chunk 多两次全量 body**。
+    @State private var scrollScheduled = RefBox(false)
 
     /// 「这一拍跟随」的代号 —— 只为一件事：**复核拍判断有没有更新的一次跟随插进来**。
-    /// 引用语义不需要（它不参与布局），但必须能让补拍的闭包读到最新值 ⇒ 用 `@State`。
-    @State private var followEpoch = 0
+    /// 同样只给闭包读写 ⇒ 引用盒子；`@State` 只负责持有对象生命周期。
+    @State private var followEpoch = RefBox(0)
 
-    /// **上一次已经把哪个尾块量过** —— 判据是"尾块 id 变了没有"，不是"要不要量"的开关。
+    /// 上一次看到的尾消息 id（只为了判断"刚提交了一条用户消息"）。
+    ///
+    /// ⚠️ 以前这个判断直接比较 `old/new: [ChatMessage]`，流式每 chunk 深比全部历史。
+    ///    现在由 `messagesRevision` 触发，这里只留一个 UUID ⇒ 与历史长度无关。
+    @State private var lastTailID = RefBox<UUID?>(nil)
+
+    /// **上一次真的滚过去量过的尾块** —— 判据是"尾块 id 变了没有"，不是"要不要量"的开关。
     ///
     /// ⚠️ 0.1.30 第一版把「先锚最后一块」写成**每一拍无条件**：流式期每来一个 token 都走一次
     ///    跟随 ⇒ 每 token 先锚**最后一行**（落点离真底差 `chatVPadding 18 + 块距 10` = 28pt）、
@@ -107,7 +143,11 @@ struct ChatView: View {
     /// ⇒ 判据只能是**尾块身份**：静止态下 id 变了就量一次（初屏 / 换会话 / 回车），
     ///    id 没变就直接锚哨兵。流式期另走一支（锚 `streamingAnchor`，见那里）——
     ///    因为流式期尾行本身在长高、懒栈不肯量它，锚哨兵吃的是总量估算（实测虚高 9018pt = 白屏）。
-    @State private var materializedTail: AnyHashable?
+    ///
+    /// ⚠️ **记账必须发生在滚动真正执行之后**（见 `ChatTailLedger`）：2026-11-04 评审发现
+    ///    旧写法在 veto 之前就记账 ⇒ 用户上滑时那一拍被拒，之后「回到最新」反而跳过实体化。
+    /// ⚠️ 类型本身是 class ⇒ 记账不再触发 body；`@State` 只负责持有它。
+    @State private var tailLedger = ChatTailLedger()
 
     /// 已展开的**工具段**（键 = 段首工具消息 id，见 `ToolRun.id`）。
     ///
@@ -279,28 +319,30 @@ struct ChatView: View {
     /// ⚠️ 别在入口处各写一遍 `scrollTo`: 分头写就会分头漏掉复核（这个 bug 已经这样活了两个版本）。
     /// - Parameter veto: 每一拍落之前问一句"还要不要落"。`followEpoch` 变化（有更新的一次跟随）
     ///   永远是否决项；调用方再按语义追加：流式跟随要追加 `nearBottom`（P9-#9 上滑阅读不拽回），
-    ///   提交那一拍**不加**（我发了消息就要看它和回答，见 `onChange(of: store.messages)`）。
+    ///   提交那一拍**不加**（我发了消息就要看它和回答，见 `onChange(of: store.messagesRevision)`）。
     private func scrollToTail(_ proxy: ScrollViewProxy, veto: @escaping () -> Bool = { true }) {
-        followEpoch += 1
-        let epoch = followEpoch
+        followEpoch.value += 1
+        let epoch = followEpoch.value
+        // 流式期尾行在长高，懒栈不肯量它 ⇒ 实体化那一支不适用，每一拍都锚指示器。
+        let materializeCandidate = store.isStreaming ? nil : materializeTarget
         for (i, delay) in Self.followBeats.enumerated() {
-            // 第一拍锚**最后一块**（把它量出来），其余各拍锚**末尾哨兵**（真底）——
-            // 顺序反了就会落进"估算出来的空尾"里，那是白屏（见 `materializeTarget`）。
+            // 第一拍**先试**把最后一块量出来，其余各拍锚末尾哨兵（真底）。
+            // ⚠️ 这里只是候选：真正记账在 `tap` 里、veto 之后（见 `ChatTailLedger`）。
             var target: AnyHashable = Self.tailAnchor
             if store.isStreaming {
                 // 流式期：**每一拍都锚流式指示器**（懒栈的孩子 ⇒ 落点是量出来的）。
                 target = Self.streamingAnchor
-            } else if i == 0, let materialize = materializeTarget,
-                      materialize != materializedTail {
-                // 静止态（初屏 / 换会话 / 回合落定）：先锚真实行把高度量出来，
-                // 其余各拍锚哨兵落到真底。顺序反了 = 白屏（0.1.30 实测 y=50719 纯白）。
-                target = materialize
-                materializedTail = materialize
             }
             // 同一次调用里的每一拍是**同一件事**，所以只认 epoch 与本拍的 veto
             let tap = {
-                guard epoch == followEpoch, veto() else { return }
-                proxy.scrollTo(target, anchor: .bottom)
+                guard epoch == followEpoch.value, veto() else { return }
+                let candidate = i == 0 ? materializeCandidate : nil
+                let materialize = tailLedger.candidate(candidate, allowed: true)
+                // 静止态（初屏 / 换会话 / 回合落定）：先锚真实行把高度量出来，
+                // 其余各拍锚哨兵落到真底。顺序反了 = 白屏（0.1.30 实测 y=50719 纯白）。
+                proxy.scrollTo(materialize ?? target, anchor: .bottom)
+                // ⚠️ 只在**真的滚过**之后记账；veto 在上面的 guard 已经拦掉拒绝的那一拍。
+                if let materialize { tailLedger.confirm(materialize) }
             }
             if delay == 0 { tap() }
             else { DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: tap) }
@@ -391,31 +433,36 @@ struct ChatView: View {
         // ⚠️ 这里**不能**用锚底 (`defaultScrollAnchor(.bottom)`) —— 它会在**内容尺寸变化时重新
         //    锚底**: 展开任意一行, 整列都跳一下, 体感"点了 A 打开了 B"(与 TrajectoryView:153
         //    同一个坑, 那次只修了 Trace, 漏了这里)。改 onAppear 定位; 流式跟随由下面
-        //    onChange(of: store.messages) 管。
+        //    onChange(of: store.messagesRevision) 管。
         .onAppear {
             DispatchQueue.main.async { scrollToTail(proxy) }
         }
         .onChange(of: store.selectedConversationId) { _, _ in
             // 换会话: replay 内容整批替换, 兜底滚到最新 (首帧 onAppear 之外的双保险)
-            // ⚠️ 这里**不用**手工置位"要量"—— 尾块 id 变了，`scrollToTail` 自己会认（见 `materializedTail`）
+            // ⚠️ 这里**不用**手工置位"要量"—— 尾块 id 变了，`scrollToTail` 自己会认（见 `ChatTailLedger`）
             DispatchQueue.main.async { scrollToTail(proxy) }
         }
-        .onChange(of: store.messages) { old, new in
+        .onChange(of: store.messagesRevision) { _, _ in
             // 流式 chunk 高频到达, 同帧多次触发会报 "update multiple times per frame";
             // scrollScheduled 同帧合并为一次滚动调度, 双跳异步复位 (滚动执行完的下一拍才放行)。
             // P9-#9: 用户上滑阅读历史时不再强制拽回 (距视口底 <140pt 才跟随)
-            // ⚠️ 2026-10-09: 守卫与置位**必须都在 async 块里** —— 在 onChange 的 action 里同步写
-            //    @State 本身就会让 SwiftUI 判成"同帧多次更新", 光靠守卫挡不住刷新警告 (见 :64 同款教训)。
+            //
+            // ⚠️ 触发值只用 `messagesRevision`，不要换回 `store.messages` —— 后者每 chunk
+            //    深比全部历史（`ChatMessage` 的合成 `==` 含正文 / 工具输出 / 思考）。
+            //    判断“刚提交”也只看尾 id，不再拿 old/new 两个完整数组。
             //
             // ⚠️ 2026-10-20 **"用户刚提交"是这条守卫唯一的例外**（boss 报「回车后整个界面白掉，
             //    直到 llm 有返回才正常」理由另有一条，见 `scrollToTail` 的实测注释：落点会落进
             //    "什么都没画"的区域）。`nearBottom` 是**几何判据**，它分不出「高度变了」和
             //    「用户上滑了」—— 在这一拍它读到什么都可能，可**语义是确定的**：我刚发了消息，
             //    就要看它和回答。⇒ 提交这一拍不吃守卫，其余每一拍（流式 / 工具 / 压缩标记…）照旧吃。
-            let justSent = new.last?.role == .user && old.last?.id != new.last?.id
+            let newLast = store.messages.last
+            let previousID = lastTailID.value
+            lastTailID.value = newLast?.id
+            let justSent = newLast?.role == .user && previousID != newLast?.id
             DispatchQueue.main.async {
-                guard !scrollScheduled else { return }
-                scrollScheduled = true
+                guard !scrollScheduled.value else { return }
+                scrollScheduled.value = true
                 // ⚠️ 2026-10-19 起这里**不再做补间**（原先连发时降级瞬移、慢工具走 0.25s 补间）。
                 //    两个理由，都是实测：① 补间的中间态按**动画插值**的布局算 ⇒ 落点差 100~260pt；
                 //    ② 带补间的落点**没法复核**（复核那一拍会打断补间）。现在统一走 `scrollToTail`
@@ -425,7 +472,7 @@ struct ChatView: View {
                 } else {
                     scrollToTail(proxy, veto: { nearBottom })   // P9-#9: 用户上滑了就停手
                 }
-                DispatchQueue.main.async { scrollScheduled = false }
+                DispatchQueue.main.async { scrollScheduled.value = false }
             }
         }
     }
@@ -798,13 +845,23 @@ struct SideChatBanner: View {
     @State private var hovering = false
 
     /// fork 时刻紧凑格式: 今天只报时间, 跨天报 M/d HH:mm。
-    private var timeText: String {
+    ///
+    /// ⚠️ 格式器**只建一次**：`DateFormatter()` 的构造要读 locale / calendar / 时区，
+    ///    是毫秒级的；而 `timeText` 每次 body 重算都会求值（流式期这条横幅跟着每 chunk 走）。
+    ///    贵的是**建实例**，改 `dateFormat` 不贵 —— 所以是两个定格式器，不是每次改一个。
+    private static let hmFormatter: DateFormatter = {
         let f = DateFormatter()
-        if Calendar.current.isDateInToday(info.at) {
-            f.dateFormat = "HH:mm"
-        } else {
-            f.dateFormat = "M/d HH:mm"
-        }
+        f.dateFormat = "HH:mm"
+        return f
+    }()
+    private static let mdhmFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "M/d HH:mm"
+        return f
+    }()
+
+    private var timeText: String {
+        let f = Calendar.current.isDateInToday(info.at) ? Self.hmFormatter : Self.mdhmFormatter
         return f.string(from: info.at)
     }
 
@@ -947,7 +1004,10 @@ struct MessageBlockView: View {
     private func thumbnail(_ att: Attachment) -> some View {
         Group {
             // P9-#12: 解码结果按路径缓存, 滚动/流式重算不再重复 IO
-            if let img = ImagePipeline.cachedImage(atPath: att.path) {
+            // ⚠️ 走**缩略**那条 (88pt × 2x = 176px): 这里要的是"塞进 88×66 的样子",
+            //    拿原图来 `scaledToFill` 等于每次重绘都从全尺寸位图重采样一次。
+            //    大图 sheet / 正文图另有通路 —— 它们要原图像素（说明行读的就是 `pixelsWide`）。
+            if let img = ImagePipeline.cachedThumbnail(atPath: att.path, maxPixels: 176) {
                 Image(nsImage: img)
                     .resizable()
                     .scaledToFill()
@@ -1221,8 +1281,13 @@ struct MessageBlockView: View {
         VStack(alignment: .leading, spacing: 6) {
             if userExpanded {
                 ScrollView(.vertical, showsIndicators: true) {
+                    // ⚠️ `split` 出的是 `[Substring]`（一个数组 + 若干切片），**不逐行复制字符**；
+                    //    `String` 化发生在 `LazyVStack` 的行构造里，只有可见行会付。
+                    //    原来用 `components(separatedBy:)`：一条 3000 行的消息，每拍（body 每次
+                    //    重算）都先复制出 3000 个 `String`，而这一层**本来就已经是惰性渲染的**
+                    //    —— 那笔分配是白付的。
                     LazyVStack(alignment: .leading, spacing: 2) {
-                        ForEach(Array(s.components(separatedBy: "\n").enumerated()),
+                        ForEach(Array(SplitLines.rows(s).enumerated()),
                                 id: \.offset) { _, line in
                             userLine(line)
                         }
@@ -1231,7 +1296,7 @@ struct MessageBlockView: View {
                 .frame(maxHeight: UserMessageFold.expandedMaxHeight)
             } else {
                 VStack(alignment: .leading, spacing: 2) {
-                    ForEach(Array(UserMessageFold.preview(s).components(separatedBy: "\n").enumerated()),
+                    ForEach(Array(UserMessageFold.previewLines(s).enumerated()),
                             id: \.offset) { _, line in
                         userLine(line)
                     }
@@ -1257,8 +1322,10 @@ struct MessageBlockView: View {
     }
 
     /// 一行。**空行写成一个空格** —— `Text("")` 高度为 0, 空行会被吃掉, 观感与原文不符。
-    private func userLine(_ line: String) -> some View {
-        Text(line.isEmpty ? " " : line)
+    /// 吃 `Substring` 而不是 `String`：调用方切行时不必为每一行复制一份字符
+    ///（`StringProtocol` 那个 `Text` init 与 `verbatim:` 同义, 不过本地化）。
+    private func userLine(_ line: Substring) -> some View {
+        (line.isEmpty ? Text(verbatim: " ") : Text(line))
             .font(CodexTheme.fontBody)
             .foregroundStyle(CodexTheme.textPrimary)
             .textSelection(.enabled)
@@ -1266,3 +1333,30 @@ struct MessageBlockView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
+
+#if SMOKE
+// MARK: - 冒烟探针（B3 性能基线）
+
+/// 让冒烟能**量到真实那条投影路径**（`CaseChatPerf`）。
+///
+/// 为什么要这层壳：`ChatView` 的存储属性里有一堆 `@State private`，Swift 的
+/// memberwise init 会因此**降到 private** ⇒ 别的文件根本 `ChatView(store:)` 不出来；
+/// 而 `projectedChat` 又藏在 `private` 嵌套类型后面。若为了测量在外面另写一份
+/// "轻量版投影"，量的是**另一段代码** —— 真那段退化成平方级时它照样绿。
+/// 所以这里只开两道最小的缝：造一个真 `ChatView`、跑一次真投影，不暴露任何结构。
+///
+/// ⚠️ 只活在 `-D SMOKE` 里：App 构建（`xcodebuild`）中这段不存在。
+struct SmokeChatProjection {
+    private let view: ChatView
+
+    init(store: ChatStore) { view = ChatView(store: store) }
+
+    /// 跑一次投影，返回块数。**返回值必须被调用方累加** —— 否则计时循环可能被优化掉，
+    /// 量出来的是"空转"而不是投影。
+    func run() -> Int { view.smokeProjectionBlockCount() }
+}
+
+extension ChatView {
+    fileprivate func smokeProjectionBlockCount() -> Int { projectedChat.blocks.count }
+}
+#endif

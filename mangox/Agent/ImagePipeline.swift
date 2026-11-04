@@ -161,21 +161,68 @@ enum ImagePipeline {
         }
     }
 
-    // MARK: - P9-#12 缩略图缓存
+    // MARK: - P9-#12 图片缓存（原图 / 缩略两条通路）
     // NSImage(contentsOfFile:) 每次渲染全图解码 + 磁盘 IO; 历史消息滚动/流式重算反复付这笔钱。
-    // NSCache 按路径缓存解码结果, 内存压力下自动逐出 (countLimit 100)。
+    //
+    // ⚠️ 2026-11-04：原来**只有一份**缓存，缩略图与"正文图/大图"共用 —— 88×66 的槽位也拿原图，
+    //    一张 4000×3000 的截图被 `.scaledToFill()` 塞进 88pt，**每次重绘都从全尺寸位图重采样**。
+    //    现在分两条，职责写死：
+    //      · `cachedImage`     —— 原图。正文图按**原图像素**定宽 (`naturalCap`)、大图 sheet 要清晰，
+    //                             而且说明行 `宽×高` 读的就是 `rep.pixelsWide` —— 降采样会让它说谎。
+    //      · `cachedThumbnail` —— 按展示尺寸降采样，解码时就是目标尺寸 (`CGImageSource` 的 thumbnail 通路)。
+    //    键里带目标像素 ⇒ 同一张图在 88pt 与 84pt 两处各存一份，互不覆盖。
 
     private static let thumbCache: NSCache<NSString, NSImage> = {
         let c = NSCache<NSString, NSImage>()
         c.countLimit = 100
+        // 按**像素字节**记账：只数条数挡不住"一张 48MB 的原图算一条"。
+        c.totalCostLimit = 256 * 1024 * 1024
         return c
     }()
 
-    /// 解码并缓存图片; nil = 文件不存在/非图。命中后同一路径不再重复 IO。
+    /// 解码并缓存**原图**; nil = 文件不存在/非图。命中后同一路径不再重复 IO。
     static func cachedImage(atPath path: String) -> NSImage? {
-        if let hit = thumbCache.object(forKey: path as NSString) { return hit }
+        let key = "F\u{1}\(path)" as NSString
+        if let hit = thumbCache.object(forKey: key) { return hit }
         guard let img = NSImage(contentsOfFile: path) else { return nil }
-        thumbCache.setObject(img, forKey: path as NSString)
+        thumbCache.setObject(img, forKey: key, cost: byteCost(of: img))
         return img
+    }
+
+    /// **缩略图**：长边 ≤ `maxPixels` **像素**（不是点 —— 2x 屏上 88pt 的槽位要 176px 才不糊）。
+    /// 只给"小尺寸展示"用；要显示原图像素信息 / 大图的地方一律走 `cachedImage`。
+    static func cachedThumbnail(atPath path: String, maxPixels: Int) -> NSImage? {
+        let key = "T\(maxPixels)\u{1}\(path)" as NSString
+        if let hit = thumbCache.object(forKey: key) { return hit }
+        guard let img = downsampled(atPath: path, maxPixels: maxPixels) else { return nil }
+        thumbCache.setObject(img, forKey: key, cost: byteCost(of: img))
+        return img
+    }
+
+    /// 解码时就解到目标尺寸，不把全图读进内存。
+    ///
+    /// ⚠️ `kCGImageSourceCreateThumbnailWithTransform` 不能省：手机竖拍的方向住在 EXIF 里，
+    ///    少了这一步缩略图会**躺下**，而原图通路（`NSImage`）是认方向的 —— 两条会当场不一致。
+    /// ⚠️ `CreateThumbnailFromImageAlways` 也不能省：不给它，它可能直接返回原尺寸，
+    ///    于是"降采样"在部分文件上静默失效（看起来一切正常，只是内存没省下来）。
+    static func downsampled(atPath path: String, maxPixels: Int) -> NSImage? {
+        guard maxPixels > 0,
+              let src = CGImageSourceCreateWithURL(URL(fileURLWithPath: path) as CFURL, nil)
+        else { return nil }
+        let opts: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceThumbnailMaxPixelSize: maxPixels,
+            kCGImageSourceShouldCacheImmediately: true,
+        ]
+        guard let cg = CGImageSourceCreateThumbnailAtIndex(src, 0, opts as CFDictionary)
+        else { return nil }
+        return NSImage(cgImage: cg, size: NSSize(width: cg.width, height: cg.height))
+    }
+
+    /// NSCache 的记账单位 = 解码后的字节数（`w×h×4`）。
+    private static func byteCost(of img: NSImage) -> Int {
+        guard let rep = img.representations.first else { return 1 }
+        return max(max(rep.pixelsWide, 1) * max(rep.pixelsHigh, 1) * 4, 1)
     }
 }

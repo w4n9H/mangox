@@ -40,6 +40,38 @@ extension SmokeMain {
         check(empty.count == 1 && String(empty[0].characters).isEmpty,
               "T-CBL 空串仍然是一行 (渲染层不必特判)")
 
+        // MARK: CRLF（2026-11-04 补：同一根病根在代码块这条路上还漏着）
+
+        // ⚠️ 这是 C 批修完 CRLF 之后**漏掉的一条缝**：`splitLines` 原先比对的是 `== "\n"`，
+        //    而 `"\r\n"` 在 Swift 里是**一个 `Character`** ⇒ 一份 Windows 换行的代码块
+        //    切不开，退化成"一整行" ⇒ 既不逐行也不限高（一个 `Text` 承载整段，平方级），
+        //    而正文明明画了 n 行。两个口径（`CodeBlockView.lineCount` 与这里）必须一致，
+        //    否则"限高"与"逐行"会一真一假。
+        let crlfCode = "func a() {}\r\nfunc b() {}\r\nfunc c() {}"
+        let crlfLines = CodeHighlighter.splitLines(AttributedString(crlfCode))
+        check(crlfLines.count == 3,
+              "T-CBL CRLF 代码块切成 3 段 (实测 \(crlfLines.count); `== \"\\n\"` 会得到 1 段)")
+        check(crlfLines.map { String($0.characters) } == ["func a() {}", "func b() {}", "func c() {}"],
+              "T-CBL CRLF 切完行尾不留 \\r (实测 \(crlfLines.map { String($0.characters) }))")
+        check(SplitLines.count(crlfCode) == crlfLines.count,
+              "T-CBL 行数口径与切行口径同源 (数出 \(SplitLines.count(crlfCode)) 行 / 切成 \(crlfLines.count) 段)")
+
+        // 解析层: 围栏代码里的 CRLF 必须被剥成 LF，否则上面那条只是"能切开"，行尾还挂着 `\r`。
+        if case .codeBlock(_, let parsedCode)? = MarkdownParser.parse("```swift\r\nlet a = 1\r\nlet b = 2\r\n```").first {
+            check(!parsedCode.contains("\r"),
+                  "T-CBL 解析层把围栏代码里的 \\r 剥掉了 (实测 \(parsedCode.debugDescription))")
+            check(parsedCode == "let a = 1\nlet b = 2",
+                  "T-CBL 解析出来的代码与原文逐字相同 (只是换行统一成 LF)")
+        } else {
+            check(false, "T-CBL 夹具: CRLF 围栏代码块没解析成 codeBlock")
+        }
+        if case .paragraph(let para)? = MarkdownParser.parse("第一行\r\n第二行").first {
+            check(!para.contains("\r"),
+                  "T-CBL 段落里的 \\r 也要剥掉 (它会在正文里渲染成一个方框)")
+        } else {
+            check(false, "T-CBL 夹具: CRLF 段落没解析成 paragraph")
+        }
+
         // MARK: 切开再拼回去 == 整块
 
         // 分开调两个入口, 才能验"逐行版"与"整块版"的结果是同一份东西

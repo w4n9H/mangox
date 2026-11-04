@@ -687,9 +687,11 @@ struct CompactTextEditor: NSViewRepresentable {
                 textView.selectedRange = NSRange(location: min(selected.location, len), length: 0)
             }
         }
+        // ⚠️ 这里直接用 SwiftUI 递进来的 `scrollView`，**不许再缓存到 coordinator**。
+        //    旧版的 `attachedScrollView` 全仓从未赋值 ⇒ guard 恒早退 ⇒ 从外部改 draft
+        //    （@ 插入 / 附加文件）后高度永不重算。参数本来就是权威来源，缓存只会多一个失效点。
         DispatchQueue.main.async { [weak coordinator = context.coordinator] in
-            guard let coordinator, let scrollView = coordinator.attachedScrollView else { return }
-            coordinator.reportHeight(scrollView: scrollView)
+            coordinator?.reportHeight(scrollView: scrollView)
         }
     }
 
@@ -697,7 +699,6 @@ struct CompactTextEditor: NSViewRepresentable {
 
     final class Coordinator: NSObject, NSTextViewDelegate {
         var parent: CompactTextEditor?
-        weak var attachedScrollView: NSScrollView?
 
         init(_ parent: CompactTextEditor) { self.parent = parent }
 
@@ -729,13 +730,24 @@ struct CompactTextEditor: NSViewRepresentable {
 
         func reportHeight(scrollView: NSScrollView) {
             guard let parent,
-                  let textView = scrollView.documentView as? NSTextView else { return }
-            textView.layoutManager?.ensureLayout(for: textView.textContainer!)
-            let used = textView.layoutManager?.usedRect(for: textView.textContainer!).size ?? .zero
-            let h = min(parent.maxHeight,
-                        max(parent.minHeight,
-                            used.height + textView.textContainerInset.height * 2))
+                  let h = CompactTextEditor.measuredHeight(
+                    scrollView: scrollView,
+                    minHeight: parent.minHeight,
+                    maxHeight: parent.maxHeight) else { return }
             parent.onHeightChange(h)
         }
+    }
+
+    /// 量已排版内容的高度（夹在 min/max 之间）。纯 AppKit 读回，不碰 SwiftUI 状态，
+    /// 冒烟可直接构一个同结构的 scroll/text view 断言。nil = 不是可测量的文本容器。
+    static func measuredHeight(scrollView: NSScrollView,
+                               minHeight: CGFloat,
+                               maxHeight: CGFloat) -> CGFloat? {
+        guard let textView = scrollView.documentView as? NSTextView,
+              let container = textView.textContainer,
+              let layout = textView.layoutManager else { return nil }
+        layout.ensureLayout(for: container)
+        let used = layout.usedRect(for: container).size
+        return min(maxHeight, max(minHeight, used.height + textView.textContainerInset.height * 2))
     }
 }

@@ -48,6 +48,10 @@ SOURCES = [
     'mangox/Theme/CodexTheme.swift',
     'mangox/Theme/CodexFonts.swift',
     'mangox/Views/Chat/Markdown/MarkdownParser.swift',
+    # 2026-11-04（D2）：解析/高亮缓存收进了 LRUCache —— 探针是**显式清单**, 新依赖要手补。
+    'mangox/Views/Chat/Markdown/LRUCache.swift',
+    # 2026-11-04（残留补齐）：换行判据只认 `SplitLines.isBreak`，CodeHighlighter 依赖它。
+    'mangox/Views/Chat/SplitLineText.swift',
     'mangox/Views/Chat/Markdown/MarkdownView.swift',
     'mangox/Views/Chat/Markdown/CodeBlockView.swift',
     'mangox/Views/Chat/Markdown/CodeHighlighter.swift',

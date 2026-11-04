@@ -36,54 +36,49 @@ enum CodeHighlighter {
         return attr
     }
 
-    // MARK: - P9-#7 高亮缓存 (LRU)
+    // MARK: - P9-#7 高亮缓存 (真 LRU)
 
     // 流式期 messages 数组每 chunk 变更 → 全部 CodeBlockView 重渲染;
     // 已完成代码块命中缓存后只剩流式中那一个块重算。
-    private static let cacheLock = NSLock()
-    private static var cache: [String: AttributedString] = [:]
-    private static var order: [String] = []
-    private static let cacheLimit = 32
+    //
+    // ⚠️ 必须是**真 LRU**(命中提键), 不能是 FIFO —— 见 `LRUCache` 的类型注释。
+    //    "历史块狂命中 + 流式块狂插入"恰好是 FIFO 逐出最吃亏的形态: 历史块被反复
+    //    逐出、反复重算, 而缓存看起来有上限、有逐出、一切正常。
+    // ⚠️ 计算在**锁外**跑: 高亮是纯函数, 拿不到锁的人不该被它挡着(原实现整段攥着锁)。
+    //    竞态下同一键被算两遍只是白算一次, 结果等价 ⇒ 后写覆盖先写, 无害。
+    private static let attrCache = LRUCache<AttributedString>(capacity: 32)
+    /// 键与整块缓存**分开存**(两个实例) —— 值类型不同, 混在一个字典里要擦类型。
+    private static let linesCache = LRUCache<[AttributedString]>(capacity: 32)
 
     static func highlightCached(_ code: String, language: String?) -> AttributedString {
         if code.count > 100_000 { return highlight(code, language: language) }   // 超长不进缓存
         let key = "\(language ?? "-")\u{1}\(code)"
-        cacheLock.lock(); defer { cacheLock.unlock() }
-        if let hit = cache[key] { return hit }
+        if let hit = attrCache.value(for: key) { return hit }
         let attr = highlight(code, language: language)
-        cache[key] = attr
-        order.append(key)
-        if order.count > cacheLimit, let evict = order.first {
-            order.removeFirst()
-            cache.removeValue(forKey: evict)
-        }
+        attrCache.insert(attr, for: key)
         return attr
     }
 
     // MARK: - 逐行版 (长代码块专用)
 
-    private static var lineCache: [String: [AttributedString]] = [:]
-    private static var lineOrder: [String] = []
-
     /// 按行切好的高亮结果 —— **长代码块**走这一版。
     ///
     /// ⚠️ 为什么不直接用 `highlightCached` 再拼一个 `Text`: 见 `Tune.codeBlockSplitLines`。
     ///    一句话 —— 一个 `Text` 承载 124 行 × 最长 522 字符的横滚文本, 排版是平方级的。
-    /// 键与整块缓存**分开存**(多一个 `L` 前缀), 因为两者类型不同, 混在一个字典里要擦类型。
     static func highlightLinesCached(_ code: String, language: String?) -> [AttributedString] {
         if code.count > 100_000 { return splitLines(highlight(code, language: language)) }
-        let key = "L\u{1}\(language ?? "-")\u{1}\(code)"
-        cacheLock.lock(); defer { cacheLock.unlock() }
-        if let hit = lineCache[key] { return hit }
+        let key = "\(language ?? "-")\u{1}\(code)"
+        if let hit = linesCache.value(for: key) { return hit }
         let lines = splitLines(highlight(code, language: language))
-        lineCache[key] = lines
-        lineOrder.append(key)
-        if lineOrder.count > cacheLimit, let evict = lineOrder.first {
-            lineOrder.removeFirst()
-            lineCache.removeValue(forKey: evict)
-        }
+        linesCache.insert(lines, for: key)
         return lines
     }
+
+#if SMOKE
+    /// 只给冒烟用: 两份缓存各自露出来（判"两条路径都真的接上了", 而不是其中一条漏改）。
+    static var smokeAttrCache: LRUCache<AttributedString> { attrCache }
+    static var smokeLinesCache: LRUCache<[AttributedString]> { linesCache }
+#endif
 
     /// 按换行把 AttributedString 切成多段, **属性跟着行一起走**。
     ///
@@ -91,12 +86,16 @@ enum CodeHighlighter {
     ///    `.dotMatchesLineSeparators`, 多行注释 / 跨行字符串的属性是**跨行连续**的 ——
     ///    逐行重来会把它切成一段段的孤立 token, 颜色当场变。
     /// ⚠️ 空行要保留成空段(不是丢掉): 丢掉行就等于把代码里的空行吃了, 行号也对不上。
+    /// ⚠️ 换行判据**只认 `SplitLines.isBreak`**（LF / CRLF, 不认孤立 `\r`）: 原先这里写的是
+    ///    `== "\n"`, 而 `"\r\n"` 是一个 `Character` ⇒ 一份 Windows 换行的代码块**切不开**,
+    ///    退化成"一整行" ⇒ 不限高、不逐行 = 一个 `Text` 承载整段, 平方级原样回来,
+    ///    行号还只剩一个 `1`。这与 `CodeBlockView.lineCount` 必须是**同一个判据**。
     static func splitLines(_ attr: AttributedString) -> [AttributedString] {
         var out: [AttributedString] = []
         var start = attr.startIndex
         var i = attr.startIndex
         while i < attr.endIndex {
-            if attr.characters[i] == "\n" {
+            if SplitLines.isBreak(attr.characters[i]) {
                 out.append(AttributedString(attr[start..<i]))
                 start = attr.index(afterCharacter: i)
             }

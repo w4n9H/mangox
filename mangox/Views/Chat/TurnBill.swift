@@ -124,8 +124,12 @@ enum AgentTouched {
 /// ⚠️ 返回空串（而不是原值）是有意的：项目外的文件不属于"这一轮改了什么"，
 ///    把它塞进列表会变成一条点不开的行。
 func workspaceRelativePath(_ path: String, root: String?) -> String {
-    if let root, !root.isEmpty, path.hasPrefix(root) {
-        return String(path.dropFirst(root.count)).trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+    if let root, !root.isEmpty, path.hasPrefix("/") {
+        let rootPath = URL(fileURLWithPath: root).standardizedFileURL.path
+        let fullPath = URL(fileURLWithPath: path).standardizedFileURL.path
+        let prefix = rootPath.hasSuffix("/") ? rootPath : rootPath + "/"
+        guard fullPath.hasPrefix(prefix) else { return "" }
+        return String(fullPath.dropFirst(prefix.count))
     }
     return path.hasPrefix("/") ? "" : path
 }

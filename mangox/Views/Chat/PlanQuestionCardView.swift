@@ -34,17 +34,27 @@ struct PlanQuestionCardView: View {
                     }
                 }
             }
+            // ⚠️ 这两个按钮**没有接上引擎**（动作是空闭包）。让它们看起来可点是**无声死胡同**：
+            //    用户点了没反应，只会当成"App 坏了"。2026-11-04 boss 拍板：禁用 + 明说未接入。
+            //    「确认计划」原来只按"选没选项"禁用 —— 选了之后照样是一按没反应。
             HStack(spacing: 8) {
                 if question.allowsCustom {
                     Button("自定义回答…") {}
                         .buttonStyle(CodexTonalButtonStyle())
+                        .disabled(true)
+                        .opacity(0.5)
+                        .help("计划确认还没接上引擎 —— 目前只作展示")
                 }
                 Spacer()
                 Button("确认计划") {}
                     .buttonStyle(CodexPrimaryButtonStyle())
-                    .disabled(selected == nil)
-                    .opacity(selected == nil ? 0.5 : 1)
+                    .disabled(true)
+                    .opacity(0.5)
+                    .help("计划确认还没接上引擎 —— 目前只作展示")
             }
+            Text("计划确认还没接上引擎 —— 目前只作展示")
+                .font(CodexTheme.fontTiny)
+                .foregroundStyle(CodexTheme.textMuted)
         }
         .padding(14)
         .background(CodexTheme.bgCard)

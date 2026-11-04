@@ -267,22 +267,29 @@ struct ToolCallCardView: View {
             //    **一个空盒子**，量高凭空 +36pt（实测 271 → 307）。这条是量高时抓到的。
             if !tool.details.isEmpty || !tool.imagePaths.isEmpty {
                 ToolOutputBox {
-                    VStack(alignment: .leading, spacing: 4) {
+                    // ⚠️ **必须是 `LazyVStack`**：`ToolOutputBox` 只是个 180pt 的滚动区，但它的
+                    //    内容原先被**一次性全部实例化** —— 输出五千行就是先建五千个视图再截断。
+                    //    惰性化以后只建可见的那二十来行（与用户消息展开态同款）。
+                    LazyVStack(alignment: .leading, spacing: 4) {
                         ForEach(Array(tool.details.enumerated()), id: \.offset) { _, d in
-                            HStack(alignment: .firstTextBaseline, spacing: 12) {
-                                // 分节头已是"输出"，行内同 key 不再重复打印
-                                if d.key != "输出" {
+                            // 「输出」这个 key 的分节头上面已经写过一次，行内不再重复打印；
+                            // 它也**不进 `HStack`** —— 那一层是给"键 + 短值"配对的，长正文塞进去
+                            // 会与尾部 `Spacer` 均分宽度（值只剩半栏，实测截断位置跳变）。
+                            if d.key == "输出" {
+                                SplitLineText(text: d.value,
+                                              font: CodexTheme.fontMonoXs,
+                                              color: CodexTheme.textSecondary)
+                            } else {
+                                HStack(alignment: .firstTextBaseline, spacing: 12) {
                                     Text(LK(d.key))
                                         .font(CodexTheme.fontMonoXs)
                                         .foregroundStyle(CodexTheme.textTertiary)
                                         .frame(width: 36, alignment: .leading)
+                                    SplitLineText(text: d.value,
+                                                  font: CodexTheme.fontMonoXs,
+                                                  color: CodexTheme.textSecondary)
+                                    Spacer()
                                 }
-                                Text(d.value)
-                                    .font(CodexTheme.fontMonoXs)
-                                    .foregroundStyle(CodexTheme.textSecondary)
-                                    .textSelection(.enabled)
-                                    .fixedSize(horizontal: false, vertical: true)
-                                Spacer()
                             }
                         }
 
@@ -492,7 +499,7 @@ private struct ToolOutputBox<Content: View>: View {
 struct DiffPreviewView: View {
     let diffText: String
 
-    private func color(for line: String) -> Color {
+    private func color(for line: some StringProtocol) -> Color {
         if line.hasPrefix("- ") { return CodexTheme.toolError }
         if line.hasPrefix("+ ") { return CodexTheme.toolDone }
         if line.hasPrefix("FILE ") { return CodexTheme.textSecondary }
@@ -501,7 +508,7 @@ struct DiffPreviewView: View {
         return CodexTheme.textSecondary
     }
 
-    private func bg(for line: String) -> Color {
+    private func bg(for line: some StringProtocol) -> Color {
         if line.hasPrefix("- ") { return CodexTheme.toolError.opacity(0.08) }
         if line.hasPrefix("+ ") { return CodexTheme.toolDone.opacity(0.08) }
         return Color.clear
@@ -509,20 +516,21 @@ struct DiffPreviewView: View {
 
     var body: some View {
         ScrollView(.vertical, showsIndicators: true) {
-            VStack(alignment: .leading, spacing: 0) {
-                // ⚠️ `omittingEmptySubsequences: false` —— 默认的 `true` 会**吃掉空行**，
-                //    而 diff 里的空行是改动上下文的骨架（改前的写法就漏在这里）。
-                ForEach(Array(diffText.split(separator: "\n", omittingEmptySubsequences: false)
-                                .enumerated()),
+            // ⚠️ **必须是 `LazyVStack`**：diff 一次可以几千行（整文件重写就是上万行），
+            //    `VStack` 会把每一行都先建出来再截断到 260pt。
+            LazyVStack(alignment: .leading, spacing: 0) {
+                // ⚠️ 切行走 `SplitLines.rows`（全项目只此一份），空行由它保下来 ——
+                //    diff 里的空行是改动上下文的骨架（改前的写法就漏在这里）。
+                ForEach(Array(SplitLines.rows(diffText).enumerated()),
                         id: \.offset) { _, line in
-                    let s = String(line)
-                    // verbatim: diff 是**代码**, 永远不许过本地化（`Text(s)` 虽也是 verbatim 语义,
-                    // 但显式写出来能挡住后来人"顺手改成 L()"）。
-                    Text(verbatim: s)
+                    // diff 是**代码**, 永远不许过本地化。`Text(_:)` 的 `StringProtocol` 那个 init
+                    // 与 `verbatim:` 同义（不过表）；这里传 `Substring` 是为了不再逐行复制一次
+                    // —— 真要改成本地化的写法只有一个：`LK(...)`, 那一眼就能看出来。
+                    Text(line)
                         .font(CodexTheme.fontMonoXs)
-                        .foregroundStyle(color(for: s))
+                        .foregroundStyle(color(for: line))
                         .frame(maxWidth: .infinity, alignment: .leading)
-                        .background(bg(for: s))
+                        .background(bg(for: line))
                         .padding(.horizontal, 10)
                         .textSelection(.enabled)
                 }

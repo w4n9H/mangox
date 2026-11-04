@@ -119,6 +119,10 @@ extension SmokeMain {
                 && !ComputerSettings.canAct("com.apple.systempreferences"),
               "T-ACT 设置页对这两个不许出现可勾的操作格 "
               + "(系统设置能关掉辅助功能授权本身 ⇒ 那是自我提权)")
+        // ⚠️ 2026-11-04 boss 拍板: **操作 MangoX 自己**同理 —— 它能点掉自己刚弹出的人机确认卡、
+        //    能把作用域/审批档一路放开。只挡"操作"不挡"读"（读是另一档权限, 走 activeBundles）。
+        check(!ComputerSettings.canAct("moofs.mangox") && ComputerRedline.actBannedBundles.contains("moofs.mangox"),
+              "T-ACT MangoX 自己不许被操作 (否则模型能点掉自己的确认卡 = 自我提权)")
         check(ComputerSettings.canAct("com.apple.Safari"),
               "T-ACT 普通 App 可以开操作 (对照: 不能一刀切全禁)")
 

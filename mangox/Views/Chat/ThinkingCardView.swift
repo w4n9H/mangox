@@ -63,14 +63,14 @@ struct ThinkingCardView: View {
             .buttonStyle(.plain)
 
             if expanded {
-                Text(text)
-                    .font(CodexTheme.fontSmall)
-                    .foregroundStyle(CodexTheme.textTertiary)
-                    .lineSpacing(2)
-                    .textSelection(.enabled)
+                // 推理正文可能很长（高强度思考时几万字），整段一个 `Text` 是平方级的
+                // ⇒ 走 `SplitLineText`：40 行以内与原来逐字相同，超过逐行 + 惰性。
+                SplitLineText(text: text,
+                              font: CodexTheme.fontSmall,
+                              color: CodexTheme.textTertiary,
+                              lineSpacing: 2)
                     .padding(.horizontal, 10)
                     .padding(.bottom, 8)
-                    .fixedSize(horizontal: false, vertical: true)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)

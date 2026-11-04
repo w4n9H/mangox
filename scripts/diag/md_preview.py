@@ -56,6 +56,10 @@ SOURCES = [
     'mangox/Agent/ImagePipeline.swift',
     'mangox/Views/Chat/ImagePresentation.swift',   # 图片呈现单一来源 (正文图块与工具卡共用)
     'mangox/Views/Chat/Markdown/MarkdownParser.swift',
+    # 2026-11-04（D2）：解析/高亮缓存收进了 LRUCache —— 探针是**显式清单**, 新依赖要手补。
+    'mangox/Views/Chat/Markdown/LRUCache.swift',
+    # 2026-11-04（残留补齐）：换行判据只认 `SplitLines.isBreak`，CodeHighlighter 依赖它。
+    'mangox/Views/Chat/SplitLineText.swift',
     'mangox/Views/Chat/Markdown/MarkdownView.swift',
     'mangox/Views/Chat/Markdown/MarkdownImageView.swift',
     'mangox/Views/Chat/Markdown/CodeBlockView.swift',
@@ -229,6 +233,12 @@ let longCode = """
 mysql -h 10.251.72.10 -P 9030 -u readonly -D basic_warehouse -e "SELECT channel, count(DISTINCT device_id) AS dau FROM unicom_user_install_package WHERE dt = '2026-09-23' GROUP BY channel ORDER BY dau DESC LIMIT 20;"
 """
 
+// 2026-11-04（C3）：>40 行时**限高 320pt + 内滚 + header 多一枚「全文」**。
+// 这张图要看的正是那三件事 —— 上限对不对、按钮在不在、短块有没有被误伤。
+let manyLines = (1...120).map {
+    "row \($0): SELECT channel, count(DISTINCT device_id) AS dau FROM t WHERE dt = '2026-09-23'"
+}.joined(separator: "\n")
+
 MainActor.assumeIsolated {
     try? FileManager.default.createDirectory(atPath: OUT, withIntermediateDirectories: true)
     makePNG(chart, 1440, 720, bars: 7)
@@ -309,6 +319,15 @@ MainActor.assumeIsolated {
         CodeBlockView(language: "bash", code: longCode)
         Text(verbatim: "wrap ON").foregroundStyle(CodexTheme.textSecondary)
         CodeBlockView(language: "bash", code: longCode, initialWrap: true)
+    }.padding(16), width: 560)
+
+    render("code-long-cap", VStack(alignment: .leading, spacing: 14) {
+        Text(verbatim: "120 lines · default (capped at 320pt)")
+            .foregroundStyle(CodexTheme.textSecondary)
+        CodeBlockView(language: "bash", code: manyLines)
+        Text(verbatim: "120 lines · wrap ON (still capped)")
+            .foregroundStyle(CodexTheme.textSecondary)
+        CodeBlockView(language: "bash", code: manyLines, initialWrap: true)
     }.padding(16), width: 560)
 
     render("image-edges", VStack(alignment: .leading, spacing: 14) {

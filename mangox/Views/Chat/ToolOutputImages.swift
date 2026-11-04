@@ -40,7 +40,9 @@ struct ToolOutputImages: View {
         // 工具给的路径本来就是绝对路径 (ImagePipeline.saveOriginal 产出); 仍过一遍统一解析,
         // 让 `file://` / `~` 这类形态与正文图片块**同一套口径**。
         if let path = ImagePresentation.resolvedPath(raw, basePath: nil),
-           let img = ImagePipeline.cachedImage(atPath: path) {
+           // ⚠️ 缩略通路：200pt × 2x = 400px。这一条一条横排十几张，每张都拿原图
+           //    (工具产出常常是整屏截图) 是滚动卡顿的直接来源；点开大图另有 `ImageFullSheet`。
+           let img = ImagePipeline.cachedThumbnail(atPath: path, maxPixels: 400) {
             Image(nsImage: img)
                 .resizable()
                 .aspectRatio(contentMode: .fit)

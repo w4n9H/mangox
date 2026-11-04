@@ -88,6 +88,11 @@ enum ComputerRedline {
     ///
     /// ⚠️ `系统设置` 为什么在名单里: 它能**关掉辅助功能授权本身** ⇒ 让模型操作它等于
     ///    把"谁能看界面"这个总开关交给模型, 而我们是靠那个授权活着的(自我提权)。
+    ///
+    /// ⚠️ **MangoX 自己**同理（2026-11-04 boss 拍板）: 操作自己 = 可以点掉自己刚弹出的人机确认卡、
+    ///    可以改自己的设置页（把作用域、审批档、红线开关一路放开）—— 那是把三道闸门的钥匙
+    ///    递给被闸门挡着的那个。**只挡"操作"不挡"读"**: `activeActBundles` 才过这张表,
+    ///    `activeBundles`（读）不过 ⇒ 想看自己的窗口仍然看得到。
     static let actBannedBundles: Set<String> = [
         "com.1password.1password",
         "com.agilebits.onepassword7",
@@ -95,6 +100,7 @@ enum ComputerRedline {
         "com.apple.keychainaccess",
         "com.apple.SecurityAgent",
         "com.apple.systempreferences",
+        "moofs.mangox",
     ]
 
     /// `AXMenuItemCmdModifiers` 的位掩码 → 人认识的修饰键名。
