@@ -58,7 +58,6 @@ enum SopInjection {
     static let builtins: Set<String> = [
         "com.apple.Notes",      // 备忘录 129 节点 / 268ms
         "com.apple.iCal",       // 日历   625 节点 / 781ms
-        "com.apple.Music",      // 音乐   155 节点 / 243ms
         "com.apple.mail",       // 邮件   收件箱 3000 节点 / 200 秒（手册写"别直接读"）
         "com.apple.reminders",  // 提醒事项 54 节点 / 90ms
         "com.apple.finder",     // 访达   列表视图 ~800 节点

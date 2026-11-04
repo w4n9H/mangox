@@ -17,7 +17,7 @@ import Foundation
 
 // MARK: - 动作
 
-/// 模型能做的动作。⚠️ **只有四个**, 而且每一个都必须按**编号**寻址 ——
+/// 模型能做的动作。⚠️ **只有五个**, 而且每一个都必须按**编号**寻址 ——
 /// 多一个 op 就多一条"模型以为自己能动"的路(同 `PiRpcTransport.computerToolNames` 那条注释)。
 ///
 /// 批 2b 只有 `press` / `setValue`; 批 2f 补了 `focus` / `scroll`, 两条都是**纯 AX**:
@@ -25,12 +25,21 @@ import Foundation
 ///     而"先点进去再发按键"要 CGEvent ⇒ 先把"能不能聚焦"这一半如实交出去。
 ///   · `scroll`: 长页面/长列表读不完 —— `AXSnapshot.rendered` 截断那句"需要的话让我滚动
 ///     再看"在批 2f 之前是**空头支票**(根本没有 scroll 这个 op, 模型照做只会撞"不认识的 op")。
+/// 批 2g(2026-11-04)补了 `open` —— **它不是 `press` 的兜底, 是另一个动作**:
+///   · 有些控件只暴露 `AXOpen`(日历右下角小月历的日期格子、Finder 桌面上的文件图标)。
+///     在它们身上 `AXPress` 要么根本不在动作表里, 要么**返回 0 却什么都不做**;
+///   · `AXOpen` 的语义是"打开/进入它指的东西"(打开那个文件、跳到那一天), 与"按一下"
+///     后果不同 ⇒ 必须各是一个 op。合成一个的话, 审批卡上写"打开"、实现发的却是
+///     `kAXPressAction` —— 人签的字就不是他以为的那件事。
+///   · ⚠️ 实测(2026-11-04, 日历 + Finder): `AXOpen` 报 `-25205` 却真的生效,
+///     `AXPress` 报 `0` 却空转 ⇒ **返回码两个方向都不可信**, 见 `ComputerOpenVerdict`。
 /// 坐标点击仍然不做: 它绕开编号("我看见的节点 = 我点的东西"这个等式没了), 要等人类接管那批。
 enum ComputerAction: String, Equatable, CaseIterable {
     case press
     case setValue
     case focus
     case scroll
+    case open
 
     /// 线上给的 `op` 字符串 → 动作。**不认识的 op 返回 nil**, 由调用方拒掉。
     ///
@@ -38,6 +47,37 @@ enum ComputerAction: String, Equatable, CaseIterable {
     ///    默默落到某个默认分支, 就等于"扩展侧改名之后一切照常"。
     static func parse(_ raw: String) -> ComputerAction? {
         ComputerAction(rawValue: raw.trimmingCharacters(in: .whitespacesAndNewlines))
+    }
+}
+
+/// `open` 的返回值怎么读 —— **纯函数, 所以判据留在这一侧**(helper 在没授权、没屏幕的机器上
+/// 测不了; 同 `AXAdapter` 头注释那条"能测的部分不许留在那边")。
+///
+/// ⚠️ 这二十几行是本次改动里**唯一不像"再加一个 case"的地方**, 因为实测发现 AX 的返回码
+///    在 `AXOpen` 上**不可信**, 而且两个方向都不可信:
+///      · `AXOpen` 打日历的日期格子 ⇒ 返回 **-25205**(`kAXErrorAttributeUnsupported`),
+///        可界面**真的跳到了那一天**(周视图 11/1 那周 → 11/15 那周, 三次复现);
+///      · `AXPress` 打同一个格子 ⇒ 返回 **0**(`success`), **什么都没发生**。
+///    ⇒ 照别的动作用 `guard err == .success` 的话, 一次**成功**的打开会被回成"打不开";
+///      模型下一手必然是重试 ⇒ 同一天被跳两次、同一个文件夹被打开两次。
+///    ⇒ 所以这里**反过来**: 默认按"动作已经送到、界面可能动了"记, 只有下面那一个码能证明
+///      "连元素都不在了、动作根本没发出去"。
+///    ⚠️ 为什么不是白名单(只认 0 和 -25205): 未知码按"失败"记的代价是**重复动作**,
+///      按"可能成功"记的代价是"模型多读一遍" —— 后者自愈, 前者不自愈。
+enum ComputerOpenVerdict: Equatable {
+    /// 返回 0: 送进去了。界面**可能**已经动了。
+    case accepted
+    /// 返回了别的码(实测 -25205), 但那个码在 `AXOpen` 上不可信 ⇒ 按"可能动了"记, 回执要写明。
+    case acceptedWithSuspectCode(Int32)
+    /// `kAXErrorInvalidUIElement`(-25202): 元素已经不在了, 动作**根本没发出去**。
+    case notDelivered
+
+    /// - Parameter raw: `AXUIElementPerformAction` 的原始返回码。
+    static func classify(_ raw: Int32) -> ComputerOpenVerdict {
+        if raw == 0 { return .accepted }
+        // -25202 = kAXErrorInvalidUIElement。只有它说明"连那个元素都没了"。
+        if raw == -25202 { return .notDelivered }
+        return .acceptedWithSuspectCode(raw)
     }
 }
 
@@ -350,8 +390,25 @@ enum ComputerActGuard {
                 let known = target.actions.isEmpty
                     ? "它一个动作都不提供"
                     : "它能做的只有：" + target.actions.joined(separator: " / ")
+                // ⚠️ 光说"按不了"是个**死胡同**: 这一类元素(日历日期格子 / Finder 桌面图标)
+                //    恰恰有另一条路 —— 只有 `AXOpen`。不指出来, 模型只会换个编号接着试。
+                let hint = target.actions.contains("AXOpen")
+                    ? " 它只有「打开」这条路 —— 想打开/跳到它, 改用 open。"
+                    : ""
                 return .refuse(
-                    reason: "「\(displayName(target))」按不了 —— \(known) ⇒ 没动。",
+                    reason: "「\(displayName(target))」按不了 —— \(known) ⇒ 没动。" + hint,
+                    refusal: nil)
+            }
+        case .open:
+            // ⚠️ `open` **只认 `AXOpen`**, 不拿 `AXPress` 顶替 —— 两者后果不同(打开/进入 vs
+            //    按一下), 而动作名必须指向实现真正发的那个 AX 动作(见 `ComputerAction` 头注释)。
+            guard target.actions.contains("AXOpen") else {
+                let known = target.actions.isEmpty
+                    ? "它一个动作都不提供"
+                    : "它能做的只有：" + target.actions.joined(separator: " / ")
+                let hint = target.actions.contains("AXPress") ? " 想按它的话用 press。" : ""
+                return .refuse(
+                    reason: "「\(displayName(target))」打不开 —— \(known) ⇒ 没动。" + hint,
                     refusal: nil)
             }
         case .setValue:
@@ -448,6 +505,7 @@ enum ComputerActGuard {
         case .setValue: verb = "写"
         case .focus: verb = "聚焦"
         case .scroll: verb = "滚动"
+        case .open: verb = "打开"
         }
         let who = app.trimmingCharacters(in: .whitespacesAndNewlines)
         return verb + " #" + String(index) + (who.isEmpty ? " · 当前前台" : " · " + who)

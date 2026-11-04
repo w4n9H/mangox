@@ -351,6 +351,7 @@ final class PiRpcTransport: AgentTransport {
               }
               return "按 #" + (input.index ?? "?") + app;
             }
+            if (input.op === "open") return "打开 #" + (input.index ?? "?") + app;
             if (input.op === "focus") return "聚焦 #" + (input.index ?? "?") + app;
             if (input.op === "scroll") {
               const way = input.direction === "up" ? "向上" : "向下";
@@ -1262,6 +1263,11 @@ final class PiRpcTransport: AgentTransport {
                     "tenth of the way per call -- read again to see where you landed; if it says no scroll bar",
                     "was found, that app cannot be scrolled this way, so tell the user instead of retrying.",
                     "",
+                    "`open` is for rows that offer AXOpen instead of AXPress -- calendar day cells, desktop",
+                    "file icons. On those, press returns success and does nothing. An open reply can say the",
+                    "action \"may have gone through\": the system returned an error code this action is known",
+                    "to report even when it worked. Never retry it -- read again and see what changed.",
+                    "",
                     "Always refused, whoever asks: paying or ordering, permanent deletion (Shift-Cmd-Delete",
                     "included), typing into password fields, and confirming a save sheet (it is cancelled and",
                     "the document stays untouched -- that call is the person's).",
@@ -1277,9 +1283,12 @@ final class PiRpcTransport: AgentTransport {
                         description: "App name or bundle id. Omit to act on the frontmost app.",
                     })),
                     op: Type.String({
-                        enum: ["press", "setValue", "focus", "scroll"],
+                        enum: ["press", "setValue", "focus", "scroll", "open"],
                         description: "press = invoke the control; setValue = write text into a field;"
-                            + " focus = move keyboard focus onto it; scroll = move a scroll area.",
+                            + " focus = move keyboard focus onto it; scroll = move a scroll area;"
+                            + " open = open/enter the thing this row points at (a file, a folder,"
+                            + " a day) -- the one to use when press is refused because the row"
+                            + " only offers AXOpen.",
                     }),
                     index: Type.Optional(Type.Number({
                         description: "The row number from the outline you are acting on."

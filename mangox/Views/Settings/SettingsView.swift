@@ -797,7 +797,7 @@ struct SettingsView: View {
                     Text("系统权限")
                         .font(.system(size: 13, weight: .semibold))
                         .foregroundStyle(CodexTheme.textPrimary)
-                    Text("这三把钥匙各管一件事，缺哪个哪件事就不工作。系统只会问你一次，拒绝之后不会再来问。")
+                    Text("这两项各管一件事，缺哪个哪件事就不工作。系统只会问你一次；被拒之后还能点那一页的「+」手动加回来。")
                         .font(.system(size: 11))
                         .foregroundStyle(CodexTheme.textMuted)
                         .fixedSize(horizontal: false, vertical: true)
@@ -806,11 +806,17 @@ struct SettingsView: View {
                 Button("重新检测") { refreshPermissionLamps() }
                     .fixedSize()
             }
-            // 顺序 = `ComputerPermission.allCases`(按"缺了它先坏哪件事"排), 不按弹窗出现的先后。
-            ForEach(ComputerPermission.allCases) { p in
+            // 顺序 = `ComputerPermission.keys`(按"缺了它先坏哪件事"排), 不按弹窗出现的先后。
+            // ⚠️ 不是 `allCases`: 输入监控不是一把能给的钥匙(见 `ComputerPermission.keys` 的注),
+            //    它排在这里**当说明**用 —— 画成灯 + 开关等于让人去追一个系统里不存在的条目。
+            ForEach(ComputerPermission.keys) { p in
                 Divider().overlay(CodexTheme.divider)
                 permissionRow(p)
             }
+            Divider().overlay(CodexTheme.divider)
+            permissionRow(.inputMonitoring)
+            Divider().overlay(CodexTheme.divider)
+            takeoverRow
         }
     }
 
@@ -820,10 +826,14 @@ struct SettingsView: View {
     ///    (用户点完允许要重启才生效, 那时把开关弹回去只会让人以为"点了没反应")。
     private func permissionRow(_ p: ComputerPermission) -> some View {
         let granted = permissionLamps[p] ?? false
+        let isKey = ComputerPermission.keys.contains(p)
         return HStack(alignment: .center, spacing: 10) {
-            Circle()
-                .fill(granted ? CodexTheme.toolDone : CodexTheme.textMuted.opacity(0.45))
-                .frame(width: 7, height: 7)
+            // 说明行**不画灯**: 一盏恒绿的灯等于没有灯, 只会让人以为"这一项还能给"。
+            if isKey {
+                Circle()
+                    .fill(granted ? CodexTheme.toolDone : CodexTheme.textMuted.opacity(0.45))
+                    .frame(width: 7, height: 7)
+            }
             VStack(alignment: .leading, spacing: 2) {
                 Text(p.title)
                     .font(.system(size: 13, weight: .semibold))
@@ -832,34 +842,64 @@ struct SettingsView: View {
                     .font(.system(size: 11))
                     .foregroundStyle(CodexTheme.textMuted)
                     .fixedSize(horizontal: false, vertical: true)
+                // 只有"系统设置里可能压根没有 MangoX"的那一项才需要这句, 别的项点过去就在那儿。
+                if !granted, let hint = p.manualAddHint {
+                    Text(hint)
+                        .font(.system(size: 11))
+                        .foregroundStyle(CodexTheme.textMuted.opacity(0.8))
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-            if p == .inputMonitoring {
-                Toggle("", isOn: takeoverBinding)
-                    .toggleStyle(.switch)
-                    .controlSize(.small)
-                    .labelsHidden()
-                    .fixedSize()
-            }
-            if !granted {
+            .padding(.leading, isKey ? 0 : 17)
+            if isKey, !granted {
                 // 已给就不画按钮: 一个点了没用的按钮比没有更让人困惑。
-                Button("前往系统设置") { openPermissionSettings(p) }
+                // 两个出口是两件事: 「申请」让系统把 MangoX **登记**进那一页(会弹一次窗),
+                // 「前往系统设置」只是深链 —— 列表里还没它的时候, 光深链是死路(2026-11-04 实测)。
+                HStack(spacing: 8) {
+                    Button("申请") {
+                        p.request()
+                        refreshPermissionLamps()
+                    }
                     .fixedSize()
+                    Button("前往系统设置") { openPermissionSettings(p) }
+                        .fixedSize()
+                }
             }
         }
     }
 
-    /// 接管检测的开关 —— **只表达意图**, 不负责判断"给成了没有"(那是灯的事)。
+    /// 接管检测 —— **不是权限**, 是"要不要让路"的业务意图。
     ///
-    /// ⚠️ 打开这一拍主动索要一次「输入监控」(`CGRequestListenEventAccess`): 这句会**弹系统窗**,
-    ///    所以它只能挂在用户点开关的时刻, 不能挂在 spawn 上 —— 那正是"用户什么都还没要就先被
-    ///    问要不要监听键盘"的来源。系统只问一次; 已经拒绝过再调用不会重弹(返回 false)⇒ 幂等。
-    /// ⚠️ 授权后要重启 MangoX 才生效 ⇒ 这里**不**因"没立刻变 true"把开关弹回去。真正挡住
-    ///    "没权限还去装监听"的是 spawn 那道三段与门(`ComputerSettings.shouldInstallTakeover`)。
+    /// ⚠️ 它原来长在「输入监控」那一行上: 一个 Toggle 同时表达"要不要接管"和"申请权限"
+    ///    (打开时顺手调 `CGRequestListenEventAccess()`)。那句话在真机上**永远不弹窗** ——
+    ///    辅助功能一给, preflight 就恒 true, 系统认为早已具备 ⇒ 开关只做到一半的事, 而且
+    ///    是在用户看不见的那一半里撒谎(2026-11-04 实测: 点开它, 系统设置那一页毫发无动)。
+    ///    拆开之后: 权限归上面那两个出口, 意图归这一行。
+    private var takeoverRow: some View {
+        HStack(alignment: .center, spacing: 10) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("接管检测")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(CodexTheme.textPrimary)
+                Text("开着：你一动键鼠，我就停下让路。关着：我正要点一个按钮、你同时动鼠标，落到谁手里是随机的。")
+                    .font(.system(size: 11))
+                    .foregroundStyle(CodexTheme.textMuted)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            Toggle("", isOn: takeoverBinding)
+                .toggleStyle(.switch)
+                .controlSize(.small)
+                .labelsHidden()
+                .fixedSize()
+        }
+    }
+
+    /// 接管检测的开关 —— **只表达意图**, 不再兼任"申请权限"(那句话在这里是空转, 见上)。
     private var takeoverBinding: Binding<Bool> {
         Binding(get: { computer.takeoverEnabled },
                 set: { on in
-                    if on { _ = CGRequestListenEventAccess() }
                     computer.takeoverEnabled = on
                     refreshPermissionLamps()
                 })

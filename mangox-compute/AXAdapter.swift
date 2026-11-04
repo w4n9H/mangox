@@ -51,8 +51,8 @@ enum AXAdapter {
     }
 
     /// **一次 read 的墙钟上限**(秒)。2026-11-02 实测逼出来的数:
-    ///   备忘录 129 节点 268ms · 日历 625 节点 781ms · 音乐 155 节点 243ms —— 正常 App 都在
-    ///   1 秒以内; 而**邮件收件箱(799 封)走了 3000 节点、花了 200 秒**(67ms/节点)。
+    ///   备忘录 129 节点 268ms · 日历 625 节点 781ms —— 正常 App 都在 1 秒以内;
+    ///   而**邮件收件箱(799 封)走了 3000 节点、花了 200 秒**(67ms/节点)。
     ///   12 秒 = 对正常 App 留 15 倍余量, 对读不动的 App 立刻止损。
     ///
     /// ⚠️ 这不是"体验优化", 是**安全项**: helper 是单线程串行(accept → 处理 → 关闭),
@@ -329,6 +329,18 @@ enum AXAdapter {
     /// 按。失败**不重试、不退到坐标点击** —— 按不下去就如实报, 让人来。
     static func press(_ el: AXUIElement) -> AXError {
         AXUIElementPerformAction(el, kAXPressAction as CFString)
+    }
+
+    /// 打开/进入 —— `AXOpen`。
+    ///
+    /// ⚠️ 它与 `press` 是**两个动作**, 不是同一个动作的两种叫法。实测(2026-11-04):
+    ///    日历右下角小月历的日期格子、Finder 桌面上的文件图标都**只暴露 `AXOpen`**,
+    ///    在它们身上 `AXPress` 有两个坏法 —— 要么根本不在动作表里, 要么**返回 0 却什么都不做**。
+    /// ⚠️ 这里**没有 `kAXOpenAction` 这个常量**(苹果的 `AXActionConstants.h` 里没有它),
+    ///    只能写字符串 —— 它是个非正式动作, 所以更不能拿返回码当判据:
+    ///    同一次 `AXOpen` 报 `-25205` 而界面确实跳了。码怎么读住 `ComputerOpenVerdict`。
+    static func open(_ el: AXUIElement) -> AXError {
+        AXUIElementPerformAction(el, "AXOpen" as CFString)
     }
 
     /// 写值。只有 `ComputerActGuard.isWritableRole` 放行的角色会走到这里。

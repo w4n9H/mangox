@@ -24,13 +24,15 @@ extension SmokeMain {
         check(ComputerAction.parse("setValue") == .setValue, "T-ACT setValue 认得")
         check(ComputerAction.parse("focus") == .focus, "T-ACT focus 认得 (批 2f)")
         check(ComputerAction.parse("scroll") == .scroll, "T-ACT scroll 认得 (批 2f)")
+        check(ComputerAction.parse("open") == .open,
+              "T-ACT open 认得 (2026-11-04: 只暴露 AXOpen 的格子靠它才动得了)")
         check(ComputerAction.parse(" press ") == .press, "T-ACT 两侧空白不算错 (线上偶尔带)")
         check(ComputerAction.parse("click") == nil,
               "T-ACT 坐标点击仍然不做 ⇒ 认不出来, 不许默默当成 press")
         check(ComputerAction.parse("PRESS") == nil,
               "T-ACT 大小写敏感: 线上写错了要变红, 不许看着差不多就认")
-        check(ComputerAction.allCases.count == 4,
-              "T-ACT 动作面只有四个 —— 多一个就多一条「模型以为自己能动」的路")
+        check(ComputerAction.allCases.count == 5,
+              "T-ACT 动作面只有五个 —— 多一个就多一条「模型以为自己能动」的路")
 
         // 方向是 scroll 的**独立参数**, 不是一个 op: 认不出来就必须拒(判据 ⑧ 的第一支),
         // 不许退回"那就往下滚"。
@@ -320,6 +322,56 @@ extension SmokeMain {
             target: scrollable, window: .none) == .allow(.scroll),
               "T-ACT 基线对照: 有滚动条 + 说了方向 ⇒ 放行")
 
+        // MARK: ⑧b `open` —— 与 `press` 是两个动作, 谁也不许顶替谁 (2026-11-04)
+
+        // 实测事实(2026-11-04): 日历右下角小月历的日期格子、Finder 桌面上的文件图标
+        // **只暴露 `AXOpen`**; 在它们身上 `AXPress` 返回 0 却什么都不做。
+        let openOnly = ComputerActTarget(role: "AXButton", title: "15, 星期日, 十一月",
+                                         actions: ["AXOpen"])
+        check(ComputerActGuard.evaluate(request: req(.open), scope: scope(),
+                                        target: openOnly, window: .none) == .allow(.open),
+              "T-ACT 只暴露 AXOpen 的格子 ⇒ open 放行 (从前这条路整个是死的)")
+
+        // ⚠️ 这一条是**本次改动的起因**: 同一个格子上 press 仍然被拒, 但拒绝语必须**指路**。
+        //    只说「按不了」是个死胡同 —— 模型只会换个编号接着试, 而它试一万次也按不动。
+        if case .refuse(let why, _) = ComputerActGuard.evaluate(
+            request: req(.press), scope: scope(), target: openOnly, window: .none) {
+            check(why.contains("按不了") && why.contains("open"),
+                  "T-ACT 只有 AXOpen 的格子: press 照旧拒, 但要说清另一条路是 open 实际:\(why)")
+        } else {
+            check(false, "T-ACT 只有 AXOpen 的元素不许被 press 放行 (AXPress 在它身上返回 0 却空转)")
+        }
+
+        // 反方向: 只有 AXPress 的按钮不许被 open 顶替 —— 否则卡片上写「打开」、实现发的是
+        // `kAXPressAction`, 人签的字就不是他以为的那件事。
+        if case .refuse(let why, _) = ComputerActGuard.evaluate(
+            request: req(.open), scope: scope(), target: button, window: .none) {
+            check(why.contains("打不开") && why.contains("press"),
+                  "T-ACT 只有 AXPress 的按钮: open 拒, 且指路去 press 实际:\(why)")
+        } else {
+            check(false, "T-ACT open 不许拿 AXPress 顶替 (两个动作后果不同, 卡片上写的必须是真做的那件事)")
+        }
+        check(ComputerActGuard.evaluate(
+            request: req(.open), scope: scope(),
+            target: ComputerActTarget(role: "AXGroup", title: "背景", actions: []),
+            window: .none) != .allow(.open),
+              "T-ACT 一个动作都不提供的容器: open 也拒 (对照: 不是「凡是 open 都放行」)")
+
+        // MARK: ⑧c open 的返回码怎么读 —— 本次改动里唯一不能照抄别的动作的地方
+
+        // 实测: `AXOpen` 打日期格子返回 -25205 而界面确实跳了; 同一格子 `AXPress` 返回 0
+        // 却什么都没发生 ⇒ **两个方向的返回码都不可信**。
+        check(ComputerOpenVerdict.classify(0) == .accepted,
+              "T-ACT open 返回 0 ⇒ 送进去了")
+        check(ComputerOpenVerdict.classify(-25205) == .acceptedWithSuspectCode(-25205),
+              "T-ACT open 返回 -25205 **不许当失败** (实测: 报它, 界面照样跳了)")
+        check(ComputerOpenVerdict.classify(-25202) == .notDelivered,
+              "T-ACT 只有「元素已失效」这一个码能证明动作没发出去")
+        // 反向: 未知码默认按「可能已经送出」记。代价是模型多读一遍(自愈); 按失败记的代价是
+        // **重复动作**(再跳一天 / 再开一次文件夹), 那个不自愈。
+        check(ComputerOpenVerdict.classify(-25200) == .acceptedWithSuspectCode(-25200),
+              "T-ACT 未知码按「可能已送出」记 (按失败记会让模型重试 ⇒ 重复打开)")
+
         // MARK: ⑨ 审批卡上那一行
 
         check(ComputerActGuard.preview(action: .press, app: "Safari", index: 12) == "按 #12 · Safari",
@@ -331,6 +383,8 @@ extension SmokeMain {
         check(ComputerActGuard.preview(action: .scroll, app: "", index: 4) == "滚动 #4 · 当前前台",
               "T-ACT scroll 那一行: 只承诺编号 + App, 方向不写在这里 "
               + "(滚错方向可以再滚回来, 不必占用卡上那一行)")
+        check(ComputerActGuard.preview(action: .open, app: "日历", index: 21) == "打开 #21 · 日历",
+              "T-ACT open 那一行: 卡上写「打开」, 实现就必须真发 AXOpen (不许悄悄换成 AXPress)")
 
         // MARK: ⑨b 坐标寻址的参数合法性 (批 3a) —— 坐标是**输入方式**, 不是第二套寻址
 
@@ -346,6 +400,11 @@ extension SmokeMain {
         } else {
             check(false, "T-ACT 非 press 带坐标必须拒 —— 否则就是把坐标当成了通用寻址")
         }
+        // `open` 也只走编号: 它要知道打开的是哪一格。而且坐标那条路本来就要求"翻译回来的元素
+        // 得在快照里认得出是第几号" —— 给它开坐标一点用都没有, 只是多一条绕路。
+        check(ComputerPointRule.refusal(action: .open, index: 0,
+                                        point: ComputerPoint(x: 420, y: 300)) != nil,
+              "T-ACT open 不吃坐标 (只按编号) —— 它与 press 是两个动作, 不共用寻址方式")
         if let why = ComputerPointRule.refusal(action: .press, index: 12,
                                                point: ComputerPoint(x: 420, y: 300)) {
             check(why.contains("只能给一个"),

@@ -46,7 +46,7 @@ extension SmokeMain {
         let sample = doc(
             section("备忘录", "com.apple.Notes", "4.11", "### 找\nfolder 在 outline。\n" + filler)
             + section("日历", "com.apple.iCal", "14.0", "### 找\n日历名住值里。\n" + filler)
-            + section("音乐", "com.apple.Music", "1.4.6", "### 找\n名字可能住 image。\n" + filler)
+            + section("提醒事项", "com.apple.reminders", "7.0", "### 找\n列表名住 cell 的 title。\n" + filler)
             + section("Chrome", "com.google.Chrome", "130", "### 找\n地址栏。\n" + filler))
 
         // ② 只注入名单内的, 顺序 = **手册里的顺序**（写的人把常用的放前面, 这个顺序
@@ -55,7 +55,7 @@ extension SmokeMain {
                                      actBundles: ["com.apple.Notes"], manual: sample, now: now)
         check(two.injected == ["com.apple.Notes", "com.apple.iCal"],
               "T-SOP 只注入名单内的小节, 顺序跟着手册走 (实际: \(two.injected))")
-        check(!(two.text ?? "").contains("com.apple.Music"),
+        check(!(two.text ?? "").contains("com.apple.reminders"),
               "T-SOP 名单外的 App 小节不许漏进来 (勾都没勾, 教了就是越权)")
 
         // ③ 节头必须写清**当前能不能点**: 它决定模型敢不敢 act
@@ -69,9 +69,12 @@ extension SmokeMain {
         check(seg.hasPrefix(SopInjection.token),
               "T-SOP 段以契约 token 开头 (\(SopInjection.token))")
         check(seg.components(separatedBy: "**通则**").count == 2,
-              "T-SOP 通则只出现一次 (六节各带一遍 = 同一句话付六次 token)")
-        check(seg.contains("验证于 2026-11-02"),
-              "T-SOP 段头带整份手册的验证日期")
+              "T-SOP 通则只出现一次 (每节各带一遍 = 同一句话付 N 次 token)")
+        // ⚠️ 判据从**真源**取日期, 不许在这里写一个字面量: 这条判的是"段头带不带日期",
+        //    不是"日期是哪一天"。写死的话, 每次重跑探针 → 改 `verifiedOn` → 这条必红,
+        //    而红的原因和它要守的东西毫无关系(2026-11-04 实测红过一次)。
+        check(seg.contains("验证于 \(SopManual.verifiedOn)"),
+              "T-SOP 段头带整份手册的验证日期 (实际: \(SopManual.verifiedOn))")
 
         // ⑤ 白名单: 第三方 App 就算手册里有那一节、名单里也勾了, 也不注入、不点名
         let third = SopInjection.block(bundles: ["com.google.Chrome"], actBundles: [],
@@ -84,9 +87,12 @@ extension SmokeMain {
               "T-SOP 名单里混着第三方 App 时只注入内置那几节 (实际: \(mixed.injected))")
 
         // ⑥ 白名单里有、手册里没那一节 = **两边不同步**（加了 App 忘了写手册）⇒ 必须点名
-        let gap = SopInjection.block(bundles: ["com.apple.reminders"], actBundles: [],
+        //    ⚠️ 造"漏节"的 App 必须**白名单里有、样本里没有**: 曾用 reminders, 后来样本补上了它 ⇒
+        //       `missing` 变空 ⇒ 这条立刻变红（不是静默, 比假绿好）。但红的原因与它守的东西无关,
+        //       而最省事的"修法"是把断言删掉 —— 那就真的没有门了。所以换成 finder。
+        let gap = SopInjection.block(bundles: ["com.apple.finder"], actBundles: [],
                                      manual: sample, now: now)
-        check(gap.missing.contains { $0.bundle == "com.apple.reminders" && $0.why.contains("没有这一节") },
+        check(gap.missing.contains { $0.bundle == "com.apple.finder" && $0.why.contains("没有这一节") },
               "T-SOP 手册漏了一节要点名 (否则「扩白名单」这个动作永远没有可见后果)")
 
         // ⑦ 节头的 bundle 认不出来 ⇒ 整节丢弃（不猜 —— 猜错就是把 A 的手册教给 B）

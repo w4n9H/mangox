@@ -198,6 +198,14 @@ extension SmokeMain {
         let wideText = wideSnap.rendered()
         check(wideText.contains("还有 80 项未显示"),
               "T-COMPUTER 超过上限(120)要**如实报出**剩下的 80 项 —— 否则模型把前 120 条当成全部")
+        // ⚠️ 这两条守的是**提示的诚实度**, 不是措辞好看: 旧文案"需要的话让我滚动/展开再看"在日历上是
+        //    空头承诺 —— 被截的是窗口顶部工具栏, 固定不动、滚也滚不到（2026-11-04 探针实测）。
+        //    模型照着它去滚 ⇒ 找不到 ⇒ 再读一遍, 两轮都白烧。所以两条都得钉住:
+        //    ① 不许再出现"滚动就能看到"这种承诺 ② 必须说清被截的可能在可视区里。
+        check(!wideText.contains("让我滚动") && !wideText.contains("滚动再看"),
+              "T-COMPUTER 截断提示不许承诺「滚动/展开就能看到被截的项」 (工具栏滚也滚不到)")
+        check(wideText.contains("滚也滚不到"),
+              "T-COMPUTER 截断提示要说清「被截的可能在可视区里、只是没渲染」 (否则模型只会反复往下滚)")
         check(!wideText.contains("[121]"),
               "T-COMPUTER 上限外的不许渲染出来 (上界是硬上界, 不是'大概')")
 
@@ -221,8 +229,16 @@ extension SmokeMain {
               "T-COMPUTER 新增按钮 ⇒ 报一条新增")
 
         let d3 = AXSnapshot.diff(from: snap, to: snap)
-        check(d3.isEmpty && d3.rendered().contains("无"),
-              "T-COMPUTER 没变化也要说出来 (\"界面没动\"本身是信息, 静默会让模型以为读失败了)")
+        check(d3.isEmpty && d3.rendered().contains("变化"),
+              "T-COMPUTER 没变化也要说出来 (\"没变化\"本身是信息, 静默会让模型以为读失败了)")
+        // ⚠️ 空差分**只**证明"这份文本快照没变", 不是"界面没动"(2026-11-04 端到端实测: 小月历
+        //    open 一个日期, 界面跳了, 而 AX 文本一个字都没变 —— 选中/高亮只改绘制)。
+        //    旧文案断言"界面没动"是过度断言: 回执前半句刚说"可能已经打开了, 看下面重读的结果",
+        //    后半句又说"界面没动" ⇒ 模型当成白做、重试一次不可逆的动作。
+        check(!d3.rendered().contains("界面没动"),
+              "T-COMPUTER 空差分不许断言「界面没动」(它只证明文本没变; 选中/高亮这类读不到)")
+        check(d3.rendered().contains("文本") && d3.rendered().contains("读不到"),
+              "T-COMPUTER 空差分要说清这是「文本层面」的结论, 并点明哪类变化读不到")
 
         // AXIdentifier 优先当差分键 —— 索引路径在"前面插入一个兄弟"时会整批错位
         let idTree = AXNode(role: "AXWindow", children: [
@@ -981,7 +997,20 @@ extension SmokeMain {
         }
         check(ComputerPermission.allCases.map(\.rawValue)
                 == ["accessibility", "inputMonitoring", "screenRecording"],
-              "T-COMPUTER 三把钥匙的顺序 = 显示顺序 (缺了它先坏哪件事), 不按弹窗出现的先后")
+              "T-COMPUTER 深链的顺序 = 显示顺序 (缺了它先坏哪件事), 不按弹窗出现的先后")
+
+        // ⑤ (批 2i) UI 只画**两把**钥匙 —— `inputMonitoring` 留在 enum 里(深链与 helper 判据都要),
+        //    但它**不许进 `keys`**: 辅助功能一给, `CGPreflightListenEventAccess` 就恒 true, 那个列表
+        //    里根本没有条目可给。画成灯 + 开关 = 让用户去追一个不存在的东西(2026-11-04 boss 实测)。
+        check(ComputerPermission.keys == [.accessibility, .screenRecording],
+              "T-COMPUTER UI 只画辅助功能与屏幕录制两把钥匙 (实际 \(ComputerPermission.keys.map(\.rawValue)))")
+        check(!ComputerPermission.keys.contains(.inputMonitoring),
+              "T-COMPUTER 输入监控不许再画成第三把钥匙 (它恒真、也无从授予)")
+        // 「点 + 手加」这句只能挂在真正会缺条目那一项上: 挂在辅助功能上会让人去手加一个早就有的东西。
+        check(ComputerPermission.screenRecording.manualAddHint != nil
+                && ComputerPermission.accessibility.manualAddHint == nil
+                && ComputerPermission.inputMonitoring.manualAddHint == nil,
+              "T-COMPUTER 「系统设置里没有它？点 + 手加」这句只挂给屏幕录制")
     }
 
     /// 拿 node 真解析一遍扩展源码。

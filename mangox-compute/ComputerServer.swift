@@ -547,6 +547,25 @@ final class ComputerServer {
                 guard err == .success else { return .failure(actFailure(err, "press")) }
                 headline = atPrefix + "按了 #\(resolvedIndex)「\(name)」。"
 
+            case .open:
+                // ⚠️ **这一支故意不写 `guard err == .success`** —— 与上面三个动作不同。
+                //    `AXOpen` 的返回码不可信(实测: 报 -25205 而界面确实跳了; 反过来 `AXPress`
+                //    报 0 却空转), 照 press 那样判就会把一次**成功**的打开回成"打不开",
+                //    模型接着重试 ⇒ 同一天被跳两次 / 同一个文件夹被打开两次。
+                //    怎么读这个码住 `ComputerOpenVerdict`(纯函数, 在 App 侧, 冒烟里钉过)。
+                let err = AXAdapter.open(el)
+                switch ComputerOpenVerdict.classify(err.rawValue) {
+                case .accepted:
+                    headline = atPrefix + "打开了 #\(resolvedIndex)「\(name)」。"
+                case .acceptedWithSuspectCode(let code):
+                    headline = atPrefix + "打开了 #\(resolvedIndex)「\(name)」—— 它返回的是 \(code)"
+                        + "(「不支持」那个码), 但这个码在 AXOpen 上不可信(实测: 报它, 界面照样动)。"
+                        + "所以我按「可能已经打开了」记。别重试同一个动作, 看下面这次重读的结果。"
+                case .notDelivered:
+                    return .failure("那个控件已经不在了(AX 返回 \(err.rawValue)) ⇒ 什么都没做。"
+                                    + "重新读一次再决定。")
+                }
+
             case .setValue:
                 let err = AXAdapter.setValue(el, text)
                 guard err == .success else { return .failure(actFailure(err, "setValue")) }

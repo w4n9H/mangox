@@ -814,6 +814,71 @@ if ! has_code mangox/Models/ComputerRedline.swift "\"$APP_BUNDLE_ID\""; then
     exit 1
 fi
 
+# ③n12 `open` 这个动作的三条源码事实 —— 全是"写错了照样编译过、只在真机上静默变味"的。
+#   ① 它必须发 `AXOpen`, 不是 `AXPress`: 两个动作后果不同(打开文件 vs 按一下), 混了不会报错,
+#      只会让审批卡上写的"打开"变成假的。
+#   ② `AXOpen` **没有 `kAXOpenAction` 常量**(苹果的 `AXActionConstants.h` 里没有, 实测编译不过),
+#      只能写字符串 —— 所以这里钉的就是那个字符串。
+#   ③ `ComputerServer` 的 `.open` 那一支**不许** `guard err == .success`: 实测 AXOpen 报 -25205
+#      而界面确实动了(三次复现) ⇒ 照别的动作判会把成功回成失败, 模型重试 ⇒ 同一天跳两次。
+OPEN_FUNC_LINE="$(awk '/static func open\(/ { print NR; exit }' mangox-compute/AXAdapter.swift)"
+if [ -z "$OPEN_FUNC_LINE" ]; then
+    echo "FAIL - AXAdapter 里找不到 open() (③n12 无法判定)" >&2
+    exit 1
+fi
+# ⚠️ 按**边界**切块, 不按"往后数 N 行": 数行数会滑进隔壁函数/分支 —— 第一版就是
+#    窗口 22 行, 结果把下一个 `case .setValue` 的 `guard err == .success` 算进了 `.open`,
+#    门当场红在自己人身上(那次红是**门写错了**, 不是代码错了)。
+# ⚠️ 切块**先剥注释**: `.open` 那一段的注释里原样写着那行 guard 的拼法(说的就是"不许这么写"),
+#    不剥注释的话门会抓到自己的说明文字 —— 门判的是代码, 不是注释。
+open_func_body() {
+    awk -v s="$OPEN_FUNC_LINE" 'NR < s { next } /^[ \t]*\/\// { next }
+        NR > s && /^    \}$/ { print; exit } { print }' mangox-compute/AXAdapter.swift
+}
+open_case_block() {
+    awk -v s="$OPEN_CASE_LINE" 'NR < s { next } /^[ \t]*\/\// { next }
+        NR > s && /^            case \./ { exit } { print }' mangox-compute/ComputerServer.swift
+}
+if ! open_func_body | grep -cF '"AXOpen" as CFString' >/dev/null; then
+    echo "FAIL - AXAdapter.open 没有发 AXOpen (换了动作就是换了后果, 而卡片上照样写着「打开」)" >&2
+    exit 1
+fi
+if open_func_body | grep -cF 'kAXPressAction' >/dev/null; then
+    echo "FAIL - AXAdapter.open 里出现了 kAXPressAction —— open 不许退化成「按」" >&2
+    exit 1
+fi
+OPEN_CASE_LINE="$(awk '/case \.open:/ { print NR; exit }' mangox-compute/ComputerServer.swift)"
+if [ -z "$OPEN_CASE_LINE" ]; then
+    echo "FAIL - ComputerServer 里找不到 case .open (③n12 无法判定)" >&2
+    exit 1
+fi
+if ! open_case_block | grep -cF 'ComputerOpenVerdict.classify' >/dev/null; then
+    echo "FAIL - ComputerServer 的 .open 分支没走 ComputerOpenVerdict (AXOpen 的返回码两个方向都不可信)" >&2
+    exit 1
+fi
+if open_case_block | grep -cE 'guard err == \.success' >/dev/null; then
+    echo "FAIL - .open 分支里出现了 guard err == .success —— 实测 AXOpen 报失败却生效, 这样会把成功回成失败" >&2
+    exit 1
+fi
+
+# ③n13 三把钥匙里**只有两把申请得动** —— 全是"写错了照样编译过、只在真机上静默变味"的。
+#   ① 屏幕录制的「申请」必须真的调 `CGRequestScreenCaptureAccess()`: 只 preflight 的话 App
+#      永远不进系统设置那一页, 用户点「前往系统设置」看到的是"无项目"(2026-11-04 实测)。
+#   ② 设置页**不许**再出现 `CGRequestListenEventAccess`: 辅助功能一给, 它恒 true ⇒ 调它不弹窗、
+#      不写 TCC、列表里仍无条目, 挂在开关上只是让用户以为"申请过了"。那条路 2026-11-04 拆掉。
+if ! has_code mangox/Models/ComputerPermission.swift 'CGRequestScreenCaptureAccess\(\)'; then
+    echo "FAIL - ComputerPermission.request 没调 CGRequestScreenCaptureAccess (只 preflight 的话 App 永远不进那一页)" >&2
+    exit 1
+fi
+if has_code mangox/Models/ComputerPermission.swift 'CGRequestListenEventAccess'; then
+    echo "FAIL - ComputerPermission 里出现了 CGRequestListenEventAccess —— 这项在真机上恒真, 申请是空转" >&2
+    exit 1
+fi
+if has_code mangox/Views/Settings/SettingsView.swift 'CGRequestListenEventAccess'; then
+    echo "FAIL - 设置页又在申请输入监控了 (辅助功能涵盖它; 那句不弹窗也不登记, 只让人以为申请过)" >&2
+    exit 1
+fi
+
 # ③o helper 的作用域**变了就得重启** (2026-10-29 boss「我明明加了」)。
 #     helper 的作用域是**启动那一刻读 env 定死的**, 进程一起就再也不看 env。而 `start` 原来
 #     只问"进程还在跑吗", 不问"名单还是不是那一批" ⇒ 把 Safari 改成 Calculator 之后, 助手

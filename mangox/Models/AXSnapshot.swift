@@ -395,7 +395,11 @@ struct AXSnapshot: Equatable {
             lines.append(Self.line(row))
         }
         if rows.count > limit {
-            lines.append("… 还有 \(rows.count - limit) 项未显示 (需要的话让我滚动/展开再看)")
+            // ⚠️ 措辞是有代价的(2026-11-04): 旧文案写"需要的话让我滚动/展开再看" —— 那是**空头承诺**。
+            //    被 120 行上限截掉的可能是窗口**顶部工具栏**, 它固定在可视区里, 滚一辈子也滚不到
+            //    (日历实锤: 129 行, 尾部 9 行 = `日/周/月/年` 四个视图按钮)。模型照着旧提示去滚,
+            //    找不到就再读一遍 —— 两轮都白烧。截断 ≠ "在可视区外", 这一句必须说清。
+            lines.append("… 还有 \(rows.count - limit) 项未显示 (这是渲染上限: 被截的可能是工具栏这类固定区域 —— 它在可视区里, 滚也滚不到)")
         }
         return lines.joined(separator: "\n")
     }
@@ -427,8 +431,13 @@ struct AXSnapshot: Equatable {
         var isEmpty: Bool { added.isEmpty && removed.isEmpty && changed.isEmpty }
 
         /// 拼成模型看的一句话。空差分也要说出来 —— "什么都没变"本身是信息。
+        ///
+        /// ⚠️ 空差分**只**证明"这份文本快照没变", 不是"界面没动"(2026-11-04 真机端到端实测):
+        ///    小月历上 open 一个日期, 界面确实跳了, 可 AX 文本里一个字都不变 —— 选中、高亮
+        ///    这类变化**只改绘制**。旧文案写"界面没动"是**过度断言**: 回执前半句刚说"可能
+        ///    已经打开了, 看下面重读的结果", 后半句又断言"界面没动" ⇒ 模型会当成动作白做、重试。
         func rendered() -> String {
-            if isEmpty { return "— 变化:无(界面没动)" }
+            if isEmpty { return "— 变化:文本上没看出变化(界面可能已经动了 —— 选中、高亮这类只改颜色, 我读不到)" }
             var parts: [String] = []
             if !changed.isEmpty {
                 let s = changed.map { one -> String in

@@ -91,8 +91,8 @@ mangox/Views/Settings/SettingsCategory.swift|集成
 mangox/Models/AXSnapshot.swift| (值:\"%@\")
 mangox/Models/AXSnapshot.swift|# 快照 · 前台:%@ · 窗口:%@
 mangox/Models/AXSnapshot.swift|— 变化:
-mangox/Models/AXSnapshot.swift|— 变化:无(界面没动)
-mangox/Models/AXSnapshot.swift|… 还有 %lld 项未显示 (需要的话让我滚动/展开再看)
+mangox/Models/AXSnapshot.swift|— 变化:文本上没看出变化(界面可能已经动了 —— 选中、高亮这类只改颜色, 我读不到)
+mangox/Models/AXSnapshot.swift|… 还有 %lld 项未显示 (这是渲染上限: 被截的可能是工具栏这类固定区域 —— 它在可视区里, 滚也滚不到)
 mangox/Models/AXSnapshot.swift|改:
 mangox/Models/AXSnapshot.swift|新增:
 mangox/Models/AXSnapshot.swift|消失:
@@ -183,3 +183,12 @@ mangox/Models/ComputerAct.swift|坐标是全局屏幕坐标, 左上原点, 和�
 mangox/Models/ComputerTakeover.swift|刚才有人动了鼠标 / 键盘 ⇒ 这次没动(界面一下都没动)。
 mangox/Models/ComputerTakeover.swift|人手还在键鼠上时我不抢 —— 你让我继续, 我下一步接着来。
 mangox/Agent/PiRpcTransport.swift|按 (
+
+# 2026-11-04 `open` (P18 批 2g) —— 与批 2f 同一族: 判据话术进的是**模型上下文**,
+# 卡片那一行是扩展 JS 拼的。豁免的只是「必须接线」这一道, 译文仍在词表里。
+# ⚠️ 两条 hint 都是**前导空格**开头(接在前一句后面), 尾端无空格 —— 尾空格登不进来。
+mangox/Models/ComputerAct.swift|打开
+mangox/Models/ComputerAct.swift| 它只有「打开」这条路 —— 想打开/跳到它, 改用 open。
+mangox/Models/ComputerAct.swift| 想按它的话用 press。
+mangox/Models/ComputerAct.swift|「%@」打不开 —— %@ ⇒ 没动。
+mangox/Agent/PiRpcTransport.swift|打开 #

@@ -19,12 +19,15 @@ import ApplicationServices
 // MARK: - 待测清单
 
 /// 顺序 = 汇报顺序。`label` 只用于打印, 判据一律走 bundle id。
+/// ⚠️ 这份清单与 `SopInjection.builtins` 是**同一批**（手册只写量过的 App）——
+///    增删要两边一起动, 否则「手册里没有这一节」会点名。
+///    音乐（`com.apple.Music`）2026-11-04 移出: 它量出来最便宜（99 节点 / 71ms）也最简单,
+///    没有值得写进手册的坑, 留着只是每轮多付一段提示词。
 let defaultTargets: [(bundle: String, label: String)] = [
     ("com.apple.iCal", "日历"),
     ("com.apple.mail", "邮件"),
     ("com.apple.Notes", "备忘录"),
     ("com.apple.reminders", "提醒事项"),
-    ("com.apple.Music", "音乐"),
     ("com.apple.finder", "访达"),
 ]
 

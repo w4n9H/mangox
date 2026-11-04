@@ -7,7 +7,7 @@
    **本文件由 scripts/l10n/gen_strings.py --write 生成, 别手改** ——
    译文改 scripts/l10n/en_values.py 的 VALUES, 再跑 --write。
 
-   条数: 952
+   条数: 960
 */
 
 " (值:\"%@\")" = " (value: %@)";
@@ -16,7 +16,9 @@
 " ⇒ 没动。重新读一次再决定。" = " ⇒ nothing was done. Read again before deciding.";
 " 别反复换节点试。" = " rather than trying one row after another.";
 " 字)" = " chars)";
+" 它只有「打开」这条路 —— 想打开/跳到它, 改用 open。" = " That element only takes open — to open or jump to it, use open.";
 " 待重启" = " Restart required";
+" 想按它的话用 press。" = " To press it instead, use press.";
 " 未选" = " none";
 " 电脑" = " Computer";
 "# 快照 · 前台:%@ · 窗口:%@" = "# Snapshot · front:%@ · window:%@";
@@ -128,10 +130,10 @@
 "· 内层 %lld" = "· Nested %lld";
 "· 最近：" = "· Latest: ";
 "— 变化:" = "— Changes:";
-"— 变化:无(界面没动)" = "— Changes: none (nothing moved)";
+"— 变化:文本上没看出变化(界面可能已经动了 —— 选中、高亮这类只改颜色, 我读不到)" = "— Changes: no text change I can see (the UI may well have moved — selection or highlight only repaints, and I cannot read that)";
 "… 其余改动省略" = "… remaining changes omitted";
 "… 还有 %lld 条" = "… %lld more";
-"… 还有 %lld 项未显示 (需要的话让我滚动/展开再看)" = "… %lld more not shown (ask me to scroll or expand if you need them)";
+"… 还有 %lld 项未显示 (这是渲染上限: 被截的可能是工具栏这类固定区域 —— 它在可视区里, 滚也滚不到)" = "… %lld more not shown (render cap: what got cut may be a toolbar or another fixed area — it is on screen, scrolling will not reach it)";
 "→ 回落 home" = "→ falls back to home";
 "⚠️ 关掉密钥闸后只剩白名单 + 服务商过滤, 建议名单内各域都已配 DMARC" = "⚠️ With the secret gate off, only the allowlist and your provider's filtering remain — make sure every allowlisted domain has DMARC configured.";
 "⚠️ 当前热键被其他 App 占用 (注册失败), 请换一个组合键" = "⚠️ Another app already owns this hotkey (registration failed); pick a different combination.";
@@ -146,6 +148,7 @@
 "「%@」不在开放名单里 ⇒ 我不动它。" = "%@ is not on the open list ⇒ I will not touch it.";
 "「%@」不接受聚焦(系统说这个控件的焦点不可设) ⇒ 没动。" = "%@ will not take focus (the system says its focus attribute is not settable) ⇒ nothing was done.";
 "「%@」只开了「读」, 没开「操作」⇒ 我不动它。" = "Only Read is enabled for %@, not Act ⇒ I will not touch it.";
+"「%@」打不开 —— %@ ⇒ 没动。" = "Cannot open %@ — %@ ⇒ nothing was done.";
 "「%@」按不了 —— %@ ⇒ 没动。" = "Cannot press %@ — %@ ⇒ nothing was done.";
 "「%@」是 %@, " = "%@ is %@, ";
 "「%@」是口令/系统类应用 ⇒ 我永远不操作它, 只读。" = "%@ is a password manager or a system app ⇒ it stays read-only, always.";
@@ -177,6 +180,7 @@
 "不可操作" = "Read-only";
 "不弹卡, 全部放行 — 定时任务用 (无人点击, 弹卡即死锁)。" = "No prompts, everything allowed — for scheduled tasks (nobody is there to click; a prompt would deadlock).";
 "不是能写字的地方 ⇒ 我不往里写。" = " is not a field you can type into ⇒ I will not write there.";
+"不用单独给。辅助功能一给，键盘监听就有了 —— 所以系统设置那一页里看不到 MangoX，那是正常的，不是漏装。" = "Nothing to grant separately. Accessibility already covers keyboard listening, so MangoX will not show up on that page of System Settings — that is normal, not a missing install.";
 "不采纳该候选, 直接删除" = "Dismiss this candidate and delete it";
 "丢弃" = "Discard";
 "丢弃本地修改, 重读磁盘文件" = "Discard local changes and reread the file from disk";
@@ -476,11 +480,11 @@
 "并发回合上限" = "Concurrent turn limit";
 "并发已达上限 (%lld), 捕获未发送" = "Concurrency limit reached (%lld); capture not sent";
 "并发已达上限 (%lld), 请等待任务结束或在设置中调高" = "Concurrency limit reached (%lld) — wait for a task to finish or raise the limit in settings";
-"开: 你一动键鼠我就停下让路。关着时我不会让路 —— 我正要点一个按钮、你同时动了鼠标, 落到谁手里是随机的。给完权限要重启 MangoX 才生效。" = "On: the moment you touch the mouse or keyboard I stop and get out of the way. Off: I do not yield - if I am about to click a button while you are moving the mouse, it is a coin toss which of us lands it. Granting the permission takes effect only after you restart MangoX.";
 "开了但一个都没勾 ⇒ 所有会话都用不了 (空 = 不开放, 不是全都行)" = "On, but nothing is ticked, so no session can use it (empty means not open, not everything)";
 "开了它, 文本读不出内容时我才会去截这个窗口的图当兜底。截图带的是整个窗口的像素, 所以默认关" = "With this on, I fall back to a screenshot of this window only when the text read comes back empty. A screenshot carries the whole window as pixels, so it stays off by default";
 "开启电脑操作" = "Turn on computer use";
 "开始 Dream" = "Start Dream";
+"开着：你一动键鼠，我就停下让路。关着：我正要点一个按钮、你同时动鼠标，落到谁手里是随机的。" = "On: the moment you touch keyboard or mouse, I step aside. Off: if I am about to click a button while you move the mouse, it is a coin toss who lands it.";
 "引擎 stderr 末尾几行:" = "Last lines of engine stderr:";
 "引擎没有输出任何 stderr。" = "The engine wrote nothing to stderr.";
 "引擎返回了空回合 · 引擎没有返回任何内容, 请检查模型与凭据" = "The engine returned an empty turn — nothing came back; check the model and credentials";
@@ -507,6 +511,7 @@
 "手动填写 IMAP / SMTP 主机 (含端口, 如 imap.example.com:993); 同样须用授权码或客户端专用密码" = "Enter the IMAP / SMTP hosts by hand (with the port, e.g. imap.example.com:993); an app password is still required";
 "手动备份" = "Manual backup";
 "打开" = "Open";
+"打开 #" = "Open #";
 "打开 (没说哪个 App)" = "Open (no app named)";
 "打开工作区" = "Open workspace";
 "打开目录" = "Open folder";
@@ -544,6 +549,7 @@
 "排队 %lld 条" = "%lld queued";
 "探测地址" = "Probe URL";
 "接口地址" = "Base URL";
+"接管检测" = "Takeover detection";
 "推荐" = "Recommended";
 "描述" = "Description";
 "提于 %@" = "Proposed %@";
@@ -736,6 +742,7 @@
 "由此侧问" = "Side chat from here";
 "由此侧问 (含 Turn %lld 及之前)" = "Side chat from here (up to and including turn %lld)";
 "由此处侧问" = "Start side chat";
+"申请" = "Request";
 "电脑操作" = "Computer use";
 "电脑操作已关闭: 打开后常规与完整模式的会话都能读你勾过的应用界面 (下一回合生效)" = "Computer use is off: turning it on lets sessions in Standard or Full mode read the apps you ticked (takes effect next turn)";
 "电脑操作已开启 (全局): 常规与完整模式的会话都能读你勾过的应用界面 — 再点一次关闭" = "Computer use is on (global): sessions in Standard or Full mode can read the apps you ticked — click again to turn it off";
@@ -882,7 +889,7 @@
 "这一段会进每轮 prompt 的索引段, 逐字就是 agent 收到的" = "This section goes into the index of every prompt, word for word as the agent receives it";
 "这一篇还是空的…" = "This note is still empty…";
 "这一轮花了什么" = "What this turn cost";
-"这三把钥匙各管一件事，缺哪个哪件事就不工作。系统只会问你一次，拒绝之后不会再来问。" = "Each of these three keys covers one thing, and whatever it covers stops working without it. macOS asks only once - after a refusal it never asks again.";
+"这两项各管一件事，缺哪个哪件事就不工作。系统只会问你一次；被拒之后还能点那一页的「+」手动加回来。" = "Each of these two covers one thing, and whatever it covers stops working without it. macOS asks only once — after a refusal you can still add MangoX with the \"+\" button on that page.";
 "这个会话还没说过话，侧问会带一个空上下文。" = "This session has no messages yet — the side chat will start empty.";
 "这个对话建立时就钉住了工具表，看不到后来新增的 %@。新建一个会话就能用。" = "This conversation pinned its tool list when it started, so it never sees %@ added later. Start a new conversation to pick them up.";
 "这个目录里没有可读的文档" = "No readable documents in this directory";
@@ -920,6 +927,7 @@
 "选择项目文件夹 (将作为 Agent 工作目录)" = "Choose the project folder (used as the agent's working directory)";
 "选择预设, 填 Key 后测试连接" = "Pick a preset, enter the key and test the connection";
 "通用" = "General";
+"那一页里没有 MangoX？点左下角「+」手动添加，或者点「申请」让我自己登记进去。" = "No MangoX on that page? Use the \"+\" button at the bottom left to add it, or hit \"Request\" and I will register myself.";
 "邮件正文为空 (或只有 HTML): 请以纯文本发送任务内容。" = "The message body is empty (or HTML only): send the task as plain text.";
 "邮箱" = "Mailbox";
 "邮箱地址" = "Email address";
