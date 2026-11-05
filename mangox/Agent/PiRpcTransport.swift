@@ -1435,7 +1435,12 @@ final class PiRpcTransport: AgentTransport {
 
     func send(prompt: String, images: [OutgoingImage]) {
         ensureProcessForCwd()
-        guard process != nil else { return } // 启动失败: 本回合静默, UI 由 ChatStore 层守卫
+        guard process != nil else {
+            // ⚠️ 这条静默 return 是「生成中…」常亮的源头: Store 侧 `runningTurns` 已经在
+            //    `beginTurn` 里置位, 而这里一个事件都不发 ⇒ 没有任何东西负责收尾。
+            Log.process("send-no-process", "chars", "\(prompt.count)")
+            return
+        }
         turnActive = true
         turnProducedOutput = false
         turnSawAgentStart = false
@@ -1455,6 +1460,9 @@ final class PiRpcTransport: AgentTransport {
                                           "mimeType": $0.mimeType] }
         }
         sendCommand(cmd)
+        // 诊断日志: 只记长度不记正文（正文走 `diag_log_body` 那个二级开关，见 `ChatStore`）。
+        Log.process("send", ["chars": "\(prompt.count)", "imgs": "\(images.count)",
+                             "pid": "\(process?.processIdentifier ?? -1)"])
     }
 
     func cancel() {
@@ -1669,9 +1677,16 @@ final class PiRpcTransport: AgentTransport {
         // 这个分支不是为了第一次 fire（那次 process 本来就是 nil）—— 是为了
         // 用户点开任务日志会话说了句话（普通回合, `dreamSpool` 被置回 nil）之后再点「立即运行」。
         if process != nil, spawnedCwd != target || spawnedDreamSpool != dreamSpool {
+            // 诊断日志: 进程**复用**是常态, 重启是例外 —— 后者会丢进程内对话记忆,
+            // 排查时"这一轮为什么没记忆"要能一眼看出是这里拆的。
+            Log.process("teardown", ["cwdChanged": spawnedCwd != target ? "1" : "0",
+                                     "dreamChanged": spawnedDreamSpool != dreamSpool ? "1" : "0"])
             teardownProcess()
         }
-        guard process == nil else { return }
+        guard process == nil else {
+            Log.process("reuse", "pid", "\(process?.processIdentifier ?? -1)")
+            return
+        }
         spawnProcess(cwd: target)
     }
 
@@ -1868,8 +1883,21 @@ final class PiRpcTransport: AgentTransport {
         p.standardInput = inPipe
         p.standardOutput = outPipe
         p.standardError = errPipe   // P12.1a: 不再丢 nullDevice — 启动失败的唯一线索在 stderr
-        do { try p.run() } catch { return }
+        let spawnStarted = Date()
+        do { try p.run() } catch {
+            // 诊断日志: 拉不起来这件事原来是**完全静默**的（`send` 那边只 `guard process != nil`），
+            // 而 UI 上已把 `runningTurns` 置了位 ⇒ 表现是"生成中…"常亮、什么都不来。
+            Log.process("spawn-failed", ["err": String(describing: error).prefix(120).description])
+            return
+        }
         process = p
+        // ⚠️ 只记**参数条数**，不记参数全文 —— 里面带 `--append-system-prompt`（知识库/手册）
+        //    与 session 路径，写进日志就等于把提示词抄了一份。
+        Log.process("spawned", ["pid": "\(p.processIdentifier)",
+                                "args": "\(args.count)",
+                                "ms": String(format: "%.0f", Date().timeIntervalSince(spawnStarted) * 1000),
+                                "cwd": (cwd as NSString).lastPathComponent,
+                                "gen": "\(spawnGeneration + 1)"])
         spawnedCwd = cwd
         spawnedDreamSpool = dreamSpool
         self.outPipe = outPipe
@@ -1932,6 +1960,10 @@ final class PiRpcTransport: AgentTransport {
         // 当场断言"一句话没说"会误报。
         let status = proc.terminationStatus
         let generation = spawnGeneration
+        // 诊断日志: 退出码是"引擎为什么没了"的第一手证据（`reportEngineSilence` 只在零输出时报，
+        // 半路退出它不报）。配合上面的 `spawned` 能对上进程号与存活时长。
+        Log.process("exit", ["status": "\(status)", "tid": "\(proc.processIdentifier)",
+                             "hasRPC": sawAnyRPC ? "1" : "0"])
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
             MainActor.assumeIsolated {
                 guard let self, self.spawnGeneration == generation else { return }
@@ -1977,6 +2009,7 @@ final class PiRpcTransport: AgentTransport {
             try stdinHandle.write(contentsOf: data)
         } catch {
             print("[PiRpcTransport] stdin write failed (进程已退出?): \(error)")
+            Log.process("stdin-failed", "type", "\(dict["type"] ?? "?")")
         }
     }
 

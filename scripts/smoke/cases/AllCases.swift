@@ -55,6 +55,7 @@ extension SmokeMain {
             caseToolFaceDrift,
             caseActScope,
             caseCodeBlockLines,
+            caseDiagnosticLog,
         ]
     }
 

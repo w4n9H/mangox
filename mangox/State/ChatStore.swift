@@ -183,8 +183,32 @@ final class ChatStore: ObservableObject {
                                      value: completionNotificationsEnabled ? 1 : 0)
         }
     }
+
+    // MARK: - 诊断日志 (2026-11-05, boss: "后续复现了，你有现场")
+
+    /// 结构日志开关（**默认开**；只记事件/数字/id，**不含对话正文**）。
+    ///
+    /// 为什么默认开：白屏这类问题"复现了才知道" —— 默认关等于复现那一刻没有现场。
+    /// 体积代价：一次运行几百 KB 到几 MB，目录里最多留 10 份（`DiagnosticLog.keepFiles`）。
+    @Published var diagLogEnabled: Bool = true {
+        didSet {
+            DiagnosticLog.shared.setEnabled(diagLogEnabled)
+            persistence?.saveSetting(key: "diag_log", value: diagLogEnabled ? 1 : 0)
+        }
+    }
+
+    /// 正文片段（**默认关**）：额外写入发送内容与回复开头 80 字。
+    /// 单独一个开关的理由是隐私 —— 结构日志可以随手发给别人，这份不行。
+    @Published var diagLogBodyRecording: Bool = false {
+        didSet {
+            DiagnosticLog.shared.setBodyRecording(diagLogBodyRecording)
+            persistence?.saveSetting(key: "diag_log_body", value: diagLogBodyRecording ? 1 : 0)
+        }
+    }
     /// 在途回合起点 (耗时显示/完成通知; beginTurn 记, 结束/停止/删除时清)。
     private var turnStartAt: [UUID: Date] = [:]
+    /// 诊断日志: 本轮已到的 chunk 数 (每 20 条汇总一行, 见 `handleTurnEvent`)。
+    private var chunkSinceLog = 0
 
     /// P4.2: 主窗口 mini 工具台形态 (true = 主窗口缩为任务台; 窗口尺寸切换在 ContentView)。
     @Published var miniMode: Bool = false
@@ -726,6 +750,15 @@ final class ChatStore: ObservableObject {
             backupDirectory = store.loadSettingText(key: "backup_dir")   // P8-T28
             lastBackupSummary = store.loadSettingText(key: "backup_last")
             lockScreenMode = LockScreenMode.resolve(store.loadSettingText(key: "lock_screen_mode"))   // 锁屏运行
+            // 诊断日志的两个开关 (2026-11-05)。⚠️ 走 settings 表而不是 UserDefaults ——
+            // 仓里所有设置都住这张表 (能被备份一起带走), 多一个真源就多一处会漂。
+            diagLogEnabled = store.loadSetting(key: "diag_log", defaultValue: 1) == 1
+            diagLogBodyRecording = store.loadSetting(key: "diag_log_body", defaultValue: 0) == 1
+            // ⚠️ 这两行**不能**省, 也**不能**指望上面两个赋值触发 `didSet`:
+            //    在 `init` 体内给存储属性赋值**不调属性观察器**(Swift 语义) ⇒ 单例里的开关
+            //    会停在默认值上, 表现是"设置页明明关着、日志照写", 而且没有任何红灯。
+            DiagnosticLog.shared.setEnabled(diagLogEnabled)
+            DiagnosticLog.shared.setBodyRecording(diagLogBodyRecording)
             // P18: computer use 的开关与作用域 —— 与其它设置同一张表(能被备份一起带走)。
             // ⚠️ 落盘口子在这里接: 单例自己不持有 persistence, 冒烟里它是 nil ⇒ 只测纯函数。
             ComputerSettings.shared.restore(
@@ -1685,22 +1718,35 @@ final class ChatStore: ObservableObject {
 
     func sendDraft(ephemeral: Bool = false) {
         let trimmed = draft.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty || !pendingImages.isEmpty else { return }
+        // 诊断日志 (2026-11-05): 回车链的第一行。只有这一行能回答"我那一下回车到底进没进来"
+        // —— 早退的五条分支在后面各留一行 `blocked`, 缺哪一条都能一眼看出来。
+        Log.send("enter", ["chars": "\(trimmed.count)", "imgs": "\(pendingImages.count)",
+                           "eph": ephemeral ? "1" : "0",
+                           "sid": String((selectedConversationId?.uuidString ?? "none").prefix(8))])
+        guard !trimmed.isEmpty || !pendingImages.isEmpty else {
+            Log.send("blocked", "reason", "empty")
+            return
+        }
         // 引擎缺失: 不发请求, 本地给一条说明 (engineMissing 横幅常驻在聊天顶部)
         if engineMissing {
+            Log.send("blocked", "reason", "engine-missing")
             messages.append(ChatMessage(role: .assistant,
                                         content: .text(L("⚠️ 未找到 pi CLI, 无法发送。请确认已安装 pi 并重启 MangoX (或检查 pi 安装路径)。"))))
             return
         }
         ensureConversationForSend() // 无选中会话时隐式建会话, 消息才有归属
         guard let sid = selectedConversationId,
-              !runningTurns.contains(sid) else { return } // P4.0.2: 该会话已有回合在途, 防双流竞争
+              !runningTurns.contains(sid) else {
+            Log.send("blocked", "reason", "turn-in-flight")
+            return // P4.0.2: 该会话已有回合在途, 防双流竞争
+        }
         // P18: 发送前再算一次 —— 用户可能刚在设置里勾了「可操作」, 而会话的工具面是老早钉的。
         refreshToolFaceDrift()
         // P4.0.4: 并发上限 —— 拒绝 + 横幅提示 (v1 不排队)
         if atTurnLimit {
             draft = trimmed
             setTurnLimitNotice(String(format: L("并发已达上限 (%lld), 请等待任务结束或在设置中调高"), maxConcurrentTurns))
+            Log.send("blocked", ["reason": "turn-limit", "max": "\(maxConcurrentTurns)"])
             return
         }
         // P7-M6b 门控: 附件随时可挂, 发送时才拦 (模型不支持图片 → 提示换模型, 附件不白挂)
@@ -1709,6 +1755,7 @@ final class ChatStore: ObservableObject {
         if !pendingImages.isEmpty {
             guard currentModelSupportsImages else {
                 setTurnLimitNotice(L("当前模型不支持图片输入, 请在设置中改用多模态模型后再发"))
+                Log.send("blocked", "reason", "text-only-model")
                 return
             }
             for p in pendingImages {
@@ -1728,6 +1775,11 @@ final class ChatStore: ObservableObject {
         let msg = ChatMessage(role: .user, content: .text(trimmed),
                               attachments: attachments.isEmpty ? nil : attachments)
         messages.append(msg)
+        // 这一行 + 随后的 `beginTurn` 是白屏引信的前半段: 内容在同一拍里多出一条用户消息,
+        // 高度变了、`messagesRevision` 变了, 于是视图立刻滚一次 —— 而此刻 `isStreaming` 还是 false。
+        Log.send("append", ["msgs": "\(messages.count)", "rev": "\(messagesRevision)",
+                            "sid": String(sid.uuidString.prefix(8))])
+        DiagnosticLog.shared.body(.send, "text", trimmed)
         draft = ""
         pendingImages = []
         persistMessage(msg, sid: sid)
@@ -1787,6 +1839,10 @@ final class ChatStore: ObservableObject {
                    modelOverride: (provider: String, modelId: String, thinking: String?)? = nil,
                    dreamSpool: String? = nil) {   // P15.3: 仅 dream fire 非 nil
         let t = transportFor(sid)
+        Log.send("turn-begin", ["sid": String(sid.uuidString.prefix(8)),
+                                "eph": ephemeral ? "1" : "0",
+                                "cwd": (cwd as NSString?)?.lastPathComponent ?? "none",
+                                "unattended": unattended ? "1" : "0"])
         if ephemeral {
             t.updateSessionBinding(nil)   // nil = --no-session (fire 轮次, P3.9 拍板)
         } else {
@@ -1819,6 +1875,10 @@ final class ChatStore: ObservableObject {
         }
         liveTurns[sid] = liveTurns[sid] ?? []   // 镜像容器就位 (视图会话事件直进 messages)
         runningTurns.insert(sid)
+        // ⚠️ 这一行是整个白屏链条的**转折点**: 它让 `store.isStreaming` 变 true, 而它跑在
+        // `ChatView` 那次 `onChange(messagesRevision)` 的 `main.async` **之前** ⇒ 视图滚第一拍时
+        // 读到的已经是"流式中"(先锚指示器、不量尾块)。日志里 `stream=1` 与 `mat=0` 同时出现就是它。
+        Log.send("running", ["stream": isStreaming ? "1" : "0", "running": "\(runningTurns.count)"])
         turnStartAt[sid] = Date()   // P4.1: 回合计时起点
         if injectedTransport != nil { injectedTurnSid = sid }   // 注入实例: 记录串行回合归属
         t.send(prompt: prompt, images: images)
@@ -2295,6 +2355,8 @@ extension ChatStore: AgentTransportDelegate {
             // P12.1a: 引擎真跑起来了一条流 ⇒ 清掉上次的启动失败诊断 (判据用"能开工",
             // 不用"进程在"—— 半死的进程照样在)。
             engineDiagnosis = nil
+            chunkSinceLog = 0
+            Log.event("started", "sid", String(sid.uuidString.prefix(8)))
 
         case .textChunk(let id, let delta):
             // P10.5: 无宿主 chunk 丢弃 —— 回合已落定 (或被替换) 后的迟到 chunk 若新建消息会成单字残块
@@ -2303,6 +2365,13 @@ extension ChatStore: AgentTransportDelegate {
                 upsertStreaming(in: &messages, id: id, delta: delta, think: false)
             } else {
                 upsertStreaming(in: &liveTurns[sid, default: []], id: id, delta: delta, think: false)
+            }
+            // ⚠️ 不许逐条打点: 一个长回复几千个 chunk, 日志会涨成几十 MB 而且把主线程拖住。
+            // 每 20 条汇总一行 —— 只回答"流有没有在动、视图里现在几条消息"。
+            chunkSinceLog += 1
+            if chunkSinceLog % 20 == 0 {
+                Log.event("chunks", ["n": "\(chunkSinceLog)", "inview": inView ? "1" : "0",
+                                     "msgs": "\(inView ? messages.count : (liveTurns[sid]?.count ?? 0))"])
             }
 
         case .thoughtChunk(let id, let delta):
@@ -2327,6 +2396,13 @@ extension ChatStore: AgentTransportDelegate {
                 persistMessage(msg, sid: sid)   // 终态落库 (trajectory 只存终态事件)
             }
             if case .awaitingApproval = tool.phase { approvalBlocked.insert(sid) }   // P8-T26
+            // 只记终态与待审批 (工具在跑时 `toolUpdated` 会高频来, 逐条记会把日志淹掉)
+            var awaiting = false
+            if case .awaitingApproval = tool.phase { awaiting = true }
+            if terminal || awaiting {
+                Log.event("tool", ["inview": inView ? "1" : "0",
+                                   "msgs": "\(inView ? messages.count : (liveTurns[sid]?.count ?? 0))"])
+            }
 
         case .messageFinalized(let id, let usage):
             if inView {
@@ -2387,6 +2463,7 @@ extension ChatStore: AgentTransportDelegate {
             let text = model.map {
                 String(format: L("引擎返回了空回合 · 模型 %@ 可能不存在或已下线"), $0)
             } ?? L("引擎返回了空回合 · 引擎没有返回任何内容, 请检查模型与凭据")
+            Log.event("empty-turn", "model", model ?? "none")
             let msg = ChatMessage(role: .system, content: .text(text))
             if inView {
                 messages.append(msg)
@@ -2398,6 +2475,9 @@ extension ChatStore: AgentTransportDelegate {
         case .streamEnded:
             runningTurns.remove(sid)
             approvalBlocked.remove(sid)   // P8-T26: 回合落定兜底清 (防审批泄漏常亮)
+            Log.event("ended", ["sid": String(sid.uuidString.prefix(8)),
+                                "msgs": "\(inView ? messages.count : (liveTurns[sid]?.count ?? 0))",
+                                "elapsed": turnStartAt[sid].map { String(format: "%.1f", Date().timeIntervalSince($0)) } ?? "nil"])
             if inView {
                 // 安全网: 收尾视图内所有在途流式块 (text + think 可能同时各有一条)
                 for i in messages.indices where messages[i].isStreaming {

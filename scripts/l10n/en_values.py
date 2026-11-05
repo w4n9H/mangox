@@ -1182,4 +1182,10 @@ VALUES = {
     ' 你说的「%@」不是 ⇒ 没动。快照里这一格的值就是能写回去的样子。': ' what you gave ("%@") is not one ⇒ nothing done. The value shown for this cell in the snapshot is the shape it accepts back.',
     '打开菜单': 'Open menu',
     '执行自定义动作': 'Run custom action',
+    '诊断日志': 'Diagnostic log',
+    '把发送、滚动、进程、事件这些关键动作写进 ~/.mangox/log/ 下的文本日志。复现问题时把这个文件发过来即可 —— 结构日志不含对话内容': 'Write sends, scrolling, process and event milestones to a text log under ~/.mangox/log/. If something goes wrong, send that file over -- structural logs contain none of your conversation.',
+    '打开文件夹': 'Open folder',
+    '记录正文片段': 'Record message excerpts',
+    '额外写入你发送的原文与回复开头 80 字。发给他人前请先看一眼': 'Also write what you sent and the first 80 characters of the reply. Re-read it before sharing.',
+    '尚无日志': 'No logs yet',
 }

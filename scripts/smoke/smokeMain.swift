@@ -108,6 +108,15 @@ struct SmokeMain {
         PiRpcTransport.sessionDirectoryOverride = piTmp
         check(PiRpcTransport.sessionDirectory.hasPrefix(NSTemporaryDirectory()),
               "守卫 27: 冒烟期 transcript 根重定向到临时目录 (实测 \(PiRpcTransport.sessionDirectory))")
+        // ⚠️ 第六个"生产调用点不传参数"的落盘根: 诊断日志 (`~/.mangox/log/`, 2026-11-05)。
+        //    它比前面几个更**吵**: 默认开着, 而冒烟里几十个 `ChatStore` 构造点加上滚动埋点
+        //    会写几万行 ⇒ 不重定向就是往用户真实目录倒垃圾, 还会把用户**真正要排查的那一份**
+        //    挤出 `keepFiles` 的窗口（现场被门禁自己冲掉, 比没日志更坏）。
+        let logTmp = dir + "/diag-log-root"
+        try? FileManager.default.createDirectory(atPath: logTmp, withIntermediateDirectories: true)
+        DiagnosticLog.directoryOverride = logTmp
+        check(DiagnosticLog.directory.hasPrefix(NSTemporaryDirectory()),
+              "守卫 29: 冒烟期诊断日志根重定向到临时目录 (实测 \(DiagnosticLog.directory))")
         // ⚠️ 第五个"生产调用点不传参数"的注入面 —— 但这次不是落盘根, 是**钥匙串**。
         //    `ChatStore.init` 的 `modelKeyStore:` 是函数级参数, 而 init 尾部**无条件**跑
         //    `scanExtensions()`, 后者起手读 `bochaKey` ⇒ 没传参数的构造点全都会去读用户真实钥匙串。

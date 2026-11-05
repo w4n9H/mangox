@@ -97,6 +97,7 @@ struct SettingsView: View {
                     computerSection
                 case .data:
                     backupSection
+                    diagnosticLogSection
                 }
             }
         }
@@ -1349,6 +1350,80 @@ struct SettingsView: View {
         guard let root = store.backupDirectory else { return }
         // P9-#11: 后台执行 (原同步版大附件库会冻结 UI); 失败经 backupFailureMessage 弹窗
         store.performManualBackupInBackground(destRoot: root)
+    }
+
+    // MARK: - 诊断日志 (2026-11-05)
+
+    /// 归在「数据」而不是「通用」：与备份同一条判据 —— **落到磁盘、会被拷走的东西**。
+    /// （「通用」那一坨是"长啥样"和"一次任务怎么跑"，日志两样都不是。）
+    private var diagnosticLogSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            settingRow(title: "诊断日志",
+                       detail: "把发送、滚动、进程、事件这些关键动作写进 ~/.mangox/log/ 下的文本日志。复现问题时把这个文件发过来即可 —— 结构日志不含对话内容") {
+                HStack(spacing: 8) {
+                    Button(LK("打开文件夹")) { openLogFolder() }
+                        .fixedSize()
+                    Toggle(isOn: Binding(
+                        get: { store.diagLogEnabled },
+                        set: { store.diagLogEnabled = $0 }
+                    )) {
+                        Text("诊断日志")
+                    }
+                    .toggleStyle(.switch)
+                    .controlSize(.small)
+                    .labelsHidden()
+                    .fixedSize()
+                }
+            }
+            // 二级开关只在总开关打开时出现 —— 总开关关着的时候它没有任何作用，
+            // 摆在那儿只会让人以为"我开了个别的"。
+            if store.diagLogEnabled {
+                Divider().overlay(CodexTheme.divider)
+                settingRow(title: "记录正文片段",
+                           detail: "额外写入你发送的原文与回复开头 80 字。发给他人前请先看一眼") {
+                    Toggle(isOn: Binding(
+                        get: { store.diagLogBodyRecording },
+                        set: { store.diagLogBodyRecording = $0 }
+                    )) {
+                        Text("记录正文片段")
+                    }
+                    .toggleStyle(.switch)
+                    .controlSize(.small)
+                    .labelsHidden()
+                    .fixedSize()
+                }
+            }
+            HStack(spacing: 8) {
+                Text(DiagnosticLog.directory)
+                    .font(CodexTheme.fontMonoXs)
+                    .foregroundStyle(CodexTheme.textSecondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                Spacer(minLength: 8)
+                Text(logFootprint)
+                    .font(.system(size: 11))
+                    .foregroundStyle(CodexTheme.textMuted)
+                    .lineLimit(1)
+            }
+        }
+        .settingsCard()
+    }
+
+    /// 目录占用 + 最近一份文件名。设置页打开时才算，不在热路径上。
+    private var logFootprint: String {
+        let bytes = DiagnosticLog.totalBytes()
+        let size = bytes >= 1024 * 1024
+            ? String(format: "%.1f MB", Double(bytes) / 1024 / 1024)
+            : String(format: "%.0f KB", Double(bytes) / 1024)
+        guard let latest = DiagnosticLog.latestFileName() else { return L("尚无日志") }
+        return "\(size) · \(latest)"
+    }
+
+    private func openLogFolder() {
+        let dir = DiagnosticLog.directory
+        // 开关刚打开时目录还不存在（懒建）—— 就地建，否则 Finder 打开的是一个死路径。
+        try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+        NSWorkspace.shared.open(URL(fileURLWithPath: dir))
     }
 }
 

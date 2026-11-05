@@ -149,6 +149,17 @@ struct ChatView: View {
     /// ⚠️ 类型本身是 class ⇒ 记账不再触发 body；`@State` 只负责持有它。
     @State private var tailLedger = ChatTailLedger()
 
+    /// 底层滚动量（`contentOffset.y` / 文档高 / 视口高）—— **白屏定案的唯一硬数据**。
+    ///
+    /// 为什么非要它：`nearBottom` 和内容底探针都在"**估算的**文档高"上照样成立 ——
+    /// 0.1.30 那次实测过 `gap=0` 而画面 0 墨迹（估算 22263 / 真实 13245）。
+    /// 只有 `contentOffset + contentSize + visibleRect` 这三个数能分清过冲和欠冲。
+    @State private var scrollMetrics = ChatScrollMetrics()
+
+    /// 诊断日志: "被 `nearBottom` 拦掉"这件事每次只记一行 —— 一段不跟随只算一次，
+    /// 直到 `nearBottom` 重新变 true（否则流式期每个 chunk 都会记一行）。
+    @State private var vetoLogged = false
+
     /// 已展开的**工具段**（键 = 段首工具消息 id，见 `ToolRun.id`）。
     ///
     /// ⚠️ 折叠态必须住在这里，**不许住行内 `@State`**：段里每来一条新工具，
@@ -206,6 +217,11 @@ struct ChatView: View {
         let v = ChatView.isNearBottom(contentBottomY: bottomY, viewportHeight: viewportHeight)
         if nearBottom != v {
             nearBottom = v   // 等值不写, 防 PreferenceKey 高频触发失效性更新
+            if v { vetoLogged = false }
+            // 翻转沿才记（探针在滚动时高频触发，逐次记等于把日志写成滚动轨迹）
+            Log.scroll("near", ["v": v ? "1" : "0",
+                                "bottom": String(format: "%.0f", bottomY),
+                                "vp": String(format: "%.0f", viewportHeight)])
         }
     }
 
@@ -219,6 +235,9 @@ struct ChatView: View {
     private func refreshViewport(_ h: CGFloat) {
         guard viewportHeight != h else { return }
         viewportHeight = h
+        // 诊断日志: 视口高变化 = 窗口缩放 **或输入卡塌高**（回车后 `draft` 清空会让它矮回去）。
+        // 那一下和滚动落在同一帧，是白屏链条里第三个高度突变的来源。
+        Log.scroll("viewport", "h", String(format: "%.0f", h))
         if lastBottomY.value > 0 { handleContentBottom(lastBottomY.value) }
     }
 
@@ -295,7 +314,7 @@ struct ChatView: View {
     ///    变成第二个自动跟随。
     private func jumpToLatestButton(_ proxy: ScrollViewProxy) -> some View {
         Button {
-            scrollToTail(proxy)
+            scrollToTail(proxy, origin: "jump-latest")
         } label: {
             Image(systemName: "arrow.down")
                 .font(.system(size: 13, weight: .semibold))
@@ -320,11 +339,20 @@ struct ChatView: View {
     /// - Parameter veto: 每一拍落之前问一句"还要不要落"。`followEpoch` 变化（有更新的一次跟随）
     ///   永远是否决项；调用方再按语义追加：流式跟随要追加 `nearBottom`（P9-#9 上滑阅读不拽回），
     ///   提交那一拍**不加**（我发了消息就要看它和回答，见 `onChange(of: store.messagesRevision)`）。
-    private func scrollToTail(_ proxy: ScrollViewProxy, veto: @escaping () -> Bool = { true }) {
+    private func scrollToTail(_ proxy: ScrollViewProxy, origin: String,
+                              veto: @escaping () -> Bool = { true }) {
         followEpoch.value += 1
         let epoch = followEpoch.value
         // 流式期尾行在长高，懒栈不肯量它 ⇒ 实体化那一支不适用，每一拍都锚指示器。
         let materializeCandidate = store.isStreaming ? nil : materializeTarget
+        // 诊断日志: 一次跟随的入口行 —— 谁触发的、当时是什么态。
+        // ⚠️ `mat` 是"这一次有没有打算先量尾块"。回车那一刻如果记到 `mat=0 stream=1`,
+        //    说明 `beginTurn` 抢在视图滚动之前把 `isStreaming` 置了 true（这就是那道保护失效的证据）。
+        Log.scroll("call", ["o": origin, "stream": store.isStreaming ? "1" : "0",
+                            "mat": materializeCandidate == nil ? "0" : "1",
+                            "msgs": "\(store.messages.count)",
+                            "near": nearBottom ? "1" : "0",
+                            "vp": String(format: "%.0f", viewportHeight)])
         for (i, delay) in Self.followBeats.enumerated() {
             // 第一拍**先试**把最后一块量出来，其余各拍锚末尾哨兵（真底）。
             // ⚠️ 这里只是候选：真正记账在 `tap` 里、veto 之后（见 `ChatTailLedger`）。
@@ -343,10 +371,47 @@ struct ChatView: View {
                 proxy.scrollTo(materialize ?? target, anchor: .bottom)
                 // ⚠️ 只在**真的滚过**之后记账；veto 在上面的 guard 已经拦掉拒绝的那一拍。
                 if let materialize { tailLedger.confirm(materialize) }
+                // 落点读回。必须推到下一拍（布局还没落定就量 = 读到的是上一帧的位置）。
+                let anchorName = materialize != nil ? "mat"
+                    : (target == AnyHashable(Self.streamingAnchor) ? "stream" : "tail")
+                DispatchQueue.main.async { logBeat(origin, i, anchorName) }
             }
             if delay == 0 { tap() }
             else { DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: tap) }
         }
+        // 0.6s 之后再回读一次 —— 回答"四拍打完，最后到底贴没贴底"。
+        // 白屏最狠的那一半是**永不自我纠正**（就停在错的位置，切会话才好）：
+        // 那一帧的特征是 `gap` 是一笔**再也不动的数**，所以要有这一行才能和"慢慢追上"区分开。
+        if origin != "follow" {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [origin] in
+                guard epoch == followEpoch.value else { return }   // 期间又有新的跟随 ⇒ 这一拍作废
+                logBeat(origin + ".settle", Self.followBeats.count, "-")
+            }
+        }
+    }
+
+    /// 一拍落点的读回（诊断日志，2026-11-05）。
+    ///
+    /// `gap = doc - y - vp`：**0 = 贴底**、正数 = 欠冲（内容还在视口下面）、
+    /// 负数 = 过冲（视口停在内容之外 = 整片白）。
+    ///
+    /// ⚠️ 流式跟随（`origin == "follow"`）是**最高频**的一条路（每个 chunk 一次、每次四拍）——
+    ///    它只在**没贴住**时记一行（容差 60pt ≈ 底部留白 + 一行）。健康的那几拍不占日志，
+    ///    否则一个长回合能把文件写满、把真正重要的那几行挤掉。
+    private func logBeat(_ origin: String, _ i: Int, _ anchor: String) {
+        guard let s = scrollMetrics.snapshot() else {
+            // 捞不到底层 NSScrollView（私有层级，见 `ChatScrollBridge`）—— 如实记 na，
+            // 别拿探针的估算数冒充，那正是这个 bug 骗了四轮的地方。
+            Log.scroll("beat", ["o": origin, "i": "\(i)", "a": anchor, "probe": "na"])
+            return
+        }
+        let gap = s.doc - s.y - s.vp
+        if origin == "follow" && abs(gap) <= 60 { return }
+        Log.scroll("beat", ["o": origin, "i": "\(i)", "a": anchor,
+                            "y": String(format: "%.0f", s.y),
+                            "doc": String(format: "%.0f", s.doc),
+                            "vp": String(format: "%.0f", s.vp),
+                            "gap": String(format: "%.0f", gap)])
     }
 
     /// 滚动列 = ScrollView (拆子表达式, 防 type-check 超时)。
@@ -406,6 +471,9 @@ struct ChatView: View {
                 //       多一档留白，落点就离真底远那一档。
                 //    ③ 必须 `height: 0`：它是锚点不是留白 —— 底部 18pt 是 `chatVPadding` 给的。
                 Color.clear.frame(height: 0).id(Self.tailAnchor)
+                    // 0 尺寸的真实 NSView，只为把底下的 `NSScrollView` 捞出来（见 `ChatScrollBridge`）。
+                    // 挂在这里而不是内容里：这里是 `ScrollView` 的直接内容，只会建一次。
+                    .background(ChatScrollBridge(metrics: scrollMetrics).frame(width: 0, height: 0))
             }
         }
         .coordinateSpace(name: "chatScroll")
@@ -414,12 +482,12 @@ struct ChatView: View {
         //    同一个坑, 那次只修了 Trace, 漏了这里)。改 onAppear 定位; 流式跟随由下面
         //    onChange(of: store.messagesRevision) 管。
         .onAppear {
-            DispatchQueue.main.async { scrollToTail(proxy) }
+            DispatchQueue.main.async { scrollToTail(proxy, origin: "appear") }
         }
         .onChange(of: store.selectedConversationId) { _, _ in
             // 换会话: replay 内容整批替换, 兜底滚到最新 (首帧 onAppear 之外的双保险)
             // ⚠️ 这里**不用**手工置位"要量"—— 尾块 id 变了，`scrollToTail` 自己会认（见 `ChatTailLedger`）
-            DispatchQueue.main.async { scrollToTail(proxy) }
+            DispatchQueue.main.async { scrollToTail(proxy, origin: "switch-conv") }
         }
         .onChange(of: store.messagesRevision) { _, _ in
             // 流式 chunk 高频到达, 同帧多次触发会报 "update multiple times per frame";
@@ -439,6 +507,16 @@ struct ChatView: View {
             let previousID = lastTailID.value
             lastTailID.value = newLast?.id
             let justSent = newLast?.role == .user && previousID != newLast?.id
+            // 诊断日志: 提交那一拍必记（白屏就发生在它之后）；"被拦掉"只记一次（见 `vetoLogged`）。
+            if justSent {
+                Log.scroll("revision", ["msgs": "\(store.messages.count)",
+                                        "stream": store.isStreaming ? "1" : "0",
+                                        "near": nearBottom ? "1" : "0"])
+            } else if !nearBottom && !vetoLogged {
+                vetoLogged = true
+                Log.scroll("veto", ["msgs": "\(store.messages.count)",
+                                    "stream": store.isStreaming ? "1" : "0"])
+            }
             DispatchQueue.main.async {
                 guard !scrollScheduled.value else { return }
                 scrollScheduled.value = true
@@ -447,12 +525,17 @@ struct ChatView: View {
                 //    ② 带补间的落点**没法复核**（复核那一拍会打断补间）。现在统一走 `scrollToTail`
                 //    的"瞬移 + 复核"，高频位移下人眼分辨不出补间丢失的那点顺滑。
                 if justSent {
-                    scrollToTail(proxy)
+                    scrollToTail(proxy, origin: "send")
                 } else {
-                    scrollToTail(proxy, veto: { nearBottom })   // P9-#9: 用户上滑了就停手
+                    scrollToTail(proxy, origin: "follow", veto: { nearBottom })   // P9-#9: 用户上滑了就停手
                 }
                 DispatchQueue.main.async { scrollScheduled.value = false }
             }
+        }
+        // 诊断日志（只观察，不改行为）: 「生成中」出现/消失的那一刻 —— `isStreaming` 决定
+        // `scrollToTail` 锚流式指示器还是锚真实行，所以这个翻转沿本身就是白屏的嫌疑点。
+        .onChange(of: store.isStreaming) { _, v in
+            Log.scroll("streaming", "v", v ? "1" : "0")
         }
     }
 
@@ -756,6 +839,50 @@ struct ChatView: View {
         .frame(maxWidth: Tune.chatColumnWidth, alignment: .leading)  // 内容 + 2×水平内边距, 与 Composer 内容宽同源 (Tune.chatContentWidth)
         .frame(maxWidth: .infinity, alignment: .center)
         .animation(CodexTheme.animMessage, value: store.messages.count)
+    }
+}
+
+// MARK: - 底层滚动量（诊断日志用，2026-11-05）
+
+/// 底层 `NSScrollView` 的三个真实数字。`weak` 持有 —— 它归 SwiftUI 的滚动容器所有。
+///
+/// 存在的唯一目的：白屏到底是**过冲**还是**欠冲**，只有这三个数能回答。
+/// `gap = doc - y - vp` ⇒ `0` 贴底 / 正数欠冲 / 负数过冲。
+final class ChatScrollMetrics {
+    weak var scrollView: NSScrollView?
+
+    func snapshot() -> (y: CGFloat, doc: CGFloat, vp: CGFloat)? {
+        guard let sv = scrollView, let doc = sv.documentView else { return nil }
+        return (sv.contentView.bounds.origin.y, doc.frame.height, sv.contentView.bounds.height)
+    }
+}
+
+/// 把 SwiftUI `ScrollView` 底下的 `NSScrollView` 捞出来：塞一个 0 尺寸的**真实 NSView**，
+/// 再 `enclosingScrollView` 往上走。
+///
+/// ⚠️ 这是 SwiftUI 的私有实现层级。**拿不到就保持 nil**（日志记 `probe=na`），
+///    **不许**改成"遍历子视图树找 NSScrollView" —— 版本一变就是崩，而它只是一条诊断日志。
+///    拿不到时的退路：用内容底探针（`ChatContentBottomKey`）的读数判方向，精度差一截。
+private struct ChatScrollBridge: NSViewRepresentable {
+    let metrics: ChatScrollMetrics
+
+    func makeNSView(context: Context) -> NSView {
+        let v = NSView(frame: .zero)
+        attach(v)
+        return v
+    }
+
+    func updateNSView(_ v: NSView, context: Context) { attach(v) }
+
+    /// 挂上来这一刻`enclosingScrollView` 往往还是 nil（滚动容器尚未把它收进文档视图），
+    /// 所以补两次重试 —— 三次都没拿到就认了（`probe=na`）。
+    private func attach(_ v: NSView) {
+        for delay in [0.0, 0.15, 0.5] {
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak v, weak metrics] in
+                guard let v, let metrics, metrics.scrollView == nil else { return }
+                metrics.scrollView = v.enclosingScrollView
+            }
+        }
     }
 }
 
