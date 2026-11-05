@@ -226,8 +226,16 @@ enum ComputerWritePlan: Equatable {
     case text
     case date(Date)
 
-    static func decide(shape: ComputerValueShape, text: String) -> ComputerWritePlan {
-        guard shape == .date, let d = ComputerDateValue.parse(text) else { return .text }
+    /// ⚠️ `timeZone` 必须**能显式传**: 不传 = 本机时区(与 `parse` / `display` 同一个缺省, 生产上
+    ///    两边都走 `.current` ⇒ 读到什么样子就能写回什么样子)。
+    ///    **判据里不许靠这个缺省**: 一条"用固定时区渲染、却让它自己去取 `.current`"的断言, 在 UTC
+    ///    的 runner 上必红, 而本地(GMT+8)一直绿 —— 因为那里两个时区恰好同源。v0.2.5 的 CI 就是
+    ///    这么翻的: 唯一一条红, 症状离原因很远。
+    static func decide(shape: ComputerValueShape, text: String,
+                       timeZone: TimeZone = .current) -> ComputerWritePlan {
+        guard shape == .date, let d = ComputerDateValue.parse(text, timeZone: timeZone) else {
+            return .text
+        }
         return .date(d)
     }
 }

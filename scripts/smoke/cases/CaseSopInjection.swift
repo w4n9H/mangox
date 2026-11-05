@@ -194,11 +194,21 @@ extension SmokeMain {
         check(widest.chars > SopManual.text.count,
               "T-SOP 段头真的是段头 (总字数必须大于手册本体, 否则上面那条比的是空集)")
 
-        // 验证日期不许造假: 必须能解析, 且不在未来
+        // 验证日期不许造假: 必须能解析, 且不在未来。
+        // ⚠️ 两处刻意松, 都是为了不给**时区**判红(实测 `TZ=America/New_York`, 2026-11-05 03:00Z):
+        //    ① 判的是**日历日**而不是时刻 —— `dayParser` 解出来是本地 00:00, 拿它比 `Date()`
+        //       等于要求"今天已经过了零点之后才能写今天的日期";
+        //    ② 还留 **1 天**余量 —— 日期字段不带时区, 作者那台机器的"今天"可以比这台早一天
+        //       (纽约 11-04 22:19 时, 手册写 11-05 是"明天")。这条判据要拦的是**明显造假**
+        //       (写成下个月去躲「陈旧」提示), 不是时差。
         let verified = SopInjection.dayParser.date(from: SopManual.verifiedOn)
         check(verified != nil,
               "T-SOP 手册的验证日期要能解析成 yyyy-MM-dd (实际: \(SopManual.verifiedOn))")
-        check(verified.map { $0 <= Date() } ?? false,
-              "T-SOP 验证日期不许在未来 (未来的验证日期 = 造假, 而且是最没人会去核的一种)")
+        let cal = Calendar.current
+        let today = cal.startOfDay(for: Date())
+        let tomorrow = cal.date(byAdding: .day, value: 1, to: today)
+        check(verified.map { cal.startOfDay(for: $0) <= (tomorrow ?? today) } ?? false,
+              "T-SOP 验证日期不许在未来 (按日历日比、留 1 天时区余量; 写成下个月那种 = 造假, "
+              + "而且是最没人会去核的一种)")
     }
 }

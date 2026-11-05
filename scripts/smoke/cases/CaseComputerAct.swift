@@ -464,9 +464,13 @@ extension SmokeMain {
         check(ComputerDateValue.parse("", timeZone: tz) == nil, "T-ACT 空串不是日期")
 
         // 写法跟着**属性类型**走 —— 其余类型一律维持"写字符串"(旧行为不许被这次改动带跑)。
-        if case .date(let d) = ComputerWritePlan.decide(shape: .date, text: "2026-11-04 17:30") {
+        // ⚠️ 这条曾经用固定时区渲染、却让 `decide` 自己去取 `.current` ⇒ **在 UTC 的 CI 上必红**
+        //    (本地 GMT+8 与 `Asia/Shanghai` 同源, 所以一直绿)。判据要把时区**两头都钉住**,
+        //    否则它测的不是"读写同源", 而是"这台机器的时区恰好等于断言里写的那一个"。
+        if case .date(let d) = ComputerWritePlan.decide(shape: .date, text: "2026-11-04 17:30",
+                                                        timeZone: tz) {
             check(ComputerDateValue.display(d, timeZone: tz) == "2026-11-04 17:30",
-                  "T-ACT 日期格 + 能解析 ⇒ 按日期写")
+                  "T-ACT 日期格 + 能解析 ⇒ 按日期写 (读写同一个时区, 在哪个时区跑都一样)")
         } else {
             check(false, "T-ACT 日期格 + 能解析, 必须算出日期来")
         }
