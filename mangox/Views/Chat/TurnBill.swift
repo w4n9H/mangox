@@ -56,7 +56,7 @@ struct TurnBill: Equatable {
     }
 
     /// 数字 + 名词。**单复数分开取词**（英文 `1 file` / `5 files` 各一条词条）——
-    /// 不靠 `%lld files` 硬套，那在 n = 1 时是错的（与 `AwaySummaryPill` 同一套办法）。
+    /// 不靠 `%lld files` 硬套，那在 n = 1 时是错的。
     static func count(_ n: Int, one: String, many: String) -> String {
         n == 1 ? one : String(format: many, n)
     }

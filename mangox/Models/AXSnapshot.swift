@@ -75,6 +75,12 @@ struct AXSnapshot: Equatable {
 
     let appName: String
     let windowTitle: String
+    /// 窗口外框(全局坐标)。
+    ///
+    /// ⚠️ **只有截断那一处用它** —— 判一行是不是落在窗口顶部的「固定区」。不进差分
+    ///    (`frame` 本来就不参与差分), 也不进渲染。根节点没报坐标时为 `nil` ⇒ 整条
+    ///    固定区策略不生效, 退回纯遍历序截断(批 2l 之前的行为)。
+    let windowFrame: AXRect?
     let rows: [Row]
 
     /// 编号 → 行。动作指令(`ui_act`)按编号找回目标, 找不回就是过期的旧快照。
@@ -94,7 +100,10 @@ struct AXSnapshot: Equatable {
                  lastText: nil,
                  rows: &rows,
                  counter: &counter)
-        return AXSnapshot(appName: appName, windowTitle: windowTitle, rows: rows)
+        return AXSnapshot(appName: appName,
+                          windowTitle: windowTitle,
+                          windowFrame: root.frame,
+                          rows: rows)
     }
 
     /// 返回值 = **这一棵子树里最后被保留下来的那段文本**。
@@ -206,7 +215,18 @@ struct AXSnapshot: Equatable {
         let t = node.title.trimmingCharacters(in: .whitespacesAndNewlines)
         if !t.isEmpty { return t }
         if ComputerRedline.isPasswordRole(node.role, subrole: node.subrole) { return "" }
-        return node.detail.trimmingCharacters(in: .whitespacesAndNewlines)
+        let d = node.detail.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !d.isEmpty { return d }
+        // ⚠️ **只有 `datetimearea` 这一族**退到 `AXIdentifier`, 不是普遍规则(批 2m, 2026-11-04)。
+        //    实测: 日历事件编辑器展开时间之后是**四个长得一模一样**的格子(起/止 × 日期/时间),
+        //    title 与 description 都是空的, 名字只在 identifier 里(`start-timepicker` …)。
+        //    不借它, 快照里就是四行同名同值的 `datetimearea`, 模型只能瞎猜该写哪一个 ——
+        //    猜错的后果是把**开始**时间写进了**结束**时间。
+        //    别的角色一律不借: 那里常常是 `__NS:3421` 这种纯噪音。
+        if cleanRoleName(node.role) == "datetimearea" {
+            return node.identifier.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        return ""
     }
 
     /// 这一行**看得见的那段字** —— 名字优先, 没有就用值(去首尾空白)。
@@ -229,6 +249,10 @@ struct AXSnapshot: Equatable {
         "checkbox", "radiobutton", "popupbutton", "combobox", "menuitem",
         "menubaritem", "menubutton", "tab", "link", "slider", "toggle",
         "switch", "disclosuretriangle", "colorwell", "incrementor", "cell",
+        // 批 2m(2026-11-04): 日历事件编辑器里的时间格子。它**只写 identifier、不写
+        // title/description**, 留在下面那条"容器有名字才留"的规则里必被当容器剪掉 ——
+        // 而那四格是"改一条日程的时间"唯一能落脚、唯一能写的地方。
+        "datetimearea",
     ]
 
     private static let staticTextRoles: Set<String> = [
@@ -381,27 +405,113 @@ struct AXSnapshot: Equatable {
                                  sheetButtons: buttonIndices(in: s).map { Self.label(s.children[$0]) })
     }
 
+    // MARK: - 批 2l: 截断不许吃掉固定区
+
+    /// 窗口顶部这么高的一带 = **固定区**(工具栏 / 视图切换器 / 标题栏)。
+    ///
+    /// ⚠️ 它现在的角色是**探针**而不是筛子: 只用来找"chrome 尾巴从哪一行开始"(见 `keepIndices`)。
+    ///    所以宁愿偏小 —— 一旦认定进 chrome 区, 后面整段都捞, 带画大了会把内容也圈进去。
+    ///
+    /// 48 这个数是量出来的(2026-11-04, 本机真窗口):
+    ///   · 日历(窗口 y=201): 工具栏按钮 `rel-y` 0~11(`添加日程` 0、`日/周/月/年` 7、`搜索` 7);
+    ///   · 访达(窗口 y=204): 工具栏 `rel-y` 0~41(含 `返回/前进` 那行说明文字), 内容从 `rel-y` 52 起。
+    /// ⇒ 48 落在 41 与 52 **之间**: 两个 App 的工具栏都在带内。
+    ///
+    /// ⚠️ 这里只认**几何**, 不认角色。工具栏在 AX 里是 `AXToolbar`(容器, 不进快照), 它的
+    ///    子按钮才是行 —— 按角色一个都认不出来。反过来"窗口顶部"是布局事实, 与本机是否
+    ///    实现某个角色无关。
+    static let fixedRegionBand = 48
+
+    /// 一次最多从"本来会被截掉的那批"里捞回多少行。
+    ///
+    /// 封顶是因为它们要**占内容的名额**: 一个几百行的工具栏能把整份快照占满。24 = 实测
+    /// 日历 10、访达 16 都装得下, 又不到 120 的 1/5。
+    static let fixedRegionCap = 24
+
+    /// 这一行是不是落在窗口顶部的固定区里。
+    ///
+    /// ⚠️ 拿不到坐标就一律当"不是"(行没 `frame`, 或根节点没报 `frame`)—— 没有判据就不猜,
+    ///    退回旧行为。反过来**允许 `rel-y` 为负**(元素在这些 App 里可能报在窗口外一点点),
+    ///    那种行同样是 chrome。
+    func isFixedRegion(_ row: Row) -> Bool {
+        guard let w = windowFrame, let f = row.frame else { return false }
+        return f.y - w.y < Self.fixedRegionBand
+    }
+
+    /// 渲染要保留哪些行(下标升序)。
+    ///
+    /// 规则: 先按遍历序从头取, 取满之后**回头看尾巴** —— 从被截的那批里**第一个落在固定区的行**
+    /// 起, 后面**整段**都捞回来, 并从内容那边让出同样多的名额; 总条数仍是 `limit`。
+    ///
+    /// ⚠️ 为什么必须这么改(2026-11-04 实测): 截断是按 **AX 遍历序**切尾巴的, 而 AppKit 把
+    ///    工具栏排在遍历**末尾** —— 它在屏幕上是"最上面那一行", 在树里却是"最后一行"。
+    ///    日历月视图 130 行 / 上限 120 ⇒ 被切掉的 10 行正是 `添加日程` 与 `日/周/月/年`。
+    ///    ⇒ **同一件事能不能做, 取决于当时界面上有多少个格子**(切「收件箱」树只剩 113 行,
+    ///    它才出现), 而模型从回执里完全看不出这个原因。
+    ///
+    /// ⚠️ 为什么是"从第一个固定区行起、后面整段", 而不是"逐行判在不在带里"(初版就是这么写的,
+    ///    场景回归当场把它打回来了): 点「添加日程」弹出的浮层 `textfield "新建快速日程"` 在
+    ///    `rel-y` **50**, 正好在 48pt 带**外** —— 逐行判 ⇒ 浮层照旧被截, 于是"新建日程"这个
+    ///    最日常的场景在树稍大一点时就做不到, 而回执只会说"还有 N 项未显示"。
+    ///    整段捞的理由是实测出来的**顺序事实**: chrome 在遍历末尾连成一片(工具栏 → 弹层 → 红绿灯),
+    ///    一旦进了 chrome 区, 后面的都还是 chrome。
+    func keepIndices(limit: Int) -> [Int] {
+        let total = rows.count
+        guard limit > 0 else { return [] }
+        guard total > limit else { return Array(0..<total) }
+        let start = (limit..<total).first { isFixedRegion(rows[$0]) }
+        let rescued = start.map { Array(($0..<total).prefix(Self.fixedRegionCap)) } ?? []
+        let budget = max(0, limit - rescued.count)
+        return Array(0..<budget) + rescued
+    }
+
     // MARK: - 渲染
 
     /// 拼成模型看的那段文本。
     ///
     /// `limit` 是**上界不是配额**: 一棵几千节点的树整段塞进上下文没有信息量, 只是贵。
     /// 截断时**必须**把"还有多少没显示"写出来 —— 否则模型会以为那就是全部。
+    /// 固定区那部分见 `keepIndices`(批 2l): 被截的若是工具栏, 它不是"看不见", 是"永远做不到"。
     func rendered(limit: Int = 120) -> String {
         var lines: [String] = []
         lines.append("# 快照 · 前台:\(appName) · 窗口:\(windowTitle)")
-        let shown = rows.prefix(limit)
-        for row in shown {
-            lines.append(Self.line(row))
+        let kept = keepIndices(limit: limit)
+        var cursor = 0
+        for i in kept {
+            if i > cursor {
+                // 缺口后面紧跟固定区行 ⇒ 这个缺口是**为了让工具栏进来**才有的。
+                let makesRoom = i < rows.count && isFixedRegion(rows[i])
+                lines.append(Self.gapNote(count: i - cursor, limit: limit, makesRoom: makesRoom))
+            }
+            lines.append(Self.line(rows[i]))
+            cursor = i + 1
         }
-        if rows.count > limit {
-            // ⚠️ 措辞是有代价的(2026-11-04): 旧文案写"需要的话让我滚动/展开再看" —— 那是**空头承诺**。
-            //    被 120 行上限截掉的可能是窗口**顶部工具栏**, 它固定在可视区里, 滚一辈子也滚不到
-            //    (日历实锤: 129 行, 尾部 9 行 = `日/周/月/年` 四个视图按钮)。模型照着旧提示去滚,
-            //    找不到就再读一遍 —— 两轮都白烧。截断 ≠ "在可视区外", 这一句必须说清。
-            lines.append("… 还有 \(rows.count - limit) 项未显示 (这是渲染上限: 被截的可能是工具栏这类固定区域 —— 它在可视区里, 滚也滚不到)")
+        if cursor < rows.count {
+            lines.append(Self.gapNote(count: rows.count - cursor, limit: limit, makesRoom: false))
         }
         return lines.joined(separator: "\n")
+    }
+
+    /// 截断时插在**缺口位置**的那句话。
+    ///
+    /// ⚠️ 两种缺口说的不是一回事, 合成一句就是骗人(2026-11-04):
+    ///   · `makesRoom`: 缺口后面紧跟着固定区行 ⇒ 名额是被固定区占走的(访达实测: 一个 291 行的
+    ///     树会出现**两个**这样的缺口 —— 工具栏 271~283 一段、窗口那几个红绿灯按钮 288~291 一段,
+    ///     中间夹着的标签页栏 284~287 落在 48pt 带外, 没被捞, 于是又断了一次);
+    ///   · 否则: 尾巴被上限切了 —— 后面再也接不上。
+    ///
+    /// ⚠️ 两种缺口都**不许**说"让出来的是内容行": 第二个缺口里被省掉的恰恰不是内容行。
+    ///    能说的只有一件事实 —— 固定区优先, 其余照旧受上限约束。
+    ///
+    /// ⚠️ 旧的这一句写的是"被截的可能是工具栏这类固定区域 —— 它在可视区里, 滚也滚不到",
+    ///    那是**在描述病**, 不是在说规则。批 2l 之后工具栏根本不会被截, 这句话要么不成立
+    ///    (工具栏已经在) 要么把内容行说成"滚也滚不到"(它们本来就在可滚区里)。改成说清
+    ///    **上限是常数、重读没有用**: 模型上一版读到"还有 N 项"的唯一反应就是再读一遍。
+    static func gapNote(count: Int, limit: Int, makesRoom: Bool) -> String {
+        if makesRoom {
+            return "… 中间 \(count) 项未显示 (渲染上限 \(limit) 项: 顶部固定区/工具栏已优先保住, 其余仍受这个上限约束 —— 重读也一样)"
+        }
+        return "… 还有 \(count) 项未显示 (渲染上限 \(limit) 项: 我一直只能给出 \(limit) 行, 重读也一样 —— 要看到后面那些, 先按编号把占地方的那块收起来)"
     }
 
     static func line(_ row: Row) -> String {

@@ -56,11 +56,12 @@ enum SopInjection {
     /// ⚠️ 扩这个集合 = 两处一起改: 这里 + `SopManual.text` 里加一节（不同步会被 `missing` 点名,
     ///    冒烟的「手册本体」判据也会红）。
     static let builtins: Set<String> = [
-        "com.apple.Notes",      // 备忘录 129 节点 / 268ms
-        "com.apple.iCal",       // 日历   625 节点 / 781ms
-        "com.apple.mail",       // 邮件   收件箱 3000 节点 / 200 秒（手册写"别直接读"）
-        "com.apple.reminders",  // 提醒事项 54 节点 / 90ms
-        "com.apple.finder",     // 访达   列表视图 ~800 节点
+        "com.apple.Notes",      // 备忘录 128 节点 / 193ms
+        "com.apple.iCal",       // 日历   130 行（月视图）/ 450ms
+        // ⚠️ 邮件 2026-11-04 移出（boss 定）: 本机邮箱没配置，手册与探针都不再覆盖它。
+        //    收件箱那条实测（799 封 = 3000 节点 / 200 秒）仍然是超时规则的依据，留在 run.sh 注释里。
+        "com.apple.reminders",  // 提醒事项 54 节点 / 42ms
+        "com.apple.finder",     // 访达   列表视图 291 行 / 1.4 秒
     ]
 
     /// 手册里的一节 = 一个 App。

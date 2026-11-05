@@ -211,6 +211,13 @@ enum AXAdapter {
         if let s = raw as? String { return s }
         // 数字型的值(滑块、步进器)AX 给的是 NSNumber —— 转成字符串, 否则模型看不见当前值。
         if let n = raw as? NSNumber { return n.stringValue }
+        // ⚠️ **日期这一档是 2026-11-04 实测补的**(批 2m): 日历事件编辑器里那四个时间格子
+        //    (`AXDateTimeArea`, id `start-timepicker` …) 的 `AXValue` 是 **CFDate**。
+        //    不认它 ⇒ 快照里这四格**连值都没有**, 而这正是"改一条日程的时间"唯一能落脚的地方:
+        //    模型只能看见四个无名空格子, 连现在几点都读不出来。
+        //    渲染成 `yyyy-MM-dd HH:mm`(本机时区), 与 `ComputerDateValue.parse` 认的格式同源 ——
+        //    "读到的样子 = 能写回去的样子"。
+        if let d = raw as? Date { return ComputerDateValue.display(d) }
         return nil
     }
 
@@ -280,7 +287,10 @@ enum AXAdapter {
                                  modifiers: mods,
                                  // 这两条**现问系统**, 不按角色猜 —— 见 `ComputerActTarget` 上的注释。
                                  canFocus: canFocus(el),
-                                 canScroll: scrollBar(of: el) != nil)
+                                 canScroll: scrollBar(of: el) != nil,
+                                 // 同上: 值的类型现问, 不按角色猜 —— `datetimearea` 是日期,
+                                 // 但别人完全可以给它挂一个字符串值。
+                                 valueShape: valueShape(of: el))
     }
 
     /// 目标窗口上此刻挂着的 sheet。**现场读** —— 存盘弹窗是"刚才那一秒"才弹出来的,
@@ -343,9 +353,65 @@ enum AXAdapter {
         AXUIElementPerformAction(el, "AXOpen" as CFString)
     }
 
+    /// 执行元素自己声明的**具名动作** —— 名字由 `ComputerCustomAction.match` 选出(唯一命中),
+    /// 判据(能不能做、红线)全在 App 侧那一遍, 这里只发。
+    ///
+    /// ⚠️ 名字必须用**原始串**(`Name:删除\nTarget:0x0\nSelector:(null)`), 不能用洗过的「删除」:
+    ///    AX 认的是它自己那一串, 我们只是在给模型看的时候洗掉噪音。
+    /// ⚠️ 返回码这族也**不可信**: 实测提醒事项的 `Name:删除` 回 **-25205**(「属性不支持」)
+    ///    而条目真的没了。所以调用方只把 `invalidUIElement` 当"没发出去", 其余一律按
+    ///    "发出去了、去看重读"记 —— 同 `open` 那条。
+    static func perform(_ el: AXUIElement, action name: String) -> AXError {
+        AXUIElementPerformAction(el, name as CFString)
+    }
+
+    /// 把这一格的**上下文菜单**摆出来 —— `AXShowMenu`。
+    ///
+    /// ⚠️ 它与 `press` 是**两个动作**, 不是同一个动作的两种叫法(同 `open` 那条): 有些控件动作表里
+    ///    两样都有, 一个按下去、一个把菜单摆出来。实测量级(2026-11-05)。
+    /// ⚠️ **返回码照样不可信, 而且两个方向都不可信**: 同一次实现在备忘录笔记格上报 **-25204**
+    ///    (`kAXErrorCannotComplete`) 而菜单真的弹了; 在侧边栏文件夹行上报 **0**。所以这里只
+    ///    执行, 判据留给调用方 —— **唯一可信的判据是"菜单项有没有真的出现"**(重读之后数
+    ///    `menuitem` 的行), 与 `press` 拿 `err == .success` 当判据不是同一路数。
+    /// ⚠️ 菜单**不是独立窗口**: 它挂在这一格的**子树**里(`AXMenu` ← 目标元素)。所以重读一次
+    ///    前台窗口树, 菜单项就带着新编号出现了 —— 不需要另开一条"读菜单"的路。
+    ///    (实测 2026-11-05: 备忘录的上下文菜单 17 项, 含「删除」; `AXWindows` 仍是 1, 前台窗口
+    ///     没变 ⇒ 不依赖"这个 App 在前台", 也就不破那条"禁顶栏菜单"的红线。)
+    static func showMenu(_ el: AXUIElement) -> AXError {
+        AXUIElementPerformAction(el, "AXShowMenu" as CFString)
+    }
+
+    /// 确认/提交 —— `AXConfirm`。**第三件不同的事**(见 `ComputerAction` 里 `confirm` 那段):
+    /// 实测(2026-11-04, 日历「创建快速日程」): 只有它能把手里的文本变成一条真日程, 而同一个
+    /// 文本框上 `AXPress` 返回 `0` 却什么都不发生 —— 拿返回码"看起来一样"就会把它当同义词。
+    static func confirm(_ el: AXUIElement) -> AXError {
+        AXUIElementPerformAction(el, kAXConfirmAction as CFString)
+    }
+
     /// 写值。只有 `ComputerActGuard.isWritableRole` 放行的角色会走到这里。
-    static func setValue(_ el: AXUIElement, _ text: String) -> AXError {
-        AXUIElementSetAttributeValue(el, kAXValueAttribute as CFString, text as CFString)
+    ///
+    /// ⚠️ **写法跟着属性当前的类型走**(批 2m, 2026-11-04 实测), 不是一味写字符串:
+    ///    `AXDateTimeArea` 的 `AXValue` 是 `CFDate`, 拿 `CFString` 去写系统回
+    ///    **-25201**(`kAXErrorIllegalArgument`), 界面纹丝不动 —— 改日程时间在"只会写字符串"
+    ///    的实现里根本不可能。`shape` 由 `liveTarget` 现场读来, 判据(该不该写、解析成什么)
+    ///    在 `ComputerWritePlan`, 这里只执行。
+    static func setValue(_ el: AXUIElement, _ text: String, shape: ComputerValueShape = .text) -> AXError {
+        if case .date(let d) = ComputerWritePlan.decide(shape: shape, text: text) {
+            return AXUIElementSetAttributeValue(el, kAXValueAttribute as CFString, d as CFDate)
+        }
+        return AXUIElementSetAttributeValue(el, kAXValueAttribute as CFString, text as CFString)
+    }
+
+    /// 这个元素的 `AXValue` 是什么类型。读不到就当**文本**(维持批 2m 之前的行为)。
+    private static func valueShape(of el: AXUIElement) -> ComputerValueShape {
+        var raw: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(el, kAXValueAttribute as CFString, &raw) == .success,
+              let raw else { return .text }
+        // ⚠️ 先比 type id 再转, 不用裸 `as!`: 属性类型由目标 App 决定, 撞上非 CFDate 的
+        //    一天就是 helper 崩掉 —— 而 helper 一崩, 整条 computer_* 面到重启前都不可用。
+        if CFGetTypeID(raw) == CFDateGetTypeID() { return .date }
+        if CFGetTypeID(raw) == CFStringGetTypeID() { return .text }
+        return .other
     }
 
     // MARK: - 聚焦与滚动 (批 2f)

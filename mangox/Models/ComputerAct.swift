@@ -17,7 +17,7 @@ import Foundation
 
 // MARK: - 动作
 
-/// 模型能做的动作。⚠️ **只有五个**, 而且每一个都必须按**编号**寻址 ——
+/// 模型能做的动作。⚠️ **只有七个**, 而且每一个都必须按**编号**寻址 ——
 /// 多一个 op 就多一条"模型以为自己能动"的路(同 `PiRpcTransport.computerToolNames` 那条注释)。
 ///
 /// 批 2b 只有 `press` / `setValue`; 批 2f 补了 `focus` / `scroll`, 两条都是**纯 AX**:
@@ -33,6 +33,37 @@ import Foundation
 ///     `kAXPressAction` —— 人签的字就不是他以为的那件事。
 ///   · ⚠️ 实测(2026-11-04, 日历 + Finder): `AXOpen` 报 `-25205` 却真的生效,
 ///     `AXPress` 报 `0` 却空转 ⇒ **返回码两个方向都不可信**, 见 `ComputerOpenVerdict`。
+/// 批 2k(2026-11-04)补了 `confirm` —— **它不是「回车键」, 也不是 `press` 的兜底**:
+///   · 实测起因: 日历的「创建快速日程」浮层里只有 statictext + textfield, **没有「完成」按钮**;
+///     文本框的 `AXActionNames` = `["AXShowMenu", "AXConfirm", "AXPress"]`, 而 `AXPress` 返回
+///     `0` 却什么都不发生 —— 只有 `AXConfirm` 能把那条日程真正落库(隔离验证: 只发它, 事件生成)。
+///   · 所以它是**第三件不同的事**: press = 按一下、open = 打开它指的东西、confirm = 提交我刚写进去的值。
+///   · ⚠️ **只对文本输入类角色放行**(`isConfirmableRole`)。放开到任意控件, `confirm` 就是一个
+///     通用的「确认」后门 —— 付款 / 删除确认框上的默认按钮都吃这一手, 而恒拒三条拦的是**标题
+///     与角色**, 一个"通用确认"会把它们整个绕过去。
+/// 批 2n(2026-11-05)补了 `showmenu` —— **它不是 `press` 的兜底, 是"把够不着的功能摆出来"**:
+///   · 实测起因: 备忘录删笔记 / 日历删日程 / 访达新建文件夹**三条场景全卡在同一个缺口上** ——
+///     功能只在**上下文菜单**里, 窗口里的控件一个都不承载它。旧的动作集只有
+///     press / setValue / focus / scroll / open / confirm,**没有任何一个能打开菜单**,
+///     SOP 因此写下"这三件我做不到, 请人来" —— 那是**产品缺口被写成能力边界**(boss 当场否掉)。
+///   · 为什么不能再塞进 `press`: 有些控件动作表里同时有 `AXPress` 与 `AXShowMenu`, 而它们做的是
+///     **两件不同的事**(按一下 vs 把它的菜单摆出来)。合成一个, 审批卡上写"按", 人签字签的
+///     就不是实际发生的事 —— 与 `open` 那条同一条理由。
+///   · ⚠️ 它**只负责把菜单摆出来**, 不替人选。菜单项会带着新编号出现在**重读**里, 选哪一项是
+///     下一手的 `press`, 那一步照样要过全部九条判据(含恒拒三条) —— 见 `ComputerRedline`。
+/// 批 2p(2026-11-05)补了 `custom` —— **执行元素自己声明的那个具名动作**(不是 AX 标准动作):
+///   · 起因是把 `showmenu` 那条结论推翻的那次实测: 备忘录列表行的动作表是
+///     `["AXShowMenu", "Name:置顶…", "Name:共享…", "Name:删除…"]` —— **没有 `AXPress`、没有 `AXOpen`**,
+///     所以"先点开某一条让它成为选中项, 再开菜单删"这条组合**在 AX 里第一步就没有入口**。
+///   · 但同一行自己挂着 `Name:删除`。隔离实验(2026-11-05, 两条测试笔记): 编辑器里开着「乙条」,
+///     对**甲条那一行**执行 `Name:删除` ⇒ 甲条进最近删除、乙条原地不动。
+///     ⇒ **自定义动作是行作用域**; 而 `showmenu` 的菜单项是**选中作用域**(删的是编辑器里
+///       开着的那条 —— 当天误删真笔记就是这个原因)。作用域不同, 不是同一件事的两种做法。
+///   · 为什么 op 名不是 `delete`: 自定义动作的名字是**目标 App 起的**, 而且会本地化。
+///     把它写进枚举等于假设全世界都叫「删除」。这里只承诺"执行它自己声明的某个动作",
+///     名字由调用方给(片段匹配、必须唯一命中), 见 `ComputerCustomAction`。
+///   · ⚠️ `custom` **不许碰 AX 标准动作**: 匹配只落在不以 `AX` 开头的名字上。否则
+///     `custom("AXPress")` 就是给 `press` 那条判据开的后门。
 /// 坐标点击仍然不做: 它绕开编号("我看见的节点 = 我点的东西"这个等式没了), 要等人类接管那批。
 enum ComputerAction: String, Equatable, CaseIterable {
     case press
@@ -40,6 +71,18 @@ enum ComputerAction: String, Equatable, CaseIterable {
     case focus
     case scroll
     case open
+    /// 确认/提交这一格 = `AXConfirm`(批 2k, 2026-11-04)。见文件头 `confirm` 那一段。
+    case confirm
+    /// 打开这一格的**上下文菜单** = `AXShowMenu`(批 2n, 2026-11-05)。
+    ///
+    /// ⚠️ **已实现, 但没对模型开放** —— 见 `exposed`。原因是它的作用域判不了:
+    ///    菜单到底作用于"这一格"还是"当前选中项", AX 里**没有任何属性可以问**。
+    ///    实测备忘录就是选中作用域(删掉了编辑器里开着的那条, 不是右键的那条) ⇒ 不可逆操作
+    ///    不能建在一个猜出来的作用域上。代码留着: 它是"判据在、但门关着"的证据,
+    ///    哪天真有 App 证明是元素作用域, 打开它就是往 `exposed` 里加一项。
+    case showmenu
+    /// 执行元素自己的**具名自定义动作**(批 2p, 2026-11-05)。见文件头 `custom` 那一段。
+    case custom
 
     /// 线上给的 `op` 字符串 → 动作。**不认识的 op 返回 nil**, 由调用方拒掉。
     ///
@@ -47,6 +90,68 @@ enum ComputerAction: String, Equatable, CaseIterable {
     ///    默默落到某个默认分支, 就等于"扩展侧改名之后一切照常"。
     static func parse(_ raw: String) -> ComputerAction? {
         ComputerAction(rawValue: raw.trimmingCharacters(in: .whitespacesAndNewlines))
+    }
+
+    /// **对模型开放的**动作。不在这张表里的 op: 认得出来, 但一律拒 ——
+    /// 这样回执才说得清是"还没开放"而不是"不认识", 而这两句话让模型走向完全不同的下一步
+    /// (换个说法重发 vs 换一条路)。
+    ///
+    /// ⚠️ 这张表是**唯一**的开放判据, 工具 schema 里那个 enum 只是它的影子。两处若漂移,
+    ///    症状是"模型调得到但服务端拒"或反过来 —— 两种都没有红灯。冒烟单独钉住这一条。
+    static let exposed: [ComputerAction] = [.press, .setValue, .focus, .scroll,
+                                            .open, .confirm, .custom]
+}
+
+/// 元素自己声明的**自定义动作** —— 名字是目标 App 起的, 形如
+/// `Name:删除\nTarget:0x0\nSelector:(null)`: 会本地化、还拖着一条噪音尾巴。
+///
+/// 这个类型只做三件事(全是纯函数, 所以判据留在这一侧): 认出哪些算自定义动作、把名字洗成
+/// 人能读的样子、按片段**唯一**命中。执行在 helper —— 它只要那个原始名字。
+///
+/// ⚠️ 为什么不能直接把 `Name:删除\nTarget:0x0\nSelector:(null)` 交给模型照着抄:
+///    那不是给人看的字符串, 抄错一个字节就是另一个动作(或者什么都没有)。让模型说人话
+///    ("删除"), 由这一层去找, 找不到/找到多个都如实拒 —— 三种结果都是可断言的。
+enum ComputerCustomAction {
+
+    /// 只留**非 AX 标准动作**。
+    ///
+    /// ⚠️ `AXPress` / `AXOpen` / `AXShowMenu` / `AXConfirm` 一律不算: 它们是别的 op 的地盘,
+    ///    从 `custom` 进来就等于绕过那些 op 各自的判据(比如 `confirm` 的角色白名单)。
+    static func available(_ actions: [String]) -> [String] {
+        actions.filter { !$0.hasPrefix("AX") }
+    }
+
+    /// 洗过的名字: `Name:删除\nTarget:0x0\nSelector:(null)` → `删除`。
+    ///
+    /// 没有 `Name:` 前缀就把整串修剪一下 —— 有些 App 直接把动作就叫 `Format`。
+    static func humanName(_ raw: String) -> String {
+        var s = raw
+        if let r = s.range(of: "Name:") { s = String(s[r.upperBound...]) }
+        if let cut = s.firstIndex(where: { $0 == "\n" || $0 == "\r" }) { s = String(s[..<cut]) }
+        let t = s.trimmingCharacters(in: .whitespacesAndNewlines)
+        return t.isEmpty ? raw.trimmingCharacters(in: .whitespacesAndNewlines) : t
+    }
+
+    enum Match: Equatable {
+        case none
+        /// 唯一命中 —— 里面是**原始动作名**(执行要用它, 不是洗过的那个)。
+        case one(String)
+        /// 命中多个(原始动作名)。分不清就不做。
+        case many([String])
+    }
+
+    /// 按片段匹配。**必须唯一命中**: 多个候选一律交回, 让调用方要求说清楚。
+    ///
+    /// ⚠️ 匹配的是**洗过的名字**而不是原始串: 原始串里 `Target:0x0` / `Selector:(null)` 这些
+    ///    噪音会让"任意片段都能命中一堆动作", 唯一性判据当场失效。
+    static func match(_ actions: [String], needle: String) -> Match {
+        let n = needle.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !n.isEmpty else { return .none }
+        let hits = available(actions).filter {
+            humanName($0).localizedCaseInsensitiveContains(n)
+        }
+        if hits.count == 1 { return .one(hits[0]) }
+        return hits.isEmpty ? .none : .many(hits)
     }
 }
 
@@ -92,6 +197,83 @@ enum ComputerScrollDirection: String, Equatable, CaseIterable {
     static func parse(_ raw: String) -> ComputerScrollDirection? {
         ComputerScrollDirection(
             rawValue: raw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased())
+    }
+}
+
+// MARK: - 值这一侧: 读成什么、怎么写回去 (批 2m, 2026-11-04)
+
+/// 一个 AX 值**是什么类型** —— 决定"怎么写回去"。由 helper 现场问属性得到。
+///
+/// ⚠️ 为什么需要它: `setValue` 原来**只会写 CFString**, 而日历事件编辑器里那四个时间格子
+///    (`AXDateTimeArea`, id `start-timepicker` …) 的 `AXValue` 是 **CFDate**。
+///    实测(2026-11-04): 拿字符串去写它, 系统回 **-25201**(`kAXErrorIllegalArgument`),
+///    界面纹丝不动 ⇒ "把日程改到 17:30"在只会写字符串的实现里**结构上做不到**,
+///    而回执只会说"写失败", 让人看不出缺的是**类型**而不是权限。
+///    同一个洞在**读**那一侧也漏了(日期读成 nil ⇒ 那四格在快照里连值都没有), 见
+///    `AXAdapter.string`。
+enum ComputerValueShape: Equatable {
+    case text
+    case date
+    /// 既不是文本也不是日期(数组 / 元素 / 结构化值)。**维持旧行为**: 照字符串写。
+    case other
+}
+
+/// `setValue` 落到一个格子上该**怎么写**。
+///
+/// ⚠️ 这是纯函数(`AXAdapter` 只负责执行), 因为"写什么"是判据不是实现 —— 而 helper 在没授权、
+///    没屏幕的机器上测不了, 判据必须留在能被冒烟断言的一侧(同本文件头注释那条)。
+enum ComputerWritePlan: Equatable {
+    case text
+    case date(Date)
+
+    static func decide(shape: ComputerValueShape, text: String) -> ComputerWritePlan {
+        guard shape == .date, let d = ComputerDateValue.parse(text) else { return .text }
+        return .date(d)
+    }
+}
+
+/// 日期文本 ⇄ `AXValue` 里那个 `CFDate`。**两个方向同一套格式**, 因为"读到的样子 = 能写回去
+/// 的样子"是最省事故的一条规矩: 模型在快照里看见 `2026-11-04 17:30`, 照抄回来就该能写进去。
+///
+/// ⚠️ **只认几种写死的格式, 不做自然语言猜测**("明天下午三点"这类解析不在这里): 猜错的代价是
+///    把日程挪到**别的日子**, 而且不会有任何红灯。认不出来就如实回一句, 让调用方换一种写法。
+enum ComputerDateValue {
+
+    /// 认的格式, 依次试。`yyyy-MM-dd HH:mm` 必须排前面 —— 它就是快照里的那一款。
+    static let formats = ["yyyy-MM-dd HH:mm:ss", "yyyy-MM-dd HH:mm", "yyyy-MM-dd", "HH:mm"]
+
+    private static func formatter(_ format: String, timeZone: TimeZone) -> DateFormatter {
+        let f = DateFormatter()
+        // ⚠️ `en_US_POSIX` 不是洁癖: 跟随用户区域设置的话, 在佛教历/民国历的系统上
+        //    "2026" 会被解析成完全不同的年份, 而且要命的是**解析成功**。
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.calendar = Calendar(identifier: .gregorian)
+        f.timeZone = timeZone
+        f.dateFormat = format
+        return f
+    }
+
+    /// 文本 → 日期。只给 `HH:mm` 时按**今天**补日期(用户说"改到 17:30"说的就是那一天)。
+    static func parse(_ text: String, now: Date = Date(), timeZone: TimeZone = .current) -> Date? {
+        let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !t.isEmpty else { return nil }
+        for format in formats where format != "HH:mm" {
+            if let d = formatter(format, timeZone: timeZone).date(from: t) { return d }
+        }
+        guard let hm = formatter("HH:mm", timeZone: timeZone).date(from: t) else { return nil }
+        var cal = Calendar(identifier: .gregorian)
+        cal.timeZone = timeZone
+        let parts = cal.dateComponents([.hour, .minute], from: hm)
+        var base = cal.dateComponents([.year, .month, .day], from: now)
+        base.hour = parts.hour
+        base.minute = parts.minute
+        base.second = 0
+        return cal.date(from: base)
+    }
+
+    /// 日期 → 文本(快照里给人看、也给模型照着写回来)。
+    static func display(_ date: Date, timeZone: TimeZone = .current) -> String {
+        formatter("yyyy-MM-dd HH:mm", timeZone: timeZone).string(from: date)
     }
 }
 
@@ -231,6 +413,10 @@ struct ComputerActTarget: Equatable {
     let canFocus: Bool
     /// 这个元素管着的那根**竖向滚动条**能不能读写(`scroll` 的落点)。
     let canScroll: Bool
+    /// 它的 `AXValue` 是什么类型 —— `setValue` 据此决定**写字符串还是写日期**(批 2m)。
+    ///
+    /// ⚠️ 默认 `.text` 保住旧调用点与 Mock 的写法; 真机上由 `AXAdapter.liveTarget` 现问。
+    let valueShape: ComputerValueShape
 
     init(role: String,
          subrole: String = "",
@@ -240,7 +426,8 @@ struct ComputerActTarget: Equatable {
          keyEquivalent: String? = nil,
          modifiers: Set<String> = [],
          canFocus: Bool = false,
-         canScroll: Bool = false) {
+         canScroll: Bool = false,
+         valueShape: ComputerValueShape = .text) {
         self.role = role
         self.subrole = subrole
         self.title = title
@@ -250,6 +437,7 @@ struct ComputerActTarget: Equatable {
         self.modifiers = modifiers
         self.canFocus = canFocus
         self.canScroll = canScroll
+        self.valueShape = valueShape
     }
 }
 
@@ -411,6 +599,98 @@ enum ComputerActGuard {
                     reason: "「\(displayName(target))」打不开 —— \(known) ⇒ 没动。" + hint,
                     refusal: nil)
             }
+        case .confirm:
+            // ⚠️ **角色白名单排在动作之前**。一个"确认"落在按钮上, 后果就是按下那个按钮 ——
+            //    那正是 `press` 的语义, 只是换了个更难被审批人看穿的名字(卡上写「确认 #12」,
+            //    而实际发生的是"点了那个按钮")。挡在这一步, 回执还能顺手指路。
+            guard isConfirmableRole(target.role) else {
+                let hint = target.actions.contains("AXPress") ? " 想按它的话用 press。" : ""
+                return .refuse(
+                    reason: "「\(displayName(target))」是 \(AXSnapshot.cleanRoleName(target.role)),"
+                        + " 不是能「确认」的输入框 ⇒ 没动。confirm 只提交你刚写进输入框的值,"
+                        + " 它不是万能的「确认」键 —— 要按某个按钮请用 press。" + hint,
+                    refusal: nil)
+            }
+            guard target.actions.contains("AXConfirm") else {
+                let known = target.actions.isEmpty
+                    ? "它一个动作都不提供"
+                    : "它支持的是：" + target.actions.joined(separator: " / ")
+                return .refuse(
+                    reason: "「\(displayName(target))」没有「确认」这个动作 —— \(known) ⇒ 没动。"
+                        + "这一格要提交, 请先看它支持哪个动作; 一个都不支持就如实告诉用户,"
+                        + " 别换个编号接着试。",
+                    refusal: nil)
+            }
+        case .showmenu:
+            // ⚠️ `showmenu` 只认 `AXShowMenu`, 不拿 `AXPress` 顶替(见 `ComputerAction` 头注释)。
+            //    ⚠️ 反过来的那一半更重要: **没有 `AXShowMenu` 的元素不是"该换 press"**, 而是
+            //    "它没有菜单可开"。这两句指的方向相反 —— 说成前者, 模型会去按它(按一下的后果
+            //    与开菜单完全不同); 说成后者, 它才会如实回去告诉用户"这一格没有菜单"。
+            guard target.actions.contains("AXShowMenu") else {
+                let known = target.actions.isEmpty
+                    ? "它一个动作都不提供"
+                    : "它能做的只有：" + target.actions.joined(separator: " / ")
+                let hint = target.actions.contains("AXPress")
+                    ? " 想按它的话用 press —— 但按它不等于打开它的菜单。" : ""
+                return .refuse(
+                    reason: "「\(displayName(target))」没有菜单可开 —— \(known) ⇒ 没动。"
+                        + "只有菜单里才有的功能, 在这一格上这条路走不通, 那就如实告诉用户。" + hint,
+                    refusal: nil)
+            }
+        case .custom:
+            // ① 参数: 得说清执行哪一个。空片段等于"随便挑一个" —— 那是我们替他选, 不行。
+            let needle = request.text.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !needle.isEmpty else {
+                let names = ComputerCustomAction.available(target.actions)
+                    .map(ComputerCustomAction.humanName)
+                let tail = names.isEmpty
+                    ? "这一格没有自定义动作, 想按它的话用 press。"
+                    : "它能执行的是：" + names.joined(separator: " / ")
+                return .refuse(reason: "custom 要说清执行哪个动作(比如 text=\"删除\") ⇒ 没动。" + tail,
+                               refusal: nil)
+            }
+            // ② **容器层不许**。理由与 `showmenu` 被撤掉是同一条: 容器上那条动作作用于
+            //    "当前选中的那个", 不是"这一格"。而"选中"在 AX 里经常是假的(备忘录的
+            //    `AXSelectedRows` 写进去回 0、回读 1 条, 删除却落到编辑器里开着的那条)。
+            if customActionBannedRoles.contains(target.role) {
+                return .refuse(
+                    reason: "「\(displayName(target))」是 \(AXSnapshot.cleanRoleName(target.role)),"
+                        + " 容器那一层的动作作用于**当前选中项**, 不是这一格 ⇒ 没动。"
+                        + "要动列表里的某一条, 就点名**那一行**自己。",
+                    refusal: nil)
+            }
+            // ③ 唯一命中才做。
+            switch ComputerCustomAction.match(target.actions, needle: needle) {
+            case .none:
+                let names = ComputerCustomAction.available(target.actions)
+                    .map(ComputerCustomAction.humanName)
+                // ⚠️ 说"它有的是…"而不是只说"做不到": 这句话就是模型下一手的依据
+                //    (同 `press` 那条列出动作表的判据)。
+                let known = names.isEmpty
+                    ? "它一个自定义动作都没有"
+                    : "它有的是：" + names.joined(separator: " / ")
+                let hint = target.actions.contains("AXPress") ? " 只是要按一下的话用 press。" : ""
+                return .refuse(
+                    reason: "「\(displayName(target))」上没有含「\(needle)」的动作 —— \(known) ⇒ 没动。"
+                        + hint,
+                    refusal: nil)
+            case .many(let hits):
+                let names = hits.map(ComputerCustomAction.humanName).joined(separator: " / ")
+                // ⚠️ 命中多个**不许挑一个**: 挑错的代价不对称(删错比没删糟得多),
+                //    而两个都命中说明调用方自己没说清。
+                return .refuse(
+                    reason: "含「\(needle)」的动作有 \(hits.count) 个(\(names)), 分不清你要哪个 ⇒ 没动。"
+                        + "把名字说得更准一些。",
+                    refusal: nil)
+            case .one(let raw):
+                // ④ 红线判**动作名** —— 屏幕上会发生的那个词就是它。
+                //    ⚠️ 第 ⑥ 条判的是元素标题(那一行叫什么), 判不到"这一行能执行什么";
+                //       「删除」与「立即删除」的差别只在这个名字里。
+                if let d = ComputerRedline.refusal(forControl: ComputerCustomAction.humanName(raw),
+                                                   role: target.role) {
+                    return .refuse(reason: d.reason, refusal: d.refusal)
+                }
+            }
         case .setValue:
             // ⚠️ 密码框那条**必须排在"能不能写"之前**: `securetextfield` 本来就不在可写白名单里,
             //    先判角色会把它报成「不是能写字的地方」—— 结论一样但话术完全不同, 而模型看到
@@ -434,6 +714,16 @@ enum ComputerActGuard {
                 return .refuse(
                     reason: "要写的内容有 \(text.count) 个字, 超过 \(maxSetValueChars) 的上限 ⇒ 没写。"
                         + "这么长的东西多半是搞错了对象。",
+                    refusal: nil)
+            }
+            // ⑧d 这一格要的是**日期**, 而给的文本解析不出来 ⇒ 不写。
+            //    ⚠️ 必须排在执行之前、而且要在这里(能断言的一侧)拦: 让 helper 把字符串硬写进
+            //    一个 CFDate 属性, 系统回 -25201, 模型看到的只是"写失败" —— 它不会想到
+            //    "该换一种写法", 只会换个编号再试。这里顺手把它该写成什么样说出来。
+            if target.valueShape == .date, ComputerDateValue.parse(text) == nil {
+                return .refuse(
+                    reason: "「\(displayName(target))」这一格要的是日期时间(例: 2026-11-04 17:30),"
+                        + " 你说的「\(text)」不是 ⇒ 没动。快照里这一格的值就是能写回去的样子。",
                     refusal: nil)
             }
         case .focus:
@@ -471,10 +761,41 @@ enum ComputerActGuard {
     ///
     /// ⚠️ 故意不含 `combobox`: 有些 App 的 combobox 是可编辑输入, 有些只是个选择器,
     ///    分不出来的时候**当成不能写**。
+    ///
+    /// ⚠️ `datetimearea` 是 2026-11-04 实测加进来的(批 2m): 日历事件编辑器展开时间之后,
+    ///    可写的是四个 `AXDateTimeArea`(起/止 × 日期/时间), 而**整个界面没有第二个落点** ——
+    ///    不让写它, "把日程改到 17:30"这条场景在产品路径上就无路可走。它比 textfield 更安全:
+    ///    写进去的是 `CFDate`, 解析不了那一档在判据里已经拒了(⑧d), 不存在"写进半截字符串"。
     static func isWritableRole(_ role: String) -> Bool {
         let r = AXSnapshot.cleanRoleName(role)
-        return r == "textfield" || r == "textarea" || r == "searchfield"
+        return r == "textfield" || r == "textarea" || r == "searchfield" || r == "datetimearea"
     }
+
+    /// `confirm` 允许落的角色。**比 `isWritableRole` 更窄**: 确认这件事的语义是
+    /// "提交我刚写进去的东西", 只有真能写的格子才有它可言。
+    ///
+    /// ⚠️ 不含 `combobox`: 选择器的 `AXConfirm` 是"定下这一项", 与"提交一段文本"不是一回事;
+    ///    分不出来的时候**当成不能确认** —— 漏 = 提交不了(说清楚就行), 错 = 替人定了东西。
+    static func isConfirmableRole(_ role: String) -> Bool {
+        let r = AXSnapshot.cleanRoleName(role)
+        return r == "textfield" || r == "textarea"
+    }
+
+    /// `custom` **不许落在**的角色 —— 容器与菜单栏。
+    ///
+    /// ⚠️ 与 `showmenu` 没被开放是同一个理由, 不是洁癖: `AXTable` / `AXOutline` 上那条「删除」
+    ///    删的是**当前选中的那个**, 不是"这一格"。而"选中"在 AX 里经常是假的(实测备忘录
+    ///    `AXSelectedRows` 写进去回 0、回读 1 条, 删除却落到编辑器里开着的那条)。
+    ///    按错一格 = 删错东西且没有撤销 ⇒ 宁可这条路在容器上走不通。
+    /// ⚠️ 菜单栏不在窗口树里, 本来也点在它上面; 列出来是为了"这张表自己说得清" ——
+    ///    将来有人给 `custom` 加坐标寻址时, 这条判据不必再补。
+    /// ⚠️ **`AXRow` / `AXCell` 不在表里**: 它们是"一条"而不是"一堆"。备忘录那条 `Name:删除`
+    ///    就同时挂在 `AXRow` 与 `AXCell` 上, 而快照里的一行落在 `cell` —— 把 row 也禁掉,
+    ///    等于把一个本来就安全的作用域也堵上(堵错了方向: 该堵的是集合层)。
+    static let customActionBannedRoles: Set<String> = [
+        "AXTable", "AXOutline", "AXList", "AXWindow",
+        "AXScrollArea", "AXApplication", "AXMenuBar", "AXMenu",
+    ]
 
     /// ③ 的文案要分岔: "根本没给操作权限" 与 "给了但这类 App 不许操作" 是两件事 ——
     /// 前者去设置里勾一下就行, 后者勾了也不会生效(说成前者会让人在设置页里白找)。
@@ -506,6 +827,13 @@ enum ComputerActGuard {
         case .focus: verb = "聚焦"
         case .scroll: verb = "滚动"
         case .open: verb = "打开"
+        case .confirm: verb = "确认"
+        // ⚠️ 写「打开菜单 #12」而不是「按 #12」: 审批卡是**人签字**的地方, 而这一下会把菜单
+        //    摆出来(屏幕上多一层面板), 与人以为的"按了一下"不是同一件事。
+        case .showmenu: verb = "打开菜单"
+        // ⚠️ 卡上给不出动作名(preview 只有编号) —— 这正好: 名字由模型给, 而**人要看的是
+        //    "它在哪一格上做了什么"**, 那件事等回执。这里只承诺"执行自定义动作"这个类别。
+        case .custom: verb = "执行自定义动作"
         }
         let who = app.trimmingCharacters(in: .whitespacesAndNewlines)
         return verb + " #" + String(index) + (who.isEmpty ? " · 当前前台" : " · " + who)

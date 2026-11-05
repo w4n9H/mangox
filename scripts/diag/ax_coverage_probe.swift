@@ -25,7 +25,6 @@ import ApplicationServices
 ///    没有值得写进手册的坑, 留着只是每轮多付一段提示词。
 let defaultTargets: [(bundle: String, label: String)] = [
     ("com.apple.iCal", "日历"),
-    ("com.apple.mail", "邮件"),
     ("com.apple.Notes", "备忘录"),
     ("com.apple.reminders", "提醒事项"),
     ("com.apple.finder", "访达"),

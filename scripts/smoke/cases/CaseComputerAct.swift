@@ -16,7 +16,7 @@ extension SmokeMain {
 
     @MainActor
     static func caseComputerAct() async {
-        print("== T-ACT 动作面判据 (P18 批 2b / 四档 op 在批 2f 补齐) ==")
+        print("== T-ACT 动作面判据 (P18 批 2b / 四档 op 在批 2f 补齐 / confirm 在批 2k) ==")
 
         // MARK: ① op 白名单 —— 认不出来的不许落到任何默认分支
 
@@ -26,13 +26,28 @@ extension SmokeMain {
         check(ComputerAction.parse("scroll") == .scroll, "T-ACT scroll 认得 (批 2f)")
         check(ComputerAction.parse("open") == .open,
               "T-ACT open 认得 (2026-11-04: 只暴露 AXOpen 的格子靠它才动得了)")
+        check(ComputerAction.parse("confirm") == .confirm,
+              "T-ACT confirm 认得 (批 2k: 日历快速日程只有这一条提交路)")
+        check(ComputerAction.parse("showmenu") == .showmenu,
+              "T-ACT showmenu 认得 (批 2n: 只活在菜单里的功能靠它才够得着)")
+        check(ComputerAction.parse("custom") == .custom,
+              "T-ACT custom 认得 (批 2p: 元素自己声明的动作, 备忘录删笔记靠它)")
+        // ⚠️ **认得出来 ≠ 开放给模型**。`showmenu` 就是这一档: 代码在、判据在、门关着。
+        //    这两件事必须分开断言 —— 合成一条("parse 认不出")的话, 将来谁把它加回 enum
+        //    就顺手放开了, 而没有任何红灯。
+        check(ComputerAction.exposed.contains(.custom),
+              "T-ACT custom 在对模型开放的名单里")
+        check(!ComputerAction.exposed.contains(.showmenu),
+              "T-ACT showmenu **没**对模型开放 (作用域判不了: 实测它删的是选中项, 不是那一行)")
+        check(ComputerAction.exposed.count == ComputerAction.allCases.count - 1,
+              "T-ACT 开放名单 = 全部动作 - 1(showmenu) —— 多放一个进来必须是**有意**的")
         check(ComputerAction.parse(" press ") == .press, "T-ACT 两侧空白不算错 (线上偶尔带)")
         check(ComputerAction.parse("click") == nil,
               "T-ACT 坐标点击仍然不做 ⇒ 认不出来, 不许默默当成 press")
         check(ComputerAction.parse("PRESS") == nil,
               "T-ACT 大小写敏感: 线上写错了要变红, 不许看着差不多就认")
-        check(ComputerAction.allCases.count == 5,
-              "T-ACT 动作面只有五个 —— 多一个就多一条「模型以为自己能动」的路")
+        check(ComputerAction.allCases.count == 8,
+              "T-ACT 动作面只有八个 —— 多一个就多一条「模型以为自己能动」的路")
 
         // 方向是 scroll 的**独立参数**, 不是一个 op: 认不出来就必须拒(判据 ⑧ 的第一支),
         // 不许退回"那就往下滚"。
@@ -371,6 +386,281 @@ extension SmokeMain {
         // **重复动作**(再跳一天 / 再开一次文件夹), 那个不自愈。
         check(ComputerOpenVerdict.classify(-25200) == .acceptedWithSuspectCode(-25200),
               "T-ACT 未知码按「可能已送出」记 (按失败记会让模型重试 ⇒ 重复打开)")
+
+        // MARK: ⑧d `confirm` —— 提交那一格, 但绝不许当"通用确认键" (批 2k, 2026-11-04)
+
+        // 实测起因: 日历「创建快速日程」的文本框 actions = AXShowMenu / AXConfirm / AXPress,
+        // 而同一格子上 AXPress 返回 0 **什么都不发生** —— 只有 AXConfirm 能把文本变成真日程
+        // (隔离验证: 一个别的动作都不发, 事件当场生成)。
+        let quickEventField = ComputerActTarget(role: "AXTextField", title: "新建快速日程",
+                                               actions: ["AXShowMenu", "AXConfirm", "AXPress"])
+        check(ComputerActGuard.evaluate(request: req(.confirm), scope: scope(),
+                                        target: quickEventField, window: .none) == .allow(.confirm),
+              "T-ACT 输入框 + 有 AXConfirm ⇒ confirm 放行 (日历快速日程只有这条路提交得了)")
+
+        // ⚠️ **这一条是这档动作的红线**。同一个 AXConfirm 落到按钮上, 实际发生的事就是"按下
+        //    那个按钮", 而卡上写的是「确认 #12」—— 审批人签的字不是他以为的那件事。
+        let confirmableButton = ComputerActTarget(role: "AXButton", title: "删除",
+                                                  actions: ["AXPress", "AXConfirm"])
+        if case .refuse(let why, _) = ComputerActGuard.evaluate(
+            request: req(.confirm), scope: scope(), target: confirmableButton, window: .none) {
+            check(why.contains("不是能「确认」的输入框") && why.contains("press"),
+                  "T-ACT 按钮上的 confirm 必须拒、并指路 press (否则它就是个换了名字的 press) 实际:\(why)")
+        } else {
+            check(false, "T-ACT confirm 绝不许在按钮上放行 (卡上写「确认」, 实际是按下那个按钮)")
+        }
+
+        // 输入框但**不提供** AXConfirm: 说清它支持什么, 不许押着 press 顶上。
+        if case .refuse(let why, _) = ComputerActGuard.evaluate(
+            request: req(.confirm), scope: scope(),
+            target: ComputerActTarget(role: "AXTextField", title: "搜索", actions: ["AXPress"]),
+            window: .none) {
+            check(why.contains("没有「确认」这个动作") && why.contains("AXPress"),
+                  "T-ACT 输入框没 AXConfirm ⇒ 拒, 并列出它支持的动作 (不许拿 press 顶替) 实际:\(why)")
+        } else {
+            check(false, "T-ACT 没有 AXConfirm 的输入框不许被 confirm 放行")
+        }
+
+        // 恒拒三条对 confirm 一视同仁 —— 在存盘确认弹窗上按一下"确认"恰恰是最危险的那一下:
+        // 它最容易被读成"对，我就是要保存/丢弃"，而那一手是人的决定。
+        let saveSheetForConfirm = ComputerActWindow(sheetTitle: "要保存对「未命名」的更改吗？",
+                                                   sheetButtons: ["不保存", "取消", "保存"])
+        if case .cancelSavePrompt(let i, _) = ComputerActGuard.evaluate(
+            request: req(.confirm), scope: scope(), target: quickEventField,
+            window: saveSheetForConfirm) {
+            check(i == 1,
+                  "T-ACT confirm 在存盘弹窗上也替你按「取消」(下标 \(i)) —— 借「确认」两个字替人丢修改是最坏的一手")
+        } else {
+            check(false, "T-ACT 存盘弹窗在时 confirm 必须走「替你按取消」, 不许放行")
+        }
+
+        check(ComputerActGuard.preview(action: .confirm, app: "日历", index: 115) == "确认 #115 · 日历",
+              "T-ACT 卡上那一行: confirm 写「确认」")
+
+        // MARK: ⑧e 值的**类型**决定怎么写 —— 日期格不是字符串格 (批 2m, 2026-11-04)
+
+        // 实测起因: 日历事件编辑器展开时间之后, 可写的只有四个 `AXDateTimeArea`
+        // (`start-timepicker` …), 它们的 `AXValue` 是 **CFDate**。拿 CFString 去写, 系统回
+        // **-25201**(`kAXErrorIllegalArgument`), 界面纹丝不动 ⇒ "把日程改到 17:30"在只会写
+        // 字符串的实现里**结构上做不到**, 而回执只会说"写失败", 让人看不出缺的是类型。
+        check(ComputerActGuard.isWritableRole("AXDateTimeArea"),
+              "T-ACT 日期格可写 (整个日历编辑器里没有第二个落点)")
+        check(!ComputerActGuard.isConfirmableRole("AXDateTimeArea"),
+              "T-ACT 日期格不许被「确认」—— confirm 的语义是提交文本, 日期格没有这个动作")
+
+        // 日期文本 ⇄ CFDate 的**两个方向同一套格式**: 快照里读到的样子就是能写回去的样子。
+        let tz = TimeZone(identifier: "Asia/Shanghai")!
+        let round = ComputerDateValue.parse("2026-11-04 17:30", timeZone: tz)
+        check(round != nil, "T-ACT 「yyyy-MM-dd HH:mm」认得 (快照里渲染的就是这一款)")
+        check(round.map { ComputerDateValue.display($0, timeZone: tz) } == "2026-11-04 17:30",
+              "T-ACT 读出来的样子与写得回去的样子是**同一个格式** —— 模型照抄就能用")
+        // 只给时分: 补**今天**, 而且必须落回同一个钟点(时区不许被系统悄悄换掉)。
+        let now = ComputerDateValue.parse("2026-11-04 09:00", timeZone: tz)!
+        let hm = ComputerDateValue.parse("17:30", now: now, timeZone: tz)
+        check(hm.map { ComputerDateValue.display($0, timeZone: tz) } == "2026-11-04 17:30",
+              "T-ACT 只说时分时补今天 实际:\(hm.map { ComputerDateValue.display($0, timeZone: tz) } ?? "nil")")
+        check(ComputerDateValue.parse("明天下午三点", timeZone: tz) == nil,
+              "T-ACT 自然语言**不猜**: 猜错是把日程挪到别的日子, 而且不会有任何红灯")
+        check(ComputerDateValue.parse("", timeZone: tz) == nil, "T-ACT 空串不是日期")
+
+        // 写法跟着**属性类型**走 —— 其余类型一律维持"写字符串"(旧行为不许被这次改动带跑)。
+        if case .date(let d) = ComputerWritePlan.decide(shape: .date, text: "2026-11-04 17:30") {
+            check(ComputerDateValue.display(d, timeZone: tz) == "2026-11-04 17:30",
+                  "T-ACT 日期格 + 能解析 ⇒ 按日期写")
+        } else {
+            check(false, "T-ACT 日期格 + 能解析, 必须算出日期来")
+        }
+        check(ComputerWritePlan.decide(shape: .date, text: "随便写点什么") == .text,
+              "T-ACT 日期格 + 解析不了 ⇒ 交回字符串那条路 (判据 ⑧e 会先拒, 这只是兜底)")
+        check(ComputerWritePlan.decide(shape: .text, text: "2026-11-04 17:30") == .text,
+              "T-ACT 普通输入框里那串字**就是个字符串** (否则搜个日期都写不进去)")
+
+        // 判据那一侧: 日期格 + 不是日期的文本 ⇒ 拒, 且说清"这一格要日期时间"。
+        let dateCell = ComputerActTarget(role: "AXDateTimeArea", title: "start-timepicker",
+                                         valueShape: .date)
+        if case .refuse(let why, _) = ComputerActGuard.evaluate(
+            request: req(.setValue, text: "下午三点"), scope: scope(),
+            target: dateCell, window: .none) {
+            check(why.contains("日期时间") && why.contains("快照"),
+                  "T-ACT 日期格收到非日期 ⇒ 拒, 并指出快照里那个值就是能写回去的样子 实际:\(why)")
+        } else {
+            check(false, "T-ACT 日期格收到非日期必须拒 —— 硬写进去就是一次 -25201 的空转")
+        }
+        check(ComputerActGuard.evaluate(request: req(.setValue, text: "2026-11-04 17:30"),
+                                        scope: scope(), target: dateCell, window: .none)
+                == .allow(.setValue),
+              "T-ACT 日期格 + 合法日期 ⇒ 放行")
+        // 对照组: 同一句话写进普通输入框照旧放行 —— 证明上一条拒的是**类型**, 不是措辞。
+        check(ComputerActGuard.evaluate(request: req(.setValue, text: "下午三点"), scope: scope(),
+                                        target: ComputerActTarget(role: "AXTextField", title: "备注"),
+                                        window: .none) == .allow(.setValue),
+              "T-ACT 对照: 「下午三点」写进普通输入框照旧放行 (拒的是类型, 不是这句话)")
+
+        // MARK: ⑧f `showmenu` —— 把够不着的功能摆出来, 但绝不替人选 (批 2n, 2026-11-05)
+
+        // 实测起因: 备忘录删笔记 / 日历删日程 / 访达新建文件夹**三条场景全卡在同一个缺口**上 ——
+        // 功能只活在上下文菜单里, 窗口里没有承载它的控件, 而动作集里没有任何 op 能打开菜单。
+        // 旧 SOP 因此把这三件写成「做不到, 请人来」—— 那是**产品缺口被写成了能力边界**。
+        let menuedCell = ComputerActTarget(role: "AXCell", title: "【场景测试】笔记",
+                                          actions: ["AXShowMenu"])
+        check(ComputerActGuard.evaluate(request: req(.showmenu), scope: scope(),
+                                        target: menuedCell, window: .none) == .allow(.showmenu),
+              "T-ACT 有 AXShowMenu 的格子 ⇒ showmenu 放行 (只活在菜单里的功能只有这条入口)")
+
+        // ⚠️ 没有 AXShowMenu 的格子必须拒, 而且**不许把这句说成"那就用 press"**:
+        //    按一下的后果与开菜单完全不同, 指错路会让模型去按一个它本想打开菜单的东西。
+        if case .refuse(let why, _) = ComputerActGuard.evaluate(
+            request: req(.showmenu), scope: scope(), target: button, window: .none) {
+            check(why.contains("没有菜单可开") && why.contains("AXPress"),
+                  "T-ACT 没有 AXShowMenu ⇒ 拒, 并列出它支持的动作 实际:\(why)")
+            check(why.contains("按它不等于打开它的菜单"),
+                  "T-ACT 拒的时候不许把指路写成「那就用 press」—— 那两件事的后果不一样 实际:\(why)")
+        } else {
+            check(false, "T-ACT 没有 AXShowMenu 的控件不许被 showmenu 放行")
+        }
+        // 一个动作都没有的格子: 要说"它一个都不提供", 不许押着系统背锅。
+        if case .refuse(let why, _) = ComputerActGuard.evaluate(
+            request: req(.showmenu), scope: scope(),
+            target: ComputerActTarget(role: "AXStaticText", title: "正文"), window: .none) {
+            check(why.contains("一个动作都不提供"),
+                  "T-ACT 一个动作都没有的格子 ⇒ 拒, 且如实说它一个都不提供 实际:\(why)")
+        } else {
+            check(false, "T-ACT 没有任何动作的格子不许被 showmenu 放行")
+        }
+
+        // 两个动作**互不顶替** —— 这一对是"不许把 showmenu 合成 press 的别名"的判据。
+        let menuOnly = ComputerActTarget(role: "AXCell", title: "一行", actions: ["AXShowMenu"])
+        if case .refuse(let why, _) = ComputerActGuard.evaluate(
+            request: req(.press), scope: scope(), target: menuOnly, window: .none) {
+            check(why.contains("按不了"), "T-ACT 只有 AXShowMenu 的格子 press 要拒 实际:\(why)")
+        } else {
+            check(false, "T-ACT press 不许落到只有 AXShowMenu 的格子上")
+        }
+        check(ComputerActGuard.evaluate(
+                request: req(.showmenu), scope: scope(),
+                target: ComputerActTarget(role: "AXCell", title: "一行",
+                                          actions: ["AXShowMenu", "AXPress"]),
+                window: .none) == .allow(.showmenu),
+              "T-ACT 两个动作都有时 showmenu 照样是 showmenu (它不是 press 换了个名字)")
+
+        // ⚠️ **红名单管着菜单项**: 菜单项也是控件, 选它 = press 它 ⇒ 走的是同一条恒拒。
+        //    这一条是本轮最容易搞错的地方 —— 我一度想给词表加一个光秃秃的「删除」, 那会把
+        //    备忘录删除整个掐死(真机实测: 菜单里那一项就叫「删除」)。判据该是**沿用现有词表**。
+        check(ComputerRedline.refusal(forControl: "删除", role: "AXMenuItem") == nil,
+              "T-ACT 菜单项「删除」放行 —— 它 = 移到废纸篓(可撤销), 不是永久删除")
+        check(ComputerRedline.refusal(forControl: "移到废纸篓", role: "AXMenuItem") == nil,
+              "T-ACT 菜单项「移到废纸篓」放行")
+        if let d = ComputerRedline.refusal(forControl: "立即删除", role: "AXMenuItem") {
+            check(d.refusal == .permanentDelete,
+                  "T-ACT 菜单项「立即删除」命中恒拒 (菜单项与按钮同一套词表)")
+        } else {
+            check(false, "T-ACT 菜单项上的「立即删除」必须恒拒 —— 否则菜单成了绕开红线的后门")
+        }
+
+        check(ComputerActGuard.preview(action: .showmenu, app: "备忘录", index: 3) == "打开菜单 #3 · 备忘录",
+              "T-ACT 卡上那一行: showmenu 写「打开菜单」—— 人签字时要知道屏幕上会多一层面板")
+
+        // MARK: ⑧g `custom` —— 执行元素自己声明的动作 (批 2p, 2026-11-05)
+
+        // 实测起因(把 showmenu 那条结论推翻的那次): 备忘录列表行的动作表是
+        //   ["AXShowMenu", "Name:置顶…", "Name:共享…", "Name:删除…"] —— **没有 AXPress / AXOpen**,
+        // 所以"先点开某条再开菜单"这条路第一步就断了。而 `Name:删除` 是**行作用域**的
+        // (隔离实验: 编辑器里开着乙条, 对甲条那一行执行它 ⇒ 甲条没了、乙条不动)。
+        let deleteAction = "Name:删除\nTarget:0x0\nSelector:(null)"
+        let pinAction = "Name:置顶\nTarget:0x0\nSelector:(null)"
+        // ⚠️ 夹具里**必须放一个真的 `AXPress`**: 第一版的夹具只有 `AXShowMenu`, 于是
+        //    "custom 不许发出 AXPress"那条断言**恒真**(它匹配的是一张根本没有 AXPress 的表)。
+        //    这类假绿只有在造反例时才看得见 —— 把 `available` 的过滤去掉, 它照样绿。
+        let noteRow = ComputerActTarget(
+            role: "AXCell", title: "问题修复批五",
+            actions: ["AXPress", "AXShowMenu", pinAction,
+                      "Name:共享\nTarget:0x0\nSelector:(null)", deleteAction])
+
+        // 名字要洗成人话: 原始串那条噪音尾巴既不该给模型看, 也不该让模型抄。
+        check(ComputerCustomAction.humanName(deleteAction) == "删除",
+              "T-ACT 动作名洗成「删除」实际:\(ComputerCustomAction.humanName(deleteAction))")
+        check(ComputerCustomAction.humanName("Format") == "Format",
+              "T-ACT 没有 Name: 前缀的动作就整串用 (有些 App 直接叫 Format)")
+        check(ComputerCustomAction.available(noteRow.actions).count == 3,
+              "T-ACT AXPress / AXShowMenu 都不算自定义动作 (AX 标准动作是别的 op 的地盘, 实际:"
+                + "\(ComputerCustomAction.available(noteRow.actions)))")
+        // ⚠️ 这一条是 `custom` 的**后门判据**: 它能发 AXPress 的话, press 那条"动作表里没有
+        //    AXPress 就拒"的判据当场失效, 而回执还会说"执行了自定义动作"。
+        check(ComputerCustomAction.match(noteRow.actions, needle: "AXPress") == .none,
+              "T-ACT custom 绝不许发出 AXPress —— 否则它就是 press 的后门")
+        check(ComputerCustomAction.match(noteRow.actions, needle: "删除") == .one(deleteAction),
+              "T-ACT 片段「删除」唯一命中, 且交回的是**原始动作名**(执行要用它)")
+        check(ComputerCustomAction.match(noteRow.actions, needle: "置") == .one(pinAction),
+              "T-ACT 片段按子串匹配 (人不会背完整名字)")
+        check(ComputerCustomAction.match(noteRow.actions, needle: " 删除 ") == .one(deleteAction),
+              "T-ACT 两侧空白不算错")
+        check(ComputerCustomAction.match(noteRow.actions, needle: "") == .none,
+              "T-ACT 空片段一个都不命中 (空 = 随便挑一个, 那是我们替他选)")
+        // 命中多个 ⇒ 交回候选, **不许挑一个**。
+        let twoDeletes = ["Name:删除\nTarget:0x0", "Name:立即删除\nTarget:0x0"]
+        if case .many(let hits) = ComputerCustomAction.match(twoDeletes, needle: "删除") {
+            check(hits.count == 2,
+                  "T-ACT 两个都含「删除」⇒ 交回两个候选让调用方说清 实际:\(hits.count)")
+        } else {
+            check(false, "T-ACT 命中多个时必须交回候选 —— 挑一个就是我们在替他决定")
+        }
+
+        // 放行: 唯一命中 + 行作用域。
+        check(ComputerActGuard.evaluate(request: req(.custom, text: "删除"), scope: scope(),
+                                        target: noteRow, window: .none) == .allow(.custom),
+              "T-ACT 行上的「删除」⇒ custom 放行 (备忘录删笔记唯一可靠的一条路)")
+
+        // 参数缺失: 要说清执行哪一个, 并顺手把它能执行的列出来。
+        if case .refuse(let why, _) = ComputerActGuard.evaluate(
+            request: req(.custom, text: "  "), scope: scope(), target: noteRow, window: .none) {
+            check(why.contains("要说清执行哪个动作") && why.contains("置顶"),
+                  "T-ACT 空片段 ⇒ 拒, 并列出它能执行的那些 实际:\(why)")
+        } else {
+            check(false, "T-ACT custom 空片段必须拒")
+        }
+
+        // ⚠️ **容器层不许** —— 与 showmenu 被撤掉同一条理由: 容器上那条删除删的是"选中项"。
+        if case .refuse(let why, _) = ComputerActGuard.evaluate(
+            request: req(.custom, text: "删除"), scope: scope(),
+            target: ComputerActTarget(role: "AXTable", title: "我的备忘录",
+                                      actions: [deleteAction]),
+            window: .none) {
+            check(why.contains("容器那一层") && why.contains("选中"),
+                  "T-ACT 容器上的 custom 必须拒, 且说清它作用在选中项上 实际:\(why)")
+        } else {
+            check(false, "T-ACT custom 绝不许落在 AXTable 上 —— 删错东西没有撤销")
+        }
+
+        // 红线判**动作名**: 「删除」与「立即删除」的差别只在这个名字里(第 ⑥ 条判的是行标题)。
+        if case .refuse(_, let refusal) = ComputerActGuard.evaluate(
+            request: req(.custom, text: "立即删除"), scope: scope(),
+            target: ComputerActTarget(role: "AXCell", title: "一行",
+                                      actions: ["Name:立即删除\nTarget:0x0"]),
+            window: .none) {
+            check(refusal == .permanentDelete,
+                  "T-ACT 动作名「立即删除」命中恒拒 —— 自定义动作不许成为绕开红线的路")
+        } else {
+            check(false, "T-ACT 动作名「立即删除」必须恒拒")
+        }
+        // 对照组: 同一格上的「删除」照旧放行 —— 证明拒的是那个词, 不是这一类动作。
+        check(ComputerActGuard.evaluate(request: req(.custom, text: "删除"), scope: scope(),
+                                        target: ComputerActTarget(role: "AXCell", title: "一行",
+                                                                  actions: [deleteAction]),
+                                        window: .none) == .allow(.custom),
+              "T-ACT 对照: 同一格上的「删除」照旧放行 (拒的是词, 不是这一类动作)")
+
+        // 没命中: 说清"它有的是…", 而不是只说做不到 —— 那句话就是模型下一手的依据。
+        if case .refuse(let why, _) = ComputerActGuard.evaluate(
+            request: req(.custom, text: "归档"), scope: scope(), target: noteRow, window: .none) {
+            check(why.contains("上没有含「归档」的动作") && why.contains("置顶"),
+                  "T-ACT 没命中 ⇒ 拒, 并列出它真正能做的 实际:\(why)")
+        } else {
+            check(false, "T-ACT 没命中必须拒, 不许悄悄发一个别的动作")
+        }
+
+        check(ComputerActGuard.preview(action: .custom, app: "备忘录", index: 21)
+                == "执行自定义动作 #21 · 备忘录",
+              "T-ACT 卡上那一行: custom 写「执行自定义动作」")
 
         // MARK: ⑨ 审批卡上那一行
 

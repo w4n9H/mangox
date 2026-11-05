@@ -349,7 +349,7 @@ struct ChatView: View {
         }
     }
 
-    /// 滚动列 = ScrollView + 摘要胶囊占位行 (拆子表达式, 防 type-check 超时)。
+    /// 滚动列 = ScrollView (拆子表达式, 防 type-check 超时)。
     private func scrollColumn(_ proxy: ScrollViewProxy) -> some View {
         VStack(spacing: 0) {
             scrollContent(proxy)
@@ -368,28 +368,7 @@ struct ChatView: View {
                     }
                     .animation(CodexTheme.animFast, value: nearBottom)
                 }
-            // P6.3.2: 离开摘要胶囊 — 独立占位行 (浮层会盖住最该读的最新内容, 2026-09-14 否决)
-            if store.awaySummary != nil {
-                HStack {
-                    Spacer()
-                    if let away = store.awaySummary {
-                        AwaySummaryPill(
-                            turns: away.turns,
-                            preview: away.preview,
-                            onJump: {
-                                store.dismissAwaySummary()
-                                scrollToTail(proxy)
-                            },
-                            onDismiss: { store.dismissAwaySummary() })
-                            .frame(maxWidth: Tune.chatColumnWidth)
-                    }
-                    Spacer()
-                }
-                .padding(.vertical, 8)
-                .transition(.opacity.combined(with: .move(edge: .bottom)))
-            }
         }
-        .animation(CodexTheme.animMed, value: store.awaySummary)
     }
 
     /// ScrollView + 探针/锚底/滚动响应 (P9-#9)。
@@ -781,61 +760,6 @@ struct ChatView: View {
 }
 
 // MARK: - Side chat (P6.3.1)
-
-/// 离开摘要悬浮胶囊 (P6.3.2): 点击任意处 = 滚底 + 消失; × = 只关不滚。
-struct AwaySummaryPill: View {
-    let turns: Int
-    let preview: String
-    var onJump: () -> Void
-    var onDismiss: () -> Void
-
-    var body: some View {
-        HStack(spacing: 8) {
-            Button(action: onJump) {
-                HStack(spacing: 6) {
-                    Image(systemName: "arrow.down.circle")
-                        .font(.system(size: 10))
-                        .foregroundStyle(CodexTheme.textMuted)
-                    // 单复数分开写: 英文 "1 turn" / "N turns" 需要各自一条词条 (不靠 %lld 硬套)
-                    if turns == 1 {
-                        Text("离开期间完成 1 轮")
-                            .font(.system(size: 12, weight: .medium))
-                            .foregroundStyle(CodexTheme.textPrimary)
-                    } else {
-                        Text("离开期间完成 \(turns) 轮")
-                            .font(.system(size: 12, weight: .medium))
-                            .foregroundStyle(CodexTheme.textPrimary)
-                    }
-                    if !preview.isEmpty {
-                        Text(L("· 最近：") + preview)
-                            .font(.system(size: 12))
-                            .foregroundStyle(CodexTheme.textSecondary)
-                            .lineLimit(1)
-                            .truncationMode(.tail)
-                    }
-                }
-            }
-            .buttonStyle(.plain)
-            Spacer(minLength: 6)
-            Button(action: onDismiss) {
-                Image(systemName: "xmark")
-                    .font(.system(size: 9, weight: .semibold))
-                    .foregroundStyle(CodexTheme.textMuted)
-                    .frame(width: 16, height: 16)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .help("关闭")
-        }
-        .padding(.leading, 14)
-        .padding(.trailing, 8)
-        .padding(.vertical, 8)
-        .background(CodexTheme.bgElevated)
-        .clipShape(Capsule())
-        .overlay(Capsule().stroke(CodexTheme.divider, lineWidth: 1))
-        .shadow(color: .black.opacity(0.06), radius: 4, y: 2)
-    }
-}
 
 /// 快照提示条: 侧问会话常驻顶部 — 中性 chrome 条 (非告警样式), 右端唯一 accent = 跳回源会话。
 struct SideChatBanner: View {

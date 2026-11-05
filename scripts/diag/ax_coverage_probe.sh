@@ -3,7 +3,7 @@
 # ComputerAct)后跑, 不是另写一遍近似实现。
 #
 # 用法:
-#   bash scripts/diag/ax_coverage_probe.sh                       # 默认五个 App
+#   bash scripts/diag/ax_coverage_probe.sh                       # 默认四个 App
 #   bash scripts/diag/ax_coverage_probe.sh --apps com.apple.mail # 只量一个
 #   bash scripts/diag/ax_coverage_probe.sh --wait 10             # 等窗口更久
 #

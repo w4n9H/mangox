@@ -1072,6 +1072,38 @@ details.fold[open]>summary{margin-bottom:4px}
   </div>
 </div>
 
+<h3>补记 · 批 2k：`confirm` 这一档 —— 「确认」不是回车键，是第三件事（2026-11-04）</h3>
+
+<p class="lead">起因是一句抱怨：<b>日历里建不了日程</b>。上一轮的报告把它归成"缺按键能力"（浮层没有「完成」按钮，正常提交方式是敲 Return），并给了三个选项，推荐开一档只放行 Return / Escape 的键盘面。实测不是这样。</p>
+
+<div class="todos">
+  <div class="todo">
+    <span class="tn">34</span>
+    <div class="tbody">
+      <div class="tt">提交 = <code>AXConfirm</code>，它不是 <code>press</code> 的同义词</div>
+      <div class="td"><b>读数</b>：日历「创建快速日程」浮层在树里只有两行 —— <code>statictext "创建快速日程"</code> + <code>textfield "新建快速日程"</code>，<b>没有任何「完成 / 取消」按钮节点</b>；而那个文本框的 <code>AXActionNames</code> = <code>["AXShowMenu", "AXConfirm", "AXPress"]</code>。<br><b>隔离验证</b>：<b>只发</b> <code>AXConfirm</code>（别的动作一个都不发）⇒ 事件当场生成：<code>复核确认键 · 2026-11-04 18:00–19:00</code>。同一个格子上 <code>AXPress</code> 返回 <code>0</code>，什么都不发生 —— <b>两个动作的返回码长得一模一样，后果完全不同</b>，正好与 <code>AXOpen</code> 那条同族。<br><b>为什么不开键盘面</b>：按键要一整套新判据（放行哪些键、发给哪个 App、什么时候不许发），而这一档只需要一句话：<b>提交我刚写进这一格的值</b>。边界比键盘窄得多，也不给模型一条"随便敲键"的路。<br><b>红线：角色白名单排在动作表之前</b>。<code>AXConfirm</code> 若落在按钮上，实际发生的事就是"按下那个按钮"，而审批卡上写的是「确认 #12」——<b>签的字不是他以为的那件事</b>。所以 <code>confirm</code> 只对 <code>textfield</code> / <code>textarea</code> 放行，按钮上直接拒并指路 press。恒拒三条一视同仁：存盘确认弹窗上按一下"确认"恰恰最危险，<code>confirm</code> 照样走到「替你按取消」那一支。<br><b>门</b>：<code>CaseComputerAct</code> 六条（认得 / 输入框放行 / 按钮上拒且指路 / 没有 AXConfirm 要说清它支持什么 / 存盘弹窗仍拦 / 卡上写「确认」）+ <code>run.sh</code> ③n14 三条源码事实（发的是 <code>kAXConfirmAction</code> · 分派真调 <code>AXAdapter.confirm</code> · 判据里角色在动作表之前）。</div>
+    </div>
+  </div>
+</div>
+
+<p class="lead" style="margin-top:14px"><b>同一轮查出、下一批改掉的那件</b>：<code>read</code> 的渲染上限是 <b>120 项</b>，而日历月视图在"日历来源列表展开"时有 <b>130 项</b> —— 被截掉的恰好是<b>工具栏</b>（AX 遍历顺序里它在末尾，屏幕上却是最上面那一行），于是<b>「添加日程」这个入口根本不在快照里</b>；切到「收件箱」只剩 113 项，它才出现。<b>同一件事能不能做，取决于当时界面上有多少个格子</b>。⇒ 批 2l（见下）。</p>
+
+<h3>补记 · 批 2l：截断不许吃掉固定区（2026-11-04）</h3>
+
+<p class="lead">上一批留了一句"现有四类归因里没有「被截断」这一类"。真去补那一类时发现<b>它根本走不到</b>（下面第二条）—— 病不在回执的措辞，在<b>截断本身按错了顺序切</b>。</p>
+
+<div class="todos">
+  <div class="todo">
+    <span class="tn">35</span>
+    <div class="tbody">
+      <div class="tt">工具栏在<b>屏幕最上面</b>，在 AX 遍历里却在<b>最后</b> ⇒ 先取固定区，再让内容让名额</div>
+      <div class="td"><b>读数</b>（2026-11-04 本机真窗口）：日历 <code>(566,201 1257×758)</code> / 130 行 / 上限 120 ⇒ <b>被截的 10 行 <code>rel-y</code> 全在 0~11</b>（<code>添加日程</code>、<code>日/周/月/年</code>、<code>搜索</code>），内容第一个格子 <code>rel-y</code> 38；访达 <code>(475,204 920×755)</code> / 291 行 / 工具栏 <code>rel-y</code> 0~41、内容从 52 起。<br><b>规则</b>（<code>AXSnapshot.keepIndices</code>）：仍按遍历序从头取，取满之后<b>回头看尾巴</b> —— 被截掉的那批里凡是落在<b>窗口顶部 48pt 带</b>里的，补回来，并从<b>内容那头让出同样多的名额</b>；<b>总条数仍是 120</b>（上界是硬上界，不许被固定区撑破）。48 落在访达工具栏底（41）与内容顶（52）之间，两个 App 都对得上。<br><b>为什么只认几何、不认角色</b>：工具栏在 AX 里是 <code>AXToolbar</code>（容器，根本不进快照），它的子按钮才是行 —— 按角色一个都认不出来；"窗口顶部"是布局事实，与 App 有没有实现某个角色无关。<br><b>封顶 24 行</b>：固定区要占内容的名额，一个几百行的工具栏能把快照占满。24 = 日历 10、访达 16 都装得下，又不到 120 的 1/5。<br><b>回执文案分两种缺口</b>：<code>中间 N 项未显示（顶部固定区已优先保住，让出来的是内容行）</code> 与 <code>还有 N 项未显示（上限是常数，重读也一样）</code>。旧文案"被截的可能在可视区里，滚也滚不到"是在<b>描述病</b>，不是在说规则 —— 固定区修好之后，这句话对<b>内容行</b>反而是新谎（它们本来就在可滚区里）。<br><b>门</b>：<code>CaseComputerPure</code> 六条（工具栏那 3 行必须出现 / 让名额后 <code>[117]</code> 在、<code>[118]</code> 不在 / 总行数仍是 120 / 缺口写在断掉的位置 / 窗口没报坐标就退回旧行为 / 封顶 24 且尾部照旧报数）。</div>
+    </div>
+  </div>
+</div>
+
+<p class="lead" style="margin-top:14px"><b>计划里写了、这轮没做的一条：<code>PointMissKind</code> 第五类「被截断」。</b>理由不是省事，而是<b>它走不到</b>：坐标命中之后，<code>rowIndex(for:in:)</code> 查的是<b>整张行表</b>（不是渲染出来的那 120 行），所以被渲染上限截掉的行<b>照样能认回编号、照样能按</b> —— 这一档永远不进 <code>missKind</code>。加一个走不到的分支，就等于加一道<b>判不红</b>的门。真正要修的是"别让它被截"（第一条），不是"被截了怎么说"。<br><b>还剩的已知边界</b>：只认窗口<b>顶部</b>那一带。底部的固定条（状态栏 / 播放条）没有实测样本，没敢按同一套推 —— 要加得先量。</p>
+
 <p class="foot">本文件是 P13 起的对齐文档格式(见 <code>docs/must_read.txt</code>)。<b>本文所有性能与覆盖数字均为二手或未测</b>(§02.B / §02.D 已标),§04 前置门第 ②③ 条未过之前,§03 改动九的账只是估算。</p>
 
 </div>

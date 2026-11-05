@@ -207,7 +207,20 @@ Trace 头部摘要行下加 **segment 三档：Messages / Turns / Details**（`T
   回读成功 → `session_file` 落库 + 临时快照清理；删除侧问会话按显式路径清产物文件。
 - 遗留：`⌘;` 快捷键未接（v1 鼠标入口够用）；源会话删除不连带侧问（快照自带上下文，可独立存活）。
 
-### 4.2 Away summary（P6.3.2）✅ 落地注记（2026-09-14）
+### 4.2 Away summary（P6.3.2）⛔ 已撤下（2026-11-04）
+
+> **撤下注记（2026-11-04）**：这条胶囊**整条删掉了** —— `AwaySummary` / `awaySummary` /
+> `pendingAway` / `accumulateAway` / `settleAwaySummary` / `dismissAwaySummary` / `AwaySummaryPill`
+> 与它那行占位、冒烟 T19 **十六条**断言、词表三条（`离开期间完成 1 轮` / `离开期间完成 %lld 轮` / `· 最近：`）
+> 一并移除；`isAppActive(headlessDefault:)` 的参数与"在场/前台双兜底"也一起去掉（只剩通知一条路径）。
+>
+> **为什么**：① 它只多给"轮数"一个数 —— 堆叠的回复里一眼能数；② 它和**轮末的账**（2026-10-22，
+> `TurnBill.swift`）抢同一个认知槽位，而那次四稿反复否掉的正是"两排同基线 / 同字号 / 同灰度的小字"；
+> ③ 它是全仓唯一一处把 `NSApp.isActive` 耦合进 UI 的地方，留着就得长期养那套按 sid 分键的积累器。
+> ④ **它从 0.1.4 落地起零改动**（`git log -S awaySummary` 只有落地那一笔）—— 不是"最近坏了"，是一直没人回来收拾现场。
+>
+> **"你不在的时候跑完了几轮"现在的去处**：轮末账（每轮正文工具条右端，常驻）+ 系统通知（P4.1）。
+> 下面这段原始设计注记**原样保留** —— 它记的是"当初为什么这么做"和"哪些判据仍然成立"（sid 分键、手动停止不计入）。
 
 - **触发（实拍板）**：「不在场」= `sid != selectedConversationId || !NSApp.isActive`（会话级切走 /
   App 级失焦两条路径），在 streamEnded 归并点积累 `pendingAway[sid] = (turns, preview)`——
@@ -355,7 +368,7 @@ CHANGELOG `[0.1.4]` 段 + README（状态栏/Trace v2/侧问/回顾）+ MARKETIN
 | P6.2.2 | Turns + Details 视图 | ✅ 2026-09-14 |
 | P6.2.3 | export_html 导出 | ✅ 2026-09-14 |
 | P6.3.1 | Side chat（`--fork` + 绑定路径化 + 入口） | ✅ 2026-09-14（169 项 ALL PASS） |
-| P6.3.2 | Away summary 横幅 | ✅ 2026-09-14（185 → 194 项 ALL PASS） |
+| P6.3.2 | Away summary 横幅 | ⛔ 2026-11-04 撤下（2026-09-14 落地时 185 → 194 项 ALL PASS）—— 见 §4.2 撤下注记 |
 | P6.3.3 | 侧问选点（`由此侧问` 先出选点弹窗，粒度 = 回合边界） | ✅ 2026-10-21（1460 项 ALL PASS） |
 | P6.4 | 收尾发版 0.1.4 | 时机待拍板 |
 | （backlog） | 过程态控制按钮 / Markdown 导出 / LLM Away 摘要 / mini 窗 Side chat | — |
@@ -368,7 +381,7 @@ CHANGELOG `[0.1.4]` 段 + README（状态栏/Trace v2/侧问/回顾）+ MARKETIN
 | Side chat 空态图标糙 | 46pt 圆形徽章 + 17pt 图标；文案层级重排 |
 | 侧栏行操作碎 | hover 双小标 → 单 `...` 菜单（重命名 / 由此侧问 / 删除…） |
 | 顶栏 fork 按钮冗余 | 移除（入口收敛为侧栏菜单 + Trace 轮级右键） |
-| Away 胶囊压住正文 | overlay 浮层 → 独立占位行（信息条必须占位，浮层只适合瞬态提示） |
+| Away 胶囊压住正文 | overlay 浮层 → 独立占位行（信息条必须占位，浮层只适合瞬态提示）—— 胶囊 2026-11-04 已撤下，**判据本身仍适用**（现在场内唯一的信息条是侧问快照提示条） |
 | 气泡正文不可选中 | MarkdownView 全块 + userBubble 补 `.textSelection(.enabled)`（跨段落仍不可选） |
 | Trace Details 费用 | 去 Cost cell 与 `$` 尾缀（数据链保留，只是不渲染） |
 | 会话恒为 "New chat" | 首条 user 消息 → 会话名 = 首行前 10 字符（一次性，手动重命名不被覆盖） |

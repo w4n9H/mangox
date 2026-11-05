@@ -7,17 +7,24 @@
    **本文件由 scripts/l10n/gen_strings.py --write 生成, 别手改** ——
    译文改 scripts/l10n/en_values.py 的 VALUES, 再跑 --write。
 
-   条数: 960
+   条数: 984
 */
 
 " (值:\"%@\")" = " (value: %@)";
 " [附件: %@]" = " [Attachment: %@]";
 " · 当前前台" = " · frontmost";
 " ⇒ 没动。重新读一次再决定。" = " ⇒ nothing was done. Read again before deciding.";
+" 不是能「确认」的输入框 ⇒ 没动。confirm 只提交你刚写进输入框的值," = " is not a field that can be confirmed ⇒ nothing was done. confirm only submits the text you just wrote into a field,";
+" 你说的「%@」不是 ⇒ 没动。快照里这一格的值就是能写回去的样子。" = " what you gave (\"%@\") is not one ⇒ nothing done. The value shown for this cell in the snapshot is the shape it accepts back.";
 " 别反复换节点试。" = " rather than trying one row after another.";
+" 别换个编号接着试。" = " rather than trying another row number.";
+" 只是要按一下的话用 press。" = " Use press if you only meant to click it.";
 " 字)" = " chars)";
+" 它不是万能的「确认」键 —— 要按某个按钮请用 press。" = " it is not a universal \"OK\" key — to press a button, use press.";
 " 它只有「打开」这条路 —— 想打开/跳到它, 改用 open。" = " That element only takes open — to open or jump to it, use open.";
+" 容器那一层的动作作用于**当前选中项**, 不是这一格 ⇒ 没动。" = " That container-level action applies to whatever is **currently selected**, not to this cell ⇒ nothing done.";
 " 待重启" = " Restart required";
+" 想按它的话用 press —— 但按它不等于打开它的菜单。" = " Use press if you only meant to click it -- but clicking is not opening its menu.";
 " 想按它的话用 press。" = " To press it instead, use press.";
 " 未选" = " none";
 " 电脑" = " Computer";
@@ -108,6 +115,7 @@
 "cron 无效" = "Invalid cron expression";
 "curl 退出码 %d" = "curl exit code %d";
 "curl 退出码 %lld" = "curl exit code %lld";
+"custom 要说清执行哪个动作(比如 text=\"删除\") ⇒ 没动。" = "custom has to say which action to run (e.g. text=\"Delete\") ⇒ nothing done.";
 "dream 完成：%lld 条提案待审" = "Dream done: %lld proposals to review";
 "env 执行程序" = "env runs a program";
 "find 执行命令/改文件" = "find executes commands / edits files";
@@ -128,12 +136,12 @@
 "txt / html 没有 frontmatter — 标题就是文件名" = "txt / html have no frontmatter — the filename is the title";
 "· %lld 个在途" = "· %lld in flight";
 "· 内层 %lld" = "· Nested %lld";
-"· 最近：" = "· Latest: ";
 "— 变化:" = "— Changes:";
 "— 变化:文本上没看出变化(界面可能已经动了 —— 选中、高亮这类只改颜色, 我读不到)" = "— Changes: no text change I can see (the UI may well have moved — selection or highlight only repaints, and I cannot read that)";
+"… 中间 %lld 项未显示 (渲染上限 %@ 项: 顶部固定区/工具栏已优先保住, 其余仍受这个上限约束 —— 重读也一样)" = "… %lld hidden in the middle (render cap %@ items: the top fixed area / toolbar is kept first, the rest still obeys this cap — re-reading is the same)";
 "… 其余改动省略" = "… remaining changes omitted";
 "… 还有 %lld 条" = "… %lld more";
-"… 还有 %lld 项未显示 (这是渲染上限: 被截的可能是工具栏这类固定区域 —— 它在可视区里, 滚也滚不到)" = "… %lld more not shown (render cap: what got cut may be a toolbar or another fixed area — it is on screen, scrolling will not reach it)";
+"… 还有 %lld 项未显示 (渲染上限 %@ 项: 我一直只能给出 %@ 行, 重读也一样 —— 要看到后面那些, 先按编号把占地方的那块收起来)" = "… %lld more not shown (render cap %@ items: I can only ever give you %@ lines, re-reading is the same — to reach the rest, collapse the part that takes up room by its number)";
 "→ 回落 home" = "→ falls back to home";
 "⚠️ 关掉密钥闸后只剩白名单 + 服务商过滤, 建议名单内各域都已配 DMARC" = "⚠️ With the secret gate off, only the allowlist and your provider's filtering remain — make sure every allowlisted domain has DMARC configured.";
 "⚠️ 当前热键被其他 App 占用 (注册失败), 请换一个组合键" = "⚠️ Another app already owns this hotkey (registration failed); pick a different combination.";
@@ -145,15 +153,20 @@
 "✓ 连接正常 (IMAP 登录 + 列 INBOX)" = "✓ Connected (IMAP login + listed INBOX)";
 "✓ 连通, 勾选后保存" = "✓ Reachable — tick the models and save";
 "✓ 采纳入库" = "✓ Accepted and stored";
+"「%@」上没有含「%@」的动作 —— %@ ⇒ 没动。" = "\"%@\": no action matching \"%@\" -- %@ ⇒ nothing done.";
 "「%@」不在开放名单里 ⇒ 我不动它。" = "%@ is not on the open list ⇒ I will not touch it.";
 "「%@」不接受聚焦(系统说这个控件的焦点不可设) ⇒ 没动。" = "%@ will not take focus (the system says its focus attribute is not settable) ⇒ nothing was done.";
 "「%@」只开了「读」, 没开「操作」⇒ 我不动它。" = "Only Read is enabled for %@, not Act ⇒ I will not touch it.";
 "「%@」打不开 —— %@ ⇒ 没动。" = "Cannot open %@ — %@ ⇒ nothing was done.";
 "「%@」按不了 —— %@ ⇒ 没动。" = "Cannot press %@ — %@ ⇒ nothing was done.";
+"「%@」是 %@," = "%@ is %@,";
 "「%@」是 %@, " = "%@ is %@, ";
 "「%@」是口令/系统类应用 ⇒ 我永远不操作它, 只读。" = "%@ is a password manager or a system app ⇒ it stays read-only, always.";
+"「%@」没有「确认」这个动作 —— %@ ⇒ 没动。" = "%@ has no confirm action — %@ ⇒ nothing was done.";
+"「%@」没有菜单可开 —— %@ ⇒ 没动。" = "\"%@\": no menu to open -- %@ ⇒ nothing done.";
 "「%@」还没勾「可操作」⇒ 没动它。到「设置 → 电脑操作」里给这个 App 勾上" = "%@ is not marked actable ⇒ I did not touch it. Tick it under Settings → Computer actions.";
 "「%@」还没勾「可读」⇒ 没打开它。到「设置 → 电脑操作」里给这个 App 勾上" = "%@ is not marked readable ⇒ I did not open it. Tick it under Settings → Computer actions.";
+"「%@」这一格要的是日期时间(例: 2026-11-04 17:30)," = "\"%@\": this cell takes a date-time (e.g. 2026-11-04 17:30),";
 "「%@」附近没有可写的滚动条(它自己和上面几层都没有) ⇒ 滚不动。" = "There is no writable scroll bar around %@ (not on it, nor a few levels above it) ⇒ it cannot be scrolled.";
 "一" = "Mon";
 "一行一个地址; 名单外的信静默丢弃并移入 Trash" = "One address per line; mail from anyone else is silently dropped and moved to Trash.";
@@ -352,6 +365,7 @@
 "只收 .md (大小写敏感); 若你刚要删或改名, 这条就是唯一的线索" = "Only .md is picked up (case-sensitive); if you just deleted or renamed something, this line is the only trace of it";
 "只是不再挂载, 目录与里面的文件一个都不动。" = "It is only unmounted — the directory and every file inside stay untouched.";
 "只有勾了「图片」的 App 才会截窗口。给完要重启 MangoX 才生效 —— 灯不会当场变, 别以为没给成。" = "Only apps with \"Image\" ticked get a window screenshot. Granting it takes effect only after you restart MangoX - the lamp will not flip right away, so do not read that as a failure.";
+"只有菜单里才有的功能, 在这一格上这条路走不通, 那就如实告诉用户。" = "Anything that exists only in a menu cannot be reached through this cell -- say so honestly.";
 "只读命令静默放行, 其余弹审批卡等待点击。" = "Read-only commands pass silently; anything else raises an approval card and waits for a click.";
 "只读命令静默放行, 危险命令自动拒绝并记下原因 (回执告知) — 远程驱动用。" = "Read-only commands pass silently; dangerous ones are refused automatically with the reason recorded (and sent back in the receipt) — for remote-driven work.";
 "只读显示本轮真正发出去的注入块 —— 门禁绿 ≠ 改对了" = "Read-only view of the injection block actually sent this turn — a green gate does not mean it is right";
@@ -363,6 +377,7 @@
 "名称" = "Name";
 "向上" = "Up";
 "向下" = "Down";
+"含「%@」的动作有 %lld 个(%@), 分不清你要哪个 ⇒ 没动。" = "Actions matching \"%@\": %lld of them (%@), so which one you want is ambiguous ⇒ nothing done.";
 "含端口, 如 imap.163.com:993" = "Include the port, e.g. imap.163.com:993";
 "含端口, 如 smtp.163.com:465" = "Include the port, e.g. smtp.163.com:465";
 "启停 (重启引擎生效)" = "Enable / disable (restart the engine to apply)";
@@ -407,10 +422,14 @@
 "如 家里那台 / 任务专用" = "e.g. Home box / tasks only";
 "始终允许" = "Always allow";
 "它一个动作都不提供" = "it offers no actions at all";
+"它一个自定义动作都没有" = "it declares no custom actions at all";
 "它们不进 prompt, 也进不了笔记索引 (pack 目录不在任何根的扫描路径下)。把内容写成一篇笔记即可" = "They enter neither the prompt nor the notes index (the pack directory is outside every root scan path). Write the content as a note instead";
 "它攒的" = "It gathered this";
+"它支持的是：" = "it offers ";
+"它有的是：" = "what it does declare: ";
 "它没有声明 key（不锁任何名字）" = "It declares no keys (locks no names)";
 "它能做的只有：" = "the only thing it offers is ";
+"它能执行的是：" = "It can run: ";
 "它锁住这些 key，DB 条目里不能再用:" = "It locks these keys, which DB items can no longer use:";
 "完成" = "Done";
 "完整地址, 如 you@example.com" = "Full address, e.g. you@example.com";
@@ -516,12 +535,15 @@
 "打开工作区" = "Open workspace";
 "打开目录" = "Open folder";
 "打开知识面板的待审核分组" = "Open the review group in the knowledge panel";
+"打开菜单" = "Open menu";
 "托管" = "Managed";
+"执行自定义动作" = "Run custom action";
 "扩展 %@ 在处理 %@ 时出错: %@" = "Extension %@ failed while handling %@: %@";
 "扩展请求了 MangoX 不处理的「%@」界面, 已按「取消」应答。" = "Extension requested a \"%@\" prompt the app does not handle; answered \"Cancel\".";
 "扫到 %lld 个文档 (md / txt / html, 深度 ≤ 3)" = "%lld documents found (md / txt / html, depth ≤ 3)";
 "找不到 dream 任务，去定时页看看" = "No dream task found — check Scheduled";
 "把会话数据库 (含知识库) 与图片附件、会话记录完整拷贝到目标目录的 mangox-backup-<时间戳>/ 子目录, 供人工保管" = "Copies the session database (including the knowledge base), image attachments and session logs into a mangox-backup-<timestamp>/ folder in the target directory for safekeeping.";
+"把名字说得更准一些。" = "Name it more precisely.";
 "把这一份整篇写进上面那条目标; 被顶掉的那一版会进变更史" = "Write this whole text into the target above; the version it replaces goes to the history";
 "把这一篇移进系统废纸篓; 旧内容会先进变更史" = "Move this note to the system Trash; its old content is recorded in the change history first";
 "把这批提案逐条落盘; 没成的会留在队列里" = "Write every proposal in this batch to disk; any that fail stay in the queue";
@@ -759,11 +781,10 @@
 "知识库/记忆: 当前会话注入条数" = "Knowledge base / memory: entries injected into this session";
 "知识库索引整段未进本轮 prompt (体积超预算): %@" = "The knowledge-base index did not fit this turn (over budget): %@";
 "硬规" = "Rule";
+"确认" = "Confirm";
 "确认支付" = "Confirm payment";
 "确认计划" = "Confirm plan";
 "确认购买" = "Confirm purchase";
-"离开期间完成 %lld 轮" = "Completed %lld turns while you were away";
-"离开期间完成 1 轮" = "Completed 1 turn while you were away";
 "移进「废纸篓」(还能捞回来); 当前内容先记进变更史" = "Move to the Trash (still recoverable); the current content is recorded in the revision history first";
 "移除" = "Remove";
 "稳定段永不参与降级 — 出现这条说明组装有 bug, 请反馈" = "The stable segment never takes part in degradation — seeing this means an assembly bug; please report it";
@@ -818,6 +839,7 @@
 "要写内容请直接 setValue; 它连 AXValue 也不吃的话, 说明这类 App 只能靠" = "To write into it, use setValue directly; if it will not take AXValue either, that app only responds to ";
 "要写的内容是空的 ⇒ 没动。清空某一栏请你自己来。" = "The text to write is empty ⇒ nothing was done. Clearing a field is your call.";
 "要写的内容有 %lld 个字, 超过 %@ 的上限 ⇒ 没写。" = "The text is %lld characters, over the %@ limit ⇒ nothing was written.";
+"要动列表里的某一条, 就点名**那一行**自己。" = "To act on one item in a list, name **that row** itself.";
 "要让它能动, 请在 设置 › 集成 › 电脑操作 里给它开「可操作」。" = "To let it act, tick Act for it under Settings › Integrations › Computer use.";
 "解析失败: %@" = "Parsing failed: %@";
 "触发条件 (每轮轻检查)" = "Trigger condition (checked lightly each round)";
@@ -884,6 +906,8 @@
 "还没有打开文件" = "No file open";
 "这一场只有工具输出，没有可提炼的内容。" = "This session has only tool output — nothing to distill.";
 "这一场没有可提炼的正文（只有工具输出）" = "No text to distill here (tool output only)";
+"这一格没有自定义动作, 想按它的话用 press。" = "This cell declares no custom actions; use press if you only meant to click it.";
+"这一格要提交, 请先看它支持哪个动作; 一个都不支持就如实告诉用户," = "To submit this field, look at which actions it actually offers; if it offers none, tell the user plainly,";
 "这一步是永久删除(不进废纸篓), 无法恢复 ⇒ 我不点。要删的话请你自己来, 或者告诉我改用「移到废纸篓」。" = "This deletes permanently (it skips the Trash) and cannot be undone, so I will not click it. Delete it yourself, or tell me to move it to the Trash instead.";
 "这一步涉及付款/下单 ⇒ 我不点。金额与对象要你自己确认过才行。" = "This is a payment or an order, so I will not click it. You need to confirm the amount and the recipient yourself.";
 "这一段会进每轮 prompt 的索引段, 逐字就是 agent 收到的" = "This section goes into the index of every prompt, word for word as the agent receives it";

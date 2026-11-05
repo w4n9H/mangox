@@ -1268,6 +1268,21 @@ final class PiRpcTransport: AgentTransport {
                     "action \"may have gone through\": the system returned an error code this action is known",
                     "to report even when it worked. Never retry it -- read again and see what changed.",
                     "",
+                    "`confirm` submits the text you just setValue'd (AXConfirm). Calendar's quick-event box is the",
+                    "case that forced it: its tree has no Done button, press on the field returns success and does",
+                    "nothing, and only confirm turns the text into an event. It is refused on anything that is not a",
+                    "text field -- it is not a universal \"OK\", and on a dialog button it would just be press wearing",
+                    "a friendlier name.",
+                    "",
+                    "`custom` runs an action the row declares itself, and it is the way to reach features that are",
+                    "not a control in the window -- deleting a note in Notes, deleting a reminder. Name it with",
+                    "`text` in the app's own words: that name is localized and carries a noisy tail, so it",
+                    "is matched as a substring and must hit exactly one action -- otherwise the call is",
+                    "refused, and the refusal lists the names the row actually offers: pass one of those",
+                    "back. It never runs an AX standard action, and it is refused on containers (a table's",
+                    "own Delete acts on whatever is selected, not on the row you named). Its name goes",
+                    "through the same permanent-deletion check as any button.",
+                    "",
                     "Always refused, whoever asks: paying or ordering, permanent deletion (Shift-Cmd-Delete",
                     "included), typing into password fields, and confirming a save sheet (it is cancelled and",
                     "the document stays untouched -- that call is the person's).",
@@ -1283,12 +1298,15 @@ final class PiRpcTransport: AgentTransport {
                         description: "App name or bundle id. Omit to act on the frontmost app.",
                     })),
                     op: Type.String({
-                        enum: ["press", "setValue", "focus", "scroll", "open"],
+                        enum: ["press", "setValue", "focus", "scroll", "open", "confirm", "custom"],
                         description: "press = invoke the control; setValue = write text into a field;"
                             + " focus = move keyboard focus onto it; scroll = move a scroll area;"
                             + " open = open/enter the thing this row points at (a file, a folder,"
                             + " a day) -- the one to use when press is refused because the row"
-                            + " only offers AXOpen.",
+                            + " only offers AXOpen; confirm = submit the text you just set there"
+                            + " (a quick-event box commits only this way); custom = run an action"
+                            + " the row declares itself (delete a note, delete a reminder) --"
+                            + " name it with `text`.",
                     }),
                     index: Type.Optional(Type.Number({
                         description: "The row number from the outline you are acting on."
@@ -1307,7 +1325,9 @@ final class PiRpcTransport: AgentTransport {
                         description: "The snapshot sequence number returned by that read.",
                     }),
                     text: Type.Optional(Type.String({
-                        description: "Only for setValue: the text to write. Must not be empty.",
+                        description: "setValue: the text to write (must not be empty). custom: a"
+                            + " fragment of that action's name, in the app's own words -- it must"
+                            + " match exactly one of the actions that row declares.",
                     })),
                     direction: Type.Optional(Type.String({
                         enum: ["up", "down"],

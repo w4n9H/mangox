@@ -15,15 +15,6 @@ enum CapsuleMode: Hashable {
     case chat, trajectory
 }
 
-/// P6.3.2: 离开摘要横幅数据 (结算后的展示态; 纯内存, App 重启即弃 — 库里消息列表才是权威)。
-struct AwaySummary: Equatable {
-    let sid: UUID
-    /// 离开期间完成的回合数。
-    let turns: Int
-    /// 最近一轮回复的首行前 60 字。
-    let preview: String
-}
-
 @MainActor
 final class ChatStore: ObservableObject {
 
@@ -334,13 +325,6 @@ final class ChatStore: ObservableObject {
     @Published private(set) var activeSideChat: SideChatInfo?
     /// 在途回合的 fork 临时快照 (sid → 截断快照文件; 回读后清理磁盘)。
     private var pendingForkTemp: [UUID: String] = [:]
-
-    // P6.3.2: 离开摘要 (Away summary)
-    /// 当前选中会话的离开摘要 (悬浮胶囊; 点击/×/新回合清除)。
-    @Published private(set) var awaySummary: AwaySummary?
-    /// 不在场完成的回合积累器 (sid 分键, 天然隔离并发任务; 结算即摘除)。
-    /// 冒烟直读断言, 故 internal。
-    private(set) var pendingAway: [UUID: (turns: Int, preview: String)] = [:]
 
     /// P6.1.2: 状态栏"当前会话 N 轮" = 视图内 user 消息数。
     var currentTurnCount: Int { messages.filter { $0.role == .user }.count }
@@ -794,12 +778,6 @@ final class ChatStore: ObservableObject {
                 self?.transports.values.forEach { $0.shutdown() }
                 self?.scheduler.stopScheduler()   // P17: 停 tick + 交还防 App Nap 的断言
             }
-        }
-        // P6.3.2: 回到前台 → 结算选中会话的离开摘要 (切走期间落定的回合)
-        NotificationCenter.default.addObserver(
-            forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main
-        ) { [weak self] _ in
-            MainActor.assumeIsolated { self?.settleAwaySummary() }
         }
     }
 
@@ -1482,7 +1460,6 @@ final class ChatStore: ObservableObject {
         }
         guard let id else {
             activeSideChat = nil   // P6.3.1: 空选中清提示条
-            awaySummary = nil      // P6.3.2: 空选中清离开摘要
             return
         }
         loadMessagesForSwitch(id)
@@ -1491,7 +1468,6 @@ final class ChatStore: ObservableObject {
         // P6.1.2: 过程态跟随选中会话 (在途 = streaming 粗粒度; 精细相位仅前台会话事件归并)
         runtimePhase = runningTurns.contains(id) ? .streaming : .idle
         refreshSideChatBanner(for: id)
-        settleAwaySummary()   // P6.3.2: 切入会话即结算其离开积累 (无则清显示)
         // P10.3v2: 会话配置跟随选中 — 存过 = 应用自己的; 没存过 = 应用 App 默认
         // (不跟随可变全局, 不写行; 被动浏览零写入)
         if let cfg = persistence?.loadSessionConfig(id: id) {
@@ -1844,7 +1820,6 @@ final class ChatStore: ObservableObject {
         liveTurns[sid] = liveTurns[sid] ?? []   // 镜像容器就位 (视图会话事件直进 messages)
         runningTurns.insert(sid)
         turnStartAt[sid] = Date()   // P4.1: 回合计时起点
-        if sid == selectedConversationId { awaySummary = nil }   // P6.3.2: 新回合开始清过期摘要
         if injectedTransport != nil { injectedTurnSid = sid }   // 注入实例: 记录串行回合归属
         t.send(prompt: prompt, images: images)
     }
@@ -2438,11 +2413,6 @@ extension ChatStore: AgentTransportDelegate {
                 // 轮末账单的耗时记账 —— 必须赶在 `liveTurns[sid] = nil` 之前（下面几行就地清镜像）。
                 // 只记实测值；手动停止那条路 `elapsed` 是 nil（turnStartAt 已被清）⇒ 不记，账单少一格。
                 noteTurnElapsed(sid: sid, projection: proj, seconds: elapsed)
-                // P6.3.2: 不在场完成 → 积累 (手动停止 elapsed=nil 已被排除; 摘要独立于通知,
-                // 已发系统通知的完成回到前台仍会出横幅 —— 拍板 2026-09-14)
-                if sid != selectedConversationId || !appIsActive {
-                    accumulateAway(sid: sid, projection: proj)
-                }
                 if elapsed >= 1 {
                     let title = allConversations.first { $0.id == sid }?.displayTitle ?? L("任务")
                     let mins = Int(elapsed) / 60, secs = Int(elapsed) % 60
@@ -2473,48 +2443,17 @@ extension ChatStore: AgentTransportDelegate {
         }
     }
 
-    // MARK: - P9-#15: NSApp 活跃判定 (单一实现, 双语义兜底)
-    // 冒烟/CLI 无 Bundle.main → headlessDefault 兜底: 通知/闪显路径传 false (视为非前台, no-op);
-    // 在场判定路径传 true (否则冒烟里一切完成都会被算成"离开")。
+    // MARK: - NSApp 活跃判定
+    // ⚠️ 只剩**一条**路径了：通知 / mini 台闪显。
+    //    P9-#15 曾把两个双胞胎(`appIsForeground` / `appIsActive`, 冒烟兜底方向相反)合并成带
+    //    参数的单一实现 —— 因为"在场判定"(离开摘要)与"前台判定"(通知)是同一句读法的两种兜底。
+    //    离开摘要撤下后只剩后者 ⇒ 参数与双兜底一起去掉, 别再长回来。
 
-    private func isAppActive(headlessDefault: Bool) -> Bool {
-        guard Bundle.main.bundleIdentifier != nil else { return headlessDefault }
+    /// App 是否前台激活 (通知 / mini 台闪显判定; 冒烟与 CLI 无 Bundle.main ⇒ 视为非前台, no-op)。
+    private var appIsForeground: Bool {
+        guard Bundle.main.bundleIdentifier != nil else { return false }
         return NSApp.isActive
     }
-
-    /// App 是否前台激活 (通知/mini 台闪显判定)。
-    private var appIsForeground: Bool { isAppActive(headlessDefault: false) }
-
-    // MARK: - P6.3.2: 离开摘要 (Away summary)
-
-    /// 不在场完成 → 积累 (sid 分键; preview 取该轮最后一条 assistant 首行前 60 字)。
-    /// 调用点保证 projection 在镜像清除前传入。
-    private func accumulateAway(sid: UUID, projection: [ChatMessage]) {
-        let preview = Self.assistantPreviewLine(projection)
-        var entry = pendingAway[sid] ?? (turns: 0, preview: "")
-        entry.turns += 1
-        if !preview.isEmpty { entry.preview = preview }
-        pendingAway[sid] = entry
-    }
-
-    /// 结算选中会话的积累 → 展示态 (selectConversation / didBecomeActive 调用)。
-    /// 只消费当前 key, 其余会话的积累原封留着等各自被选中。
-    private func settleAwaySummary() {
-        guard let sid = selectedConversationId else { awaySummary = nil; return }
-        if let p = pendingAway.removeValue(forKey: sid) {
-            awaySummary = AwaySummary(sid: sid, turns: p.turns, preview: p.preview)
-        } else {
-            awaySummary = nil
-        }
-    }
-
-    /// × 按钮: 只关不滚。点击滚底路径由视图调同一方法 (滚动在视图层做)。
-    func dismissAwaySummary() {
-        awaySummary = nil
-    }
-
-    /// P6.3.2: App 是否激活 (在场判定, 兜底方向与 appIsForeground 相反 — 见 isAppActive 注释)。
-    private var appIsActive: Bool { isAppActive(headlessDefault: true) }
 
     /// P4.1: 组装完成通知 (标题 = 会话/任务名, 正文 = 耗时 + 回复首行 60 字)。
     private func notifyCompletion(sid: UUID, title: String, elapsed: TimeInterval,

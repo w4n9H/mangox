@@ -198,16 +198,93 @@ extension SmokeMain {
         let wideText = wideSnap.rendered()
         check(wideText.contains("还有 80 项未显示"),
               "T-COMPUTER 超过上限(120)要**如实报出**剩下的 80 项 —— 否则模型把前 120 条当成全部")
-        // ⚠️ 这两条守的是**提示的诚实度**, 不是措辞好看: 旧文案"需要的话让我滚动/展开再看"在日历上是
-        //    空头承诺 —— 被截的是窗口顶部工具栏, 固定不动、滚也滚不到（2026-11-04 探针实测）。
-        //    模型照着它去滚 ⇒ 找不到 ⇒ 再读一遍, 两轮都白烧。所以两条都得钉住:
-        //    ① 不许再出现"滚动就能看到"这种承诺 ② 必须说清被截的可能在可视区里。
-        check(!wideText.contains("让我滚动") && !wideText.contains("滚动再看"),
-              "T-COMPUTER 截断提示不许承诺「滚动/展开就能看到被截的项」 (工具栏滚也滚不到)")
-        check(wideText.contains("滚也滚不到"),
-              "T-COMPUTER 截断提示要说清「被截的可能在可视区里、只是没渲染」 (否则模型只会反复往下滚)")
+        // ⚠️ 这三条守的是**提示的诚实度**, 不是措辞好看。文案换过两轮, 每一轮都是被真机教学:
+        //    ① 初版"需要的话让我滚动/展开再看"是空头承诺(模型的下一步是滚/再读, 两轮都白烧);
+        //    ② 改版说"被截的可能是工具栏 —— 滚也滚不到"是在**描述病**, 不是在说规则;
+        //    ③ 2026-11-04 批 2l 之后工具栏根本不会被截(见 `keepIndices`), 这句话对**内容行**
+        //       反而成了新谎 —— 内容行本来就在可滚区里。现在只许可说一件事实: 上限是常数。
+        check(!wideText.contains("让我滚动") && !wideText.contains("滚动再看")
+              && !wideText.contains("滚也滚不到"),
+              "T-COMPUTER 截断提示不许承诺「滚动/展开就能看到被截的项」 (两轮踩过: 空头承诺 + 描述病)")
+        check(wideText.contains("渲染上限 120 项") && wideText.contains("重读也一样"),
+              "T-COMPUTER 截断提示要说清「上限是常数、重读没用」 (否则模型唯一的反应就是再读一遍)")
         check(!wideText.contains("[121]"),
               "T-COMPUTER 上限外的不许渲染出来 (上界是硬上界, 不是'大概')")
+
+        // MARK: AX 树 —— 批 2l: 截断不许吃掉固定区
+        //
+        // 造的是**真机的形状**(2026-11-04 实测): 屏幕最上面那一排是工具栏, 而在 AX 遍历里它
+        // 排在**最后**。所以"截断=切尾巴"恰好切掉模型最需要的那几个按钮 —— 日历月视图 130 行
+        // 上限 120, 被切的 10 行正是 `添加日程` 与 `日/周/月/年`。
+        func toolbarSnap(windowFrame: AXRect?, toolbarCount: Int = 3) -> AXSnapshot {
+            var kids = (1...200).map { AXNode(role: "AXStaticText", title: "第\($0)条") }
+            for i in 0..<toolbarCount {
+                kids.append(AXNode(role: "AXButton",
+                                   title: "工具\(i + 1)",
+                                   frame: AXRect(x: 700 + i * 60, y: 10, w: 40, h: 24)))
+            }
+            let root = AXNode(role: "AXWindow", title: "长列表与工具栏",
+                              frame: windowFrame, children: kids)
+            return AXSnapshot.build(root: root, appName: "x", windowTitle: "长列表与工具栏")
+        }
+        func shownRowCount(_ s: String) -> Int {
+            s.split(separator: "\n").filter {
+                $0.trimmingCharacters(in: .whitespaces).hasPrefix("[")
+            }.count
+        }
+        let win = AXRect(x: 0, y: 0, w: 1200, h: 600)
+
+        let toolSnap = toolbarSnap(windowFrame: win)
+        check(toolSnap.rows.count == 203,
+              "T-COMPUTER 夹具: 200 条内容 + 3 个工具栏按钮 实际:\(toolSnap.rows.count)")
+        let toolText = toolSnap.rendered()
+        check(toolText.contains("[201] button \"工具1\"") && toolText.contains("[203] button \"工具3\""),
+              "T-COMPUTER 顶部固定区(工具栏)不许被渲染上限吃掉 —— 它在遍历末尾, 却在屏幕最上面")
+        check(toolText.contains("[117]") && !toolText.contains("[118]"),
+              "T-COMPUTER 捞工具栏的代价要从**内容那头**让名额, 不是把上界撑破")
+        check(shownRowCount(toolText) == 120,
+              "T-COMPUTER 捞回固定区之后总行数仍是上限 120 (上界是硬上界) 实际:\(shownRowCount(toolText))")
+        check(toolText.contains("中间 83 项未显示"),
+              "T-COMPUTER 缺口要写在**断掉的位置**并说清它换来了什么 (尾部那句'还有 N 项'不成立)")
+
+        // 窗口没报坐标 ⇒ 没有判据, 退回纯遍历序 —— 别猜。
+        let noFrameText = toolbarSnap(windowFrame: nil).rendered()
+        check(!noFrameText.contains("[201]") && noFrameText.contains("[120]"),
+              "T-COMPUTER 窗口没报坐标 ⇒ 整条固定区策略不生效 (不许凭角色猜'这是工具栏')")
+
+        // 固定区本身也封顶: 一个几百行的工具栏不许把快照占满。
+        let capText = toolbarSnap(windowFrame: win, toolbarCount: 40).rendered()
+        check(capText.contains("[224]") && !capText.contains("[225]"),
+              "T-COMPUTER 固定区一次最多捞 \(AXSnapshot.fixedRegionCap) 行 (封顶是它要占内容的名额)")
+        check(capText.contains("还有 16 项未显示") && shownRowCount(capText) == 120,
+              "T-COMPUTER 封顶之后尾部那批照旧如实报数 (两个缺口可以同时存在)")
+
+        // MARK: AX 树 —— 批 2m: 日期格要进快照, 而且**只有它**能借 identifier 当名字
+        //
+        // 造的是真机的形状(2026-11-04 实测): 日历事件编辑器展开时间之后是**四个**
+        // `AXDateTimeArea`(`start-datepicker` / `start-timepicker` / `end-*`), title 与
+        // description **全空**, 名字只在 `AXIdentifier` 里, 值是一个 CFDate(读到 `string()`
+        // 那一步已经渲染成 `yyyy-MM-dd HH:mm`)。不放它们进来, "改一条日程的时间"根本没有落脚点;
+        // 不借 identifier, 快照里就是四行同名同值, 模型只能瞎猜该写哪一个。
+        let dateTree = AXNode(role: "AXWindow", title: "日历", children: [
+            AXNode(role: "AXDateTimeArea", value: "2026-11-04 17:00",
+                   identifier: "start-datepicker"),
+            AXNode(role: "AXDateTimeArea", value: "2026-11-04 17:00",
+                   identifier: "start-timepicker"),
+            // 对照: 同样只写 identifier 的普通容器 —— 它**不许**借 identifier 当名字。
+            AXNode(role: "AXGroup", identifier: "__NS:3421", children: [
+                AXNode(role: "AXStaticText", title: "正文"),
+            ]),
+        ])
+        let dateSnap = AXSnapshot.build(root: dateTree, appName: "日历", windowTitle: "日历")
+        check(dateSnap.rows.contains { $0.role == "datetimearea" && $0.title == "start-timepicker" },
+              "T-COMPUTER 日期格进快照, 名字取 identifier 实际:\(dateSnap.rows.map(\.title))")
+        check(dateSnap.rows.filter { $0.role == "datetimearea" }.count == 2,
+              "T-COMPUTER 四个日期格一个都不许被当容器剪掉 (它们 title/description 都是空的)")
+        check(dateSnap.rows.contains { $0.role == "datetimearea" && $0.value == "2026-11-04 17:00" },
+              "T-COMPUTER 日期格的值要渲染出来 (否则模型连现在几点都读不出, 更别说写回去)")
+        check(!dateSnap.rows.contains { $0.title == "__NS:3421" },
+              "T-COMPUTER 对照: 别的角色不借 identifier (那里常是 __NS:3421 这种纯噪音)")
 
         // MARK: AX 树 —— 差分
 
@@ -394,6 +471,28 @@ extension SmokeMain {
             check(csrc.contains("name: \"" + one + "\""),
                   "T-COMPUTER 工具名 \(one) 必须在扩展源码里出现 (名字表与源码会漂)")
         }
+
+        // MARK: 动作面「开放名单」只许有一份真源
+
+        // ⚠️ 2026-11-05 boss 一句「showmenu 不是说了不给模型调用吗」逼出来的缺口:
+        //    **运行时其实关着**, 但关它的是两道互不相干的东西 ——
+        //      ① 扩展源码里那份**手抄**的 `op` enum(模型看得见的只有它);
+        //      ② helper 的 `ComputerAction.exposed` guard(真拦住它的那一道)。
+        //    而**没有任何一条判据**看住这两份清单一致: 谁把 `"showmenu"` 抄回 enum, 编译过、
+        //    纯函数断言全绿、`exposed` 那几条也全绿(它们只看 `exposed`), 症状要等到模型真去
+        //    调那一下才出现 —— 白烧一轮, 而"门关着"这件事就只剩运行时兜底。
+        //    判据落在**真注入给 pi 的那份字节**上, 不是再写一份手抄的期望值(那样又是一个人猿)。
+        let opEnum = schemaOpEnum(csrc)
+        check(opEnum != nil,
+              "T-COMPUTER 能从扩展源码里抠出 op 的 enum (抠不出来 ⇒ 下面两条判的是空集)")
+        let schemaOps = opEnum ?? []
+        check(!schemaOps.contains(ComputerAction.showmenu.rawValue),
+              "T-COMPUTER showmenu **不在**模型看得见的 op 枚举里 (作用域判不了: 实测它删的是"
+              + "选中项, 不是那一行 ⇒ 代码保留、入口不给。实际: \(schemaOps))")
+        check(Set(schemaOps) == Set(ComputerAction.exposed.map(\.rawValue)),
+              "T-COMPUTER schema 的 op 枚举 == ComputerAction.exposed (两份清单必须一致: "
+              + "多一个 = 模型能调一个我们没打算给它的动作; 少一个 = 那个动作白写。"
+              + "实际 schema \(schemaOps) vs exposed \(ComputerAction.exposed.map(\.rawValue)))")
 
         // MARK: 扩展落地
 
@@ -1011,6 +1110,25 @@ extension SmokeMain {
                 && ComputerPermission.accessibility.manualAddHint == nil
                 && ComputerPermission.inputMonitoring.manualAddHint == nil,
               "T-COMPUTER 「系统设置里没有它？点 + 手加」这句只挂给屏幕录制")
+    }
+
+    /// 从扩展源码里抠出 `op` 那个 enum —— **模型能看见哪些 op 的唯一一处**。
+    ///
+    /// ⚠️ 认「含 `press` 的那一个」而不是「第一个」: 源码里有两个 `enum: [`(`op` 与 `direction`
+    ///    的 up/down), 取第一个会拿到方向表, 于是这条判据永远在比一份无关的清单(**假绿**)。
+    /// ⚠️ 不引真 TS 解析器: 这里要的只是「一个数组字面量里的字符串」, 上手写解析器反而更容易坏;
+    ///    语法那条由下面 `runNodeSyntaxCheck` 的真解析器管, 两件事别混。
+    static func schemaOpEnum(_ src: String) -> [String]? {
+        var rest = Substring(src)
+        while let head = rest.range(of: "enum: [") {
+            rest = rest[head.upperBound...]
+            guard let end = rest.firstIndex(of: "]") else { return nil }
+            // 引号把数组切成奇数段: 第 1/3/5… 段才是值(`["a", "b"]` → ["a", ", ", "b"])。
+            let vals = rest[..<end].split(separator: "\"", omittingEmptySubsequences: false)
+                .enumerated().filter { $0.offset % 2 == 1 }.map { String($0.element) }
+            if vals.contains("press") { return vals }
+        }
+        return nil
     }
 
     /// 拿 node 真解析一遍扩展源码。

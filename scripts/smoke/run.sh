@@ -879,6 +879,64 @@ if has_code mangox/Views/Settings/SettingsView.swift 'CGRequestListenEventAccess
     exit 1
 fi
 
+# ③n14 `confirm` 这一档(批 2k) —— 三条"写错了照样编译过、只在真机上静默变味"的事实。
+#   ① 它必须发 `AXConfirm`: 实测(2026-11-04, 日历「创建快速日程」)同一个文本框上 `AXPress`
+#      返回 0 却什么都不发生, 只有 `AXConfirm` 能把文本落库 ⇒ 换成 press 不会报错, 只会让
+#      审批卡上写的「确认」变成假的。
+#   ② `ComputerServer` 的 `.confirm` 分支必须真调 `AXAdapter.confirm`(而不是顺手用 press)。
+#   ③ 判据里**角色白名单必须排在动作之前**: 一个"确认"落在按钮上, 实际发生的就是"按下那个
+#      按钮", 而卡上写的是「确认 #12」—— 审批人签的字不是他以为的那件事。
+CONFIRM_FUNC_LINE="$(awk '/static func confirm\(/ { print NR; exit }' mangox-compute/AXAdapter.swift)"
+if [ -z "$CONFIRM_FUNC_LINE" ]; then
+    echo "FAIL - AXAdapter 里找不到 confirm() (③n14 无法判定)" >&2
+    exit 1
+fi
+confirm_func_body() {
+    awk -v s="$CONFIRM_FUNC_LINE" 'NR < s { next } /^[ \t]*\/\// { next }
+        NR > s && /^    \}$/ { print; exit } { print }' mangox-compute/AXAdapter.swift
+}
+if ! confirm_func_body | grep -cF 'kAXConfirmAction' >/dev/null; then
+    echo "FAIL - AXAdapter.confirm 没发 kAXConfirmAction (换成 press 的话卡上写「确认」、实际只是聚焦)" >&2
+    exit 1
+fi
+if confirm_func_body | grep -cF 'kAXPressAction' >/dev/null; then
+    echo "FAIL - AXAdapter.confirm 里出现了 kAXPressAction —— confirm 不许退化成「按」" >&2
+    exit 1
+fi
+CONFIRM_CASE_LINE="$(awk '/case \.confirm:/ { print NR; exit }' mangox-compute/ComputerServer.swift)"
+if [ -z "$CONFIRM_CASE_LINE" ]; then
+    echo "FAIL - ComputerServer 里找不到 case .confirm (③n14 无法判定)" >&2
+    exit 1
+fi
+confirm_case_block() {
+    awk -v s="$CONFIRM_CASE_LINE" 'NR < s { next } /^[ \t]*\/\// { next }
+        NR > s && /^            case \./ { exit } { print }' mangox-compute/ComputerServer.swift
+}
+if ! confirm_case_block | grep -cF 'AXAdapter.confirm' >/dev/null; then
+    echo "FAIL - ComputerServer 的 .confirm 分支没调 AXAdapter.confirm" >&2
+    exit 1
+fi
+GUARD_CONFIRM_LINE="$(awk '/^        case \.confirm:$/ { print NR; exit }' mangox/Models/ComputerAct.swift)"
+if [ -z "$GUARD_CONFIRM_LINE" ]; then
+    echo "FAIL - ComputerActGuard 里找不到 case .confirm (③n14 无法判定)" >&2
+    exit 1
+fi
+guard_confirm_block() {
+    awk -v s="$GUARD_CONFIRM_LINE" 'NR < s { next } /^[ \t]*\/\// { next }
+        NR > s && /^        case \./ { exit } { print }' mangox/Models/ComputerAct.swift
+}
+CONFIRM_ROLE_LINE="$(guard_confirm_block | awk '/isConfirmableRole\(target\.role\)/ { print NR; exit }')"
+CONFIRM_ACT_LINE="$(guard_confirm_block | awk '/contains\("AXConfirm"\)/ { print NR; exit }')"
+if [ -z "$CONFIRM_ROLE_LINE" ] || [ -z "$CONFIRM_ACT_LINE" ]; then
+    echo "FAIL - confirm 的判据缺一条 (角色白名单 / AXConfirm 动作表), ③n14 无法判定" >&2
+    exit 1
+fi
+if [ "$CONFIRM_ROLE_LINE" -ge "$CONFIRM_ACT_LINE" ]; then
+    echo "FAIL - confirm 先判了动作表再判角色 —— 顺序反了: 按钮上的 AXConfirm 会被放行" >&2
+    echo "       那一手实际发生的是「按下那个按钮」, 而卡上写的是「确认 #12」" >&2
+    exit 1
+fi
+
 # ③o helper 的作用域**变了就得重启** (2026-10-29 boss「我明明加了」)。
 #     helper 的作用域是**启动那一刻读 env 定死的**, 进程一起就再也不看 env。而 `start` 原来
 #     只问"进程还在跑吗", 不问"名单还是不是那一批" ⇒ 把 Safari 改成 Calculator 之后, 助手
@@ -945,6 +1003,47 @@ for NEEDLE in 'ComputerPointRule\.refusal' 'rowIndex\(for:' 'ComputerPointRule\.
         exit 1
     fi
 done
+
+# ③u 诊断脚本**不许发全局输入 / 不许走顶栏菜单** (2026-11-04 boss 定，原话：
+#     「既然都用了ax方案，就应该是在应用的ui上进行操作，而不是在顶栏菜单」)。
+#     这不是风格问题, 是**不可逆损失**:
+#       · 顶栏菜单属于"此刻前台的那个 App" —— 要按它就得先把目标 App 弄到前台。一旦前台
+#         不是它(人正停在 WorkBuddy 里敲字), 那一下"删除"落到谁身上说不准, 而删除 / 移到
+#         废纸篓**没有撤销**。实测就是这么翻的车: 本来在测日历, 删的却不是日历里的东西。
+#       · `CGEvent` 发的 ⌘⌫ / Esc / 鼠标点击更糟: 它发给**屏幕最上层**, 与我校验过的那棵
+#         AX 树毫无关系 —— "我读过日历"根本不蕴含"此刻前台是日历"。
+#     ✅ 正确形态: 一律 `AXUIElementPerformAction` 打在**目标元素**上(元素级、不用前台);
+#        做不到就**如实失败**(退码 3 + 一句"这个 App 只能靠人删"), 不许退到全局输入。
+#     ⚠️ 只能扫源码事实: 这几行编译得过、跑起来"还能用"、零红灯 —— 唯一症状是某天删错东西。
+#     ⚠️ `AXMenuBar` 本身**不在禁列**: 清理器要靠它把"顶栏里的菜单项"**排除掉**(`inMenuBar`),
+#        禁的是 `AXMenuBarItem` 这个"去顶栏取菜单"的入口。
+#     ⚠️ 剥注释用 `/^[ \t]*(\/\/|#)/`（.swift 与 .py 两种注释都认）—— 文件头讲这条红线的那句
+#        `**没有** CGEvent` 不能把它自己判红。
+#     ⚠️ 报的位置用 `FNR`（**原文件行号**）：剥注释那一版是把行删掉的，拿它的 `grep -n`
+#        报出来的行号会指到别处去（实测：真第 224 行被报成 165 行）—— 判据自己撒谎比不报更坏。
+for DIAG_SRC in scripts/diag/*.swift scripts/diag/*.py; do
+    [ -f "$DIAG_SRC" ] || continue
+    if awk '/^[ \t]*(\/\/|#)/ { next }
+            /CGEvent|\.post\(tap:|AXMenuBarItem|osascript|cliclick/ {
+                printf "%s:%d: %s\n", FILENAME, FNR, $0 > "/dev/stderr"; bad = 1
+            }
+            END { exit bad ? 0 : 1 }' "$DIAG_SRC"; then
+        echo "FAIL - $DIAG_SRC 里有全局输入 / 顶栏菜单的用法 (见上, 行号是原文件的)" >&2
+        echo "       那一下按的是『此刻前台那个 App』, 不是我校验过的那个 ⇒ 可能删错东西且无撤销" >&2
+        echo "       改成 AXUIElementPerformAction 打在目标元素上; 做不到就如实失败, 别退到全局输入" >&2
+        exit 1
+    fi
+done
+# 另一半同样要盯: 红线**真的落到了执行点**上 —— 清理器必须还在排顶栏(否则"禁用法"只是把
+# 菜单项当普通项按下去, 一样依赖前台)。判据 = `inMenuBar` 这个过滤函数还在、且被 `usableItems` 用。
+if ! has_code scripts/diag/scenario_cleanup.swift 'role\(c\) == "AXMenuBar"'; then
+    echo "FAIL - scenario_cleanup 不再识别顶栏菜单 (那它就会把顶栏菜单项当普通菜单项按下去)" >&2
+    exit 1
+fi
+if ! has_code scripts/diag/scenario_cleanup.swift '!inMenuBar\(\$0\)'; then
+    echo "FAIL - scenario_cleanup 的 usableItems 不再排掉顶栏菜单项 (依赖前台的那条路又回来了)" >&2
+    exit 1
+fi
 
 # ④ 冒烟主文件的**体量棘轮** (2026-10-19) —— 判据 = 行数**只减不增**。
 #    为什么要有这条: 冒烟已长到 7000+ 行, 而且几乎全在**一个函数 `run()`** 里

@@ -92,7 +92,8 @@ mangox/Models/AXSnapshot.swift| (值:\"%@\")
 mangox/Models/AXSnapshot.swift|# 快照 · 前台:%@ · 窗口:%@
 mangox/Models/AXSnapshot.swift|— 变化:
 mangox/Models/AXSnapshot.swift|— 变化:文本上没看出变化(界面可能已经动了 —— 选中、高亮这类只改颜色, 我读不到)
-mangox/Models/AXSnapshot.swift|… 还有 %lld 项未显示 (这是渲染上限: 被截的可能是工具栏这类固定区域 —— 它在可视区里, 滚也滚不到)
+mangox/Models/AXSnapshot.swift|… 中间 %lld 项未显示 (渲染上限 %@ 项: 顶部固定区/工具栏已优先保住, 其余仍受这个上限约束 —— 重读也一样)
+mangox/Models/AXSnapshot.swift|… 还有 %lld 项未显示 (渲染上限 %@ 项: 我一直只能给出 %@ 行, 重读也一样 —— 要看到后面那些, 先按编号把占地方的那块收起来)
 mangox/Models/AXSnapshot.swift|改:
 mangox/Models/AXSnapshot.swift|新增:
 mangox/Models/AXSnapshot.swift|消失:
@@ -166,6 +167,16 @@ mangox/Agent/PiRpcTransport.swift|滚动 #
 mangox/Agent/PiRpcTransport.swift|向上
 mangox/Agent/PiRpcTransport.swift|向下
 
+# P18 批 2k: `confirm` 那一档的回执与卡片动词 —— 同批 2b / 2f 一族: 住在 `ComputerActGuard`
+# 这条纯函数里, 由 socket 回给扩展再交给模型 ⇒ 进的是**模型上下文, 不是界面**。
+# 豁免的只是「必须接线」这一道, 译文仍在词表里(gen_strings 照收)。
+mangox/Models/ComputerAct.swift|确认
+mangox/Models/ComputerAct.swift|它支持的是：
+mangox/Models/ComputerAct.swift| 不是能「确认」的输入框 ⇒ 没动。confirm 只提交你刚写进输入框的值,
+mangox/Models/ComputerAct.swift| 它不是万能的「确认」键 —— 要按某个按钮请用 press。
+mangox/Models/ComputerAct.swift|这一格要提交, 请先看它支持哪个动作; 一个都不支持就如实告诉用户,
+mangox/Models/ComputerAct.swift| 别换个编号接着试。
+
 # P18 批 3a/3b: 坐标点击与「人一动手就让路」的回执 —— 与批 2b / 2f 同一族:
 # 住在 `ComputerAct.refusal` / `ComputerTakeover.refusal` 这两条**纯函数**里, 由 socket
 # 回给扩展再交给模型 ⇒ 进的是**模型上下文, 不是界面**。包 L() 会让"界面语言 = 英文"时
@@ -192,3 +203,23 @@ mangox/Models/ComputerAct.swift| 它只有「打开」这条路 —— 想打开
 mangox/Models/ComputerAct.swift| 想按它的话用 press。
 mangox/Models/ComputerAct.swift|「%@」打不开 —— %@ ⇒ 没动。
 mangox/Agent/PiRpcTransport.swift|打开 #
+
+# 2026-11-05 `custom` (批 2p) —— 与批 2b / 2f 同一族: 前 11 条是 `ComputerAct.refusal`
+# 里 `showmenu` / `custom` 两档的判据话术(由 socket 回给扩展再交给模型 ⇒ 进的是**模型上下文,
+# 不是界面**); 后 2 条是审批卡上那个动词(`preview` 拼出来, 与 `按` / `写` / `确认` 同待遇 ——
+# 由扩展 JS 拼成 `执行自定义动作 #12 · 备忘录`)。包 L() 会让英文界面下给模型发英文回执,
+# 而模型判断"这一格叫什么"依据的是中文界面。豁免的只是「必须接线」这一道, 译文仍在词表里。
+# ⚠️ 有 3 条**以空格开头**(接在前一句后面): 空格在 `|` 之后, 属字面量本身 —— 删了就不匹配。
+mangox/Models/ComputerAct.swift|打开菜单
+mangox/Models/ComputerAct.swift|执行自定义动作
+mangox/Models/ComputerAct.swift| 想按它的话用 press —— 但按它不等于打开它的菜单。
+mangox/Models/ComputerAct.swift|只有菜单里才有的功能, 在这一格上这条路走不通, 那就如实告诉用户。
+mangox/Models/ComputerAct.swift|这一格没有自定义动作, 想按它的话用 press。
+mangox/Models/ComputerAct.swift|它能执行的是：
+mangox/Models/ComputerAct.swift| 容器那一层的动作作用于**当前选中项**, 不是这一格 ⇒ 没动。
+mangox/Models/ComputerAct.swift|要动列表里的某一条, 就点名**那一行**自己。
+mangox/Models/ComputerAct.swift|它一个自定义动作都没有
+mangox/Models/ComputerAct.swift|它有的是：
+mangox/Models/ComputerAct.swift| 只是要按一下的话用 press。
+mangox/Models/ComputerAct.swift|把名字说得更准一些。
+mangox/Models/ComputerAct.swift| 你说的「%@」不是 ⇒ 没动。快照里这一格的值就是能写回去的样子。

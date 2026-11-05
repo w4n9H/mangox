@@ -185,7 +185,8 @@ extension SmokeMain {
                                         actBundles: Array(SopInjection.builtins),
                                         codemode: true, now: now)
         check(widest.injected.count == SopInjection.builtins.count && widest.missing.isEmpty,
-              "T-SOP 真手册在最宽一档下六节全进、一条都不许掉 (实际进 \(widest.injected.count) 节, "
+              "T-SOP 真手册在最宽一档下白名单里的节全都要进、一条都不许掉 (实际进 "
+              + "\(widest.injected.count)/\(SopInjection.builtins.count) 节, "
               + "没带上 \(widest.missing))")
         check(widest.chars <= Tune.sopTotalCharLimit,
               "T-SOP 真注入量(含段头) ≤ 预算 \(Tune.sopTotalCharLimit) (实际 \(widest.chars) 字; "

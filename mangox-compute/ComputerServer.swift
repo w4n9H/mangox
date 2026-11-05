@@ -417,7 +417,16 @@ final class ComputerServer {
             return .failure("辅助功能权限还没授予 ⇒ 动不了界面。请在 系统设置 › 隐私与安全性 › 辅助功能 里勾上 MangoX。")
         }
         guard let action = ComputerAction.parse(opRaw) else {
-            return .failure("不认识的 op: 「\(opRaw)」。目前有 press / setValue / focus / scroll 四种。")
+            let names = ComputerAction.exposed.map { $0.rawValue }.joined(separator: " / ")
+            return .failure("不认识的 op: 「\(opRaw)」。目前有 \(names)。")
+        }
+        // ⚠️ 认得出来 ≠ 开放给模型。`showmenu` 就是这一档: 代码在、判据在, 门关着。
+        //    这两句话必须分开说 —— 说"不认识"会让模型换个写法再试, 说"没开放"它才会换一条路。
+        //    判据住 `ComputerAction.exposed`(冒烟钉着), 这里只执行。
+        guard ComputerAction.exposed.contains(action) else {
+            return .failure("op「\(action.rawValue)」已经实现但**还没对模型开放** ⇒ 没动。"
+                            + "要执行控件自己声明的动作(比如删除一行)请用 custom; "
+                            + "想按它的话用 press。")
         }
         // ⚠️ 方向解析失败**不在 helper 填默认值**: 判据那边要把"没说往哪滚"与"滚不动"分开说
         //    (前者重发一次就好, 后者得换节点或换 App)。空串 ⇒ nil ⇒ 判据里那条 `guard` 拒。
@@ -566,10 +575,83 @@ final class ComputerServer {
                                     + "重新读一次再决定。")
                 }
 
+            case .confirm:
+                // ⚠️ 按"动作发出去没有"判, **不按"界面动没动"判**: 提交之后界面可能只多一行字,
+                //    拿文本差异当判据会把一次成功回成失败(模型接着重试 = 同一条日程建两遍)。
+                let err = AXAdapter.confirm(el)
+                guard err == .success else { return .failure(actFailure(err, "confirm")) }
+                headline = atPrefix + "确认了 #\(resolvedIndex)「\(name)」。"
+
+            case .showmenu:
+                // ⚠️ 判据是「**菜单项真的出现了**」, 不是返回码 —— 见 `AXAdapter.showMenu` 那条
+                //    实测。这里只有 `invalidUIElement` 一个码能证明"动作根本没发出去"。
+                let err = AXAdapter.showMenu(el)
+                if err == .invalidUIElement {
+                    return .failure("那个控件已经不在了(AX 返回 \(err.rawValue)) ⇒ 菜单没打开。"
+                                    + "重新读一次再决定。")
+                }
+                guard let trees = AXAdapter.frontWindowTree(pid: t.pid) else {
+                    return .failure("打开菜单的请求发出去了, 但之后读不到「\(t.name)」的窗口了"
+                                    + " ⇒ 说不清它开没开。重新读一次再看。")
+                }
+                let snap = AXSnapshot.build(root: trees.root,
+                                            appName: t.bundle,
+                                            windowTitle: trees.root.title)
+                // 菜单挂在这一格的**子树**里(`AXMenu` ← 目标元素), 所以重读前台窗口树就够 ——
+                // 不需要另开一条"读菜单"的路(实测 2026-11-05, 见 `AXAdapter.showMenu`)。
+                let items = snap.rows.filter { $0.role == "menuitem" }
+                // ⚠️ 一个都没有 ⇒ **不许回"菜单开了"**: 那条回执会让模型拿着编号去按一项不存在的
+                //    菜单, 而它看不出错。0 项有两种可能(根本没弹 / 弹在这棵树外面), 都不该被
+                //    说成成功 —— 那是把"我不知道"写成"我做到了"。
+                guard !items.isEmpty else {
+                    return .failure("在 #\(resolvedIndex)「\(name)」上发了打开菜单, 但重读里一个"
+                                    + "菜单项都没出现 ⇒ 我当成它没弹出来, 什么都没发生。"
+                                    + "别重试同一个动作: 这一格多半没有上下文菜单 —— 那就如实"
+                                    + "告诉用户, 别换个编号接着试。")
+                }
+                let seq = remember(bundle: t.bundle, pid: t.pid, name: t.name,
+                                   trees: trees, snapshot: snap)
+                let list = items.map { item -> String in
+                    // 无名的那些是分隔线 —— 留着(它们占着编号), 但别让人以为那是一个功能。
+                    "  [\(item.number)] " + (item.title.isEmpty ? "(分隔线)" : item.title)
+                }.joined(separator: "\n")
+                return .success(
+                    text: atPrefix + "打开了 #\(resolvedIndex)「\(name)」的菜单。\n"
+                        + "菜单项(下一步 press 哪个编号就是选它 —— 恒拒三条照样管着它们):\n"
+                        + list
+                        + "\n新快照 seq=\(seq)(一共 \(snap.rows.count) 项), 旧编号全部作废。\n"
+                        + "— 菜单现在是**打开**状态(不选就一直挡着界面): 选一项 press 掉, "
+                        + "或者让用户按 Esc 收起来。",
+                    seq: seq)
+
+            case .custom:
+                // 判据已经跑过(唯一命中 + 红线); 这里重新解出**原始动作名**去执行。
+                // ⚠️ 不能拿 `request.text` 直接发: 那是模型给的片段(「删除」), 而 AX 认的是
+                //    它自己那一串(`Name:删除\nTarget:0x0\nSelector:(null)`) —— 同一条判据、
+                //    同一个纯函数, 所以两边不会挑出不同的动作。
+                guard case .one(let raw) = ComputerCustomAction.match(liveTarget?.actions ?? [],
+                                                                     needle: request.text) else {
+                    return .failure("这一格的动作表在判据之后变了(现在认不出「\(request.text)」)"
+                                    + " ⇒ 没动。重新读一次再决定。")
+                }
+                let err = AXAdapter.perform(el, action: raw)
+                if err == .invalidUIElement {
+                    return .failure("那个控件已经不在了(AX 返回 \(err.rawValue)) ⇒ 什么都没做。重新读一次。")
+                }
+                // ⚠️ 其余返回码**不信**: 实测提醒事项的 `Name:删除` 回 -25205 而条目真的没了。
+                //    照别的动作那样 `guard err == .success` 会把一次成功记成失败(模型会重试 =
+                //    同一条被删两次, 或者去删下一条)。
+                let label = ComputerCustomAction.humanName(raw)
+                headline = atPrefix + "执行了 #\(resolvedIndex)「\(name)」上的「\(label)」。"
+                    + (err == .success ? "" : "(AX 返回 \(err.rawValue) —— 这族动作的返回码不可信)")
+
             case .setValue:
-                let err = AXAdapter.setValue(el, text)
+                // ⚠️ `shape` 传现场读数(`liveTarget`)而不是快照里那份: 它决定**写字符串还是
+                //    写日期**, 猜错就是一次 -25201 的空转。
+                let err = AXAdapter.setValue(el, text, shape: liveTarget?.valueShape ?? .text)
                 guard err == .success else { return .failure(actFailure(err, "setValue")) }
                 headline = atPrefix + "写了 #\(resolvedIndex)「\(name)」。"
+                    + (liveTarget?.valueShape == .date ? " (这一格是日期时间, 按 \(text) 写的)" : "")
 
             case .focus:
                 let err = AXAdapter.focus(el)

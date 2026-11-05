@@ -1104,68 +1104,6 @@ struct SmokeMain {
                   "T18 重命名后 sideOf 保留")
         }
 
-        // ---- T19 P6.3.2: Away summary (在场不积累 / 后台积累 / 分键隔离 / 结算 / 停止不计入) ----
-        do {
-            // 基线: 清早前测试遗留显示态 (T3/T5 的后台完成已在积累器留 key), 记积累器水位
-            store.selectConversation(sidA)
-            store.dismissAwaySummary()
-            let awayBase = store.pendingAway.count
-
-            // ① 在场选中会话完成 → 不积累 (冒烟无 NSApp 视为激活)
-            store.draft = "在场完成"
-            store.sendDraft()
-            check(await waitUntil { store.runningTurns.isEmpty }, "T19 前台回合结束")
-            check(store.pendingAway.count == awayBase, "T19 在场完成不积累")
-
-            // ② 后台会话完成 → 按 sid 积累; 未切回不结算; preview 首行截断
-            // (P15.3 起库里一直躺着一条预置的 dream ⇒ 按下标定位（含 .last）不再可靠, 一律按名字找)
-            mock.scriptedReply = { _ in String(repeating: "很长的后台回复内容。", count: 20) }
-            store.addScheduled(name: "T19巡检", prompt: "执行巡检", cron: "0 0 1 1 *", projectId: nil)
-            guard let t19i = store.scheduledTasks.firstIndex(where: { $0.name == "T19巡检" }) else { report() }
-            store.runScheduledFire(store.scheduledTasks[t19i])
-            guard let log1 = store.scheduledTasks[t19i].logSessionId else { check(false, "T19 日志会话1"); report() }
-            check(await waitUntil { store.runningTurns.isEmpty }, "T19 后台回合结束")
-            check(store.pendingAway[log1]?.turns == 1, "T19 后台完成积累 turns=1")
-            check(store.awaySummary == nil, "T19 未切回不结算")
-            check(store.pendingAway[log1]?.preview.hasSuffix("…") == true,
-                  "T19 preview 首行截断加省略号 (实测 [\(store.pendingAway[log1]?.preview ?? "<无 key>")])")
-
-            // ③ 分键隔离: 第二个后台任务各自积累 (并发任务不串数据)
-            mock.scriptedReply = { _ in "第二个任务完成" }
-            store.addScheduled(name: "T19第二", prompt: "执行", cron: "0 0 1 1 *", projectId: nil)
-            guard let t19j = store.scheduledTasks.firstIndex(where: { $0.name == "T19第二" }) else { report() }
-            store.runScheduledFire(store.scheduledTasks[t19j])
-            guard let log2 = store.scheduledTasks[t19j].logSessionId else { check(false, "T19 日志会话2"); report() }
-            check(await waitUntil { store.runningTurns.isEmpty }, "T19 第二后台回合结束")
-            check(store.pendingAway[log2]?.turns == 1 && store.pendingAway[log1]?.turns == 1,
-                  "T19 双任务积累器分键隔离")
-
-            // ④ 切回结算: 只消费当前 key; × 只关不滚
-            store.selectConversation(log1)
-            check(store.awaySummary?.sid == log1 && store.awaySummary?.turns == 1,
-                  "T19 切回结算 (sid/turns)")
-            check(store.pendingAway[log1] == nil && store.pendingAway[log2]?.turns == 1,
-                  "T19 结算摘除自身 key, 他 key 不动")
-            check(!hasText(store.messages, "第二个任务完成"), "T19 会话1 视图无任务2 内容")
-            store.dismissAwaySummary()
-            check(store.awaySummary == nil, "T19 × 只关 (显示态清除)")
-
-            // ⑤ 切到任务2 各自结算; 新回合开始清过期摘要
-            store.selectConversation(log2)
-            check(store.awaySummary?.sid == log2 && store.awaySummary?.turns == 1,
-                  "T19 切到任务2 结算各自摘要")
-            store.draft = "新一轮"
-            store.sendDraft()
-            check(store.awaySummary == nil, "T19 新回合开始清摘要")
-            check(await waitUntil { store.runningTurns.isEmpty }, "T19 任务2 回合收尾")
-
-            // ⑥ 手动停止不计入: stop 清 turnStartAt → 补发 streamEnded (pi abort 路径) 无新增积累
-            let awayBeforeStop = store.pendingAway.count
-            store.stopStreaming()
-            store.transport(mock, didEmit: .streamEnded)
-            check(store.pendingAway.count == awayBeforeStop, "T19 停止后 streamEnded 不积累")
-        }
-
         // ---- T20 P6.4: 首条消息自动命名 (首行前 10 字符, 一次性) ----
         do {
             store.newConversation()
