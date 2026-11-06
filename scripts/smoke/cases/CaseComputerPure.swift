@@ -796,52 +796,85 @@ extension SmokeMain {
         check(!AXSnapshot.worthRereading(root: wechatTree),
               "T-LAZY 微信那种树不重读 (一个内容角色都没有 ⇒ 它本来就没实现 AX, 重读也没用)")
 
-        // MARK: 可勾选清单 = 已安装 ∪ 运行中 (2026-10-28 boss: 「浏览器怎么都没有」)
+        // MARK: 可勾选清单 = **固定白名单** (2026-11-06 boss: 「应用太多了…只放测过 sop 的」)
+        //
+        // 这一组的职责换了。以前是"合成得对吗"(已安装 ∪ 运行中 ∪ 已勾), 现在是
+        // **"目录外的 App 一律进不来"** —— 那才是这次改动要保住的东西。
+        // ⚠️ 旧的 `merge` / `scanInstalled` / `appRoots` 判据**整组删掉**而不是留着:
+        //    它们守的函数已经不存在了, 留着就是"判据在守一个没人调的东西"(假绿)。
+        //
+        // ⚠️ 第一版写了 13 条, 被 boss 打回（「不要为了冒烟而冒烟」）后砍到 6 条。
+        //    砍掉的都是**复述实现**、不是判据 —— 判据要能变红, 而那几条只有"有人改写实现写法"
+        //    才会红, 改了行为它们照样绿:
+        //      · `supported.count == Set(supported).count` 并进 ① 同一条 check;
+        //      · "手册里有节的都在清单里" —— 被 ① 蕴含(两边集合相等), 永远红不了;
+        //      · "行数恒等于白名单大小" —— `options` 就是 `bundles.map`, 这条恒真;
+        //      · "取不到名字退末段" 与 "没在跑也占一行" 各自单列 ⇒ 并进 ④/⑤ 的样本里;
+        //      · 收敛的 4 条(摘了谁 / 白名单内不动 / 三档一起收 / 幂等) ⇒ 一次调用能全判, 并成 ⑥。
+        //    **条数不是指标**: 该减少的是"断言行", 不是"独立失败模式"。
 
-        let merged = ComputerSettings.merge(
-            installed: [("com.apple.Safari", "Safari"), ("com.apple.mail", "Mail")],
-            running: [ComputerTarget.Candidate(bundle: "com.apple.mail", name: "mail 进程名", pid: 11),
-                      ComputerTarget.Candidate(bundle: "com.example.loose", name: "Loose", pid: 22)],
-            keep: ["com.example.gone"])
-        check(merged.contains { $0.bundle == "com.apple.Safari" && !$0.running },
-              "T-COMPUTER 装了但没在跑也要在列表里 (只列运行中 ⇒ 没打开的 App 永远勾不到)")
-        check(merged.contains { $0.bundle == "com.apple.mail" && $0.running && $0.name == "Mail" },
-              "T-COMPUTER 在跑的打标记, 名字仍用 Info.plist 那个 (不是进程名)")
-        check(merged.contains { $0.bundle == "com.example.loose" && $0.running },
-              "T-COMPUTER 没扫到但正在跑的也要进来 (容器内 App / 临时挂载的 dmg)")
-        check(merged.contains { $0.bundle == "com.example.gone" },
-              "T-COMPUTER 已勾但已不在清单里的要补进来 (否则勾着看不见、也取消不掉)")
-        check(merged.count == 4, "T-COMPUTER 同一个 bundle 只出现一次")
-        let names = merged.map(\.name)
-        check(names == names.sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending },
-              "T-COMPUTER 按名字排序 (按'运行中优先'排会让列表每隔几分钟整块重排)")
+        // ① 目录漂移: 白名单 = 手册覆盖 ∪ 免手册, 且无重复
+        let supported = ComputerSettings.supported
+        let allowed = SopInjection.builtins.union(ComputerSettings.manualFree)
+        check(Set(supported) == allowed && Set(supported).count == supported.count,
+              "T-COMPUTER 可勾清单 == 手册覆盖 ∪ 免手册, 且无重复 (实测 \(supported)) —— "
+              + "两处各留一份清单就会各说各话")
+        // ② 免手册名单的边界: 它是"省掉一节 SOP"的例外, 不是"随便加一个 App"的口子。
+        check(Set(ComputerSettings.manualFree).isDisjoint(with: SopInjection.builtins)
+                && Set(ComputerSettings.manualFree).isDisjoint(with: ComputerRedline.actBannedBundles),
+              "T-COMPUTER 免手册名单: 不与手册重叠(重叠了手册漏节也看不出来)、不含红线应用"
+              + "(「界面简单」不是绕开恒拒的理由) —— 实测 \(ComputerSettings.manualFree)")
 
-        // 扫已安装: 用夹具造两个假 .app —— 一个在根目录, 一个在厂商子目录里
-        let appsRoot = fixtureDir("computer-apps")
-        func makeApp(_ rel: String, bundle: String, name: String) {
-            let dir = appsRoot + "/" + rel + "/Contents"
-            try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
-            let plist = """
-            <?xml version="1.0" encoding="UTF-8"?>
-            <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-            <plist version="1.0"><dict>
-            <key>CFBundleIdentifier</key><string>\(bundle)</string>
-            <key>CFBundleName</key><string>\(name)</string>
-            <key>CFBundlePackageType</key><string>APPL</string>
-            </dict></plist>
-            """
-            try? plist.write(toFile: dir + "/Info.plist", atomically: true, encoding: .utf8)
-        }
-        makeApp("FakeOne.app", bundle: "com.example.fakeone", name: "FakeOne")
-        makeApp("Vendor/FakeTwo.app", bundle: "com.example.faketwo", name: "FakeTwo")
-        let scanned = ComputerSettings.scanInstalled(roots: [appsRoot])
-        check(scanned.contains { $0.bundle == "com.example.fakeone" },
-              "T-COMPUTER 根目录的 .app 要扫到 (读 Info.plist 的 CFBundleIdentifier)")
-        check(scanned.contains { $0.bundle == "com.example.faketwo" },
-              "T-COMPUTER 厂商子目录里的一层也要扫到 (/Applications/*/*.app —— 只扫一层会漏掉一整类 App)")
-        check(scanned.count == 2, "T-COMPUTER 同一份夹具里不重复收录")
-        check(ComputerSettings.appRoots(home: "/Users/x").contains("/Users/x/Applications"),
-              "T-COMPUTER 用户目录下的 ~/Applications 也要扫")
+        // ② 目录外的 App: **既"装着"也"跑着", 仍然不许出现** —— 这次改动的全部产品要求
+        let fixed = ComputerSettings.options(
+            bundles: supported,
+            names: ["com.apple.Notes": "备忘录"],
+            running: [ComputerTarget.Candidate(bundle: "com.apple.Notes", name: "Notes", pid: 9),
+                      ComputerTarget.Candidate(bundle: "com.apple.Safari", name: "Safari", pid: 8)])
+        check(!fixed.contains { $0.bundle == "com.apple.Safari" },
+              "T-COMPUTER 正在跑但不在白名单里的 App 不出现 (否则又回到'几百行, 大半没量过')")
+        check(fixed.contains { $0.bundle == "com.apple.Notes" && $0.running && $0.name == "备忘录" },
+              "T-COMPUTER 白名单里的照样出现、在跑的打标记、名字用传进来的那个")
+
+        // ③ 一个都没在跑时**照样全部列出** —— "先勾好、等下打开就能用"靠的就是这条;
+        //    退回"只列运行中"(2026-10-28 那版)立刻红。这也是唯一能抓它的断言, 别删。
+        let idle = ComputerSettings.options(bundles: supported, names: [:], running: [])
+        check(idle.count == supported.count && idle.allSatisfy { !$0.running },
+              "T-COMPUTER 一个都没在跑也列出全部 (实测 \(idle.count)/\(supported.count) 行)")
+
+        // ④ 名字三档回落: 系统名 > 手册节名 > bundle 末段（最坏也要有个能点的名字）
+        let bySys = ComputerSettings.displayNames(for: ["com.apple.Notes"],
+                                                  manualTitles: ["com.apple.Notes": "备忘录"],
+                                                  resolve: { _ in "笔记(系统)" })
+        let byManual = ComputerSettings.displayNames(for: ["com.apple.Notes"],
+                                                     manualTitles: ["com.apple.Notes": "备忘录"],
+                                                     resolve: { _ in nil })
+        let bySegment = ComputerSettings.displayNames(for: ["com.example.x"], resolve: { _ in nil })
+        check(bySys["com.apple.Notes"] == "笔记(系统)"
+                && byManual["com.apple.Notes"] == "备忘录"
+                && bySegment["com.example.x"] == "x",
+              "T-COMPUTER 名字三档回落 (系统 \(bySys["com.apple.Notes"] ?? "nil") / "
+              + "手册 \(byManual["com.apple.Notes"] ?? "nil") / 末段 \(bySegment["com.example.x"] ?? "nil"))")
+
+        // ⑤ 启动收敛（`pruneUnsupported`）: 一次调用把四件事一起判 ——
+        //    摘的正是目录外那个 / 白名单内一根不动 / 三档一起收 / 第二遍什么都不摘(幂等)。
+        //    拆成四条只会让"同一份前置"重复四遍, 红的还是同一次改坏。
+        let pruner = ComputerSettings()
+        pruner.restore(enabledRaw: "1",
+                       bundlesRaw: "com.apple.Notes,com.apple.Safari",
+                       actRaw: "com.apple.Safari",
+                       imageRaw: "com.apple.Safari")
+        check(pruner.selected.contains("com.apple.Safari"),
+              "T-COMPUTER 前置: `restore` 如实还原越界值 (收敛是产品决定, 不属于'还原')")
+        let dropped = pruner.pruneUnsupported()
+        let twice = pruner.pruneUnsupported()
+        check(dropped == ["com.apple.Safari"]
+                && pruner.selected == ["com.apple.Notes"]
+                && pruner.actSelected.isEmpty && pruner.imageSelected.isEmpty
+                && twice.isEmpty,
+              "T-COMPUTER 启动收敛: 摘目录外 / 白名单内不动 / 三档一起收 / 幂等 "
+              + "(实测 dropped=\(dropped) read=\(pruner.selected.sorted()) "
+              + "act=\(pruner.actSelected.sorted()) img=\(pruner.imageSelected.sorted()) twice=\(twice))")
 
         // MARK: 名字从哪儿来 + 什么该占行 (2026-10-28 实测, 见 AXAdapter.maxDepth 注释)
         //

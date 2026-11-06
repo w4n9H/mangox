@@ -263,6 +263,7 @@
 "允许" = "Allow";
 "允许锁屏运行" = "Allow running while locked";
 "先删除 Inbox agent「%@」" = "Delete the Inbox agent “%@” first";
+"免手册（界面极简，量一次就穷尽）：%@" = "No manual needed (tiny UI, one measurement covers it): %@";
 "全局" = "Global";
 "全局串行 (同一时刻只跑一个远程任务)" = "Global serial (only one remote task runs at a time)";
 "全局唤起捕获输入条: 输入后回车即以无人值守模式开跑 (关审批 + Minimal 档); Esc 或点击外部关闭" = "Global hotkey opens the capture bar: type and press Enter to run unattended (approval off, Minimal mode); Esc or clicking outside closes it.";
@@ -362,6 +363,7 @@
 "只作用于这个 Inbox 起的会话, 不改变你当前会话的模型与档位" = "Applies only to sessions started by this Inbox; your current session's model and mode are untouched.";
 "只保证 MangoX 自己不被休眠打断。任务实际是在后台进程里跑的，系统会不会让它变慢，这条设置影响不到。" = "This only keeps MangoX itself from being interrupted by sleep. Tasks actually run in the background, and this setting cannot affect whether the system slows them down.";
 "只出提案，不改任何文件" = "Proposals only, no files touched";
+"只列真机量过的内置应用：大部分在手册里写了怎么读、哪些事做不到。别的应用界面差异太大，量不准，先不开。" = "Only built-in apps measured on a real machine: most have a manual saying how to read them and what they cannot do. Other apps vary too much to measure reliably, so they stay closed for now.";
 "只收 .md (大小写敏感); 若你刚要删或改名, 这条就是唯一的线索" = "Only .md is picked up (case-sensitive); if you just deleted or renamed something, this line is the only trace of it";
 "只是不再挂载, 目录与里面的文件一个都不动。" = "It is only unmounted — the directory and every file inside stay untouched.";
 "只有勾了「图片」的 App 才会截窗口。给完要重启 MangoX 才生效 —— 灯不会当场变, 别以为没给成。" = "Only apps with \"Image\" ticked get a window screenshot. Granting it takes effect only after you restart MangoX - the lamp will not flip right away, so do not read that as a failure.";
@@ -584,7 +586,6 @@
 "提炼依据: %@" = "Distilled from: %@";
 "插件" = "Plugins";
 "搜索会话、项目" = "Search chats and projects";
-"搜索应用…" = "Search apps…";
 "摘掉" = "Unmount";
 "摘掉知识库「%@」？" = "Unmount knowledge base “%@”?";
 "摘掉这个库" = "Unmount this base";
@@ -712,7 +713,6 @@
 "模型由 MangoX 自管, spawn 时物化到 ~/.mangox/pi-config 供 pi 消费 (不碰 ~/.pi/agent)" = "MangoX owns the model list; it is materialized into ~/.mangox/pi-config at spawn time for pi to consume (your ~/.pi/agent is untouched)";
 "模式" = "Mode";
 "模式档位: 决定 agent 可用的工具与扩展 (下回合生效)" = "Mode: decides which tools and extensions the agent gets (applies next turn)";
-"正在列出应用…" = "Listing apps…";
 "正文" = "Body";
 "此刻不在 prompt 里 —— 索引整段进或整段不进, 它超出了本轮预算" = "Not in the prompt right now — the index goes in whole or not at all, and this one exceeded the round budget";
 "此操作需要你的批准才能执行" = "This needs your approval to run";
@@ -733,7 +733,7 @@
 "每轮都带上 %lld 条 · %lld 字 / %lld 字" = "%lld every turn · %lld / %lld chars";
 "永久删除" = "Erase";
 "没有匹配的会话或项目" = "No matching chats or projects";
-"没有匹配的应用" = "No matching app";
+"没有可勾的应用" = "No apps to select";
 "注入块在 spawn 期生效; 点此重启引擎立刻生效" = "The injection block takes effect at spawn; restart the engine to apply it now";
 "注入块已是最新" = "Injected block is up to date";
 "注入量" = "PAYLOAD";

@@ -43,10 +43,8 @@ struct SettingsView: View {
     // P18 computer use: 开关与作用域 (单例 —— 与 `AppearanceModel.shared` 同款,
     // spawn 那一侧读的是同一份, 所以改完下一轮就生效, 不需要再往 ChatStore 上补一次)
     @ObservedObject private var computer = ComputerSettings.shared
-    /// 应用列表的搜索词（已安装的 App 有几百个，没有搜索翻不动）。
-    @State private var computerQuery = ""
     /// 「这个 App 上次读成什么样」—— helper 写在磁盘上的观测, 打开设置页时读一次。
-    /// ⚠️ 一次读全, 不在行里读: 列表几百行, 每行一次文件 IO 会把设置页拖住。
+    /// ⚠️ 一次读全, 不在行里读: 读健康目录是逐个 bundle 一个文件。
     @State private var computerHealth: [String: ComputerSettings.ReadHealth] = [:]
     /// 三把系统钥匙的**事实**(给没给)。与 `computer.takeoverEnabled` 分得很清:
     /// 那个是"我打算用", 这个是"系统给没给" —— 两者分叉时界面必须说得出是哪一种。
@@ -917,49 +915,43 @@ struct SettingsView: View {
         NSWorkspace.shared.open(url)
     }
 
-    /// 列表 = **已安装 ∪ 运行中**（合并逻辑在 `ComputerSettings.merge`，纯函数，冒烟守着）。
+    /// 列表 = **固定白名单**（`ComputerSettings.supported` ⇒ 手册覆盖、真机量过的那几个）。
     ///
-    /// ⚠️ 只列"正在运行"的话，没打开的 App 就永远勾不到 —— 2026-10-28 boss 拿着截图问
-    ///    「浏览器怎么都没有」就是这个：Safari 没开，所以它不在列表里。
+    /// ⚠️ 演变史: 只列"正在运行"⇒ boss 问「浏览器怎么都没有」; 改成"已安装 ∪ 运行中"⇒ 几百行,
+    ///    大半没量过（2026-11-06 boss: 「应用太多了, 而且很多都不确定能不能跑通」）⇒ 固定列表。
+    /// ⚠️ 所以**没有搜索框**: 四行不需要搜索, 留着它反而暗示"下面还有几百行被滤掉了"。
     @ViewBuilder
     private var computerAppList: some View {
-        let q = computerQuery.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        let rows = q.isEmpty ? computer.options : computer.options.filter {
-            $0.name.lowercased().contains(q) || $0.bundle.lowercased().contains(q)
-        }
         VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 6) {
-                Image(systemName: "magnifyingglass")
-                    .font(.system(size: 10))
-                    .foregroundStyle(CodexTheme.textMuted)
-                TextField("搜索应用…", text: $computerQuery)
-                    .textFieldStyle(.plain)
-                    .font(CodexTheme.fontSmall)
-                if !computerQuery.isEmpty {
-                    Button("清除") { computerQuery = "" }
-                        .fixedSize()
-                }
-            }
-            .padding(.horizontal, 6)
-            .padding(.vertical, 4)
-            .background(CodexTheme.bgInput)
-            .clipShape(RoundedRectangle(cornerRadius: CodexTheme.radiusSm))
-
-            if rows.isEmpty {
-                Text(computer.options.isEmpty ? "正在列出应用…" : "没有匹配的应用")
+            if computer.options.isEmpty {
+                Text("没有可勾的应用")
                     .font(.system(size: 11))
                     .foregroundStyle(CodexTheme.textMuted)
                     .fixedSize(horizontal: false, vertical: true)
             } else {
-                // ⚠️ 必须**限高**: 已安装的 App 有几百个，不限高会把设置页撑成无限长，
-                //    下面的状态说明与其它段全被推出屏幕。
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 4) {
-                        ForEach(rows) { app in computerRow(app) }
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                // 免手册的那几个（`ComputerSettings.manualFree`）要**点名**：上面那句讲的是"手册里
+                // 写了怎么读"，而它们没有手册 —— 不点名就是在撒谎，用户会去手册里找。
+                let freeNames = computer.options
+                    .filter { ComputerSettings.manualFree.contains($0.bundle) }
+                    .map(\.name)
+                VStack(alignment: .leading, spacing: 4) {
+                    ForEach(computer.options) { app in computerRow(app) }
                 }
-                .frame(maxHeight: 240)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                // 白名单本身就是一句话承诺 ⇒ 必须写在列表旁边, 而不是让人猜"为什么只有这几个"。
+                Text("只列真机量过的内置应用：大部分在手册里写了怎么读、哪些事做不到。别的应用界面差异太大，量不准，先不开。")
+                    .font(.system(size: 10))
+                    .foregroundStyle(CodexTheme.textMuted)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.top, 2)
+                if !freeNames.isEmpty {
+                    // 列表是**数据**不是文案 ⇒ 名字走 format 参数, 不插进 `L()`（本地化那条禁令）。
+                    Text(String(format: L("免手册（界面极简，量一次就穷尽）：%@"),
+                                freeNames.joined(separator: " / ")))
+                        .font(.system(size: 10))
+                        .foregroundStyle(CodexTheme.textMuted)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
         }
     }

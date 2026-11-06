@@ -14,6 +14,11 @@
 //  ⚠️ 落盘值**不许是容器里的位置**(本仓 10-08 那条纪律: 存序号 ⇒ 插/挪一项 ⇒ 老值
 //     静默改义、零红灯) ⇒ 存 **bundle id 本身**, 反解时按字面认领。
 //
+//  ⚠️ **能勾哪些 App = 固定白名单**（2026-11-06 boss 拍板, 见 `supported`）。
+//     原来那份"扫 `/Applications` 扫出几百个包"的清单已经删掉 —— 它把"装了什么"当成了
+//     "能用什么", 而这两件事在 computer use 里差得很远: 能不能读、能点哪里, 取决于那个 App
+//     的 AX 树有没有被真机量过（手册 + 探针）。
+//
 
 import AppKit
 import Foundation
@@ -75,15 +80,14 @@ final class ComputerSettings: ObservableObject {
     ///    冒烟用完就置回 nil。
     var candidateOverride: [ComputerTarget.Candidate]?
 
-    /// 设置页里能勾的 App = **已安装的 ∪ 正在运行的**。
+    /// 设置页里能勾的 App = **固定白名单**（`supported`），不是"扫出来的所有 App"。
     ///
-    /// ⚠️ 2026-10-28 boss 拿着截图问「浏览器怎么都没有」—— 当时只列**正在运行**的
-    ///    (`NSWorkspace.runningApplications`), 没打开的 App 一律看不见, 于是"先勾好、等会儿用"
-    ///    这件事做不到。列表的职责是**让人挑得到**, 不是"只显示此刻能用的"。
+    /// ⚠️ 演变史, 别退回上一版:
+    ///    · 2026-10-28: 只列**正在运行**的 ⇒ boss 问「浏览器怎么都没有」（没打开的 App 勾不到）;
+    ///    · 2026-10-28 当天: 改成"已安装的 ∪ 正在运行的" ⇒ 又变成**几百行**, 而且大半没量过;
+    ///    · 2026-11-06: 改成固定列表（boss 原话见 `supported`）。
+    /// 列表的职责是**让人挑得到**, 但"挑得到"的前提是"这个 App 真能用"。
     @Published private(set) var options: [Option] = []
-
-    /// 扫出来的已安装 App。扫一次就缓存 —— 目录内容不会一分钟变一次。
-    private var installed: [(bundle: String, name: String)] = []
 
     /// 落盘口子, 由 `ChatStore` 接上 persistence。**nil = 不落盘**(冒烟里就是 nil)。
     ///
@@ -92,7 +96,7 @@ final class ComputerSettings: ObservableObject {
     ///    而 persistence 是 ChatStore 的东西 —— 传一个闭包进来, 两边都不必互相持有。
     var onPersist: ((String, String) -> Void)?
 
-    // MARK: 可勾选清单 (已安装 ∪ 运行中)
+    // MARK: 可勾选清单 (固定白名单 ≠ 装了什么)
 
     struct Option: Identifiable, Equatable {
         let bundle: String
@@ -105,86 +109,113 @@ final class ComputerSettings: ObservableObject {
         var id: String { bundle }
     }
 
-    /// App 可能落的目录。
+    /// 设置页能勾的 App —— **固定白名单** = 手册覆盖的那几个 + `manualFree`（免手册的极简 App）。
     ///
-    /// ⚠️ **两层都扫**: `/Applications/*.app` 之外还有厂商目录(`/Applications/*/*.app`,
-    ///    Adobe / Office / 部分国产软件都往里放)。只扫一层的话那些 App 永远不出现在列表里 ——
-    ///    而这正是 boss 这次截图里"看不到"的那一类。
-    nonisolated static func appRoots(home: String) -> [String] {
-        ["/Applications", "/System/Applications",
-         "/Applications/Utilities", "/System/Applications/Utilities",
-         home + "/Applications"]
-    }
-
-    /// 合并成一份可勾选清单 —— **纯函数**, 冒烟能断言。
+    /// ⚠️ 为什么改（2026-11-06 boss 拍板, 原话「这个里面应用太多了, 而且很多都不确定能不能跑通」）:
+    ///    扫 `/Applications` 会列出几百个包, 而其中**只有手册覆盖的那几个**在真机上量过 ——
+    ///    界面节点长什么样、哪些事做不到, 都是逐条探针跑出来的（`scripts/diag/*.sh`）。
+    ///    其余应用勾上之后大概率是"读得到一堆无名 group, 一步也动不了", 却要用户自己撞一遍才知道。
+    ///    **列表就是承诺**: 出现在这里 ⇒ 手册里写了它怎么读、哪些事做不到（或者见 `manualFree`）。
     ///
-    /// 三条规则:
-    ///   ① 已安装为底;
-    ///   ② 正在跑但没被扫到的(容器内 App、临时挂载的 dmg、`Contents/MacOS` 直接起的)也要进来 ——
-    ///      "列表里看不到却明明在跑"是最费解的一种;
-    ///   ③ **按名字排序**。按"运行中优先"排会让列表每隔几分钟就整块重排, 正在找某个 App 的
-    ///      时候最烦。
-    ///
-    /// ⚠️ `keep` = 已经勾上的 bundle。它可能**不在**扫出来的清单里(那个 App 被删了、改名了) ——
-    ///    不补进来的话会出现"勾着但看不见、也取消不掉"。
-    nonisolated static func merge(installed: [(bundle: String, name: String)],
-                      running: [ComputerTarget.Candidate],
-                      keep: Set<String> = []) -> [Option] {
-        var table: [String: (name: String, running: Bool)] = [:]
-        for a in installed where !a.bundle.isEmpty {
-            table[a.bundle] = (a.name, false)
-        }
-        for a in running where !a.bundle.isEmpty {
-            // 名字优先用已安装那边的(Info.plist 里更规范); 只有没扫到时才用进程名。
-            let name = table[a.bundle]?.name ?? a.name
-            table[a.bundle] = (name, true)
-        }
-        for b in keep where table[b] == nil {
-            table[b] = (b, false)
-        }
-        return table
-            .map { Option(bundle: $0.key, name: $0.value.name, running: $0.value.running) }
-            .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
-    }
-
-    /// 扫已安装的 `.app`。**纯函数**(只读磁盘、无隐藏状态) ⇒ 冒烟能用夹具目录断言。
-    nonisolated static func scanInstalled(roots: [String]) -> [(bundle: String, name: String)] {
-        let fm = FileManager.default
-        var out: [(bundle: String, name: String)] = []
+    /// ⚠️ 这里**不再抄一份 bundle 字面量**: 白名单在两个地方漂过一次（`builtins` 上那条
+    ///    "扩集合 = 两处一起改"就是为此写的）⇒ 顺序取**手册里的顺序**（写的人把常用的放前面）,
+    ///    集合以 `builtins` + `manualFree` 为准。
+    /// ⚠️ 白名单里有、手册里**缺那一节**的 App 要**照样出现**（排在最后）: 漏节是另一件事
+    ///    （`SopInjection.block` 的 `missing` 会点名、冒烟「手册本体」会红）, 而悄悄少一行更坏 ——
+    ///    用户只会以为"这个 App 不支持", 没人会想到是手册漏了一节。
+    /// `nonisolated`: 纯解析, 而冒烟（顶层代码）要在任意上下文里调它。
+    nonisolated static var supported: [String] {
+        let doc = SopInjection.parse(SopManual.text)
         var seen = Set<String>()
-        for root in roots {
-            guard let top = try? fm.contentsOfDirectory(atPath: root) else { continue }
-            for entry in top {
-                let path = root + "/" + entry
-                var isDir: ObjCBool = false
-                guard fm.fileExists(atPath: path, isDirectory: &isDir), isDir.boolValue else { continue }
-                if entry.hasSuffix(".app") {
-                    addAPP(path, &out, &seen)
-                    continue
-                }
-                // 厂商目录: 只往下探**一层**。递归整棵树会扫到 helper / framework 里那些
-                // 同名的小 .app(它们也是 .app, 但不是用户能"读界面"的那个 App)。
-                guard let inner = try? fm.contentsOfDirectory(atPath: path) else { continue }
-                for sub in inner where sub.hasSuffix(".app") {
-                    addAPP(path + "/" + sub, &out, &seen)
-                }
-            }
+        var out: [String] = []
+        for sec in doc.sections
+        where sec.bundle != "" && SopInjection.builtins.contains(sec.bundle)
+              && seen.insert(sec.bundle).inserted {
+            out.append(sec.bundle)
+        }
+        // 免手册的那几个排在手册 App 后面: 它们没有"常用程度"可排, 也不抢前四位。
+        for b in manualFree where seen.insert(b).inserted {
+            out.append(b)
+        }
+        for b in SopInjection.builtins.sorted() where seen.insert(b).inserted {
+            out.append(b)
         }
         return out
     }
 
-    private nonisolated static func addAPP(_ path: String,
-                               _ out: inout [(bundle: String, name: String)],
-                               _ seen: inout Set<String>) {
-        guard let b = Bundle(path: path), let id = b.bundleIdentifier, !id.isEmpty,
-              !seen.contains(id) else { return }
-        // ⚠️ 走 `object(forInfoDictionaryKey:)` 而不是 `infoDictionary` 直读: 前者会顺着
-        //    `.lproj` 取**本地化**过的名字, 后者拿到的是原始串(常常是英文名)。
-        let name = b.object(forInfoDictionaryKey: "CFBundleDisplayName") as? String
-            ?? b.object(forInfoDictionaryKey: "CFBundleName") as? String
-            ?? ((path as NSString).lastPathComponent as NSString).deletingPathExtension
-        seen.insert(id)
-        out.append((id, name))
+    /// **免手册**的应用 —— `supported` 里唯一不受"手册写没写它"约束的那几个。
+    ///
+    /// ⚠️ 判据不是"这个 App 简单"这种感觉, 而是**量一次能不能穷尽它的界面**:
+    ///    ① 系统内置; ② **单窗口 + 平铺按钮**, 没有侧栏 / 列表 / 拖拽 / 只在菜单里才够得着的功能;
+    ///    ③ 不在 `ComputerRedline.actBannedBundles` 里。
+    ///    计算器满足这三条: 一个显示屏 + 二十来个带名字的 `AXButton`, 量一次就是全部;
+    ///    给它写一节 SOP 只会每轮白占几百字预算。
+    /// ⚠️ 反过来: 只要有"侧栏 / 列表行 / 右键菜单"这类**结构**, 就必须写手册 —— `custom` 动作
+    ///    是行作用域的、菜单项的作用域判不了, 这两件事没法靠"看起来简单"推出来, 必须真机量。
+    /// ⚠️ 改这个列表要连带看冒烟那两条: 与 `builtins` 不许重叠（重叠 = 两份声明会漂）、
+    ///    与恒拒名单不许相交（捷径不是绕开红线的后门）。
+    nonisolated static let manualFree: [String] = [
+        "com.apple.calculator",   // 计算器: 单窗口平铺按钮, 2026-10-29 探针量过
+    ]
+
+    /// 手册里的节名（`备忘录` 这种）—— 只在系统给不出名字时用作回落。
+    nonisolated static func manualTitles(_ raw: String = SopManual.text) -> [String: String] {
+        var out: [String: String] = [:]
+        for sec in SopInjection.parse(raw).sections where out[sec.bundle] == nil {
+            out[sec.bundle] = sec.title
+        }
+        return out
+    }
+
+    /// 白名单里每个 App 的显示名 —— **跟着系统语言走**（`备忘录` / `Notes` 各按本机来）。
+    ///
+    /// 取不到（App 被删、LaunchServices 不认）就退手册里的节名, 再退 bundle 末段:
+    /// 三种都必须有个名字, 因为这一行要能被人认出来点。
+    /// `resolve` 可注入 ⇒ 冒烟不必连 LaunchServices 就能断言这三档回落。
+    /// ⚠️ 默认值里写**类名**不写 `Self`: Swift 不许在默认实参表达式里引用协变的 `Self`。
+    nonisolated static func displayNames(for bundles: [String],
+                                         manualTitles: [String: String] = [:],
+                                         resolve: (String) -> String? = { ComputerSettings.appDisplayName($0) })
+    -> [String: String] {
+        var out: [String: String] = [:]
+        for b in bundles {
+            if let n = resolve(b), !n.isEmpty { out[b] = n; continue }
+            if let t = manualTitles[b], !t.isEmpty { out[b] = t; continue }
+            out[b] = ComputerTarget.lastSegment(of: b)
+        }
+        return out
+    }
+
+    /// 系统给的 App 名（本地化过的那个）。取不到 ⇒ nil, **不猜**。
+    ///
+    /// ⚠️ 走 `object(forInfoDictionaryKey:)` 而不是 `infoDictionary` 直读: 前者会顺着
+    ///    `.lproj` 取**本地化**过的名字, 后者拿到的是原始串（常常是英文名）。
+    nonisolated static func appDisplayName(_ bundle: String) -> String? {
+        guard let url = appURL(bundle) else { return nil }
+        guard let b = Bundle(url: url) else { return nil }
+        return (b.object(forInfoDictionaryKey: "CFBundleDisplayName") as? String)
+            ?? (b.object(forInfoDictionaryKey: "CFBundleName") as? String)
+    }
+
+    /// ⚠️ 单独一层是因为它**必须能在没有 AppKit 的上下文里被替换**: 冒烟用注入的
+    ///    `resolve` 绕开它, 生产恒走 `NSWorkspace`。
+    nonisolated static func appURL(_ bundle: String) -> URL? {
+        NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundle)
+    }
+
+    /// 固定白名单 → 可勾选行。**纯函数**: 输入只有「白名单顺序 / 名字 / 此刻在跑谁」。
+    ///
+    /// ⚠️ 行数**恒定等于白名单大小**: 装没装、跑没跑都**不决定**它在不在列表里, 只决定那一行
+    ///    有没有「运行中」那个标记 —— 这正是"固定列表"的意思: 先勾好, 等下真的打开那个 App 就能用。
+    nonisolated static func options(bundles: [String],
+                                    names: [String: String],
+                                    running: [ComputerTarget.Candidate]) -> [Option] {
+        let live = Set(running.map(\.bundle))
+        return bundles.map { b in
+            Option(bundle: b,
+                   name: names[b] ?? ComputerTarget.lastSegment(of: b),
+                   running: live.contains(b))
+        }
     }
 
     /// 正在运行的 App(只算 regular —— 菜单栏程序与后台 agent 没有窗口可读)。
@@ -205,6 +236,11 @@ final class ComputerSettings: ObservableObject {
     // MARK: 判据 (纯函数)
 
     /// 真正下发的作用域 —— 全局配置在这一刻的投影（不是"本轮私有"，见文件头）。
+    ///
+    /// ⚠️ **这里不按白名单过滤, 是有意的**: 白名单（`supported`）管的是"设置页给不给你勾",
+    ///    不是"能不能读"。库里的越界值由 `pruneUnsupported` 在**启动时**收敛一次;
+    ///    若这一层再滤一遍, 等于把"产品目录"和"权限投影"合成一个东西 —— 而 `CaseActScope` ③d
+    ///    证明的恰恰是"投影要挡的是硬禁区与未勾选, 不是目录外"（那道判据得能造出越界状态才验得到）。
     ///
     /// ⚠️ **排序后**返回: 下发顺序稳定 ⇒ 同样的勾选每次拼出同样的 env 串 ⇒ 可断言、可肉眼看 diff。
     ///    `Set` 的迭代顺序不稳定(且与插入顺序无关), 直接下发会让"改了什么"看不出来。
@@ -443,26 +479,44 @@ final class ComputerSettings: ObservableObject {
 
     /// 刷新可勾选列表。
     ///
-    /// **两段式**是有意的: 先只取运行态(毫秒级, 立刻上屏), 再后台扫已安装的 App(几百个包,
-    /// 几十到几百毫秒)洗完再换一版。否则点开设置要**卡一下**才出现任何东西 —— 而这一栏
-    /// 的主入口就在输入框那一行, 会被点得很频繁。
+    /// ⚠️ 2026-11-06 起**不再扫 `/Applications`**: 列表是固定白名单（见 `supported`）, 这一趟只剩
+    ///    4 次 LaunchServices 查询 + 一次"谁在跑"（毫秒级）⇒ 原来那个**两段式**（先取运行态立刻上屏、
+    ///    再后台扫几百个包洗完换一版）没有存在的理由了。去掉之后 `installed` 那份缓存也一起删掉。
     func refresh() {
-        let me = Bundle.main.bundleIdentifier
-        let running = Self.runningApps(excluding: me)
-        options = Self.merge(installed: installed, running: running, keep: selected)
+        let bundles = Self.supported
+        let running = Self.runningApps(excluding: Bundle.main.bundleIdentifier)
+        options = Self.options(bundles: bundles,
+                               names: Self.displayNames(for: bundles,
+                                                        manualTitles: Self.manualTitles()),
+                               running: running)
+    }
 
-        let roots = Self.appRoots(home: NSHomeDirectory())
-        // ⚠️ `[weak self]` 只挂在 `MainActor.run` 那一层: 挂到外层再在里层 `guard let self`
-        //    会报 "reference to captured var 'self' in concurrently-executing code"
-        //    (Swift 6 里是 error)。外层只捕获 `roots` / `running` 两个值, 不需要 self。
-        Task.detached(priority: .utility) {
-            let found = Self.scanInstalled(roots: roots)
-            await MainActor.run { [weak self] in
-                guard let self else { return }
-                self.installed = found
-                self.options = Self.merge(installed: found, running: running, keep: self.selected)
-            }
-        }
+    /// 一次性收敛: 把**不在白名单里**的勾选摘掉（2026-11-06 boss 定: 只开放真机量过 SOP 的 App）。
+    ///
+    /// ⚠️ **不放进 `restore` / `decode`**: 那两个的契约是"库里有什么就如实还原", 越界值由**投影**
+    ///    兜底（`activeActBundles` 再滤一遍硬禁区就是为这个; `CaseActScope` ③d 正是靠"手改过的库
+    ///    仍能把口令类留在勾选集里"来证明桥必须查投影）。这里是**产品决定**（哪些 App 还能用）,
+    ///    属于启动时装配 —— 两件事, 合起来两边都变糊。
+    ///
+    /// ⚠️ 必须**在 `onPersist` 接上之后**调: 否则摘掉的值只活在内存里, 库里躺的还是旧的 ⇒
+    ///    下次启动再摘一遍, 而且"库 vs 界面"永远不一致。
+    /// 返回值 = 被摘掉的 bundle（字母序）: 要留痕, 也要能断言。
+    @discardableResult
+    func pruneUnsupported() -> [String] {
+        let ok = Set(Self.supported)
+        let dropped = selected.subtracting(ok)
+            .union(actSelected.subtracting(ok))
+            .union(imageSelected.subtracting(ok))
+            .sorted()
+        guard !dropped.isEmpty else { return [] }
+        // 顺序沿用 `restore`: 先收子集再收读面 —— 反过来的中间那一拍会出现"子集里有、读面里没有",
+        // 而 `didSet` 会把那一拍 persist 出去。
+        actSelected.formIntersection(ok)
+        imageSelected.formIntersection(ok)
+        selected.formIntersection(ok)
+        Log.event("computer-prune", ["dropped": dropped.joined(separator: ","),
+                                     "kept": selected.sorted().joined(separator: ",")])
+        return dropped
     }
 
     private func persist() {

@@ -342,7 +342,10 @@ struct SmokeMain {
         check(store.maxConcurrentTurns == 1, "T8 下限 clamp 1")
         store.maxConcurrentTurns = 100
         check(store.maxConcurrentTurns == 20, "T8 上限 clamp 20")
-        check(await waitUntil { true }, "T8 稳态")
+        // T9 要判"fire 跳过不弹横幅"⇒ 先清掉 T8 那条超限横幅, 否则分不清是谁弹的。
+        // (原来这里是一句 `check(await waitUntil { true }, "T8 稳态")` —— 恒真, 什么都不判,
+        //  2026-11-06 清账时删掉, 空出的位置正好用来做这件事。)
+        store.turnLimitNotice = nil
 
         // ---- T9 fire 超限落痕: 并发满时到点任务跳过并记录原因 ----
         store.maxConcurrentTurns = 1   // T8 收尾 clamp 到 20, 这里重设满载口径
@@ -363,7 +366,11 @@ struct SmokeMain {
         if let last = store.messages.last, case .text(let s) = last.content {
             check(s.contains("因冲突跳过 (并发已满 (1))"), "T9 末条为跳过痕 (未投递新 prompt)")
         } else { check(false, "T9 末条为跳过痕") }
-        check(true, "T9 fire 跳过不弹用户横幅 (落痕语义)")
+        // ⚠️ 这条原来是 `check(true, …)` —— **假断言**, 一个字节都不判, 却每年贡献一行 PASS。
+        //    真判据: 跳过只往日志会话写时间线（`SchedulerService.recordFireSkip` 写明"不动 UI 状态"）,
+        //    所以横幅必须是空的（上面已清掉 T8 那条, 这里分得清是谁弹的）。
+        check(store.turnLimitNotice == nil, "T9 fire 跳过不弹用户横幅 (落痕只进日志会话)")
+
 
         // ---- T10 P4.1/P4.2 逻辑级回归: 通知开关持久化 / stopTurn 指定停止 ----
         check(store.completionNotificationsEnabled, "T10 通知开关默认开")
@@ -376,7 +383,6 @@ struct SmokeMain {
         store.stopTurn(sidA)   // 迷你条 [■] 路径: 指定会话停止
         check(store.runningTurns.isEmpty, "T10 stopTurn(sid) 清在途")
         check(!(store.messages.last?.isStreaming ?? true), "T10 半截回复光标摘除")
-        check(await waitUntil { true }, "T10 稳态")
         let store3 = ChatStore(transport: MockTransport(),
                                dbPath: dir + "/smoke.db",
                                managedExtensionsDir: dir + "/ext")

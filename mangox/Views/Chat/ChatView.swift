@@ -160,6 +160,16 @@ struct ChatView: View {
     /// 直到 `nearBottom` 重新变 true（否则流式期每个 chunk 都会记一行）。
     @State private var vetoLogged = false
 
+    /// 内容底探针**最后一次报数**的时刻。与 `lastBottomY` 配对，用来读"这个读数有多旧"：
+    /// 视口落到内容之外时探针会**不再实例化**（那正是白屏的样子），此时 `bottomY` 停在旧值，
+    /// 光看数值分不出"贴底"和"根本听不到" ⇒ 必须有年龄。
+    /// ⚠️ 初值是 `nil`（"从没报过"）而不是 `Date.distantPast`：后者算出来的 age 是 2027 年那种
+    ///    天文数字，而第一拍恰恰还没量到 —— 那会让 `void` 在**每一次初屏**都谎报一次白屏。
+    @State private var lastBottomAt = RefBox<Date?>(nil)
+
+    /// 同帧合并的跟随调度：正在排队的那一次的**意图**（见 `requestFollow`）。
+    @State private var pendingOrigin = RefBox("")
+
     /// 已展开的**工具段**（键 = 段首工具消息 id，见 `ToolRun.id`）。
     ///
     /// ⚠️ 折叠态必须住在这里，**不许住行内 `@State`**：段里每来一条新工具，
@@ -214,6 +224,7 @@ struct ChatView: View {
         //    0 一律当"这一拍没量到", 保留上一次的有效读数 —— 绝不能当坐标用。
         guard bottomY > 0 else { return }
         lastBottomY.value = bottomY
+        lastBottomAt.value = Date()   // 诊断日志: 这个读数有多新（见 `logBeat` 的 `age`）
         let v = ChatView.isNearBottom(contentBottomY: bottomY, viewportHeight: viewportHeight)
         if nearBottom != v {
             nearBottom = v   // 等值不写, 防 PreferenceKey 高频触发失效性更新
@@ -344,7 +355,16 @@ struct ChatView: View {
         followEpoch.value += 1
         let epoch = followEpoch.value
         // 流式期尾行在长高，懒栈不肯量它 ⇒ 实体化那一支不适用，每一拍都锚指示器。
-        let materializeCandidate = store.isStreaming ? nil : materializeTarget
+        //
+        // ⚠️ **提交那一拍是例外**（2026-11-06 现场实证，`mangox-20261106-084658.log`）：
+        //    回车时 `beginTurn` 抢在视图这次滚动之前把 `isStreaming` 置了 true，
+        //    日志里三次提交全是 `o=send mat=0 stream=1` —— 也就是说"先量尾块"这道保护
+        //    在**最需要它的那一拍**恒不生效（它只在初屏/换会话这些静止态才生效）。
+        //    那一刻的尾块是刚 append 的用户消息：**已经定型、量它是安全的**，
+        //    所以提交拍的候选取真尾块，第 0 拍先锚它把高度量出来，后面几拍再锚指示器。
+        //    （其余流式拍保持"不量" —— 量一行正在长高的文本会来回弹，见 0.1.30。）
+        let materializeCandidate: AnyHashable? = origin == "send" ? materializeTarget
+            : (store.isStreaming ? nil : materializeTarget)
         // 诊断日志: 一次跟随的入口行 —— 谁触发的、当时是什么态。
         // ⚠️ `mat` 是"这一次有没有打算先量尾块"。回车那一刻如果记到 `mat=0 stream=1`,
         //    说明 `beginTurn` 抢在视图滚动之前把 `isStreaming` 置了 true（这就是那道保护失效的证据）。
@@ -390,6 +410,50 @@ struct ChatView: View {
         }
     }
 
+    /// 同帧合并的跟随请求口 —— **一次换会话只允许产生一次 `scrollToTail`**。
+    ///
+    /// 为什么要有（2026-11-06 现场实证，`~/.mangox/log/mangox-20261106-084658.log`）：
+    /// 换会话时 `onChange(selectedConversationId)` 与 `onChange(messagesRevision)` 各发一次请求
+    /// （replay 会改 `messages` ⇒ revision 也变），实测相隔 **1~24 ms**。后一次 `followEpoch += 1`
+    /// 把前一次还没到点的**复核拍（i=1/2/3）全部作废** —— 六次换会话，**六次都只落了第一拍**。
+    /// 而 0.1.27 治白屏靠的正是复核拍 ⇒「换会话」这条路上白屏**从来没被真正覆盖过**。
+    ///
+    /// 合并规则：同帧只排一次；后来的只**升级意图**（换会话 / 提交 > 普通跟随），不再排第二次。
+    /// ⚠️ 吃不吃 `nearBottom` 守卫只看**最终意图**是不是普通跟随 —— 换会话与提交必须滚到底，
+    ///    否则"在上一个会话里往上翻着"会连带把新会话的定位拦住（那是另一条 bug）。
+    private func requestFollow(_ proxy: ScrollViewProxy, origin: String) {
+        DispatchQueue.main.async {
+            if scrollScheduled.value {
+                // 已有一拍在排队：不排第二次（排了就是互相拍死），只升级意图
+                pendingOrigin.value = Self.mergeFollowOrigin(pending: pendingOrigin.value,
+                                                             incoming: origin)
+                return
+            }
+            scrollScheduled.value = true
+            pendingOrigin.value = origin
+            DispatchQueue.main.async {
+                let o = pendingOrigin.value
+                pendingOrigin.value = ""
+                if o == "follow" {
+                    scrollToTail(proxy, origin: o, veto: { nearBottom })
+                } else {
+                    scrollToTail(proxy, origin: o)
+                }
+                // ⚠️ 复位推到最后：同一帧后来的请求必须看到 true 才会被合并掉。
+                DispatchQueue.main.async { scrollScheduled.value = false }
+            }
+        }
+    }
+
+    /// "更响亮的意图"排前面：换会话 / 初屏 / 提交 / 回到最新都必须滚，只有普通跟随吃守卫。
+    static func followRank(_ origin: String) -> Int { origin == "follow" ? 1 : 2 }
+
+    /// 同帧合并时留下哪个意图 —— 抽成纯函数，好让"更响亮的留下"这条能**被断言**（见 T-CSCROLL）。
+    /// 空字符串 = 还没有排队的请求。
+    static func mergeFollowOrigin(pending: String, incoming: String) -> String {
+        pending.isEmpty ? incoming : (followRank(incoming) > followRank(pending) ? incoming : pending)
+    }
+
     /// 一拍落点的读回（诊断日志，2026-11-05）。
     ///
     /// `gap = doc - y - vp`：**0 = 贴底**、正数 = 欠冲（内容还在视口下面）、
@@ -399,19 +463,37 @@ struct ChatView: View {
     ///    它只在**没贴住**时记一行（容差 60pt ≈ 底部留白 + 一行）。健康的那几拍不占日志，
     ///    否则一个长回合能把文件写满、把真正重要的那几行挤掉。
     private func logBeat(_ origin: String, _ i: Int, _ anchor: String) {
-        guard let s = scrollMetrics.snapshot() else {
+        let bottom = lastBottomY.value
+        let age: Double? = lastBottomAt.value.map { Date().timeIntervalSince($0) * 1000 }
+        var f: [String: String] = ["o": origin, "i": "\(i)", "a": anchor,
+                                   "bottom": String(format: "%.0f", bottom),
+                                   "age": age.map { String(format: "%.0f", $0) } ?? "na"]
+        if let s = scrollMetrics.snapshot() {
+            let gap = s.doc - s.y - s.vp
+            f["y"] = String(format: "%.0f", s.y)
+            f["doc"] = String(format: "%.0f", s.doc)
+            f["vp"] = String(format: "%.0f", s.vp)
+            f["gap"] = String(format: "%.0f", gap)
+            // 白屏判据（2026-11-06 补）: 视口是 `[y, y+vp]`，而 `bottom` 是**内容底距视口顶**的 y。
+            // `bottom <= 0` ⇒ 内容底已经在视口之上 ⇒ 视口里一个像素内容都没有 = **整片白**。
+            // ⚠️ 三种取值，别压成两种:
+            //    `0`  = 最后一次读数说内容底还在视口里；
+            //    `1`  = 内容底不在视口里, 且探针**已经很久没报数**（>400ms）= 真的听不到 ⇒ 白；
+            //    `na` = 压根还没量过（初屏第一拍）—— 这时判 1 会在每次打开会话时谎报一次。
+            if bottom > 0 {
+                f["void"] = "0"
+            } else {
+                f["void"] = (age ?? -1) > 400 ? "1" : "na"
+            }
+            // ⚠️ 流式跟随只在"没贴住"时记，但**末拍永远记**（`i == count-1` 与 settle）：
+            //    末拍是"这次跟随最终落在哪"的唯一证据。11-06 的现场就是被这条过滤吞掉的。
+            if origin == "follow", abs(gap) <= 60, i < Self.followBeats.count - 1 { return }
+        } else {
             // 捞不到底层 NSScrollView（私有层级，见 `ChatScrollBridge`）—— 如实记 na，
             // 别拿探针的估算数冒充，那正是这个 bug 骗了四轮的地方。
-            Log.scroll("beat", ["o": origin, "i": "\(i)", "a": anchor, "probe": "na"])
-            return
+            f["probe"] = "na"
         }
-        let gap = s.doc - s.y - s.vp
-        if origin == "follow" && abs(gap) <= 60 { return }
-        Log.scroll("beat", ["o": origin, "i": "\(i)", "a": anchor,
-                            "y": String(format: "%.0f", s.y),
-                            "doc": String(format: "%.0f", s.doc),
-                            "vp": String(format: "%.0f", s.vp),
-                            "gap": String(format: "%.0f", gap)])
+        Log.scroll("beat", f)
     }
 
     /// 滚动列 = ScrollView (拆子表达式, 防 type-check 超时)。
@@ -482,12 +564,14 @@ struct ChatView: View {
         //    同一个坑, 那次只修了 Trace, 漏了这里)。改 onAppear 定位; 流式跟随由下面
         //    onChange(of: store.messagesRevision) 管。
         .onAppear {
-            DispatchQueue.main.async { scrollToTail(proxy, origin: "appear") }
+            requestFollow(proxy, origin: "appear")
         }
         .onChange(of: store.selectedConversationId) { _, _ in
             // 换会话: replay 内容整批替换, 兜底滚到最新 (首帧 onAppear 之外的双保险)
             // ⚠️ 这里**不用**手工置位"要量"—— 尾块 id 变了，`scrollToTail` 自己会认（见 `ChatTailLedger`）
-            DispatchQueue.main.async { scrollToTail(proxy, origin: "switch-conv") }
+            // ⚠️ 走 `requestFollow` 而不是直接调：紧随其后的 `messagesRevision` 那次会把
+            //    这里的复核拍作废（2026-11-06 实证），两条必须合并成一拍。
+            requestFollow(proxy, origin: "switch-conv")
         }
         .onChange(of: store.messagesRevision) { _, _ in
             // 流式 chunk 高频到达, 同帧多次触发会报 "update multiple times per frame";
@@ -517,20 +601,15 @@ struct ChatView: View {
                 Log.scroll("veto", ["msgs": "\(store.messages.count)",
                                     "stream": store.isStreaming ? "1" : "0"])
             }
-            DispatchQueue.main.async {
-                guard !scrollScheduled.value else { return }
-                scrollScheduled.value = true
-                // ⚠️ 2026-10-19 起这里**不再做补间**（原先连发时降级瞬移、慢工具走 0.25s 补间）。
-                //    两个理由，都是实测：① 补间的中间态按**动画插值**的布局算 ⇒ 落点差 100~260pt；
-                //    ② 带补间的落点**没法复核**（复核那一拍会打断补间）。现在统一走 `scrollToTail`
-                //    的"瞬移 + 复核"，高频位移下人眼分辨不出补间丢失的那点顺滑。
-                if justSent {
-                    scrollToTail(proxy, origin: "send")
-                } else {
-                    scrollToTail(proxy, origin: "follow", veto: { nearBottom })   // P9-#9: 用户上滑了就停手
-                }
-                DispatchQueue.main.async { scrollScheduled.value = false }
-            }
+            // ⚠️ 2026-10-19 起这里**不再做补间**（原先连发时降级瞬移、慢工具走 0.25s 补间）。
+            //    两个理由，都是实测：① 补间的中间态按**动画插值**的布局算 ⇒ 落点差 100~260pt；
+            //    ② 带补间的落点**没法复核**（复核那一拍会打断补间）。现在统一走 `scrollToTail`
+            //    的"瞬移 + 复核"，高频位移下人眼分辨不出补间丢失的那点顺滑。
+            // ⚠️ 2026-11-06: 调度收口到 `requestFollow` —— 这里原来是自己那一套
+            //    `guard !scrollScheduled` 闸，只合并 revision 内部，合不住与
+            //    `selectedConversationId` 那条的竞争（换会话时两条相隔 1~24ms，后一条把前一条
+            //    的复核拍作废）。现在两条走同一个口。
+            requestFollow(proxy, origin: justSent ? "send" : "follow")
         }
         // 诊断日志（只观察，不改行为）: 「生成中」出现/消失的那一刻 —— `isStreaming` 决定
         // `scrollToTail` 锚流式指示器还是锚真实行，所以这个翻转沿本身就是白屏的嫌疑点。

@@ -49,5 +49,22 @@ extension SmokeMain {
         _ = afterVeto.candidate(a, allowed: false)
         check(afterVeto.candidate(a, allowed: true) == a,
               "T-CSCROLL 先否决、后允许时仍须实体化尾块")
+
+        // ⑤ 同帧合并只留"更响亮的意图"（2026-11-06，`mangox-20261106-084658.log`）。
+        //
+        // 病根: 换会话时 `selectedConversationId` 与 `messagesRevision` 各发一次跟随请求
+        // （实测相隔 1~24ms），后一次 `followEpoch += 1` 把前一次的**复核拍全部作废**
+        // —— 六次换会话，六次都只落了第一拍。而 0.1.27 治白屏靠的就是复核拍。
+        // ⇒ 两条必须合并成一拍，且留下的是**不吃 nearBottom 守卫**的那一个（换会话必须滚）。
+        check(ChatView.followRank("follow") < ChatView.followRank("switch-conv"),
+              "T-CSCROLL 普通跟随的优先级必须低于换会话 (否则换会话会被 nearBottom 拦住)")
+        check(ChatView.followRank("send") == ChatView.followRank("switch-conv"),
+              "T-CSCROLL 提交与换会话同级 (都不吃 nearBottom 守卫)")
+        check(ChatView.mergeFollowOrigin(pending: "switch-conv", incoming: "follow") == "switch-conv",
+              "T-CSCROLL 换会话排着队时, 后到的流式跟随**不许**把意图降级 (降级 = 复核拍重新被作废)")
+        check(ChatView.mergeFollowOrigin(pending: "follow", incoming: "switch-conv") == "switch-conv",
+              "T-CSCROLL 普通跟随排着队时, 换会话必须把意图升上去")
+        check(ChatView.mergeFollowOrigin(pending: "", incoming: "follow") == "follow",
+              "T-CSCROLL 队列空时直接接受来者")
     }
 }

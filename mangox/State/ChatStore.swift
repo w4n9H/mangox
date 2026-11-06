@@ -770,6 +770,16 @@ final class ChatStore: ObservableObject {
             ComputerSettings.shared.onPersist = { [weak self] key, value in
                 self?.persistence?.saveSettingText(key: key, value: value)
             }
+            // ⚠️ 这两行的**顺序**不能换:
+            //    ① `pruneUnsupported` 会把"不在支持列表里"的旧勾选摘掉（2026-11-06 起只有手册
+            //       覆盖的那几个 App 能勾, 见 `ComputerSettings.supported`）—— 它靠 `didSet` 落库,
+            //       所以**必须在 `onPersist` 接上之后**跑, 否则摘掉的值只活在内存里、库里躺着旧的;
+            //    ② `refresh` 把 `options` 填上。它原来靠设置页的 `onAppear` 触发, 而审批桥
+            //       (`resolveBundle`) 在没有 `options` 时会退回"此刻正在跑的所有 App" ——
+            //       那会把一个目录外的 App 认出来、再写一句"去设置里勾上"（而设置里根本没有它）。
+            //       现在列表是固定白名单、刷新是毫秒级 ⇒ 启动就填好。
+            ComputerSettings.shared.pruneUnsupported()
+            ComputerSettings.shared.refresh()
             capture.restore(CaptureHotkey.load(persistence: store))   // P8-T27 (P9.1d: 状态随 CaptureService)
         }
         // P9.1b/c/d: 子 store 挂接 + objectWillChange 转发 (两阶段初始化完成后才可引用 self)
