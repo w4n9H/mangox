@@ -344,6 +344,29 @@ struct ChatView: View {
     /// 「滚到底」的**节拍** —— 第一拍立刻落，后面几拍是**复核**（实测依据见 `ChatFollowBeats`）。
     private static var followBeats: [Double] { ChatFollowBeats.plan }
 
+    /// 一拍该锚哪个点。抽成纯函数，好让"**回车那一拍不许锚指示器**"这条能被断言（`T-CSCROLL`）。
+    ///
+    /// ⚠️ 流式期锚**流式指示器**（`LazyVStack` 的**孩子** ⇒ `scrollTo` 会为了它把前面的行量出来），
+    ///    静止态锚**末尾哨兵**（孩子外面那枚 0 高兄弟 ⇒ 恒实例化，落点是真底）。
+    ///    **提交那一拍是例外：不许锚指示器**（2026-11-09 现场实证，`mangox-20261109-142845.log`）。
+    ///
+    /// 那次现场（1015 条消息的长会话，回车 → 白屏 → 滚轮才恢复）:
+    ///   `14:29:02.754 call o=send stream=1` ⇒ 第 1~4 拍全锚指示器，落点读回 `doc=38797`；
+    ///   而 8 秒后同一份文档被量成 `doc=182609`（**4.7 倍**）—— 那时 `msgs` 一直是 1015，
+    ///   即回车后**一个 chunk 都还没来**，指示器下面根本没有内容可锚。
+    ///   ⇒ `scrollTo` 只能吃整条懒栈的**估算**总高，视口落进**懒栈还没实例化**的那一段：
+    ///     屏幕上什么都没有，而几何判据**全都正常**（`gap=326` 不是负数、`void=0` 因为 `bottom`
+    ///     是 12.9 秒前的旧读数、`doc` 与 `gap` 还是同一次估算算出来的 ⇒ 自己证明自己）。
+    ///   首 token 前那 8 秒没有任何 `messagesRevision` 变化 ⇒ 没有 `follow` ⇒ 不会重新布局，
+    ///   所以白屏一直停着；滚一下滚轮强制真实布局（`doc` 被量成 182609）⇒ 下一拍落到真底。
+    ///
+    /// ⇒ 提交那一刻走**静止态那一套**（先量尾块、再锚哨兵）。⚠️ 11-06 那次只修了**候选**
+    ///   （`mat=1`，日志里确实生效了），`target` 这一行没动 —— 这条就是它的另一半。
+    static func followTarget(origin: String, isStreaming: Bool) -> String {
+        if isStreaming && origin != "send" { return streamingAnchor }
+        return tailAnchor
+    }
+
     /// **「滚到底」的唯一实现** —— 初屏定位 / 换会话 / 提交跟随 / 回到最新 全走这里。
     ///
     /// ⚠️ 别在入口处各写一遍 `scrollTo`: 分头写就会分头漏掉复核（这个 bug 已经这样活了两个版本）。
@@ -354,7 +377,7 @@ struct ChatView: View {
                               veto: @escaping () -> Bool = { true }) {
         followEpoch.value += 1
         let epoch = followEpoch.value
-        // 流式期尾行在长高，懒栈不肯量它 ⇒ 实体化那一支不适用，每一拍都锚指示器。
+        // 流式期尾行在长高，懒栈不肯量它 ⇒ 实体化那一支不适用，锚点见 `followTarget`。
         //
         // ⚠️ **提交那一拍是例外**（2026-11-06 现场实证，`mangox-20261106-084658.log`）：
         //    回车时 `beginTurn` 抢在视图这次滚动之前把 `isStreaming` 置了 true，
@@ -374,13 +397,9 @@ struct ChatView: View {
                             "near": nearBottom ? "1" : "0",
                             "vp": String(format: "%.0f", viewportHeight)])
         for (i, delay) in Self.followBeats.enumerated() {
-            // 第一拍**先试**把最后一块量出来，其余各拍锚末尾哨兵（真底）。
+            // 第一拍**先试**把最后一块量出来，其余各拍按 `followTarget` 选锚点。
             // ⚠️ 这里只是候选：真正记账在 `tap` 里、veto 之后（见 `ChatTailLedger`）。
-            var target: AnyHashable = Self.tailAnchor
-            if store.isStreaming {
-                // 流式期：**每一拍都锚流式指示器**（懒栈的孩子 ⇒ 落点是量出来的）。
-                target = Self.streamingAnchor
-            }
+            let target = AnyHashable(Self.followTarget(origin: origin, isStreaming: store.isStreaming))
             // 同一次调用里的每一拍是**同一件事**，所以只认 epoch 与本拍的 veto
             let tap = {
                 guard epoch == followEpoch.value, veto() else { return }

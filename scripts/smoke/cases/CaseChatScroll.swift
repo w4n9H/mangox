@@ -66,5 +66,19 @@ extension SmokeMain {
               "T-CSCROLL 普通跟随排着队时, 换会话必须把意图升上去")
         check(ChatView.mergeFollowOrigin(pending: "", incoming: "follow") == "follow",
               "T-CSCROLL 队列空时直接接受来者")
+
+        // ⑥ 回车那一拍**不许锚流式指示器**（2026-11-09，`mangox-20261109-142845.log`）。
+        //
+        // 现场: 1015 条消息的长会话里回车 → 白屏 → 滚轮才恢复。日志里第 1~4 拍全锚指示器,
+        // 落点读回 `doc=38797`；8 秒后同一份文档被量成 `doc=182609`（4.7 倍），而那 8 秒里
+        // `msgs` 一直是 1015 —— 回车后一个 chunk 都还没来, 指示器下面没有内容可锚 ⇒
+        // `scrollTo` 只能吃懒栈的**估算**总高, 视口落进还没实例化的一段（屏幕全空）。
+        // ⚠️ 这一条**只能**由这里守: 白屏不崩不报错, 几何判据也全是正常的（`gap`/`doc`
+        //    是同一次估算算出来的, 自己证明自己）—— 长会话里才发作, 短会话里永远看不见。
+        check(ChatView.followTarget(origin: "send", isStreaming: true) == ChatView.tailAnchor,
+              "T-CSCROLL 回车那一拍要锚末尾哨兵, 不许锚流式指示器 (那一刻它还没有内容可锚; "
+              + "锚它 = 按估算的文档高落进空白区 = 白屏, 且几何判据全绿)")
+        check(ChatView.followTarget(origin: "follow", isStreaming: true) == ChatView.streamingAnchor,
+              "T-CSCROLL 真正流式跟随时仍然锚流式指示器 (它会把前面的行量出来, 落点是真的)")
     }
 }

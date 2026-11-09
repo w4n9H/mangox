@@ -186,10 +186,18 @@ fi
 #     ⇒ 视口停在内容**下方** = 整片白，而且视口下方没有行被实例化，这个估算**永远不会自我纠正**
 #     （boss 报「回车后白屏，连对话完成后都不显示，切一次会话才好」）。
 #     ⚠️ 两条写法都编译得过、没有任何数值会变、也没有断言会红 ⇒ 只能扫源码事实。
+#
+#     ⚠️ 2026-11-09 补上另一半：**提交那一拍是例外**（`mangox-20261109-142845.log`）。
+#        回车时指示器下面**一个 chunk 都还没有**（`msgs` 卡在 1015 整整 8 秒）⇒ 锚它只能吃估算
+#        总高（当时 doc=38797 / 8 秒后被量成 182609）⇒ 视口落进懒栈还没实例化的一段 = 白屏，
+#        而几何判据全绿（`gap` / `doc` 是同一次估算算出来的，自己证明自己；`void` 读的 `bottom`
+#        是 12.9 秒前的旧读数）。⇒ 选择逻辑收进 `ChatView.followTarget`：流式期返回指示器、
+#        **提交拍返回哨兵**。这里的指纹跟着换成"循环真的用了它"；"选得对不对"由行为断言守
+#        （`T-CSCROLL 回车那一拍…` / `T-CSCROLL 真正流式跟随时…` 两条），两处不重复同一件事。
 FOLLOW_LOOP=$(grep -A20 'for (i, delay) in Self.followBeats.enumerated()' mangox/Views/Chat/ChatView.swift)
-if ! echo "$FOLLOW_LOOP" | grep -cE 'target = Self\.streamingAnchor' >/dev/null; then
-    echo "FAIL - 流式期的锚点不是 Self.streamingAnchor (锚哨兵 = 吃总高估算 = 白屏, 实测差 9018pt)" >&2
-    echo "       指示器是懒栈的孩子才量得出真实落点; 只改注释不算, 这门看的是真源码" >&2
+if ! echo "$FOLLOW_LOOP" | grep -cE 'Self\.followTarget\(origin: origin, isStreaming: store\.isStreaming\)' >/dev/null; then
+    echo "FAIL - 「滚到底」的节拍没有按 followTarget 选锚点 (写死锚哨兵 = 吃总高估算 = 白屏)" >&2
+    echo "       选择逻辑只许住 followTarget (那里有断言); 只改注释不算, 这门看的是真源码" >&2
     exit 1
 fi
 if ! has_code mangox/Views/Chat/ChatView.swift '\.id\(Self\.streamingAnchor\)'; then

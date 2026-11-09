@@ -39,6 +39,15 @@ UNIQUE_PHRASES = {
     # 工具名本身可能只作为无关文字出现（同上面那条教训），所以必须看**声明本体**。
     "bocha_web_search": ["Search the web with Bocha",
                          "Bocha covers Chinese-language"],
+    # P18 · computer use 三件套。**这支探针一直是瞎的** —— 它写于 2026-10-16，
+    # `mangox-computer.ts` 是 2026-11-05 才有的，所以它跑绿了也不代表"会动用户 App 的那一面"在。
+    # ⚠️ 短语必须**整句落在一个数组元素里**: 描述是 `[].join("\n")` 拼的, 跨行取句永远 0 命中。
+    "computer_read": ["Read the front window of a macOS app as a numbered outline",
+                      "Only apps the user allowed for this session are readable"],
+    "computer_act": ["One action on the window you just read",
+                     "setValue refuses empty text on purpose"],
+    "computer_open": ["Open a macOS app, or bring it to the front if it is already running",
+                      "Gated by the reading permission, not the acting one"],
     # pi 内置的"只读三件套"(grep/find/ls) **默认不开** ——
     # `dist/core/settings-manager.js:35` `DEFAULT_TOOL_NAMES = ["read","bash","edit","write"]`。
     # ⇒ 探针判据（2026-10-16）: 不传 `--tools` 应 **0**; 传 `--tools +grep,+find,+ls` 应 **≥1**

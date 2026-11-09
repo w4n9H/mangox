@@ -5,6 +5,20 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [0.2.10] - 2026-11-09
+
+本版主线 = **修掉「回车之后白屏一下、滚一下滚轮才恢复输出」**：渲染没丢，是提交那一拍把视线锚到了错的节点上。全量冒烟 **2273 项 ALL PASS** + `xcodebuild` Debug BUILD SUCCEEDED 零 warning。
+
+### 修复
+
+- **回车后白屏，滚动一下才回来**：提交那一拍原先把 `scrollTo` 锚在**流式指示器**上，而此刻第一个 token 还没到 —— 指示器下面没有任何实体行可锚，`scrollTo` 只能吃懒栈的**总高估算**（现场实测：估算 38,797pt，8 秒后真实 182,609pt，差 4.7 倍），视线落进还没实例化的那一段里。而首 token 到达之前 `messagesRevision` 不变 ⇒ 不会重新触发跟随 ⇒ 白屏就停在那儿，直到滚轮强制一次真实布局。现在改成**提交拍锚末尾哨兵**（`tailAnchor`：懒栈的兄弟，位置恒定，不依赖任何行被实例化）；真正在流式跟随时仍然锚指示器（`streamingAnchor`：懒栈的孩子，`scrollTo` 会为它把前面的行实例化）。两种锚点各有适用面，不是"换掉一个更差的"
+
+### 工程
+
+- **「选哪个锚点」抽成纯函数 `ChatView.followTarget(origin:isStreaming:)`**：原来那 5 行内联 if 没法单测，现在冒烟直接断言两条 —— 提交拍必须是末尾哨兵、流式跟随必须是指示器（后者防的是"为了治白屏把流式锚点一起拆了"这种过度修复）。`run.sh` ③f 的指纹也换了形态：从"扫 `target = Self.streamingAnchor`"改成"扫循环真的调了 `followTarget`" —— 选择对不对交给行为断言，扫源门只负责证明没被绕过，两处不重复同一件事
+- **引擎基线抬到 pi 1.5.0（1.3.0 → 1.5.0，跳了两个版本）**：契约体检 13/13（CLI 11 个参数 · 三个关键 RPC 的键集合 · 两种 `--tools` 组合 · 5 个扩展全加载），`scripts/diag/pi_baseline.json` 从 1.3.0（2026-10-17）更新到 1.5.0（2026-11-09），`get_session_stats` 新增的 `contextUsage` 一并记进基线。1.5.0 唯一那条 Breaking（工具参数校验换成 `pi-schema`）拿我们扩展里**真实注册的 5 个工具 schema** 验过：最小合法参数全过，数字字符串 `"3"` 从"被拒"变成"coerce 收下"
+- **工具面探针补上 computer use 三件套**：`tool_surface_probe.py` 写于 10-16，`mangox-computer.ts` 是 11-05（P18）才有的 —— 它一直跑绿，却看不见**唯一会动用户 App 的那一面**。补 `computer_read` / `computer_act` / `computer_open` 三条唯一短语（必须整句落在一个数组元素里：描述是 `[].join("\n")` 拼的，跨行取句永远 0 命中）。实测三件套声明全在（挂与不挂该扩展，transcript 16050 vs 9217 字符），阴性对照为 0。**旧基线里同样缺 `mangox-computer.ts`**，一并补上
+
 ## [0.2.9] - 2026-11-09
 
 本版主线 = **把「每个 App 的差异」各收成一处真源**：Safari 的渲染上限收进一张表，浏览器手册从「按浏览器各写一节」变成「一节挂多个 App」；顺带把定时任务那个开关从「持续」改名成「留痕」。全量冒烟 **2271 项 ALL PASS** + `xcodebuild` Debug BUILD SUCCEEDED 零 warning。
