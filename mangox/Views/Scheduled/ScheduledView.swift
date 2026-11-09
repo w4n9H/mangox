@@ -449,7 +449,7 @@ struct ScheduledView: View {
             if !task.enabled {
                 parts.append(L("已暂停"))
             } else if task.continuous {
-                parts.append(L("持续"))
+                parts.append(L("留痕"))
             }
             if task.runCount > 0 {
                 parts.append(String(format: L("已跑 %lld 次"), task.runCount))
@@ -833,14 +833,19 @@ struct ScheduledView: View {
         return store.projects.first { $0.id == pid }?.title ?? L("选择项目")
     }
 
-    /// 持续模式开关 (跨天任务: 每次触发注入上次运行的执行记录)
+    /// 留痕开关 —— UI 叫「留痕」, 字段仍叫 `continuous`, 机制叫交接文件 (handoff)。
+    /// 三个名字指向同一件事: 每次触发把上一轮的产出与工作日志带进来, 跑完再写回去。
+    ///
+    /// ⚠️ 2026-11-09 从「持续」改名（boss 原话: 这个词很容易误解, 有段时间没用就记不起来了）。
+    ///    根因是原词描述的是**时间**（一直不停）, 而它管的是**记忆**（记得上一轮）——
+    ///    名字指向错误的维度, 忘掉是必然的。别改回「持续 / 连续 / 循环」那一族。
     private var continuousToggle: some View {
         Button(action: { draftContinuous.toggle() }) {
             HStack(spacing: 4) {
-                Image(systemName: draftContinuous ? "arrow.triangle.2.circlepath" : "arrow.triangle.2.circlepath")
+                Image(systemName: "arrow.triangle.2.circlepath")
                     .font(.system(size: 10))
                     .foregroundStyle(draftContinuous ? CodexTheme.accent : CodexTheme.textMuted)
-                Text("持续")
+                Text("留痕")
                     .font(CodexTheme.fontSmall)
                     .foregroundStyle(draftContinuous ? CodexTheme.textPrimary : CodexTheme.textTertiary)
             }
@@ -853,7 +858,7 @@ struct ScheduledView: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .help("持续模式: 每次触发自动带上此前运行的执行记录 (跨天任务保连续性)")
+        .help("每轮把进展留在工作日志里，下一轮接着它干")
     }
 
     private var nameField: some View {

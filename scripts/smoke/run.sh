@@ -321,6 +321,20 @@ if [ -z "$COMPUTE_DEPTH" ] || [ "$COMPUTE_DEPTH" -lt 24 ]; then
     exit 1
 fi
 
+# ③v 「某个 App 读起来不一样」只许写在 `ComputerAppProfile` 的表里 (2026-11-09, 收口那一步)。
+#    加 Safari 那轮的全部差异只有**渲染上限**一件事, 但它被写成了一句按 bundle 字面量分叉的
+#    三元表达式, 藏在 AXSnapshot 里。再加一个浏览器就会变成 `bundle == A || bundle == B ? … : …`
+#    —— 这种写法**错一个字符就谁都不生效**: 不报错、不告警, 行为只是静默退回 120,
+#    而 120 行对网页来说等于"只能读到页头"(实测 GitHub 仓库页 1598 行, 正文在 1000 行开外)。
+#    ⚠️ 编译得过、数值守卫也看不见(120 本来就是个合法值) ⇒ 只能扫源码事实(同 ③k)。
+#    ⚠️ 表本身不算命中的: 它里面写的是 `"bundle": 3000` 这种键值, 没有等值比较。
+STRAY_BUNDLE_EQ="$(grep -rn '== "com\.apple\.Safari"' mangox/ mangox-compute/ || true)"
+if [ -n "$STRAY_BUNDLE_EQ" ]; then
+    echo "FAIL - 又出现了按 bundle 字面量分叉的写法（读法差异必须住 ComputerAppProfile 的表里）:" >&2
+    echo "$STRAY_BUNDLE_EQ" >&2
+    exit 1
+fi
+
 # ③l 动作面(批 2b)的三条**只在真机上才会出事**的事实 —— 它们全都编译得过、纯函数断言也全绿:
 #    ① 判据(`ComputerActGuard.evaluate`)**必须**排在执行(`AXAdapter.press`)之前。
 #       把它俩调个位置, 界面上没有任何异样, 直到"模型替人点了不保存"那天。

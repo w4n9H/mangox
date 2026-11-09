@@ -985,7 +985,7 @@ extension SmokeMain {
         check(AXSnapshot.renderLineLimit(for: "com.apple.Safari") == 3000,
               "T-COMPUTER Safari 渲染上限 3000 行 (实测 GitHub 仓库页 1598 行; 120 行只够看页头)")
         let narrow = SopInjection.builtins
-            .subtracting(["com.apple.Safari"])      // 唯一被放宽的那个（下一行单独判）
+            .subtracting(["com.apple.Safari"])      // 唯一被放宽的那个（上面单独判）
             .union(["com.apple.calculator"])        // 免手册的那个也不是网页
             .union(["com.example.unconfigured"])    // 压根没配过的
         check(narrow.allSatisfy { AXSnapshot.renderLineLimit(for: $0) == 120 },
@@ -1001,6 +1001,15 @@ extension SmokeMain {
         check(roomy.count > capped.count && capped.contains("未显示") && !roomy.contains("未显示"),
               "T-COMPUTER 上限真的生效 (120 行: \(capped.count) 字且带截断提示; "
               + "3000 行: \(roomy.count) 字全量)")
+        // 收口（2026-11-09）：差异只许住在 `ComputerAppProfile` 的表里，而**表点名的 App
+        // 必须真的在清单里** —— `supported` 是从「手册节 ∩ builtins ∪ manualFree」**算**出来的，
+        // 它不认这张表。所以"表里加一行、手册没加节"的后果是：读法放宽了，而用户在设置页
+        // 根本勾不到这个 App（等于这个 App 不存在）。加 Chrome 时最容易踩的就是这一脚。
+        let strayProfiles = ComputerAppProfile.profiledBundles
+            .filter { !ComputerSettings.supported.contains($0) }
+        check(strayProfiles.isEmpty,
+              "T-COMPUTER 读法表点名的 App 必须真在清单里 (否则那张表在描述一个勾不到的东西; "
+              + "实际越界: \(strayProfiles) —— 清单 = \(ComputerSettings.supported))")
 
         // 只有空白的文本(空格/换行)等于没有 —— 那些行在屏幕上什么也不显示
         let blankText = AXSnapshot.build(root: AXNode(role: "AXWindow", title: "w", children: [

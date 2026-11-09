@@ -556,8 +556,6 @@
 "拉取失败 (%@), 已回落预设清单" = "Fetch failed (%@); fell back to the built-in preset list";
 "拒绝" = "Deny";
 "拷贝到 ~/.mangox/extensions (默认停用)" = "Copied to ~/.mangox/extensions (disabled by default)";
-"持续" = "Continuous";
-"持续模式: 每次触发自动带上此前运行的执行记录 (跨天任务保连续性)" = "Continuous mode: each trigger carries the previous run's record (keeps multi-day tasks coherent)";
 "按" = "Press";
 "按 #" = "Press #";
 "按 (" = "Press (";
@@ -729,6 +727,7 @@
 "每天" = "Daily";
 "每天 %@" = "Daily at %@";
 "每小时" = "Hourly";
+"每轮把进展留在工作日志里，下一轮接着它干" = "Each run leaves its progress in the work log; the next run picks up from there";
 "每轮都带上" = "Every turn";
 "每轮都带上 %lld 条 · %lld 字 / %lld 字" = "%lld every turn · %lld / %lld chars";
 "永久删除" = "Erase";
@@ -771,6 +770,7 @@
 "电脑操作" = "Computer use";
 "电脑操作已关闭: 打开后常规与完整模式的会话都能读你勾过的应用界面 (下一回合生效)" = "Computer use is off: turning it on lets sessions in Standard or Full mode read the apps you ticked (takes effect next turn)";
 "电脑操作已开启 (全局): 常规与完整模式的会话都能读你勾过的应用界面 — 再点一次关闭" = "Computer use is on (global): sessions in Standard or Full mode can read the apps you ticked — click again to turn it off";
+"留痕" = "Handoff";
 "白名单 %lld 条" = "%lld on the allowlist";
 "白名单至少一个发件人地址" = "Add at least one sender address to the allowlist";
 "目录: %lld 家 / %lld 条" = "Catalog: %lld providers / %lld models";

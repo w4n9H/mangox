@@ -40,6 +40,7 @@ cp scripts/diag/scenario_cleanup.swift "$TMP/main.swift"
 echo "── 编测试清理器 (scenario-cleanup) ──"
 DEVELOPER_DIR="$DEV" xcrun swiftc -O -sdk "$SDK" -target "$(uname -m)-apple-macos14.0" \
     -swift-version 5 \
+    mangox/Models/ComputerAppProfile.swift \
     mangox/Models/AXSnapshot.swift \
     mangox/Models/ComputerAct.swift \
     mangox/Models/ComputerRedline.swift \

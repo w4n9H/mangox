@@ -116,6 +116,34 @@ extension SmokeMain {
         check(bad.injected.isEmpty && (bad.text ?? "").contains("没带上"),
               "T-SOP 丢了那一节之后仍要点名 (「手册里有节但认不出是谁的」对模型等于没有)")
 
+        // ⑦b 一节挂**多个** App（浏览器那节, 2026-11-09）:
+        //    ① 命中一个就整节注入; ② 正文只出一次; ③ 权限按 App 各写一次。
+        //    ③ 是这三条里最要命的一条: 合成节里"一个能点、一个只读"是常态（两个名单各自独立）,
+        //    节级徽章必然对着其中一个说谎 —— 模型要么去点点不动的东西, 要么放着能点的行不敢动。
+        let oneOfPair = SopInjection.block(bundles: ["com.apple.Safari"], actBundles: [],
+                                           manual: doc(section("浏览器",
+                                                               "com.apple.Safari · com.google.Chrome",
+                                                               "26.0.1 / 130",
+                                                               "### 打开网址\n1. 带 url 打开。\n2. read 一次：标题变 = 成。")),
+                                           now: now)
+        check(oneOfPair.injected == ["com.apple.Safari"]
+              && (oneOfPair.text ?? "").contains("浏览器 · com.apple.Safari · 只读"),
+              "T-SOP 多 bundle 的节命中一个就整节注入, 节头只写**命中那个** App 的权限"
+              + " (实际: \(oneOfPair.injected))")
+        let twice = SopInjection.block(bundles: ["com.apple.Notes", "com.apple.iCal"],
+                                       actBundles: ["com.apple.iCal"],
+                                       manual: doc(section("两个",
+                                                           "com.apple.Notes · com.apple.iCal", "1 / 2",
+                                                           "### 甲\n1. 一步。\n2. 另一步。")),
+                                       now: now)
+        check(twice.injected == ["com.apple.Notes", "com.apple.iCal"],
+              "T-SOP 两个 App 共用一节时两个都算注入 (少算一个 ⇒ 那个 App 会被点名「手册里没有这一节」, "
+              + "而它的手册就在眼前。实际: \(twice.injected))")
+        check((twice.text ?? "").components(separatedBy: "--- 两个").count == 2,
+              "T-SOP 两个 App 共用一节时正文只出一次 (按 App 各出一遍 = 同一套步骤讲两遍, 白烧预算)")
+        check((twice.text ?? "").contains("com.apple.Notes(只读) · com.apple.iCal(可操作)"),
+              "T-SOP 多 bundle 的节权限按 App 各写一次 (节级徽章会对其中一个说谎)")
+
         // ⑧ 超预算: 逐节跳过 + 点名, 且**后面的小节不许钻空子**（截尾, 不是贪心填空）
         // 边界: 一节 ≈380 字（正文 300 + 节头），200 装不下一节、600 只装得下一节。
         let tiny = SopInjection.block(bundles: ["com.apple.Notes", "com.apple.iCal"],
@@ -160,12 +188,22 @@ extension SmokeMain {
         // ⑫ **手册本体** —— 手册住进代码之后, 这几条是它唯一的守门人。
         //     改一行手册不需要动任何逻辑, 所以没有任何别的东西会红。
         let manual = SopInjection.parse(SopManual.text)
-        let bundles = Set(manual.sections.map(\.bundle))
+        // 一节可以挂多个 App（浏览器）, 所以判据是**展平后**的集合: 数节数会把"两节并一节"
+        // 误判成"少了一个 App 的手册"。
+        let bundles = Set(manual.sections.flatMap(\.bundles))
 
-        check(bundles == SopInjection.builtins && manual.sections.count == SopInjection.builtins.count,
+        check(bundles == SopInjection.builtins,
               "T-SOP 手册恰好覆盖白名单那 \(SopInjection.builtins.count) 个 App、不多不少"
               + " (手册多出来的节永远不会被注入 = 死内容; 少一节 = 那个 App 没有手册。"
               + " 实际: \(bundles.sorted()))")
+
+        // 同一个 App 出现在两节 = 后一节永远不会被注入（`block` 里的 `seen` 会挡掉）。
+        // ⚠️ 这一条在"一节挂多个 bundle"之后才有意义: 节数已经不能代表 App 数了。
+        let dup = Dictionary(grouping: manual.sections.flatMap(\.bundles), by: { $0 })
+            .filter { $0.value.count > 1 }.keys.sorted()
+        check(dup.isEmpty,
+              "T-SOP 同一个 App 不许写进两节 (第二节永远不会被注入 = 死内容; 两节还会各自漂。"
+              + "实际重复: \(dup))")
 
         check(!manual.preamble.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
               "T-SOP 手册要有通则 (编号会变 / act 回执只给 diff 这两条对每个 App 都成立, 只写一次)")
@@ -178,9 +216,12 @@ extension SmokeMain {
         //    更硬的一条: 「成」一个 App 只有一段, 可一个 App 有四五件事（备忘录那段的「成」
         //    其实只覆盖"删一条", 建一条 / 追加 / 打开都没有判据）。
         //    现在按**任务**切: 一条线 = 目标 + 编号步骤, 每步的判据跟在同一行后面。
-        let tooLong = manual.sections.filter { $0.body.count > 700 }.map { "\($0.title)=\($0.body.count)" }
+        // 上限 = 整份预算的 1/5: 它的用处是"单个 App 不许吃掉大半预算", 不是"每节都必须短"。
+        // ⚠️ 2026-11-09 从 700 提到 900: 浏览器那节要写「Safari 已验 / Chrome 要人先开
+        //    accessibility」—— 那是**决策信息**, 砍掉它模型就会在 Chrome 的空壳上瞎点。
+        let tooLong = manual.sections.filter { $0.body.count > 900 }.map { "\($0.title)=\($0.body.count)" }
         check(tooLong.isEmpty,
-              "T-SOP 单节 ≤700 字 (每轮都进提示词; 超了就是写了没人要的东西。实际超: \(tooLong))")
+              "T-SOP 单节 ≤900 字 (每轮都进提示词; 超了就是写了没人要的东西。实际超: \(tooLong))")
         // 判据 = 这一节里 **≥2 个 `### 任务`**、且合计 **≥2 条编号步骤**。
         // 散文体 / 只有分类小标题的写法两条都过不了 —— 那正是"模型还得自己拼步骤"的样子。
         let notTaskLine = manual.sections.filter { !Self.isTaskLine($0.body) }.map(\.title)
@@ -192,7 +233,8 @@ extension SmokeMain {
         check(!Self.isTaskLine("\n### 找\n- 左栏 outline：每个 cell 的 title 自带计数。\n"
                                + "- 分组行只有一个 statictext。"),
               "T-SOP 反例: 按知识分类切、没有编号步骤的写法必须判不合格 (否则上面那条是恒真的)")
-        let noVersion = manual.sections.filter { $0.version.isEmpty }.map(\.bundle)
+        let noVersion = manual.sections.filter { $0.version.isEmpty }
+            .map { $0.bundles.joined(separator: "+") }
         check(noVersion.isEmpty,
               "T-SOP 每节都要写 App 版本 (没有版本 ⇒ 无法判断这节是不是旧系统界面。实际缺: \(noVersion))")
 

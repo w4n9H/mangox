@@ -128,10 +128,12 @@ final class ComputerSettings: ObservableObject {
         let doc = SopInjection.parse(SopManual.text)
         var seen = Set<String>()
         var out: [String] = []
-        for sec in doc.sections
-        where sec.bundle != "" && SopInjection.builtins.contains(sec.bundle)
-              && seen.insert(sec.bundle).inserted {
-            out.append(sec.bundle)
+        // 一节可以挂多个 App（浏览器那节）, 所以这里展平: 顺序 = 节序 × 节内顺序。
+        for sec in doc.sections {
+            for b in sec.bundles
+            where SopInjection.builtins.contains(b) && seen.insert(b).inserted {
+                out.append(b)
+            }
         }
         // 免手册的那几个排在手册 App 后面: 它们没有"常用程度"可排, 也不抢前四位。
         for b in manualFree where seen.insert(b).inserted {
@@ -159,10 +161,13 @@ final class ComputerSettings: ObservableObject {
     ]
 
     /// 手册里的节名（`备忘录` 这种）—— 只在系统给不出名字时用作回落。
+    /// 多 bundle 的节（`浏览器`）给每个 App 都记同一个名字, 因为它本来就是"这一类 App 的名字"。
     nonisolated static func manualTitles(_ raw: String = SopManual.text) -> [String: String] {
         var out: [String: String] = [:]
-        for sec in SopInjection.parse(raw).sections where out[sec.bundle] == nil {
-            out[sec.bundle] = sec.title
+        for sec in SopInjection.parse(raw).sections {
+            for b in sec.bundles where out[b] == nil {
+                out[b] = sec.title
+            }
         }
         return out
     }

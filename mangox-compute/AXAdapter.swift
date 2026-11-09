@@ -15,10 +15,19 @@
 //       ⚠️ 这里曾经**只在 `liveTarget` 那条路上接**, `build` 硬写了 `false` ⇒ 遮蔽只剩"按角色"
 //       一档, 而头注释已经写着"按属性名字符串读"(注释比事实说得多)。`run.sh` ③q 现在盯着这句。
 //       ⚠️ 仍然没在真机上找到过一个 `AXProtectedContent=1` 的元素来对照 —— 真遇到时回来记一笔。
-//    ③ **网页正文读不到**: 浏览器把网页当独立进程(渲染进程), 主窗口树默认只有外壳。常规解法是
-//       给目标 App 置 `AXManualAccessibility`(Chromium) / `AXEnhancedUserInterface`(WebKit),
-//       但实测(2026-10-28)Chrome 对这两个**都拒绝**: `−25205` / `−25208`, 节点数与深度一字未变
-//       ⇒ 本版**不假装**能读网页正文。要读正文只能走截图 + 视觉那条路(批 2 的图像面)。
+//    ③ **网页正文要靠目标 App 自己开着 a11y**: 浏览器把网页当独立进程(渲染进程), 主窗口树默认只有
+//       外壳。我们这侧推不动它 —— 常规解法是给目标 App 置 `AXManualAccessibility`(Chromium) /
+//       `AXEnhancedUserInterface`(WebKit), 实测(2026-10-28)Chrome 对这两个**都拒绝**:
+//       `−25205` / `−25208`, 节点数与深度一字未变。
+//       ⇒ **能不能读网页, 是目标 App 的状态, 不是我们的能力上限**:
+//         · Safari(WebKit) 默认就开着 —— 2026-11-06 实测一个内容页 2504 节点 / 1598 行 / 781ms。
+//         · Chrome(Chromium) 要人手动开: `chrome://accessibility` 勾 `Web accessibility`, 或启动时
+//           带 `--force-renderer-accessibility`; 那个勾**不跨重启**。2026-11-09 实测勾上之后
+//           363 节点 / 251 行 / 8904 字符 / 156ms（此前恒 43 行, 只有外壳）。
+//       ⚠️ 判据: 读回来的行里有没有 `webarea` 的正文。有 = 开了; 只有外壳 = 没开。
+//          **别再把这条写成"本版做不到"**（手册与回执都改过一遍了）。
+//       另: 还有一条**未验**的路 —— 把 `AXEnhancedUserInterface` 设在 **system-wide 元素**上
+//       (10-28 那次设在 Chrome 自己身上才吃 −25205/−25208)。
 //
 
 import ApplicationServices

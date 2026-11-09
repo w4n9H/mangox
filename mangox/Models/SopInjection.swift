@@ -37,8 +37,9 @@ enum SopInjection {
     static let token = "[SOP]"
 
     /// 手册正文住在 `SopManual.text`（**格式契约与五条硬约束写在那个文件头**, 这里不重复）。
-    /// 本文件只认它的**形状**: 通则（第一个 `## ` 之前）+ 若干个 `## 名字 · bundle · 版本` 节。
-    /// `## ` 这一级就是 App 的边界（节头里的 `com.xxx` 决定注入给谁）; 认不出 bundle 的节整节丢弃。
+    /// 本文件只认它的**形状**: 通则（第一个 `## ` 之前）+ 若干个 `## 名字 · bundle [· bundle…] · 版本` 节。
+    /// `## ` 这一级就是**注入边界**（节头里出现的 `com.xxx` 就是这一节注入给谁）; 一个 bundle 都
+    /// 认不出的节整节丢弃。一个节可以挂多个 bundle（浏览器那节）, 命中任何一个就整节注入。
     /// ⚠️ 手册是**代码**（不是用户可改的文件）⇒ 唯一会漂的是"白名单加了 App 但手册没加节",
     ///    那一条由 `block` 点名（`missing.why = "手册里没有这一节"`）+ 冒烟 `T-SOP 手册本体` 守着。
 
@@ -53,8 +54,9 @@ enum SopInjection {
     ///   ② 内置 App 的界面是系统给的、跨用户基本一致; 第三方 App 每个版本都能重排,
     ///      手册折旧速度完全不是一个量级。
     ///   ③ 白名单让"注入量"有上限。
-    /// ⚠️ 扩这个集合 = 两处一起改: 这里 + `SopManual.text` 里加一节（不同步会被 `missing` 点名,
-    ///    冒烟的「手册本体」判据也会红）。
+    /// ⚠️ 扩这个集合 = 两处一起改: 这里 + `SopManual.text` 里让它出现在某一节的节头
+    ///    （不同 App 就加一节; **同一类操作**的 App 加进已有那一节的节头, 如浏览器）。
+    ///    不同步会被 `missing` 点名, 冒烟的「手册本体」判据也会红。
     static let builtins: Set<String> = [
         "com.apple.Notes",      // 备忘录 128 节点 / 193ms
         "com.apple.iCal",       // 日历   130 行（月视图）/ 450ms
@@ -69,12 +71,23 @@ enum SopInjection {
         "com.apple.Safari",     // Safari 网页 1598 行 / 2504 节点 / 781ms
     ]
 
-    /// 手册里的一节 = 一个 App。
+    /// 手册里的一节 = 一个 App, **或一类 App**。
+    ///
+    /// 为什么允许一节挂多个 bundle（2026-11-09 boss 定, 原话「不要区分不同浏览器, 这样太浪费
+    /// 为数不多的空间了, 以浏览器操作手册的方向去做」）: 预算只有 4500 字, 而**同一件事**在
+    /// Safari 与 Chrome 上是同一条路（网页里点东西 / 换页 / 切标签）—— 写成两节等于把同一套
+    /// 步骤讲两遍, 还多出一个"两节迟早会漂"的真源。
+    ///
+    /// ⚠️ 合成节的**唯一**理由是「操作完全一致」。差一条就得分开写: 合成之后模型会把 A 的锚点
+    ///    套到 B 上, 而它读不到"这一条只对 Safari 成立"这种括号里的限定 ⇒ 点错且不可逆。
+    ///    所以合成节里的锚点只能写**各家都成立**的判据（`webarea` / `radiobutton` / 行数变化）,
+    ///    各家不同的按钮名一律写成"按 read 回来的名字找"。
     struct Section: Equatable {
-        let bundle: String
+        /// 顺序 = 节头里的书写顺序（多 bundle 时版本也按这个顺序写）。
+        let bundles: [String]
         /// 显示名（`## 备忘录 · com.apple.Notes · 4.11` 里的第一段）。
         let title: String
-        /// 写手册时那个 App 的版本。空串 = 没写。
+        /// 写手册时那个 App 的版本。空串 = 没写。多 bundle 时按 ` / ` 隔开、顺序同上。
         let version: String
         let body: String
     }
@@ -160,16 +173,23 @@ enum SopInjection {
         // 顺序 = **手册里的顺序**, 不是 bundle 排序: 写的人把常用的放前面, 这个顺序
         // 本身就是优先级（超预算从后往前掉）。换成 `sorted()` 的话掉哪一份是随机的。
         // 同时它也**稳定** —— 手册不动, 段内容就逐字节不变（前缀缓存才命得中）。
-        for sec in doc.sections where wanted.contains(sec.bundle) {
-            guard seen.insert(sec.bundle).inserted else { continue }   // 同一 App 写了两节 = 取第一节
-            let piece = render(sec, act: actBundles.contains(sec.bundle))
+        for sec in doc.sections {
+            // 这一节在名单里命中了哪些 App（还没进过段的）。多 bundle 的节只要**有一个**命中
+            // 就整节注入 —— 正文是各类 App 通用的一套步骤, 拆开就没有意义了。
+            // ⚠️ `!seen.contains` 同时也是"同一个 App 写了两节"的兜底: 取第一节, 后面那节自动出局。
+            let hit = sec.bundles.filter { wanted.contains($0) && !seen.contains($0) }
+            guard !hit.isEmpty else { continue }
+            let piece = render(sec, actBundles: actBundles, hit: hit)
             if overflowed || used + piece.count > budget {
                 overflowed = true
-                out.missing.append(Result.Missing(bundle: sec.bundle, why: "超预算"))
+                out.missing.append(contentsOf: hit.map { Result.Missing(bundle: $0, why: "超预算") })
                 continue
             }
             parts.append(piece)
-            out.injected.append(sec.bundle)
+            for b in hit {
+                seen.insert(b)
+                out.injected.append(b)
+            }
             used += piece.count
         }
         // 白名单里有、手册里没这一节 = **两边不同步**（加了 App 忘了写手册）。
@@ -177,7 +197,7 @@ enum SopInjection {
         //
         // ⚠️ 它必须在下面那道 `parts.isEmpty` 之前算 —— 曾经写在后面, 于是"名单里那个 App
         //    在手册里根本没有一节"这个最需要点名的情形恰好被 `return out` 吞掉, 一条都不会报。
-        let inFile = Set(doc.sections.map(\.bundle))
+        let inFile = Set(doc.sections.flatMap(\.bundles))
         for bundle in wanted.sorted() where !inFile.contains(bundle) {
             out.missing.append(Result.Missing(bundle: bundle, why: "手册里没有这一节"))
         }
@@ -216,8 +236,21 @@ enum SopInjection {
     /// 一节在提示词里的样子。节头带**当前**权限与版本 —— 这两件事模型必须能在用之前看到:
     /// 前者决定它能不能点, 后者决定它该不该照着做。
     /// （日期只按**整份**算一次: 见 `SopManual.verifiedOn` 的注释, 逐节记日期会诱导模型去信"某节更新"。）
-    static func render(_ sec: Section, act: Bool) -> String {
-        var meta = [sec.title, sec.bundle, act ? "可操作" : "只读"]
+    ///
+    /// ⚠️ 权限**按 App 各写一次**, 不写"这一节可操作": 合成节里 Safari 可点而 Chrome 只读是
+    ///    完全可能的（两个名单各自独立）, 一个节级徽章会对着其中一个说谎 —— 于是模型要么去点
+    ///    点不动的东西, 要么放着一堆能点的行不敢动。
+    ///     单 bundle: `备忘录 · com.apple.Notes · 可操作 · v4.11`（与旧格式逐字节相同）
+    ///     多 bundle: `浏览器 · com.apple.Safari(可操作) · com.google.Chrome(只读) · v26.0.1 / 130`
+    static func render(_ sec: Section, actBundles: [String], hit: [String]) -> String {
+        let act = Set(actBundles)
+        let who: [String]
+        if hit.count == 1 {
+            who = [hit[0], act.contains(hit[0]) ? "可操作" : "只读"]
+        } else {
+            who = hit.map { act.contains($0) ? "\($0)(可操作)" : "\($0)(只读)" }
+        }
+        var meta = [sec.title] + who
         if !sec.version.isEmpty { meta.append("v\(sec.version)") }
         return "\n\n--- " + meta.joined(separator: " · ") + " ---\n" + sec.body
     }
@@ -229,9 +262,9 @@ enum SopInjection {
         var sections: [Section] = []
     }
 
-    /// 一段手册正文 = **通则**（第一个 `## ` 之前）+ 若干个 `## 名字 · bundle · 版本` 小节。
+    /// 一段手册正文 = **通则**（第一个 `## ` 之前）+ 若干个 `## 名字 · bundle [· bundle…] · 版本` 小节。
     ///
-    /// 只认 `## ` 这一级: 节内用 `##` 以下的小标题（`### 找` 之类）随便写, 不会被切开。
+    /// 只认 `## ` 这一级: 节内用 `### 任务` 这一级随便写, 不会被切开。
     /// ⚠️ 这里**不认识** frontmatter（`---` 那块）: 手册是代码常量之后, 验证日期是 `SopManual.verifiedOn`
     ///    一个 Swift 常量, 不再是文档里的元数据 —— 同一件事不留两个真源。
     static func parse(_ raw: String) -> Doc {
@@ -250,14 +283,21 @@ enum SopInjection {
             guard let c = current else { return }
             let head = c.head
             // bundle 从标题里认: 这是"这一节属于谁"的唯一判据。
-            // 认不出来就**整节丢掉并真的丢掉**（不猜）—— 猜错 = 把 A 的手册教给 B。
-            guard let bundle = firstBundle(in: head) else { return }
-            let fields = head.split(separator: "·").map { $0.trimmingCharacters(in: .whitespaces) }
-            let title = fields.first ?? bundle
-            let version = fields.count >= 3 ? fields[2].replacingOccurrences(of: "v", with: "") : ""
+            // 一个都认不出就**整节丢掉并真的丢掉**（不猜）—— 猜错 = 把 A 的手册教给 B。
+            let bundles = head.split(whereSeparator: { " ··—-\t".contains($0) })
+                .map(String.init).filter(isBundleID)
+            guard !bundles.isEmpty else { return }
+            // 名字与版本 = 标题里**不是 bundle** 的那几段: 第一段是名字, 最后一段是版本。
+            // 中间夹着几个 bundle 就跳过几个, 所以 `名字 · a · b · v` 与 `名字 · a · v` 同一套规则。
+            let rest = head.split(separator: "·").map { $0.trimmingCharacters(in: .whitespaces) }
+                .filter { !isBundleID($0) }
+            let title = rest.first ?? bundles[0]
+            let version = rest.count >= 2
+                ? rest[rest.count - 1].replacingOccurrences(of: "v", with: "")
+                : ""
             let body = c.body.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
             guard !body.isEmpty else { return }
-            doc.sections.append(Section(bundle: bundle, title: title, version: version, body: body))
+            doc.sections.append(Section(bundles: bundles, title: title, version: version, body: body))
         }
         for line in lines[firstSection...] {
             if line.hasPrefix("## ") {
@@ -271,10 +311,12 @@ enum SopInjection {
         return doc
     }
 
-    /// 标题里第一个像 bundle id 的片段（`com.apple.Notes`）。
-    static func firstBundle(in head: String) -> String? {
-        let parts = head.split(whereSeparator: { " ··—-\t".contains($0) })
-        return parts.first { $0.hasPrefix("com.") && $0.contains(".") }.map(String.init)
+    /// 标题里一个片段是不是 bundle id（`com.apple.Notes`）。
+    ///
+    /// ⚠️ 判据是 **`com.` 前缀 + 后面还有至少一个点**, 不是"含点": 版本号 `26.0.1` 也含点,
+    ///    按"含点"认的话它会被当成一个 App, 于是每节的 bundle 列表里多出一个 `26.0.1`。
+    static func isBundleID(_ s: String) -> Bool {
+        s.hasPrefix("com.") && s.dropFirst(4).contains(".")
     }
 
     static let dayParser: DateFormatter = {

@@ -29,6 +29,7 @@ cp scripts/diag/ax_coverage_probe.swift "$TMP/main.swift"
 
 DEVELOPER_DIR="$DEV" xcrun swiftc -O \
     -sdk "$SDK" -target "$ARCH-apple-macos14.0" -swift-version 5 \
+    mangox/Models/ComputerAppProfile.swift \
     mangox/Models/AXSnapshot.swift \
     mangox/Models/ComputerAct.swift \
     mangox/Models/ComputerRedline.swift \
