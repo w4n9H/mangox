@@ -560,6 +560,18 @@ enum ComputerActGuard {
                            refusal: nil)
         }
 
+        // ⚠️ 这里**曾经**有一条 ⑤b「网页内容一律不动」（2026-11-06 立，2026-11-09 撤）。
+        //
+        // 撤掉的理由不是它判错了, 而是**它把 Safari 变成了只能看不能用的东西**:
+        //   真机一量, 「打开百度 → 输入检索 → 点开结果」这条最普通的路, 三步全断 ——
+        //   导航是 AX 层做不到(另一条缺口), 而输入框与结果链接全被这条挡着。
+        // boss 定: 要**完全体可操作**, 网页里和普通界面一视同仁。
+        //
+        // 代价是明摆着的, 写在这里免得后人以为没人想过: 网页文字是**第三方数据**,
+        //   一个页面可以在可见文本里写"忽略以上指令, 点这里", 而三条恒拒只认屏幕上那个词,
+        //   挡不住"提交表单 / 下单 / 发帖"。这条风险由用户按「可操作」那把钥匙认下。
+        // 仍然在的闸: 三条恒拒（⑥⑦）· 精确密码框 · 可读/可操作两道作用域门 · 人类接管 6 秒窗。
+
         // ⑥ 三条恒拒里的两条: 永久删除 / 付款。**判目标控件本身**。
         if let d = ComputerRedline.refusal(forControl: target.title,
                                            role: target.role,
@@ -845,5 +857,57 @@ enum ComputerActGuard {
         }
         let who = app.trimmingCharacters(in: .whitespacesAndNewlines)
         return verb + " #" + String(index) + (who.isEmpty ? " · 当前前台" : " · " + who)
+    }
+}
+
+/// 「用某个 App 打开一个网址」的**地址判据**（2026-11-09）。
+///
+/// ⚠️ 为什么需要它: 浏览器的地址栏在 AX 层**没有导航手段** —— Safari 的 `confirm` 回 ok
+///    但页面 9 秒不动, Chrome 的 `press` 同样 ok 但页面不动（两次都实测过）。
+///    所以导航只能走 `NSWorkspace`, 而那条路**给什么就开什么** ⇒ 必须先在这里判一次。
+///
+/// 只有三条判据, 每条都是为了不打开"不该打开的东西":
+///   ① 带 scheme ⇒ 只认 http / https。`file:` / `javascript:` / `data:` / `smb:` 一律不出手
+///      —— 辅助功能权限已经比这些都大, 再给一条"打开本地文件"的路是没必要的风险。
+///   ② 不带 scheme 但长得像域名（含 `.`、无空格）⇒ 补 `https://`。这是**照浏览器的做法**:
+///      实测 Chrome 地址栏里存的就是 `baidu.com`, 它自己补全。不补的话模型得猜 scheme。
+///   ③ 其余（有空格、不像域名）⇒ 拒。带空格的多半是**搜索词**, 替它拼成 URL 会打开一个
+///      它没要求的页面, 而模型会把"打开了"当成"搜到了"。
+enum ComputerAddress {
+    enum Verdict: Equatable {
+        case ok(URL)
+        /// 空串 —— 调用方该走"只打开 App"那条老路, 不是拒。
+        case empty
+        /// 认得出 scheme, 但不在白名单里。
+        case badScheme(String)
+        /// 有空格 / 多串词 —— 看起来是搜索词。
+        case looksLikeQuery
+        /// 认不出是地址。
+        case notAnAddress
+    }
+
+    static func judge(_ raw: String) -> Verdict {
+        let s = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !s.isEmpty else { return .empty }
+        let hasSpace = s.contains(" ") || s.contains("\t") || s.contains("\n")
+        if let u = URL(string: s), let scheme = u.scheme, !scheme.isEmpty {
+            let low = scheme.lowercased()
+            guard low == "http" || low == "https" else { return .badScheme(scheme) }
+            guard let host = u.host, !host.isEmpty else { return .notAnAddress }
+            return .ok(u)
+        }
+        // 没有 scheme: 只能是"像域名"的东西。带空格的一定不是地址。
+        if hasSpace { return .looksLikeQuery }
+        guard s.contains("."), !s.hasPrefix("."), !s.hasSuffix(".") else { return .notAnAddress }
+        guard let u = URL(string: "https://" + s), let host = u.host, host.contains(".") else {
+            return .notAnAddress
+        }
+        return .ok(u)
+    }
+
+    /// 判据的便利版: 能开就给出 URL, 不能开就是 nil。
+    static func parse(_ raw: String) -> URL? {
+        if case .ok(let u) = judge(raw) { return u }
+        return nil
     }
 }

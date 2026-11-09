@@ -40,6 +40,7 @@ APPS = {
     "备忘录": "com.apple.Notes",
     "提醒事项": "com.apple.reminders",
     "访达": "com.apple.finder",
+    "Safari": "com.apple.Safari",
 }
 
 #: 小月历格子标题里的中文月名 → 数字。`group "月历区域"` 用的是阿拉伯数字（`2026年11月`），
@@ -808,6 +809,82 @@ def scn_finder_new_folder(ctx):
     raise Fail("建完之后列表里看不到「未命名文件夹」—— 这一下没产生后果")
 
 
+def _safari_webarea(ctx, tries=4, pause=1.5):
+    """等到网页树出来 —— Safari 是**页面加载完**才建 `AXWebArea` 的。
+
+    ⚠️ 实测两次（2026-11-06）：刚 `open -a Safari <url>` 完立刻读，窗口标题还是「未命名」、
+       工具栏上还是「停止载入此页面」，整棵树里**一个 webarea 都没有**。首版直接 `check`
+       ⇒ 连红两次，看上去像红线没生效，实际只是读早了。
+    ⚠️ 等不到就 **Skip**，不是 Fail：浏览器里没开页面是「前置条件不成立」，不是产品缺陷。
+       判成红，人会学会无视红（同 `Skip` 的注释）。
+    """
+    loading = False
+    for i in range(tries):
+        ctx.read("Safari")
+        for r in ctx.rows:
+            if r["role"] == "webarea":
+                return r
+        loading = any(r["title"] == "停止载入此页面" for r in ctx.rows)
+        if i + 1 < tries:
+            time.sleep(pause)
+    raise Skip("Safari 里没有可读的网页内容（%s）—— 先在浏览器里打开一个有链接的页面再跑这条"
+               % ("页面还在加载" if loading else "快照里没有 webarea"))
+
+
+def _window_title(ctx):
+    """快照第一行里的窗口标题 —— 判"这一下到底有没有后果"最省事的一把尺。"""
+    line = ctx.text.split("\n")[0]
+    return line.split("窗口:")[-1] if "窗口:" in line else line
+
+
+def scn_safari_web_operate(ctx):
+    """网页里**真能点** —— 2026-11-09 撤掉 ⑤b 之后，这条从"必须被拒"翻成"必须真有后果"。
+
+    历史: 11-06 立的是「网页内容一律不动」（`scn_safari_web_untouchable`），因为它能证明
+    `AXAdapter.insideWebArea` 走真父链算对了。11-09 boss 定要**完全体可操作**，⑤b 与那个
+    函数一起删了，于是这条场景的判据反过来：
+
+      ① 网页里的 link 按下去，**窗口标题必须变**（真跳转），不是"回执说 ok"；
+      ② 反例：`open(url:)` 对 `file://` 仍然拒（撤⑤b 不等于把所有闸拆掉）。
+
+    ⚠️ `open(url: "baidu.com")` 的真导航**不放进来**：它每跑一次就多一个关不掉的标签页
+       （关标签不可逆，我不替用户关）。导航那条由冒烟 `ComputerAddress` 的判据 + 手测覆盖。
+    ⚠️ 页面用**国内站点**（`open -a Safari https://www.baidu.com`）：之前拿 GitHub 试，
+       一次"服务器未响应"、一次载入慢到没有 webarea —— 那种红全是网络，不是产品。
+    """
+    _safari_webarea(ctx)
+
+    # ⚠️ 样本要挑**像导航链接**的：页面上第一个 link 常常是 skip-link
+    #    （百度那句「欢迎进入…盲人用户进入读屏幕模式…」），按下去本来就没有后果 ——
+    #    拿它当样本，判据测的就成了"这个元素有没有副作用"，而不是"产品放没放行"。
+    #    所以：跳过无障碍那一族、跳过标题过长的，最多试 3 个。
+    skip_words = ("盲人", "无障碍", "跳到", "skip", "Skip")
+    tried = []
+    for _ in range(3):
+        cands = [r for r in ctx.rows
+                 if r["role"] == "link" and 0 < len(r["title"]) <= 24
+                 and r["title"] not in tried
+                 and not any(w in r["title"] for w in skip_words)]
+        if not cands:
+            break
+        link = cands[0]
+        tried.append(link["title"])
+        before = _window_title(ctx)
+        # 判效果不判回执 —— helper 这一层只说"动作送进去了"，说不了"页面跳没跳"。
+        ctx.act("Safari", "press", link["number"])
+        for _ in range(6):
+            time.sleep(0.8)
+            ctx.read("Safari")
+            if _window_title(ctx) != before:
+                after = _window_title(ctx)
+                r = ctx.s.req({"op": "open", "app": "Safari", "url": "file:///etc/passwd"})
+                check(not r.get("ok") and "scheme" in (r.get("error") or ""),
+                      "file:// 没被拒 —— 撤⑤b 把导航那道闸也拆了: %s" % (r.get("error") or "ok"))
+                return "网页 link %r 真跳转（%r → %r）；file:// 仍被拒" % (
+                    link["title"][:18], before[:16], after[:16])
+    check(False, "按了 %r 这些网页 link，窗口标题一个都没变 —— ⑤b 撤了却没真放行" % (tried,))
+
+
 SCENARIOS = [
     # (标题, 函数, 清理菜单项)
     ("日历 · 今天有什么日程", scn_calendar_today, None),
@@ -826,6 +903,7 @@ SCENARIOS = [
     ("访达 · 找某个文件", scn_finder_find_file, None),
     ("访达 · 打开一个文件夹再返回", scn_finder_open_folder, None),
     ("访达 · 新建文件夹", scn_finder_new_folder, None),
+    ("Safari · 网页里真能点（导航除外）", scn_safari_web_operate, None),
 ]
 
 

@@ -287,14 +287,19 @@ final class ComputerServer {
             //    但模型该做的事不同: 前者报告"这里什么都没有", 后者换 App 或要求截图。
             //    不区分 ⇒ 模型会把微信那 3 个按钮当成"这个窗口的全部内容"(2026-10-28 实测: 微信
             //    主窗口 1052×754 只暴露 6 个节点, 消息列表/聊天正文/输入框一个都没有)。
+            // 渲染上限**按 App** 给：Safari 的树里装着整个网页，120 行只够看到页头导航
+            // （实测 GitHub 仓库页 1598 行，正文在 1000 行开外）⇒ 见 `AXSnapshot.renderLineLimit`。
+            // 两处出口必须用**同一个**值，否则「有没有可读控件」这一支会给出另一份行数。
+            let lineLimit = AXSnapshot.renderLineLimit(for: t.bundle)
             if AXSnapshot.lacksReadableControls(root: tree) {
                 return finishRead(text: withSeq(partialNote + rereadNote
                                                 + lackOfControlsNote(app: t.name, nodes: snap.rows.count)
-                                                + "\n\n" + snap.rendered(), seq),
+                                                + "\n\n" + snap.rendered(limit: lineLimit), seq),
                                   seq: seq, bundle: t.bundle, pid: t.pid,
                                   root: tree, includeImage: includeImage)
             }
-            return finishRead(text: withSeq(partialNote + rereadNote + snap.rendered(), seq), seq: seq,
+            return finishRead(text: withSeq(partialNote + rereadNote
+                                            + snap.rendered(limit: lineLimit), seq), seq: seq,
                               bundle: t.bundle, pid: t.pid, root: tree,
                               includeImage: includeImage)
 
@@ -302,8 +307,8 @@ final class ComputerServer {
             return handleAct(app: app, opRaw: opRaw, index: index, seq: seq,
                              text: text, directionRaw: direction, point: point)
 
-        case .open(let app):
-            return handleOpen(app: app)
+        case .open(let app, let url):
+            return handleOpen(app: app, url: url)
         }
     }
 
@@ -755,11 +760,27 @@ final class ComputerServer {
     ///
     /// ⚠️ **为什么"打开"归读面管**: 它不动 App 里的任何东西, 与"在 Dock 上点一下图标"同一件事;
     ///    进去之后能做什么, 仍然由操作面那道门管(`actBundles`)。两件事两道门。
-    private func handleOpen(app: String) -> ComputerResponse {
+    private func handleOpen(app: String, url urlRaw: String) -> ComputerResponse {
         let q = app.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !q.isEmpty else {
             // "打开当前前台" 是同义反复。不猜一个填进来 —— 猜错就是"悄悄打开了别人"。
             return .failure("computer_open 要说清打开哪个 App ⇒ 我什么都没打开。")
+        }
+        // 地址判据先跑: 地址不合法就没必要去解析 App —— 回执要说的是"这个地址不行"。
+        let verdict = ComputerAddress.judge(urlRaw)
+        switch verdict {
+        case .badScheme(let s):
+            return .failure("「\(urlRaw)」用的是 \(s): 这个 scheme 我不碰 ⇒ 什么都没打开。"
+                            + "只认 http / https —— 文件 / 脚本 / data: 那几类等于多开一条打开本机东西的路。")
+        case .looksLikeQuery:
+            return .failure("「\(urlRaw)」里有空格, 看着是搜索词不是网址 ⇒ 什么都没打开。"
+                            + "要搜东西就分两步: 先 computer_open 一个搜索引擎(例如 url: \"baidu.com\"),"
+                            + " 再在网页里的搜索框 setValue, 然后 press 搜索按钮。")
+        case .notAnAddress:
+            return .failure("「\(urlRaw)」认不出是网址 ⇒ 什么都没打开。"
+                            + "给 http:// 或 https:// 开头的, 或者形如 baidu.com 的域名。")
+        case .ok, .empty:
+            break
         }
         let installed = installedInScope()
         // 三条分支的**判据**在 `ComputerTarget.openPlan`(纯函数, 冒烟能断言); 这里只执行。
@@ -773,6 +794,10 @@ final class ComputerServer {
             return .failure("「\(q)」不在开放名单里(也可能本机没装) ⇒ 我没打开它。\(tail)")
 
         case .activate(let t):
+            // 带地址 ⇒ 让**已经在跑的那个实例**开一个新标签页。
+            if case .ok(let target) = verdict {
+                return openURL(target, in: t)
+            }
             // 已经在跑 ⇒ **只切前台**, 不再 launch 一次: 有些 App 被再 launch 会开新窗口
             // (用户眼里就是"它怎么又开了一个")。
             _ = NSRunningApplication(processIdentifier: t.pid)?.activate(options: [.activateAllWindows])
@@ -780,6 +805,10 @@ final class ComputerServer {
                             + "接下来用 computer_read 读它。")
 
         case .launch(let t):
+            // 带地址 ⇒ 由系统**连带启动它并打开这个地址**, 不必先 launch 再打开(那样会开两个窗口)。
+            if case .ok(let target) = verdict {
+                return openURL(target, in: t)
+            }
             guard let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: t.bundle) else {
                 return .failure("找不到「\(t.name)」的 App 包(\(t.bundle)) ⇒ 它可能已经被卸掉了。")
             }
@@ -800,6 +829,45 @@ final class ComputerServer {
             return .success(text: "已经请系统启动「\(t.name)」, 但 4 秒内还没看到它起来。"
                             + "过一会儿再 computer_read; 要是仍然不行, 让用户手动打开一次。")
         }
+    }
+
+    /// 让 `t` 打开这个地址。**整条路不走 AX** —— 两个浏览器的地址栏都没有导航手段。
+    ///
+    /// ⚠️ 为什么是 `NSWorkspace.open(_:withApplicationAt:)` 而不是 AppleScript:
+    ///    AppleScript 要「自动化」那份 TCC, 而本 app 是 ad-hoc 签名 ⇒ 每次重新构建
+    ///    designated requirement 都变、授权跟着失效。代价是**只能新开标签页**,
+    ///    不能在当前那一页跳转 —— 人也是这么用的, 回执里写清就行。
+    private func openURL(_ url: URL, in t: ComputerTarget.Candidate) -> ComputerResponse {
+        guard let appURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: t.bundle) else {
+            return .failure("找不到「\(t.name)」的 App 包(\(t.bundle)) ⇒ 什么都没打开。")
+        }
+        // ⚠️ 结果要跨线程带回来, 所以用一个小盒子: 直接捕获 `var` 在 Swift 6 里会报
+        //    "mutation of captured var in concurrently-executing code" —— 那是**编译告警**,
+        //    而 `run.sh` 把告警当硬门。
+        final class Box: @unchecked Sendable {
+            var opened = false
+            var why: String?
+        }
+        let box = Box()
+        let config = NSWorkspace.OpenConfiguration()
+        config.activates = true
+        let sem = DispatchSemaphore(value: 0)
+        NSWorkspace.shared.open([url], withApplicationAt: appURL, configuration: config) { app, error in
+            box.opened = (app != nil)
+            box.why = error?.localizedDescription
+            sem.signal()
+        }
+        // 5 秒只是"等系统回话"的上限, **不是**加载上限 —— 页面什么时候画出来与我们无关。
+        if sem.wait(timeout: .now() + 5) == .timedOut {
+            return .failure("系统 5 秒内没回应「用 \(t.name) 打开 \(url.absoluteString)」 ⇒ 不确定开没开。"
+                            + "先用 computer_read 看一眼; 要是没有新标签页, 让用户自己打开。")
+        }
+        guard box.opened else {
+            let why = box.why.map { "(\($0))" } ?? ""
+            return .failure("系统拒绝用「\(t.name)」打开 \(url.absoluteString)\(why) ⇒ 什么都没打开。")
+        }
+        return .success(text: "已经用「\(t.name)」打开 \(url.absoluteString)（新标签页）。"
+                        + "页面要几秒才画完 —— 等一会儿再 computer_read, 现在读多半只有个空壳。")
     }
 
     // MARK: - 指认 → 定位

@@ -826,12 +826,14 @@ extension SmokeMain {
               + "(「界面简单」不是绕开恒拒的理由) —— 实测 \(ComputerSettings.manualFree)")
 
         // ② 目录外的 App: **既"装着"也"跑着", 仍然不许出现** —— 这次改动的全部产品要求
+        //    ⚠️ 样本用 Chrome 不用 Safari: Safari 2026-11-06 已经进白名单了, 拿它当"目录外"
+        //       这条会**反向变红**（而那种红会被误读成"白名单漏了它"）。
         let fixed = ComputerSettings.options(
             bundles: supported,
             names: ["com.apple.Notes": "备忘录"],
             running: [ComputerTarget.Candidate(bundle: "com.apple.Notes", name: "Notes", pid: 9),
-                      ComputerTarget.Candidate(bundle: "com.apple.Safari", name: "Safari", pid: 8)])
-        check(!fixed.contains { $0.bundle == "com.apple.Safari" },
+                      ComputerTarget.Candidate(bundle: "com.google.Chrome", name: "Chrome", pid: 8)])
+        check(!fixed.contains { $0.bundle == "com.google.Chrome" },
               "T-COMPUTER 正在跑但不在白名单里的 App 不出现 (否则又回到'几百行, 大半没量过')")
         check(fixed.contains { $0.bundle == "com.apple.Notes" && $0.running && $0.name == "备忘录" },
               "T-COMPUTER 白名单里的照样出现、在跑的打标记、名字用传进来的那个")
@@ -859,16 +861,17 @@ extension SmokeMain {
         // ⑤ 启动收敛（`pruneUnsupported`）: 一次调用把四件事一起判 ——
         //    摘的正是目录外那个 / 白名单内一根不动 / 三档一起收 / 第二遍什么都不摘(幂等)。
         //    拆成四条只会让"同一份前置"重复四遍, 红的还是同一次改坏。
+        //    ⚠️ 越界样本同样用 Chrome（Safari 已进白名单, 拿它当越界值这条会恒红）。
         let pruner = ComputerSettings()
         pruner.restore(enabledRaw: "1",
-                       bundlesRaw: "com.apple.Notes,com.apple.Safari",
-                       actRaw: "com.apple.Safari",
-                       imageRaw: "com.apple.Safari")
-        check(pruner.selected.contains("com.apple.Safari"),
+                       bundlesRaw: "com.apple.Notes,com.google.Chrome",
+                       actRaw: "com.google.Chrome",
+                       imageRaw: "com.google.Chrome")
+        check(pruner.selected.contains("com.google.Chrome"),
               "T-COMPUTER 前置: `restore` 如实还原越界值 (收敛是产品决定, 不属于'还原')")
         let dropped = pruner.pruneUnsupported()
         let twice = pruner.pruneUnsupported()
-        check(dropped == ["com.apple.Safari"]
+        check(dropped == ["com.google.Chrome"]
                 && pruner.selected == ["com.apple.Notes"]
                 && pruner.actSelected.isEmpty && pruner.imageSelected.isEmpty
                 && twice.isEmpty,
@@ -972,6 +975,32 @@ extension SmokeMain {
               "T-COMPUTER 去冗余生效后, 渲染里不再出现同一句的第二遍")
         check(navLike.rows.first?.title == "新闻",
               "T-COMPUTER 行的名字只认 label, 不拿值凑 (否则渲染成 `\"新闻\" (值:\"新闻\")`)")
+
+        // MARK: 渲染上限**按 App** 给 (2026-11-06)
+        //
+        // 内置四个 App 的树只有几百行（备忘录 71 / 日历 130 / 提醒事项 54 / 访达 291），120 够用。
+        // Safari 的树里装着整个网页 —— 实测（2026-11-06）GitHub 仓库页 **1598 行**，而 120 行
+        // 只够看到页头导航（`Products` / `Sign in` / `Code` / `Issues`），正文在 1000 行开外
+        // ⇒ 不给它更大的上限，这个 App 等于只能读个标题栏。
+        check(AXSnapshot.renderLineLimit(for: "com.apple.Safari") == 3000,
+              "T-COMPUTER Safari 渲染上限 3000 行 (实测 GitHub 仓库页 1598 行; 120 行只够看页头)")
+        let narrow = SopInjection.builtins
+            .subtracting(["com.apple.Safari"])      // 唯一被放宽的那个（下一行单独判）
+            .union(["com.apple.calculator"])        // 免手册的那个也不是网页
+            .union(["com.example.unconfigured"])    // 压根没配过的
+        check(narrow.allSatisfy { AXSnapshot.renderLineLimit(for: $0) == 120 },
+              "T-COMPUTER 只给 Safari 放宽: 其余内置 + 计算器 + 未配置的仍然是 120 "
+              + "(它们的树只有几百行, 放开是纯亏 —— 这份文本每轮都留在上下文里。实际: "
+              + "\(narrow.filter { AXSnapshot.renderLineLimit(for: $0) != 120 }.sorted()))")
+        // 行为面: 上限要**真的**影响渲染 —— 只查上面那张表证明不了它会被用上。
+        let longPage = AXSnapshot.build(root: AXNode(role: "AXWindow", title: "长页", children:
+            (0..<200).map { AXNode(role: "AXStaticText", value: "第\($0)行") }),
+            appName: "com.apple.Safari", windowTitle: "长页")
+        let capped = longPage.rendered(limit: 120)
+        let roomy = longPage.rendered(limit: 3000)
+        check(roomy.count > capped.count && capped.contains("未显示") && !roomy.contains("未显示"),
+              "T-COMPUTER 上限真的生效 (120 行: \(capped.count) 字且带截断提示; "
+              + "3000 行: \(roomy.count) 字全量)")
 
         // 只有空白的文本(空格/换行)等于没有 —— 那些行在屏幕上什么也不显示
         let blankText = AXSnapshot.build(root: AXNode(role: "AXWindow", title: "w", children: [

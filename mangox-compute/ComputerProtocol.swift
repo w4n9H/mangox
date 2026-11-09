@@ -37,10 +37,15 @@ enum ComputerRequest: Decodable {
     ///    授权也就落在两道不同的门上(读面 vs 操作面)。
     /// ⚠️ 没有它, 「用计算器算 100×5」在计算器没开时**结构上做不到**: 读不到 ⇒ 没有窗口树
     ///    ⇒ 也没有编号可动。
-    case open(app: String)
+    ///
+    /// 🔺 2026-11-09 加 `url`: **浏览器导航只能走这条路**。实测两个浏览器的地址栏在 AX 层
+    ///    都没有导航手段 —— Safari 的 `confirm` 回 ok 但页面 9 秒不动, Chrome 的 `press`
+    ///    同样 ok 但页面不动。所以"打开某个网址"不落在 `act` 上, 而是落在 `open` 上:
+    ///    语义就是"让系统用这个 App 打开这个地址"。空串 = 老行为(只打开/切前台)。
+    case open(app: String, url: String)
 
     private enum CodingKeys: String, CodingKey {
-        case op, app, includeImage, index, seq, text, direction, point
+        case op, app, includeImage, index, seq, text, direction, point, url
         /// 动作本身(`press` / `setValue` / `focus` / `scroll`)。⚠️ 不能复用 `op` ——
         /// 那个位置装的是信封类型(`act`), 两个语义塞进一个键, 读代码的人分不清哪个是哪个。
         case action
@@ -68,7 +73,10 @@ enum ComputerRequest: Decodable {
         case "open":
             // 空 `app` 交给 server 拒(并说清"打开哪个"): 解码阶段回一句机器话,
             // 模型只会把 `dataCorrupted` 当成故障重试。
-            self = .open(app: try c.decodeIfPresent(String.self, forKey: .app) ?? "")
+            // `url` 同理: **校验在 server**(只放行 http/https), 这里只搬字段 ——
+            // 解码层拒掉的话, 模型看到的是"参数坏了", 而真实答案是"这个 scheme 不行"。
+            self = .open(app: try c.decodeIfPresent(String.self, forKey: .app) ?? "",
+                         url: try c.decodeIfPresent(String.self, forKey: .url) ?? "")
         default:
             // 不认识的 op 要说清楚, 不能默默当成 ping —— 否则扩展侧改名之后会读到"一切正常"。
             throw DecodingError.dataCorruptedError(forKey: .op, in: c,

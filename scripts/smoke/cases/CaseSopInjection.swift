@@ -9,12 +9,24 @@
 //  两组判据, 别混:
 //    ① **组装**（①~⑫）: 传样本手册进 `block`, 把每种边界造出来（名单空 / 漏节 / 超预算 / 陈旧 / 档位）。
 //    ② **本体**（⑬）: 直接盯 `SopManual.text` —— 它现在住在代码里、改一次要发一次版,
-//       所以"写法"必须由门禁守, 不能靠写的人自觉（单节字数 / 覆盖白名单 / 不写编号 / 日期不造假）。
+//       所以"写法"必须由门禁守, 不能靠写的人自觉（单节字数 / 任务线结构 / 覆盖白名单 / 不写编号 / 日期不造假）。
 //
 
 import Foundation
 
 extension SmokeMain {
+
+    /// 一节是不是写成了**任务线**: ≥2 个 `### 任务` 小标题, 且合计 ≥2 条编号步骤（`1. ` 这种）。
+    ///
+    /// ⚠️ 抽成函数, 为的是让**正例与反例走同一段逻辑**。反例若另写一份判定, 那一份会自己漂成
+    ///    恒真 —— 而它恰恰是"上面那条不是恒真"的唯一证据（判据本身也可以是错的, 见 10-14 的教训）。
+    static func isTaskLine(_ body: String) -> Bool {
+        let tasks = body.components(separatedBy: "\n### ").count - 1
+        let steps = body.components(separatedBy: "\n").filter {
+            $0.range(of: #"^\d+\. "#, options: .regularExpression) != nil
+        }
+        return tasks >= 2 && steps.count >= 2
+    }
 
     @MainActor
     static func caseSopInjection() async {
@@ -158,13 +170,28 @@ extension SmokeMain {
         check(!manual.preamble.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
               "T-SOP 手册要有通则 (编号会变 / act 回执只给 diff 这两条对每个 App 都成立, 只写一次)")
 
-        // 单节字数 + 结构: 每节必须写「怎么认」(`### 找`), 且必须有版本
+        // 单节字数 + 结构: 每节必须写成**任务线**（`### 任务名` + 编号步骤）, 且必须有版本
         // —— 版本决定模型该不该照着做; 没有版本号 = 无法判断这节是不是上一个系统版本的界面。
+        //
+        // ⚠️ 2026-11-06 换过一次判据: 原来要求每节含 `### 找`（把知识按「找 / 做 / 成 / 别」四类切）。
+        //    那个结构**不是 SOP** —— 同一件事的步骤被切碎分到四个抽屉里, 模型得自己拼一条路出来;
+        //    更硬的一条: 「成」一个 App 只有一段, 可一个 App 有四五件事（备忘录那段的「成」
+        //    其实只覆盖"删一条", 建一条 / 追加 / 打开都没有判据）。
+        //    现在按**任务**切: 一条线 = 目标 + 编号步骤, 每步的判据跟在同一行后面。
         let tooLong = manual.sections.filter { $0.body.count > 700 }.map { "\($0.title)=\($0.body.count)" }
         check(tooLong.isEmpty,
               "T-SOP 单节 ≤700 字 (每轮都进提示词; 超了就是写了没人要的东西。实际超: \(tooLong))")
-        check(manual.sections.allSatisfy { $0.body.contains("### 找") },
-              "T-SOP 每节都要写「怎么认」(`### 找`) (只写步骤、不写锚 = 模型看不见界面只能瞎点)")
+        // 判据 = 这一节里 **≥2 个 `### 任务`**、且合计 **≥2 条编号步骤**。
+        // 散文体 / 只有分类小标题的写法两条都过不了 —— 那正是"模型还得自己拼步骤"的样子。
+        let notTaskLine = manual.sections.filter { !Self.isTaskLine($0.body) }.map(\.title)
+        check(notTaskLine.isEmpty,
+              "T-SOP 每节要写成任务线 (≥2 个 `### 任务` 且合计 ≥2 条编号步骤; 写成散文或"
+              + "按知识分类切, 模型还得自己拼步骤。实际不合格: \(notTaskLine))")
+        // 反例自证: 同一段判定喂它的**反面**必须判不合格, 否则上面那条对任何输入都返回空 = 恒真。
+        // 用的正是被换掉的那种写法（一个 `###` 小标题 + 一段描述, 没有编号）—— 它曾经是四段结构的常态。
+        check(!Self.isTaskLine("\n### 找\n- 左栏 outline：每个 cell 的 title 自带计数。\n"
+                               + "- 分组行只有一个 statictext。"),
+              "T-SOP 反例: 按知识分类切、没有编号步骤的写法必须判不合格 (否则上面那条是恒真的)")
         let noVersion = manual.sections.filter { $0.version.isEmpty }.map(\.bundle)
         check(noVersion.isEmpty,
               "T-SOP 每节都要写 App 版本 (没有版本 ⇒ 无法判断这节是不是旧系统界面。实际缺: \(noVersion))")

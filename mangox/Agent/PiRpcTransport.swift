@@ -1370,7 +1370,7 @@ final class PiRpcTransport: AgentTransport {
 
             pi.registerTool({
                 name: "computer_open",
-                label: "Open an app",
+                label: "Open an app or a URL",
                 description: [
                     "Open a macOS app, or bring it to the front if it is already running. An app with no window",
                     "has nothing to read or act on, so open it first.",
@@ -1379,6 +1379,13 @@ final class PiRpcTransport: AgentTransport {
                     "and the display name (prefer the bundle id when a plain name is not recognised). It never",
                     "guesses.",
                     "",
+                    "Pass `url` to have that app open a web address (`http` / `https` only; a bare domain like",
+                    "`baidu.com` is read as `https://baidu.com`). This is the ONLY way to navigate a browser:",
+                    "both Safari's and Chrome's address fields accept the text but never actually go there,",
+                    "so do not try to drive the address bar with computer_act. It always opens a NEW TAB --",
+                    "it cannot replace the page you are on. The page needs a few seconds to paint, so wait",
+                    "before computer_read or you will only see a shell.",
+                    "",
                     "Gated by the reading permission, not the acting one. It only launches: call computer_read",
                     "afterwards for an outline and a `seq`.",
                 ].join("\n"),
@@ -1386,6 +1393,9 @@ final class PiRpcTransport: AgentTransport {
                     app: Type.String({
                         description: "App name or bundle id. Required -- there is no frontmost default.",
                     }),
+                    url: Type.Optional(Type.String({
+                        description: "Web address to open in that app. http/https only. Opens a new tab.",
+                    })),
                 }, { additionalProperties: false }),
 
                 async execute(_toolCallId, params) {
@@ -1396,7 +1406,7 @@ final class PiRpcTransport: AgentTransport {
                     }
                     let reply;
                     try {
-                        reply = await ask(sock, { op: "open", app: params.app || "" });
+                        reply = await ask(sock, { op: "open", app: params.app || "", url: params.url || "" });
                     } catch (error) {
                         throw new Error("could not reach the window reader: " + String(error));
                     }

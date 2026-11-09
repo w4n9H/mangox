@@ -286,6 +286,29 @@ struct AXSnapshot: Equatable {
     ///    一起拉进来判; 而它们只要有一句提示文案就够读了, 判错只是让回执多一句废话。
     static let readableMinSide = 200
 
+    /// 一次 `read` 最多渲染多少行 —— **按 App** 给，不是一个全局常数。
+    ///
+    /// 内置那四个 App 的树只有几百行（备忘录 71 / 日历 130 / 提醒事项 54 / 访达 291），
+    /// 120 对它们绰绰有余；放开只会让模型多读一堆它用不着的东西（而这份文本每轮都留在上下文里）。
+    ///
+    /// **Safari 不一样**：它的树里装着整个网页。实测（2026-11-06，GitHub 仓库页）：
+    /// 2504 节点 / **1598 行**，光前 120 行就 5717 字 ⇒ 全量约 7.6 万字。而 120 行只够看到
+    /// 页头导航（`Products` / `Sign in` / `Code` / `Issues`），正文在 1000 行开外
+    /// ⇒ 不给它更大的上限，这个 App 等于只能读个标题栏。
+    ///
+    /// 为什么是 3000（2026-11-06 boss 定，在 1500 与 5000 之间折中）：
+    ///   · 1500 能覆盖 GitHub 那种页面的 94%，但长文档页 / 长列表页仍会断在正文中途；
+    ///   · 5000 最坏约 24 万字（≈14 万 token），一次 read 吃掉大半个窗口；
+    ///   · 3000 最坏约 14 万字（≈8.6 万 token），还是"读一次用得起"的量级，
+    ///     对 1598 行这类常见页面仍留一倍余量。
+    ///
+    /// ⚠️ 这是**渲染**上限，与 `AXAdapter` 那两道读的预算（12 秒 / 3000 节点）不是一回事：
+    ///    前者省上下文，后者防挂死，两者不要混。
+    /// ⚠️ 别改成全局常量。四个内置 App 的树小，放开是纯亏。
+    static func renderLineLimit(for bundle: String) -> Int {
+        bundle == "com.apple.Safari" ? 3000 : 120
+    }
+
     /// 这棵树里有没有一层能承载内容的控件。
     static func hasReadableControls(root: AXNode) -> Bool {
         if contentRoles.contains(cleanRoleName(root.role)) { return true }
@@ -472,6 +495,9 @@ struct AXSnapshot: Equatable {
     /// `limit` 是**上界不是配额**: 一棵几千节点的树整段塞进上下文没有信息量, 只是贵。
     /// 截断时**必须**把"还有多少没显示"写出来 —— 否则模型会以为那就是全部。
     /// 固定区那部分见 `keepIndices`(批 2l): 被截的若是工具栏, 它不是"看不见", 是"永远做不到"。
+    ///
+    /// ⚠️ 生产端**不要**用这里的默认值, 传 `renderLineLimit(for:)` —— 那个按 App 给
+    ///    （Safari 3000 / 其余 120）。默认值只是给冒烟与诊断留一个稳定的基准。
     func rendered(limit: Int = 120) -> String {
         var lines: [String] = []
         lines.append("# 快照 · 前台:\(appName) · 窗口:\(windowTitle)")

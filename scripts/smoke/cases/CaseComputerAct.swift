@@ -93,6 +93,43 @@ extension SmokeMain {
                                         target: button, window: .none) == .allow(.press),
               "T-ACT 基线: 权限齐、seq 对、编号在、能按 ⇒ 放行")
 
+        // MARK: 网页内容与普通界面**一视同仁**（⑤b 于 2026-11-09 撤掉）
+        //
+        // 立过又撤: 2026-11-06 加 Safari 时立了「网页内容一律不动」，因为网页文字是第三方数据；
+        // 11-09 boss 定要**完全体可操作** —— 真机一量，「打开百度 → 输入检索 → 点开结果」
+        // 三步全断，Safari 只剩"能看不能用"。于是撤掉它，网页里照常按。
+        //
+        // ⚠️ 撤一条红线最容易顺手把别的门也拆掉 —— 所以这一片**必须双向判**：
+        //   ① 网页里的 link / button ⇒ 走 ⑧ 的动作表，有 `AXPress` 就放行；
+        //   ② 网页里的输入框 ⇒ 能 setValue；
+        //   ③ **反例**：网页里那个按钮叫「删除」⇒ ⑥ 三条恒拒照旧拦（撤的只是"网页"这一条）；
+        //   ④ **反例**：网页里的纯文本没有 `AXPress` ⇒ ⑧ 照旧拒（放行 ≠ 见谁都放行）。
+        let webLink = ComputerActTarget(role: "AXLink", title: "新闻", actions: ["AXPress"])
+        check(ComputerActGuard.evaluate(request: req(), scope: scope(),
+                                        target: webLink, window: .none) == .allow(.press),
+              "T-ACT 网页里的 link 能按（⑤b 已撤：网页内容与普通界面一视同仁）")
+        check(ComputerActGuard.evaluate(request: req(.setValue, text: "天气"), scope: scope(),
+                                        target: field, window: .none) == .allow(.setValue),
+              "T-ACT 网页里的输入框能写（同上；改回「整片拒」这条会红）")
+        // ③ 撤的是「网页」这一条，不是所有门。⚠️ 用**真会命中**的词（「立即删除」「确认支付」）：
+        //    恒拒认的是"永久删除"那一族，**裸的「删除」不拦**（"移到废纸篓"必须放行）——
+        //    这也正是撤⑤b 之后的真实代价：网页里叫「删除」的按钮，现在真能点下去。
+        for word in ["立即删除", "确认支付"] {
+            let webDanger = ComputerActTarget(role: "AXButton", title: word, actions: ["AXPress"])
+            if case .refuse(let why, _) = ComputerActGuard.evaluate(
+                request: req(), scope: scope(), target: webDanger, window: .none) {
+                check(why.contains("永久删除") || why.contains("付款") || why.contains("不可恢复"),
+                      "T-ACT 网页里的「\(word)」仍被恒拒拦下 实际:\(why)")
+            } else {
+                check(false, "T-ACT 网页里的「\(word)」必须仍被恒拒拦下（否则撤⑤b 把恒拒一起拆了）")
+            }
+        }
+        // ④ 放行 ≠ 见谁都放行：动作表那关还在。
+        let webPlainText = ComputerActTarget(role: "AXStaticText", title: "正文", actions: [])
+        check(ComputerActGuard.evaluate(request: req(), scope: scope(),
+                                        target: webPlainText, window: .none) != .allow(.press),
+              "T-ACT 网页里的纯文本按不了（⑧ 动作表照旧生效，撤⑤b 没顺手拆掉它）")
+
         // MARK: ② 读面 —— 没开读的 App 一律不动
 
         if case .refuse(let why, _) = ComputerActGuard.evaluate(
@@ -386,6 +423,34 @@ extension SmokeMain {
         // **重复动作**(再跳一天 / 再开一次文件夹), 那个不自愈。
         check(ComputerOpenVerdict.classify(-25200) == .acceptedWithSuspectCode(-25200),
               "T-ACT 未知码按「可能已送出」记 (按失败记会让模型重试 ⇒ 重复打开)")
+
+        // MARK: ⑧c2 `computer_open` 的 url —— 导航唯一的路，判据只剩三道（2026-11-09）
+        //
+        // 为什么它落在 `open` 而不是 `act`: 两个浏览器的地址栏都没有导航手段 —— Safari 的
+        // `confirm` 回 ok 但页面 9 秒不动（实测连读 6 次标题不变），Chrome 的 `press` 同样
+        // ok 但页面不动。所以"打开某个网址"只能走系统，而系统那条路给什么就开什么。
+        check(ComputerAddress.parse("https://www.baidu.com")?.absoluteString == "https://www.baidu.com",
+              "T-ACT http(s) 地址原样放行")
+        check(ComputerAddress.parse("baidu.com")?.absoluteString == "https://baidu.com",
+              "T-ACT 不带 scheme 的域名补 https（Chrome 地址栏里存的就是 baidu.com，它自己补）")
+        check(ComputerAddress.judge("") == .empty,
+              "T-ACT 空 url = 只打开 App（老行为），不是拒")
+        // 反例 —— 下面每一条都是"打开了不该打开的东西"。
+        // ⚠️ 写成表、不各写一份 `if case`：早先 `javascript:` 那条是 `if case ... {}` **空体**，
+        //    绿了什么都不打印 ⇒ 条数会随行为浮动，而且"它真跑了"这件事在日志里看不见。
+        //    判据绿的时候也必须留下一条 PASS —— 这与"条数不是指标"是一体两面。
+        for (raw, scheme) in [("file:///etc/passwd", "file"), ("javascript:alert(1)", "javascript")] {
+            if case .badScheme(let s) = ComputerAddress.judge(raw) {
+                check(s.lowercased() == scheme,
+                      "T-ACT \(scheme): 被拒，且回执说得出是哪个 scheme 实际:\(s)")
+            } else {
+                check(false, "T-ACT \(scheme): 必须拒（否则等于给模型一条绕过地址判据的路）")
+            }
+        }
+        check(ComputerAddress.judge("天气 上海") == .looksLikeQuery,
+              "T-ACT 带空格的按搜索词拒（替它拼成 URL 会打开一个它没要求的页面）")
+        check(ComputerAddress.judge("随便什么") == .notAnAddress,
+              "T-ACT 不像域名的不猜（带 . 才当域名）")
 
         // MARK: ⑧d `confirm` —— 提交那一格, 但绝不许当"通用确认键" (批 2k, 2026-11-04)
 
