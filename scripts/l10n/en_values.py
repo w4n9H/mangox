@@ -1177,6 +1177,11 @@ VALUES = {
     '允许按坐标点击': 'Allow clicking by position',
     '有些应用只看得见画面、认不出控件（比如微信）。开着：我能照着画面上的位置点下去。': 'Some apps only show a picture and expose no controls (WeChat, for one). On: I can click where the picture says to.',
     '代价：可能点到别的地方，而且没有撤销；点的那一下你的光标会动。': 'Cost: it can land somewhere else and there is no undo; the cursor moves for that click.',
+    # 第五档(2026-11-10): 模拟键盘输入。**与上一组分开一行一个开关** —— 同属"模拟输入",
+    # 但风险不是一件事(点错看得见 / 打进去的字可能被回车发出去), 文案也就不能合成一句。
+    '允许模拟键盘输入': 'Allow simulated keyboard input',
+    '有些应用写不进字（微信没有可用的输入框控件）。开着：我能把一段文字敲进当前的输入框。': 'Some apps cannot be typed into at all (WeChat exposes no usable text field). On: I can type a piece of text into the focused field.',
+    '代价：写错地方撤不回；写完之后按一次回车，在不少应用里就等于「发送」—— 那一下也不会再问你。': 'Cost: text that lands in the wrong place cannot be taken back, and pressing Return afterwards means "send" in many apps — that step will not ask you again.',
     # 第四档的 13 道闸回执 —— 它们是**模型回执**, 但判据住在 `mangox/Models/ComputerAct.swift`
     # (两个 target 共用), 于是按本仓惯例照样进词表。⚠️ 片段式的那几条(以 `—— ` 结尾 /
     # 以 ` ⇒ ` 开头)翻译时**要和相邻片段接得上**, 它们是拼起来说的一句话。
@@ -1204,6 +1209,29 @@ VALUES = {
     '先处理弹层, 或者重新 read 一次按新的来。': 'Deal with the sheet first, or read again and work from the new picture.',
     '%@ 底下写着「%@」 ⇒ 没点。': 'Under %@ it says "%@" ⇒ nothing was tapped.',
     '按坐标点这一档认不出控件语义, 这类词一律不替你点 —— 这一步你自己点。': 'Clicking by position cannot tell what a control means, so I never tap these words for you — this step is yours.',
+    # 第五档(2026-11-10): `ComputerTypeRule` 的九道闸回执 —— 与第四档同一族(进的是**模型上下文**,
+    # 不是界面; 住在与 helper 共用的纯函数里)。⚠️ 片段式的那几条(以空格开头 / 以 `——` 结尾)
+    # 翻译时**要和相邻片段接得上**, 它们是拼起来说的一句话。
+    '「模拟键盘输入」这一档关着 ⇒ 没写。': '"Keyboard input" is off ⇒ nothing was typed.',
+    '它默认关是因为写进去的字可能被下一拍回车发出去、而发出去撤不回 ——': 'It is off by default because what gets typed can go out on the next Return, and sending cannot be undone —',
+    '「%@」还没勾「可操作」⇒ 没写。看得到不等于动得。': '"%@" is not marked as able to act (Can act) ⇒ nothing was typed. Being visible is not the same as being actionable.',
+    '只给了回车、没给要写的字 ⇒ 没按。回车在不少 App 里就是「发出去 / 确定」,': 'Only a Return and no text ⇒ nothing was pressed. In many apps Return means "send" or "confirm",',
+    ' 这一档不替你单按它 —— 要发就先把内容写上。': ' and this mode will not press it on its own -- write the content first if you mean to send.',
+    '没给要写的字 ⇒ 没写。': 'No text to write ⇒ nothing was typed.',
+    '文本里有%@ ⇒ 没写。': 'The text contains %@ ⇒ nothing was typed.',
+    '回车在不少 App 里等于发送, 一段带换行的字会变成好几条消息。': 'In many apps Return sends, so a paragraph with line breaks would go out as several messages.',
+    ' 要分多段就分几次写。': ' Send several lines in separate calls.',
+    '要写 %lld 个字, 超过这一档的上限 %@ ⇒ 没写。': 'That is %lld characters, over the %@ limit of this mode ⇒ nothing was typed.',
+    '控制字符 %@': 'control character %@',
+    ' 分段写(或者让人自己粘贴)比一次塞进去安全 —— 塞进去之后想改也没法改。': ' Writing it in pieces (or letting the person paste it) is safer than stuffing it in at once -- once it is in, there is no way to revise it.',
+    '「%@」重启过了 ⇒ 你手上那份快照说的不是这个窗口, 焦点落在哪儿也不知道, 没写。': '"%@" was restarted ⇒ the snapshot you hold is not this window, and there is no telling where the focus sits ⇒ nothing was typed.',
+    '重新 read 一次。': 'Read again.',
+    '「%@」不在前台 ⇒ 没写。': '"%@" is not in front ⇒ nothing was typed.',
+    '键盘事件会落到**此刻在前台的那个 App** 的焦点里, 不是你指定的这个。': 'Keystrokes land in whatever app is **in front right now**, not in the one you named.',
+    '先 computer_open 把它切上来。': 'Bring it forward with computer_open first.',
+    '你此刻正按着鼠标键 ⇒ 没写。松开之后再说一次。': 'You are holding a mouse button right now ⇒ nothing was typed. Ask again after you let go.',
+    '你 %@ 毫秒前刚动过键鼠 ⇒ 没写。': 'You touched the keyboard or mouse %@ ms ago ⇒ nothing was typed.',
+    '人正在打字时我不往他那行里插字 —— 稍等一下再说一次。': 'I will not type into the line someone is already typing in -- try again in a moment.',
     '申请': 'Request',
     ' 想按它的话用 press —— 但按它不等于打开它的菜单。': ' Use press if you only meant to click it -- but clicking is not opening its menu.',
     '「%@」没有菜单可开 —— %@ ⇒ 没动。': '"%@": no menu to open -- %@ ⇒ nothing done.',

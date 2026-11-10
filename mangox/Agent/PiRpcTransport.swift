@@ -1077,13 +1077,17 @@ final class PiRpcTransport: AgentTransport {
     /// 第四档(2026-11-10): 按坐标点一下。**单独一个工具**, 不并进 `computer_act` ——
     /// 它前面没有元素, 也没有 `op`; 并进去等于让模型以为 act 有时可以不管编号。
     nonisolated static let computerTapToolName = "computer_tap"
+    /// 第五档(2026-11-10): 往当前焦点里写一段字(可选补一次回车)。**又一个独立工具** ——
+    /// 与 `tap` 同理: 它前面没有元素、没有编号、也没有坐标, 只有"焦点"。
+    nonisolated static let computerTypeToolName = "computer_type"
 
     /// P18: computer 扩展注册出来的工具名 —— 与 `computerExtensionSource` 同源同改
     /// (冒烟断言"每个名字都能在源码里找到 `name: "<名字>"`", 同 `webSearchToolNames` 那条守)。
     ///
-    /// ⚠️ **现在有四个工具**: 读一个、动一个、打开一个、按坐标点一个。
+    /// ⚠️ **现在有五个工具**: 读一个、动一个、打开一个、按坐标点一个、往焦点里写一个。
     nonisolated static let computerToolNames: [String] =
-        [computerReadToolName, computerActToolName, computerOpenToolName, computerTapToolName]
+        [computerReadToolName, computerActToolName, computerOpenToolName,
+         computerTapToolName, computerTypeToolName]
 
     nonisolated static let computerExtensionFileName = "mangox-computer.ts"
 
@@ -1421,6 +1425,71 @@ final class PiRpcTransport: AgentTransport {
                             op: "tap",
                             app: params.app || "",
                             point: { x: params.x, y: params.y },
+                            seq: params.seq,
+                        });
+                    } catch (error) {
+                        throw new Error("could not reach the window reader: " + String(error));
+                    }
+                    if (!reply || typeof reply !== "object") {
+                        throw new Error("the window reader sent something that is not an object.");
+                    }
+                    if (reply.ok !== true) {
+                        return ok("Refused: " + (reply.error || "no reason given."));
+                    }
+                    return ok(typeof reply.text === "string"
+                        ? reply.text
+                        : "(the reader returned no text)");
+                },
+            });
+
+            pi.registerTool({
+                name: "computer_type",
+                label: "Type into the focused field",
+                description: [
+                    "Type a piece of text into whatever currently has the keyboard focus in that app -- for an",
+                    "app whose outline has no usable text field at all (WeChat exposes five nodes and no input",
+                    "control, so `setValue` structurally cannot reach it).",
+                    "",
+                    "It goes to the focus, not to a coordinate and not to a row: click the field first (with tap",
+                    "or press), then type. The read must still be the latest one -- if the interface moved in",
+                    "between, the focus may no longer be where you think it is.",
+                    "",
+                    "Line breaks are refused on purpose: in WeChat, Slack and iMessage the Return key sends. A",
+                    "paragraph with five line breaks would go out as five messages. Write one line per call.",
+                    "",
+                    "`submit` presses Return once after the text. It is off by default because that is what",
+                    "sends, and sending cannot be undone. A reply that says the text was typed only means the",
+                    "keys went out -- read again to see whether it landed, or went out.",
+                ].join("\n"),
+                parameters: Type.Object({
+                    app: Type.Optional(Type.String({
+                        description: "App name or bundle id. Omit to type into the frontmost app.",
+                    })),
+                    text: Type.String({
+                        description: "The text to type. No line breaks. At most 2000 characters.",
+                    })),
+                    submit: Type.Optional(Type.Boolean({
+                        description: "Press Return once after typing (usually means send / confirm)."
+                            + " Default false.",
+                    })),
+                    seq: Type.Number({
+                        description: "The snapshot sequence from the most recent read.",
+                    }),
+                }, { additionalProperties: false }),
+
+                async execute(_toolCallId, params) {
+                    const sock = process.env[SOCK_ENV];
+                    if (!sock) {
+                        return ok("computer_type is not enabled in this session: no "
+                            + SOCK_ENV + " was provided.");
+                    }
+                    let reply;
+                    try {
+                        reply = await ask(sock, {
+                            op: "type",
+                            app: params.app || "",
+                            text: params.text,
+                            submit: params.submit === true,
                             seq: params.seq,
                         });
                     } catch (error) {
@@ -1834,7 +1903,8 @@ final class PiRpcTransport: AgentTransport {
                                              imageBundles: ComputerSettings.shared.activeImageBundles,
                                              takeover: ComputerSettings.shared.shouldInstallTakeover(
                                                  expectsHuman: approvalMode.expectsHumanAtKeyboard),
-                                             tap: ComputerSettings.shared.tapEnabled)
+                                             tap: ComputerSettings.shared.tapEnabled,
+                                             type: ComputerSettings.shared.typeEnabled)
         let computerExtPath = computerSock != nil ? Self.ensureComputerExtensionFile() : nil
         var args = spec.scriptArgs + ["--mode", "rpc"]
         // P12.1b + P13: 扩展参数 (关自动发现 + 补回内置 provider + 挂托管扩展 + codemode 层)。
@@ -1964,6 +2034,7 @@ final class PiRpcTransport: AgentTransport {
                                               takeover: ComputerSettings.shared.shouldInstallTakeover(
                                                   expectsHuman: approvalMode.expectsHumanAtKeyboard),
                                               tap: ComputerSettings.shared.tapEnabled,
+                                              type: ComputerSettings.shared.typeEnabled,
                                               peerPid: ProcessInfo.processInfo.processIdentifier,
                                               inherited: ProcessInfo.processInfo.environment) {
             p.environment = env
@@ -2918,6 +2989,18 @@ final class PiRpcTransport: AgentTransport {
                 let x = args["x"].map { "\($0)" } ?? "?"
                 let y = args["y"].map { "\($0)" } ?? "?"
                 return (app.isEmpty ? name : app, "tap (\(x),\(y))")
+            }
+            // 第五档同样没有 `op` / 没有坐标: 它要紧的是**写什么**与**会不会按回车**。
+            // ⚠️ `submit` 必须上卡: 那是"只写上"与"发出去"的分界 —— 审批时人要靠这一行决定,
+            //    藏在参数里等于让人签一张自己没读过的字。
+            // ⚠️ 这里不写汉字(与上面 `tap (x,y)` 同): 审批卡的 command 列是给眼睛看的定位信息,
+            //    不是句式, 拼进 L() 反而会在两种语言下都变长。
+            if name == Self.computerTypeToolName {
+                let body = (args["text"] as? String) ?? ""
+                let willSubmit = (args["submit"] as? Bool) == true
+                return (app.isEmpty ? name : app,
+                        (willSubmit ? "type + Enter (send): " : "type: ")
+                            + "\"" + String(body.prefix(60)) + "\"")
             }
             // setValue 的正文要看得见: 审批时"要往这个框里写什么"就是这个动作的全部内容。
             if let text = args["text"] as? String, !text.isEmpty {

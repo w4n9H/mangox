@@ -387,8 +387,8 @@ if ! has_code mangox-compute/ComputerServer.swift '\.post\(tap: \.cghidEventTap\
     exit 1
 fi
 TAP_POST_N="$(count_code mangox-compute/ComputerServer.swift '\.post\(')"
-if [ "$TAP_POST_N" != "2" ]; then
-    echo "FAIL - helper 里发合成事件的处数是 ${TAP_POST_N}, 应该只有 down/up 两发" >&2
+if [ "$TAP_POST_N" != "6" ]; then
+    echo "FAIL - helper 里发合成事件的处数是 ${TAP_POST_N}, 应该是 6 (鼠标 down/up + 字符 down/up + 回车 down/up)" >&2
     exit 1
 fi
 TAP_HIDCALL_N="$(count_code mangox-compute/ComputerServer.swift 'hidClick\(at')"
@@ -412,6 +412,33 @@ if ! has_code mangox-compute/ComputerServer.swift 'primaryHeight - saved\.y'; th
     echo "       2026-11-10 实测: 少了这一步差 36px, 而回执照样写着'归位了'" >&2
     exit 1
 fi
+# ⚠️ 2026-11-10 第五档(`computer_type`)把"发事件"又扩了一次(键盘)。**同一套围栏, 同样四根柱子**:
+#    谁发(上面那圈已经管住) / 几处 / 排在谁后面 / 分段与键码有没有被改坏。
+TYPE_HIDCALL_N="$(count_code mangox-compute/ComputerServer.swift 'hidType\(')"
+if [ "$TYPE_HIDCALL_N" != "2" ]; then
+    echo "FAIL - hidType 出现 ${TYPE_HIDCALL_N} 次(定义 + 调用应为 2) ⇒ 键盘那个窄口又多开了一处" >&2
+    exit 1
+fi
+TYPE_RULE_LINE="$(awk '/ComputerTypeRule\.refusal\(/ { print NR; exit }' mangox-compute/ComputerServer.swift)"
+TYPE_CALL_LINE="$(awk '/return hidType\(text:/ { print NR; exit }' mangox-compute/ComputerServer.swift)"
+if [ -z "$TYPE_RULE_LINE" ] || [ -z "$TYPE_CALL_LINE" ] || [ "$TYPE_RULE_LINE" -ge "$TYPE_CALL_LINE" ]; then
+    echo "FAIL - 打字的判据与执行顺序不对 (rule@${TYPE_RULE_LINE:-?} type@${TYPE_CALL_LINE:-?})" >&2
+    echo "       判据必须排在 hidType 之前 —— 反了就是'先打了再问能不能打', 而打出去的字撤不回" >&2
+    exit 1
+fi
+if ! has_code mangox-compute/ComputerServer.swift 'keyboardSetUnicodeString'; then
+    echo "FAIL - 打字不再走 keyboardSetUnicodeString (改按物理键位映射就写不了中文)" >&2
+    exit 1
+fi
+if ! has_code mangox-compute/ComputerServer.swift 'min\(start \+ 20'; then
+    echo "FAIL - 一次送的不再按 20 个 UTF-16 单元分段" >&2
+    echo "       keyboardSetUnicodeString 的硬上限是 20, 超了会被**静默截断**(一个字都不报错)" >&2
+    exit 1
+fi
+if ! has_code mangox-compute/ComputerServer.swift 'virtualKey: 36'; then
+    echo "FAIL - 提交那一下不再按 return(36)" >&2
+    exit 1
+fi
 # 协议那一半(解码)只活在 helper 里, 冒烟编不到它 ⇒ 只能扫源码:
 # `point` 缺了必须解成 nil、由 server 拒并说清"要点哪儿" —— 在解码层编一个默认点(比如 0,0)
 # 就等于把"模型没给坐标"变成"模型要左上角", 而它是模型最容易照做的那一个坐标。
@@ -431,6 +458,17 @@ case "$TAP_BRANCH" in
     *'?? ComputerPoint'*|*'decode(ComputerPoint'*)
         echo "FAIL - tap 在解码层给坐标填了默认值" >&2
         echo "       缺坐标要在 server 拒并说清'要点哪儿'; 填 0,0 等于把'没给'变成'点左上角'" >&2
+        exit 1
+        ;;
+esac
+# 第五档的解码分支: 同样是扫源码(它只编进 helper)。
+#   ① `submit` **缺省必须是 false** —— 写 `?? true` 等于"默认发送", 而发送撤不回;
+#   ② 不许在解码层为 `text` 编默认值 —— 空文本要由 server 拒并说清"要写什么"。
+TYPE_BRANCH="$(awk '/case "type":/{f=1; next} f && /^        case "/{exit} f {print}' mangox-compute/ComputerProtocol.swift)"
+case "$TYPE_BRANCH" in
+    *'forKey: .submit) ?? false'*) ;;
+    *)
+        echo "FAIL - type 的 submit 缺省不是 false (缺省 true = 默认按回车 = 默认可发送)" >&2
         exit 1
         ;;
 esac

@@ -56,6 +56,13 @@ final class ComputerSettings: ObservableObject {
     ///    全局档与逐 App 授权是两件事 —— 用户可能愿意给微信「可操作」, 但不愿意让我动他的鼠标。
     static let tapKey = "computer_tap"             // "1" / 缺失 = 关
 
+    /// 第五档: 允许"往当前焦点里写一段字"(2026-11-10)。**默认关**。
+    ///
+    /// ⚠️ **又一个独立的键, 不并进 `tapKey`** —— 它们同属"模拟输入", 但风险不是一件事:
+    ///    点错的位置当场看得见, 而打进输入框的字**可能被下一拍回车发出去**。合成一个键的后果
+    ///    与上面几条一样(老值静默改义), 但更糟: 用户想开"点一下"就顺带授权了"打字 + 回车"。
+    static let typeKey = "computer_type"           // "1" / 缺失 = 关
+
     // MARK: 状态
 
     /// 总开关。**默认关** —— 批 1 阶段没有作用域 UI 之前默认开 = 悄悄开一个面。
@@ -93,6 +100,11 @@ final class ComputerSettings: ObservableObject {
     ///    「可读 / 视觉 / 可操作」给过什么。反过来说, 它开着也不代表谁都能点 ——
     ///    真正的门仍是逐 App 的「可操作」。
     @Published var tapEnabled: Bool = false { didSet { persist() } }
+
+    /// 全局档: 允许"往当前焦点里写一段字"(含可选的一次回车)。**默认关**。
+    ///
+    /// ⚠️ 关掉它**不动** `tapEnabled`: 两件事两个开关(见 `typeKey` 上那段)。
+    @Published var typeEnabled: Bool = false { didSet { persist() } }
 
     /// 候选表注入 —— **只给冒烟用**(真机上恒 nil)。
     ///
@@ -502,7 +514,7 @@ final class ComputerSettings: ObservableObject {
 
     func restore(enabledRaw: String?, bundlesRaw: String?, actRaw: String? = nil,
                  imageRaw: String? = nil, takeoverRaw: String? = nil,
-                 tapRaw: String? = nil) {
+                 tapRaw: String? = nil, typeRaw: String? = nil) {
         let d = Self.decode(enabledRaw: enabledRaw, bundlesRaw: bundlesRaw,
                             actRaw: actRaw, imageRaw: imageRaw)
         enabled = d.enabled
@@ -518,6 +530,8 @@ final class ComputerSettings: ObservableObject {
         // 第四档同款("缺键 = 关", 不写 `?? true`): 老库没有它 ⇒ 关。
         // ⚠️ 放在最后: 与上一行同一个理由(它的 `didSet` 会 persist 一次)。
         tapEnabled = tapRaw == "1"
+        // 第五档同款, 同样放最后(理由同上)。
+        typeEnabled = typeRaw == "1"
     }
 
     /// 把模型给的 `app`(名字或 bundle id)落到 bundle 上 —— **认不出就 nil, 不猜**。
@@ -649,5 +663,6 @@ final class ComputerSettings: ObservableObject {
         //    否则下次启动读不到键 ⇒ 走"缺失 = 关"那条, 结论一样但看不出"是谁关的"。
         onPersist(Self.takeoverKey, takeoverEnabled ? "1" : "0")
         onPersist(Self.tapKey, tapEnabled ? "1" : "0")
+        onPersist(Self.typeKey, typeEnabled ? "1" : "0")
     }
 }

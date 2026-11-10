@@ -7,7 +7,7 @@
    **本文件由 scripts/l10n/gen_strings.py --write 生成, 别手改** ——
    译文改 scripts/l10n/en_values.py 的 VALUES, 再跑 --write。
 
-   条数: 1022
+   条数: 1045
 */
 
 " (值:\"%@\")" = " (value: %@)";
@@ -16,6 +16,7 @@
 " ⇒ 没动。重新读一次再决定。" = " ⇒ nothing was done. Read again before deciding.";
 " 不是能「确认」的输入框 ⇒ 没动。confirm 只提交你刚写进输入框的值," = " is not a field that can be confirmed ⇒ nothing was done. confirm only submits the text you just wrote into a field,";
 " 你说的「%@」不是 ⇒ 没动。快照里这一格的值就是能写回去的样子。" = " what you gave (\"%@\") is not one ⇒ nothing done. The value shown for this cell in the snapshot is the shape it accepts back.";
+" 分段写(或者让人自己粘贴)比一次塞进去安全 —— 塞进去之后想改也没法改。" = " Writing it in pieces (or letting the person paste it) is safer than stuffing it in at once -- once it is in, there is no way to revise it.";
 " 别反复换节点试。" = " rather than trying one row after another.";
 " 别换个编号接着试。" = " rather than trying another row number.";
 " 只是要按一下的话用 press。" = " Use press if you only meant to click it.";
@@ -28,7 +29,9 @@
 " 想按它的话用 press。" = " To press it instead, use press.";
 " 未选" = " none";
 " 电脑" = " Computer";
+" 要分多段就分几次写。" = " Send several lines in separate calls.";
 " 要开就在 设置 › 集成 › 电脑操作 里打开。" = " turn it on in Settings › Integrations › Computer control.";
+" 这一档不替你单按它 —— 要发就先把内容写上。" = " and this mode will not press it on its own -- write the content first if you mean to send.";
 "# 快照 · 前台:%@ · 窗口:%@" = "# Snapshot · front:%@ · window:%@";
 "#%@ 在这份快照里查不到对应元素 ⇒ 没动。重新读一次。" = "#%@ has no matching element in this snapshot ⇒ nothing was done. Read again.";
 "#%@ 属于旧快照(你手上 seq=%@, 现在是 %@)" = "#%@ belongs to an older snapshot (you hold seq=%@, it is %@ now)";
@@ -160,6 +163,7 @@
 "✓ 连通, 勾选后保存" = "✓ Reachable — tick the models and save";
 "✓ 采纳入库" = "✓ Accepted and stored";
 "「%@」上没有含「%@」的动作 —— %@ ⇒ 没动。" = "\"%@\": no action matching \"%@\" -- %@ ⇒ nothing done.";
+"「%@」不在前台 ⇒ 没写。" = "\"%@\" is not in front ⇒ nothing was typed.";
 "「%@」不在前台 ⇒ 没点。" = "\"%@\" is not in front ⇒ nothing was tapped.";
 "「%@」不在开放名单里 ⇒ 我不动它。" = "%@ is not on the open list ⇒ I will not touch it.";
 "「%@」不接受聚焦(系统说这个控件的焦点不可设) ⇒ 没动。" = "%@ will not take focus (the system says its focus attribute is not settable) ⇒ nothing was done.";
@@ -172,13 +176,16 @@
 "「%@」没有「确认」这个动作 —— %@ ⇒ 没动。" = "%@ has no confirm action — %@ ⇒ nothing was done.";
 "「%@」没有菜单可开 —— %@ ⇒ 没动。" = "\"%@\": no menu to open -- %@ ⇒ nothing done.";
 "「%@」的窗口挪过: 原来 %@, 现在 %@ ⇒ 没点。" = "\"%@\" window moved: it was %@, now it is %@ ⇒ nothing was tapped.";
+"「%@」还没勾「可操作」⇒ 没写。看得到不等于动得。" = "\"%@\" is not marked as able to act (Can act) ⇒ nothing was typed. Being visible is not the same as being actionable.";
 "「%@」还没勾「可操作」⇒ 没动它。到「设置 → 电脑操作」里给这个 App 勾上" = "%@ is not marked actable ⇒ I did not touch it. Tick it under Settings → Computer actions.";
 "「%@」还没勾「可操作」⇒ 没点。看得到不等于动得。" = "\"%@\" is not marked \"Can act\" ⇒ nothing was tapped. Being visible is not the same as being actionable.";
 "「%@」还没勾「可读」⇒ 没打开它。到「设置 → 电脑操作」里给这个 App 勾上" = "%@ is not marked readable ⇒ I did not open it. Tick it under Settings → Computer actions.";
 "「%@」这一格要的是日期时间(例: 2026-11-04 17:30)," = "\"%@\": this cell takes a date-time (e.g. 2026-11-04 17:30),";
 "「%@」重启过了 ⇒ 你手上那份快照说的不是这个窗口, 没点。重新 read 一次。" = "\"%@\" was restarted ⇒ the snapshot you hold is not this window, so nothing was tapped. Read again.";
+"「%@」重启过了 ⇒ 你手上那份快照说的不是这个窗口, 焦点落在哪儿也不知道, 没写。" = "\"%@\" was restarted ⇒ the snapshot you hold is not this window, and there is no telling where the focus sits ⇒ nothing was typed.";
 "「%@」附近没有可写的滚动条(它自己和上面几层都没有) ⇒ 滚不动。" = "There is no writable scroll bar around %@ (not on it, nor a few levels above it) ⇒ it cannot be scrolled.";
 "「按坐标点击」这一档关着 ⇒ 没点。" = "\"Click by position\" is off ⇒ nothing was tapped.";
+"「模拟键盘输入」这一档关着 ⇒ 没写。" = "\"Keyboard input\" is off ⇒ nothing was typed.";
 "一" = "Mon";
 "一行一个地址; 名单外的信静默丢弃并移入 Trash" = "One address per line; mail from anyone else is silently dropped and moved to Trash.";
 "三" = "Wed";
@@ -229,6 +236,7 @@
 "人格段没有落在注入块最前 — 这是代码问题, 请反馈" = "The persona segment is not at the very front of the injection block — this is a code issue, please report it";
 "人格目录不在 — 本轮 prompt 里没有「我」" = "The persona folder is not there — there is no “me” in this round’s prompt";
 "人格目录里没有可载入的 .md — 本轮 prompt 里没有「我」" = "No loadable .md in the persona folder — there is no “me” in this round’s prompt";
+"人正在打字时我不往他那行里插字 —— 稍等一下再说一次。" = "I will not type into the line someone is already typing in -- try again in a moment.";
 "仅 read / bash / write / edit 四个内置工具, 不挂业务扩展 — 轻装跑定时任务与快速问答。" = "Only the four built-in tools (read / bash / write / edit) and no business extensions — a lean setup for scheduled tasks and quick questions.";
 "仅作用于本任务运行 (日志会话), 不改变你当前会话的模型与档位。" = "Applies only to this task's run (its log session); your current session's model and mode are untouched.";
 "仅显示前 80 条, 继续输入缩小范围" = "Showing the first 80 — keep typing to narrow it down";
@@ -238,6 +246,7 @@
 "仍然覆盖" = "Overwrite anyway";
 "从托管区删除" = "Remove from managed area";
 "付款" = "Payment";
+"代价：写错地方撤不回；写完之后按一次回车，在不少应用里就等于「发送」—— 那一下也不会再问你。" = "Cost: text that lands in the wrong place cannot be taken back, and pressing Return afterwards means \"send\" in many apps — that step will not ask you again.";
 "代价：可能点到别的地方，而且没有撤销；点的那一下你的光标会动。" = "Cost: it can land somewhere else and there is no undo; the cursor moves for that click.";
 "任务" = "Task";
 "任务删除后停止调度。工作日志文件始终保留; 日志会话可选删除。" = "Deleting a task stops scheduling. The work log file is always kept; the log session is optional.";
@@ -252,10 +261,12 @@
 "位置" = "Location";
 "低" = "Low";
 "低 · 每 30 分钟" = "Low · every 30 min";
+"你 %@ 毫秒前刚动过键鼠 ⇒ 没写。" = "You touched the keyboard or mouse %@ ms ago ⇒ nothing was typed.";
 "你 %@ 毫秒前刚动过键鼠 ⇒ 没点。" = "You touched the keyboard or mouse %@ ms ago ⇒ nothing was tapped.";
 "你写的" = "You wrote it";
 "你手动压缩了上下文 · %lld → %lld tokens" = "You compacted the context · %lld → %lld tokens";
 "你是谁" = "Who You Are";
+"你此刻正按着鼠标键 ⇒ 没写。松开之后再说一次。" = "You are holding a mouse button right now ⇒ nothing was typed. Ask again after you let go.";
 "你此刻正按着鼠标键(可能在拖拽) ⇒ 没点。松开之后再说一次。" = "You are holding a mouse button right now (dragging, most likely) ⇒ nothing was tapped. Ask again after you let go.";
 "侧问 · %@" = "Side · %@";
 "侧问创建失败：快照回读未完成 (回合未成功)" = "Could not start the side chat: the snapshot could not be read back (the turn did not succeed).";
@@ -277,8 +288,10 @@
 "停用后不再收信 (绑定关系保留)" = "Once disabled it stops receiving mail (the binding is kept).";
 "允许" = "Allow";
 "允许按坐标点击" = "Allow clicking by position";
+"允许模拟键盘输入" = "Allow simulated keyboard input";
 "允许锁屏运行" = "Allow running while locked";
 "先 computer_open 把它切上来, 再点。" = "Bring it forward with computer_open first, then tap.";
+"先 computer_open 把它切上来。" = "Bring it forward with computer_open first.";
 "先删除 Inbox agent「%@」" = "Delete the Inbox agent “%@” first";
 "先处理弹层, 或者重新 read 一次按新的来。" = "Deal with the sheet first, or read again and work from the new picture.";
 "先给它一条读法：勾「可读」或「视觉」—— 没有编号就没有能点的东西" = "Give it a way to read first: tick \"Read\" or \"Vision\" - without row numbers there is nothing to act on";
@@ -387,6 +400,7 @@
 "只是不再挂载, 目录与里面的文件一个都不动。" = "It is only unmounted — the directory and every file inside stay untouched.";
 "只有勾了「视觉」的 App 才会截窗口。给完要重启 MangoX 才生效 —— 灯不会当场变, 别以为没给成。" = "Only apps with \"Vision\" ticked get a window screenshot. Granting it takes effect only after you restart MangoX - the lamp will not flip right away, so do not read that as a failure.";
 "只有菜单里才有的功能, 在这一格上这条路走不通, 那就如实告诉用户。" = "Anything that exists only in a menu cannot be reached through this cell -- say so honestly.";
+"只给了回车、没给要写的字 ⇒ 没按。回车在不少 App 里就是「发出去 / 确定」," = "Only a Return and no text ⇒ nothing was pressed. In many apps Return means \"send\" or \"confirm\",";
 "只能看图" = "Picture only";
 "只读命令静默放行, 其余弹审批卡等待点击。" = "Read-only commands pass silently; anything else raises an approval card and waits for a click.";
 "只读命令静默放行, 危险命令自动拒绝并记下原因 (回执告知) — 远程驱动用。" = "Read-only commands pass silently; dangerous ones are refused automatically with the reason recorded (and sent back in the receipt) — for remote-driven work.";
@@ -414,6 +428,7 @@
 "回合完成通知" = "Turn completion notifications";
 "回执发送失败: %@" = "Could not send the receipt: %@";
 "回执未发出: Inbox「%@」的账号/收件实现不可用" = "No receipt sent: the account or receiving path for Inbox “%@” is unavailable";
+"回车在不少 App 里等于发送, 一段带换行的字会变成好几条消息。" = "In many apps Return sends, so a paragraph with line breaks would go out as several messages.";
 "图上的位置是相对窗口的, 窗口一动就全偏 —— 重新 read 一次再算。" = "Positions in the picture are relative to the window, so moving it shifts every one of them — read again and measure again.";
 "图片: %@" = "Image: %@";
 "图片已不存在 (附件文件被移动或删除)" = "The image is gone (the file was moved or deleted)";
@@ -454,6 +469,7 @@
 "它能做的只有：" = "the only thing it offers is ";
 "它能执行的是：" = "It can run: ";
 "它锁住这些 key，DB 条目里不能再用:" = "It locks these keys, which DB items can no longer use:";
+"它默认关是因为写进去的字可能被下一拍回车发出去、而发出去撤不回 ——" = "It is off by default because what gets typed can go out on the next Return, and sending cannot be undone —";
 "它默认关是因为可能点错、而且点错了没有撤销 ——" = "It is off by default because it can land in the wrong place and there is no undo —";
 "完成" = "Done";
 "完整地址, 如 you@example.com" = "Full address, e.g. you@example.com";
@@ -598,6 +614,7 @@
 "探测地址" = "Probe URL";
 "接口地址" = "Base URL";
 "接管检测" = "Takeover detection";
+"控制字符 %@" = "control character %@";
 "推荐" = "Recommended";
 "描述" = "Description";
 "提于 %@" = "Proposed %@";
@@ -637,6 +654,7 @@
 "文件类型构成 (共 %lld 个已识别文件)" = "File types (out of %lld recognized files)";
 "文件还在磁盘上 — 用文本编辑器另存为 UTF-8 即可" = "The files are still on disk — re-save them as UTF-8 in a text editor";
 "文字树 · %lld 行" = "Text tree · %lld rows";
+"文本里有%@ ⇒ 没写。" = "The text contains %@ ⇒ nothing was typed.";
 "新" = "New";
 "新会话" = "New session";
 "新会话-%@" = "New session-%@";
@@ -689,6 +707,7 @@
 "最近收信 %@" = "Last received %@";
 "最高" = "Max";
 "有些 App(尤其网页内容)不把滚动条交给系统 —— 那就趁早告诉用户这一页我一次读不完," = "Some apps — web content in particular — never hand a scroll bar to the system, so tell the user early that this page cannot be read in one go,";
+"有些应用写不进字（微信没有可用的输入框控件）。开着：我能把一段文字敲进当前的输入框。" = "Some apps cannot be typed into at all (WeChat exposes no usable text field). On: I can type a piece of text into the focused field.";
 "有些应用只看得见画面、认不出控件（比如微信）。开着：我能照着画面上的位置点下去。" = "Some apps only show a picture and expose no controls (WeChat, for one). On: I can click where the picture says to.";
 "有任务在跑时不让电脑休眠，跑完自动恢复；没任务时照常休眠" = "Keeps the computer awake while a task is running and lets it sleep again afterwards";
 "服务商" = "Provider";
@@ -759,6 +778,7 @@
 "永久删除" = "Erase";
 "没有匹配的会话或项目" = "No matching chats or projects";
 "没有可勾的应用" = "No apps to select";
+"没给要写的字 ⇒ 没写。" = "No text to write ⇒ nothing was typed.";
 "注入块在 spawn 期生效; 点此重启引擎立刻生效" = "The injection block takes effect at spawn; restart the engine to apply it now";
 "注入块已是最新" = "Injected block is up to date";
 "注入量" = "PAYLOAD";
@@ -866,6 +886,7 @@
 "补跑只跑最近一次; 忽略 = 认下这批, 不再提示" = "Catch up runs only the most recent one; Ignore accepts this batch and stops asking";
 "要么窗口被挪走了, 要么这个点是照着另一张图算的。" = "Either the window moved, or that point was measured from a different picture.";
 "要保存" = "Save";
+"要写 %lld 个字, 超过这一档的上限 %@ ⇒ 没写。" = "That is %lld characters, over the %@ limit of this mode ⇒ nothing was typed.";
 "要写内容请直接 setValue; 它连 AXValue 也不吃的话, 说明这类 App 只能靠" = "To write into it, use setValue directly; if it will not take AXValue either, that app only responds to ";
 "要写的内容是空的 ⇒ 没动。清空某一栏请你自己来。" = "The text to write is empty ⇒ nothing was done. Clearing a field is your call.";
 "要写的内容有 %lld 个字, 超过 %@ 的上限 ⇒ 没写。" = "The text is %lld characters, over the %@ limit ⇒ nothing was written.";
@@ -1003,12 +1024,14 @@
 "重启引擎生效 (知识改动将注入)" = "Restart the engine to apply (knowledge changes are injected)";
 "重命名" = "Rename";
 "重新 read 一次(这次的快照会带上窗口外框)。" = "Read again (that snapshot will carry the window frame).";
+"重新 read 一次。" = "Read again.";
 "重新检测" = "Check again";
 "重新生成" = "Regenerate";
 "重新读取" = "Reread";
 "重新载入（丢掉我的改动）" = "Reload (discard my changes)";
 "重试 %lld/%lld · %llds 后" = "Retry %lld/%lld · in %llds";
 "错误" = "Error";
+"键盘事件会落到**此刻在前台的那个 App** 的焦点里, 不是你指定的这个。" = "Keystrokes land in whatever app is **in front right now**, not in the one you named.";
 "长行折行显示" = "Fold long lines";
 "间隔" = "Interval";
 "阿里云邮箱" = "Alibaba Cloud Mail";

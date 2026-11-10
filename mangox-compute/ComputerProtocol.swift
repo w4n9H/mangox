@@ -41,6 +41,18 @@ enum ComputerRequest: Decodable {
     /// ⚠️ `seq` 在这里同样必填: 坐标是照着**某一份快照**的窗口几何算出来的, 没有 seq 就不知道
     ///    它对着哪个窗口 —— 而窗口挪动是常态(实测微信一小时挪了三次)。
     case tap(app: String, point: ComputerPoint?, seq: Int)
+    /// 往**当前焦点**里写一段字, 可选按一次回车 —— 第五档(2026-11-10)。
+    ///
+    /// ⚠️ 为什么不复用 `act` 的 `setValue`: 那条路要求先把目标**翻译回元素** —— 而这一档要服务的
+    ///    正是翻译不回来的界面(微信的 `CopyElementAtPosition` 永远回 `AXApplication` 自己),
+    ///    所以 `setValue` 在微信上**结构性地**用不了。键盘事件不认元素, 它的语义就是"往焦点里写"。
+    ///
+    /// ⚠️ `seq` 必填, 与 `tap` 同族: 拿它判"这份快照说的还是此刻这个进程吗"。打字不依赖窗口几何,
+    ///    但它依赖**焦点在谁那儿** —— App 重启过之后焦点归谁没人知道, 而键一敲就落进去了。
+    ///
+    /// ⚠️ `submit` **缺省是 `false`, 解码层也不填 true**: 回车在不少 App 里等于"发出去 / 确定",
+    ///    而这两件事都撤不回。只写不交是安全的那一半, 要交就得显式要。
+    case type(app: String, text: String, submit: Bool, seq: Int)
     /// 打开(或切到前台)一个 App —— P18 批 2d。
     /// ⚠️ 为什么不复用 `act`: 打开一个 App **不动它里面的任何东西**, 与"在 Dock 上点一下图标"
     ///    同一件事; 而"进去之后能做什么"仍然由操作面那道门管(`actBundles`)。两件事两个 op,
@@ -56,6 +68,8 @@ enum ComputerRequest: Decodable {
 
     private enum CodingKeys: String, CodingKey {
         case op, app, includeImage, index, seq, text, direction, point, url
+        /// 打字那一档要不要补一次回车(第五档)。**布尔, 缺省 false** —— 见 `case type` 上那段。
+        case submit
         /// 动作本身(`press` / `setValue` / `focus` / `scroll`)。⚠️ 不能复用 `op` ——
         /// 那个位置装的是信封类型(`act`), 两个语义塞进一个键, 读代码的人分不清哪个是哪个。
         case action
@@ -86,8 +100,15 @@ enum ComputerRequest: Decodable {
             self = .tap(app: try c.decodeIfPresent(String.self, forKey: .app) ?? "",
                         point: try c.decodeIfPresent(ComputerPoint.self, forKey: .point),
                         seq: try c.decodeIfPresent(Int.self, forKey: .seq) ?? -1)
+        case "type":
+            // 空 `text` 交给 server 拒(并说清"要写什么"): 解码层回一句机器话,
+            // 模型只会当成故障重试。`submit` 缺省 false —— 见 `case type` 上那段。
+            self = .type(app: try c.decodeIfPresent(String.self, forKey: .app) ?? "",
+                         text: try c.decodeIfPresent(String.self, forKey: .text) ?? "",
+                         submit: try c.decodeIfPresent(Bool.self, forKey: .submit) ?? false,
+                         seq: try c.decodeIfPresent(Int.self, forKey: .seq) ?? -1)
         case "open":
-            // 空 `app` 交给 server 拒(并说清"打开哪个"): 解码阶段回一句机器话,
+            // 空 `app` 交给 server 拒(并说清"打开哪个")+ 解码阶段回一句机器话,
             // 模型只会把 `dataCorrupted` 当成故障重试。
             // `url` 同理: **校验在 server**(只放行 http/https), 这里只搬字段 ——
             // 解码层拒掉的话, 模型看到的是"参数坏了", 而真实答案是"这个 scheme 不行"。

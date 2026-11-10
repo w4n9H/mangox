@@ -58,6 +58,7 @@ extension SmokeMain {
             caseCodeBlockLines,
             caseDiagnosticLog,
             caseBuiltInExtensions,
+            caseComputerType,
         ]
     }
 

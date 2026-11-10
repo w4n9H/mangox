@@ -46,6 +46,13 @@ final class ComputerServer {
     ///    逐 App 的是「可操作」那道门(见 `actBundles`)。
     let tapEnabled: Bool
 
+    /// 全局档: 允许"往当前焦点里写一段字"(第五档, 2026-11-10)。**缺省 = 关**。
+    ///
+    /// ⚠️ 与 `tap` **分成两个键、两个开关**, 理由在 `ComputerTypeRule` 文件头: 同一类动作
+    ///    (模拟输入)不等于同一件风险(点错看得见, 打进去的字可能被下一拍回车发出去)。
+    /// ⚠️ 同族: 只在启动时读一次 env ⇒ 改了要重启 helper(App 侧 `Scope` 算进比较, 会自动重启)。
+    let typeEnabled: Bool
+
     /// 上一次读的快照 + 编号到元素的表。**按 bundle 存**, 不是全局一个:
     /// 读 Safari 不该让 Finder 的编号失效(同时读两个 App 是常态)。
     struct Cached {
@@ -90,6 +97,8 @@ final class ComputerServer {
         self.takeoverWanted = env[HumanInputTap.envKey] == "1"
         // 第四档: 同样"要就写 1, 不要就删掉"。缺键 = 关(不是"都开")。
         self.tapEnabled = env[ComputerTapRule.envKey] == "1"
+        // 第五档: 同款"要就写 1, 不要就删掉"。
+        self.typeEnabled = env[ComputerTypeRule.envKey] == "1"
     }
 
     static let allowedBundlesEnvKey = "MANGOX_COMPUTE_ALLOWED_BUNDLES"
@@ -330,6 +339,9 @@ final class ComputerServer {
 
         case .tap(let app, let point, let seq):
             return handleTap(app: app, point: point, seq: seq)
+
+        case .type(let app, let text, let submit, let seq):
+            return handleType(app: app, text: text, submit: submit, seq: seq)
         }
     }
 
@@ -591,6 +603,109 @@ final class ComputerServer {
             : "\n— 这一点底下读到的是「\(underPoint.prefix(40))」。"
         if !HumanInputTap.shared.isInstalled {
             note += "\n— ⚠️ 接管检测没装上 ⇒ 我没法确认你手上有没有鼠标。"
+        }
+        return .success(text: note, seq: seq)
+    }
+
+    /// `type` 的入口。判据全在 `ComputerTypeRule`(纯函数, 冒烟造得出反例), 这里只取事实 + 执行。
+    ///
+    /// ⚠️ 它同样**不经过** `ComputerActGuard`: 这一档没有元素, 那九条判据拿不到输入。
+    /// ⚠️ 它**不要坐标、也不判窗口几何**: 键落进的是"当前焦点", 不是某个位置。所以要判的是
+    ///    **焦点归谁** —— 同进程 + 前台 + 人没在打字; 窗口挪没挪与它无关。
+    private func handleType(app: String, text: String, submit: Bool, seq: Int) -> ComputerResponse {
+        guard AXIsProcessTrusted() else {
+            return .failure("辅助功能权限还没授予 ⇒ 打不了字。"
+                            + "请在 系统设置 › 隐私与安全性 › 辅助功能 里勾上 MangoX。")
+        }
+        let candidates = candidatesInScope()
+        guard !candidates.isEmpty else {
+            return .failure(emptyScopeNote(verb: "写"))
+        }
+        guard let t = resolve(query: app, in: candidates) else {
+            return .failure(refusal(query: app, available: candidates, verb: "写"))
+        }
+        guard let cached = cache[t.bundle] else {
+            return .failure("还没读过「\(t.name)」⇒ 我不知道此刻焦点该在谁那儿 ⇒ 没写。"
+                            + "先 computer_read 一次。")
+        }
+        // ⚠️ 与 tap 同一条纪律, 但理由不同: tap 是"坐标要对着某份快照的窗口几何",
+        //    这里是"焦点落在哪个输入框" —— 中间界面动过, 焦点可能已经换了地方。
+        guard seq == cached.seq else {
+            return .failure("你手上是第 \(seq) 份快照, 而「\(t.name)」最新的是第 \(cached.seq) 份 "
+                            + "⇒ 没写。中间界面动过, 焦点可能已经不在你以为的那个输入框里 —— "
+                            + "重新 read 一次。")
+        }
+
+        let now = ProcessInfo.processInfo.systemUptime
+        let installed = HumanInputTap.shared.isInstalled
+        let since: Int? = !installed ? nil
+            : HumanInputTap.shared.lastHumanInputAt.map { Int(((now - $0) * 1000).rounded()) }
+                ?? Int.max
+        let facts = ComputerTypeRule.Facts(
+            typeEnabled: typeEnabled,
+            appActable: actBundles.contains(t.bundle),
+            appName: t.name,
+            snapshotPid: cached.pid,
+            currentPid: t.pid,
+            isFrontmost: Self.isFrontmost(bundle: t.bundle, pid: t.pid),
+            leftButtonDown: CGEventSource.buttonState(.combinedSessionState, button: .left),
+            rightButtonDown: CGEventSource.buttonState(.combinedSessionState, button: .right),
+            sinceHumanInputMs: since,
+            text: text,
+            submit: submit)
+        if let why = ComputerTypeRule.refusal(facts) { return .failure(why) }
+        return hidType(text: text, submit: submit, name: t.name, seq: cached.seq,
+                       monitored: installed)
+    }
+
+    /// 真把这段字敲进去 —— **全仓唯一一处发键盘事件**。
+    ///
+    /// 三件事:
+    ///   ① **一段一段送, 每段 ≤ 20 个 UTF-16 单元** —— `keyboardSetUnicodeString` 的硬上限,
+    ///      超了会被**静默截断**(一个字都不报错, 只是后面那些没进去);
+    ///   ② 走 `.cghidEventTap`, 与鼠标那条同一个理由(按 pid 投递对 AppKit 无效);
+    ///   ③ 回执**只报"敲了"**, 不报"发出去了" —— 发送是目标 App 收到回车之后的事,
+    ///      只有再 read 一次才知道。
+    private func hidType(text: String, submit: Bool, name: String, seq: Int,
+                         monitored: Bool) -> ComputerResponse {
+        let src = CGEventSource(stateID: .hidSystemState)
+        let units = Array(text.utf16)
+        var start = 0
+        while start < units.count {
+            let end = min(start + 20, units.count)
+            let chunk = Array(units[start..<end])
+            guard let down = CGEvent(keyboardEventSource: src, virtualKey: 0, keyDown: true),
+                  let up = CGEvent(keyboardEventSource: src, virtualKey: 0, keyDown: false) else {
+                return .failure("造不出键盘事件 ⇒ 没写进去。")
+            }
+            chunk.withUnsafeBufferPointer { buf in
+                down.keyboardSetUnicodeString(stringLength: buf.count, unicodeString: buf.baseAddress)
+                up.keyboardSetUnicodeString(stringLength: buf.count, unicodeString: buf.baseAddress)
+            }
+            down.post(tap: .cghidEventTap)
+            up.post(tap: .cghidEventTap)
+            start = end
+            usleep(2_000)
+        }
+
+        var note = "往「\(name)」的当前焦点写了 \(text.count) 个字。"
+        if submit {
+            guard let down = CGEvent(keyboardEventSource: src, virtualKey: 36, keyDown: true),
+                  let up = CGEvent(keyboardEventSource: src, virtualKey: 36, keyDown: false) else {
+                return .success(text: note + "\n— ⚠️ 那次回车没造出来 ⇒ 只写进去了, 没交出去。",
+                                seq: seq)
+            }
+            down.post(tap: .cghidEventTap)
+            usleep(15_000)
+            up.post(tap: .cghidEventTap)
+            note += "并按了一次回车。"
+            note += "\n— 回车在不少 App 里就是「发出去 / 确定」。这条回执只证明键发出去了, "
+                + "**发没发出去要再 read 一次才知道** —— 别把「敲了」当成「成了」。"
+        } else {
+            note += "\n— 没按回车。要交出去就再说一次并带上 submit。"
+        }
+        if !monitored {
+            note += "\n— ⚠️ 接管检测没装上 ⇒ 我无法确认你手上是不是正在打字, 这次是盲写的。"
         }
         return .success(text: note, seq: seq)
     }

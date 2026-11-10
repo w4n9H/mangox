@@ -767,7 +767,8 @@ final class ChatStore: ObservableObject {
                 actRaw: store.loadSettingText(key: ComputerSettings.actBundlesKey),
                 imageRaw: store.loadSettingText(key: ComputerSettings.imageBundlesKey),
                 takeoverRaw: store.loadSettingText(key: ComputerSettings.takeoverKey),
-                tapRaw: store.loadSettingText(key: ComputerSettings.tapKey))
+                tapRaw: store.loadSettingText(key: ComputerSettings.tapKey),
+                typeRaw: store.loadSettingText(key: ComputerSettings.typeKey))
             ComputerSettings.shared.onPersist = { [weak self] key, value in
                 self?.persistence?.saveSettingText(key: key, value: value)
             }

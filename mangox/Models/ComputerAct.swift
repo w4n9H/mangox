@@ -557,6 +557,139 @@ enum ComputerTapRule {
     }
 }
 
+/// 往**当前焦点**里写一段字(第五档, 2026-11-10)。
+///
+/// ⚠️ 为什么是独立一档而不是 `act` 的第八个动词: 与 `tap` 同一条理由 —— `ComputerActGuard`
+///    那九条判据的输入是"元素", 而这一档压根没有元素, 它的语义就是"往焦点里写"。
+///
+/// ⚠️ 为什么不能复用 `setValue`: 那条路要求先把目标**翻译回元素**, 而微信那类 App 的
+///    `CopyElementAtPosition` 永远回 `AXApplication` 自己 ⇒ 结构上写不进去(实测 5 节点 / 覆盖率 0%)。
+///    键盘事件不认元素, 所以这是唯一能到得了那种界面的路。
+///
+/// ⚠️ 与 `tap` **各自一档**(两个 env 键、两个开关), 不合成一个: 它们同属"模拟输入", 但风险
+///    不是一件事 —— 点错的位置当场看得见, 而打进输入框的字**可能被下一拍回车发出去**。
+///    开关的语义必须与它管的那件事同一个(见 `ComputerPermission` 那次教训), 合成一个就等于
+///    让用户点一次同时授权两件不同的事。
+enum ComputerTypeRule {
+
+    /// 这一档的 env 键。**要就写 "1", 不要就删掉**(同 `MANGOX_COMPUTE_TAP` / `MANGOX_COMPUTE_TAKEOVER`)。
+    static let envKey = "MANGOX_COMPUTE_TYPE"
+
+    /// 人最后一次动键鼠之后, 至少消停这么久才允许写。
+    ///
+    /// ⚠️ 与 `tap` 取了同一个数, 但**理由不同**: tap 那条防的是"抢鼠标导致点错", 这条防的是
+    ///    "人正打着字, 我把字插进他那一行里"。人在连续输入时这个计时器一直被刷新 ⇒ 真在打字的人
+    ///    天然被挡住, 这正是要的效果。
+    /// ⚠️ 不能是 0: 那是"人正打着字我也照写"。
+    static let humanQuietMs = 400
+
+    /// 一次最多写多少。**防的不是攻击, 是失控**: 模型把一整篇文档当 `text` 塞进一个聊天输入框,
+    /// 那一下既撤不回(可能被下一拍回车发出去), 也会把界面撑爆。
+    static let maxChars = 2000
+
+    /// 一次 type 的全部输入。**全是事实**, 判据只对照它们(同 `ComputerTapRule.Facts` 的纪律)。
+    struct Facts {
+        /// 全局档(设置页那个「模拟键盘输入」开关)。**默认关**。
+        var typeEnabled: Bool
+        /// 这个 App 勾了「可操作」没有。
+        var appActable: Bool
+        var appName: String
+        /// 上次 read 时那个进程, 与此刻的进程 —— 不相等 = App 重启过, 焦点归谁不知道。
+        var snapshotPid: Int32
+        var currentPid: Int32
+        /// 键盘事件发给**前台** App。不在前台时写进去的是别人的焦点。
+        var isFrontmost: Bool
+        var leftButtonDown: Bool
+        var rightButtonDown: Bool
+        /// 最近一次人类输入距今多少毫秒。`nil` = 监听没装上(拿不到事实, 不假装判过)。
+        var sinceHumanInputMs: Int?
+        var text: String
+        /// 写完要不要补一次回车。
+        var submit: Bool
+    }
+
+    /// 文本里的换行 / 控制字符。`nil` = 干净。
+    ///
+    /// ⚠️ 换行必须单独拦: 键盘注入的"回车"与文本里的 `\n` 在很多 App 里是同一件事 ——
+    ///    微信 / Slack / iMessage 的默认设置都是"回车 = 发送" ⇒ 一段带 5 个换行的文本会变成
+    ///    **5 条消息**, 而模型以为自己只写了一段字。这条不能靠调用方自觉。
+    ///
+    /// ⚠️ 连带拦 C0 控制字符与 U+2028/2029(行分隔符): 它们注入进去会变成什么, 取决于目标 App,
+    ///    而我们连它是哪个控件都不知道 —— 窄口里不认识的输入一律不放行。
+    static func offendingCharacter(_ text: String) -> Character? {
+        for ch in text {
+            for s in ch.unicodeScalars {
+                if s.value < 0x20 || s.value == 0x7F || s.value == 0x2028 || s.value == 0x2029 {
+                    return ch
+                }
+            }
+        }
+        return nil
+    }
+
+    /// 拒(`nil` = 可以写)。**顺序即代价序**: 先判不要钱的, 最后才碰进程表与监听。
+    static func refusal(_ f: Facts) -> String? {
+        // ① 档位
+        guard f.typeEnabled else {
+            return "「模拟键盘输入」这一档关着 ⇒ 没写。"
+                + "它默认关是因为写进去的字可能被下一拍回车发出去、而发出去撤不回 ——"
+                + " 要开就在 设置 › 集成 › 电脑操作 里打开。"
+        }
+        // ② 这个 App 有没有被允许动
+        guard f.appActable else {
+            return "「\(f.appName)」还没勾「可操作」⇒ 没写。看得到不等于动得。"
+        }
+        // ③ 空的字 + 要回车 —— 那不是打字, 是"光按一下回车"
+        let body = f.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        if body.isEmpty {
+            return f.submit
+                ? "只给了回车、没给要写的字 ⇒ 没按。回车在不少 App 里就是「发出去 / 确定」,"
+                    + " 这一档不替你单按它 —— 要发就先把内容写上。"
+                : "没给要写的字 ⇒ 没写。"
+        }
+        // ④ 换行 / 控制字符
+        if let bad = offendingCharacter(f.text) {
+            let scalar = bad.unicodeScalars.first.map { String(format: "U+%04X", $0.value) } ?? ""
+            // ⚠️ 判别用**布尔**, 不用 `what == "换行"` —— 拿一个显示字面量当判别键,
+            //    改文案那天比较就静默变成恒假(同 `ToolDetail.key` / `KnowledgeKind.tag` 那一族)。
+            let isLineBreak = scalar == "U+000A" || scalar == "U+000D"
+            let what = isLineBreak ? "换行" : "控制字符 \(scalar)"
+            var why = "文本里有\(what) ⇒ 没写。"
+            if isLineBreak {
+                why += "回车在不少 App 里等于发送, 一段带换行的字会变成好几条消息。"
+                    + " 要分多段就分几次写。"
+            }
+            return why
+        }
+        // ⑤ 量
+        guard f.text.count <= maxChars else {
+            return "要写 \(f.text.count) 个字, 超过这一档的上限 \(maxChars) ⇒ 没写。"
+                + " 分段写(或者让人自己粘贴)比一次塞进去安全 —— 塞进去之后想改也没法改。"
+        }
+        // ⑥ 同上一次读的是不是同一个进程
+        guard f.snapshotPid == f.currentPid else {
+            return "「\(f.appName)」重启过了 ⇒ 你手上那份快照说的不是这个窗口, 焦点落在哪儿也不知道, 没写。"
+                + "重新 read 一次。"
+        }
+        // ⑦ 前台: 键盘事件发给谁, 由系统当前的前台 App 决定
+        guard f.isFrontmost else {
+            return "「\(f.appName)」不在前台 ⇒ 没写。"
+                + "键盘事件会落到**此刻在前台的那个 App** 的焦点里, 不是你指定的这个。"
+                + "先 computer_open 把它切上来。"
+        }
+        // ⑧ 手上按着键(可能在拖拽 / 多选)
+        guard !f.leftButtonDown, !f.rightButtonDown else {
+            return "你此刻正按着鼠标键 ⇒ 没写。松开之后再说一次。"
+        }
+        // ⑨ 人刚动过键鼠
+        if let ms = f.sinceHumanInputMs, ms < humanQuietMs {
+            return "你 \(ms) 毫秒前刚动过键鼠 ⇒ 没写。"
+                + "人正在打字时我不往他那行里插字 —— 稍等一下再说一次。"
+        }
+        return nil
+    }
+}
+
 /// 一条动作请求 —— 与 `ComputerRequest.act` 的字段一一对应。
 struct ComputerActRequest: Equatable {
     let app: String

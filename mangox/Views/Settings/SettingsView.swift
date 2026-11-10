@@ -818,6 +818,8 @@ struct SettingsView: View {
             takeoverRow
             Divider().overlay(CodexTheme.divider)
             tapRow
+            Divider().overlay(CodexTheme.divider)
+            typeRow
         }
     }
 
@@ -935,6 +937,37 @@ struct SettingsView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             Toggle("", isOn: Binding(get: { computer.tapEnabled },
                                      set: { computer.tapEnabled = $0 }))
+                .toggleStyle(.switch)
+                .controlSize(.small)
+                .labelsHidden()
+                .fixedSize()
+        }
+    }
+
+    /// 第五档(2026-11-10): 允许往当前焦点里写字。
+    ///
+    /// ⚠️ **与「按坐标点击」分开一行、分开一个开关**: 它们同属"模拟输入", 但风险不是一件事 ——
+    ///    点错的位置当场看得见, 而打进去的字**可能被下一拍回车发出去**, 撤不回。合成一行就等于
+    ///    让用户点一次同时授权两件不同后果的事。
+    /// ⚠️ 副标题同样只写**代价**: 好处(微信 / 画布类里能写字)是它存在的理由。
+    private var typeRow: some View {
+        HStack(alignment: .center, spacing: 10) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("允许模拟键盘输入")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(CodexTheme.textPrimary)
+                Text("有些应用写不进字（微信没有可用的输入框控件）。开着：我能把一段文字敲进当前的输入框。")
+                    .font(.system(size: 11))
+                    .foregroundStyle(CodexTheme.textMuted)
+                    .fixedSize(horizontal: false, vertical: true)
+                Text("代价：写错地方撤不回；写完之后按一次回车，在不少应用里就等于「发送」—— 那一下也不会再问你。")
+                    .font(.system(size: 11))
+                    .foregroundStyle(CodexTheme.toolRunning)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            Toggle("", isOn: Binding(get: { computer.typeEnabled },
+                                     set: { computer.typeEnabled = $0 }))
                 .toggleStyle(.switch)
                 .controlSize(.small)
                 .labelsHidden()
