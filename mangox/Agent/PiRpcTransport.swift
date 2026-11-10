@@ -341,6 +341,11 @@ final class PiRpcTransport: AgentTransport {
               //    那种字面量登不进豁免名单(门会一直红)。共用 `app` 那一段也省一份译文。
               return input.app ? "打开" + app : "打开 (没说哪个 App)";
             }
+            // 第四档(2026-11-10): 它没有 `op`, 唯一的参数就是那个点。不加这一支, 卡上会退成
+            // 兜底那句"读" —— 而这一档最需要人看清的恰恰是"要按屏幕的哪儿"。
+            if (toolName === "computer_tap") {
+              return "按 (" + String(input.x) + "," + String(input.y) + ")" + app;
+            }
             if (input.op === "setValue") {
               const n = input.text === undefined ? 0 : String(input.text).length;
               return "写 #" + (input.index ?? "?") + " (" + n + " 字)" + app;
@@ -1069,16 +1074,16 @@ final class PiRpcTransport: AgentTransport {
     nonisolated static let computerReadToolName = "computer_read"
     nonisolated static let computerActToolName = "computer_act"
     nonisolated static let computerOpenToolName = "computer_open"
+    /// 第四档(2026-11-10): 按坐标点一下。**单独一个工具**, 不并进 `computer_act` ——
+    /// 它前面没有元素, 也没有 `op`; 并进去等于让模型以为 act 有时可以不管编号。
+    nonisolated static let computerTapToolName = "computer_tap"
 
     /// P18: computer 扩展注册出来的工具名 —— 与 `computerExtensionSource` 同源同改
     /// (冒烟断言"每个名字都能在源码里找到 `name: "<名字>"`", 同 `webSearchToolNames` 那条守)。
     ///
-    /// ⚠️ **现在有三个工具**: 读一个、动一个、打开一个。动作面刻意只开 `press` / `setValue` ——
-    /// 以后加 `computer_scroll` 时这里加一项即可, `ApprovalGate` 的 `computer_` 前缀判据
-    /// 会自动把它算进"要审批"那一侧(不必也**不许**去改白名单)。
-    /// ⚠️ `computer_open` **也在这张表里**(它同样要过桥), 但它查的是**读面**(见桥里那段)。
+    /// ⚠️ **现在有四个工具**: 读一个、动一个、打开一个、按坐标点一个。
     nonisolated static let computerToolNames: [String] =
-        [computerReadToolName, computerActToolName, computerOpenToolName]
+        [computerReadToolName, computerActToolName, computerOpenToolName, computerTapToolName]
 
     nonisolated static let computerExtensionFileName = "mangox-computer.ts"
 
@@ -1369,6 +1374,71 @@ final class PiRpcTransport: AgentTransport {
             });
 
             pi.registerTool({
+                name: "computer_tap",
+                label: "Tap a point",
+                description: [
+                    "Click one point -- for an app whose outline has no row you can act on, where the picture",
+                    "is the only thing that shows what is there. Read it first with `includeImage`: that read",
+                    "also prints where the window sits on screen, so the point is window origin plus the",
+                    "position you measured in the picture.",
+                    "",
+                    "This is not a looser `press`: nothing is resolved back to a control, so the checks that",
+                    "guard `press` (paying or ordering, permanent deletion, password fields) cannot run here.",
+                    "What is left is geometry -- the window must not have moved since that read, the point must",
+                    "be inside it, and the window on top of that point must be the same one. Each refusal says",
+                    "which of those failed: re-read and measure again rather than nudging the point.",
+                    "",
+                    "It is off by default and it uses the real mouse, so the cursor moves for a moment. Do not",
+                    "use it while the person may be working, and never for something a row number could do.",
+                    "",
+                    "A reply that says it clicked means the point was pressed -- not that the interface did",
+                    "what you wanted. Read again to find out.",
+                ].join("\n"),
+                parameters: Type.Object({
+                    app: Type.Optional(Type.String({
+                        description: "App name or bundle id. Omit to tap in the frontmost app.",
+                    })),
+                    x: Type.Number({
+                        description: "Global screen x, left edge origin (same numbers as the outline frames).",
+                    }),
+                    y: Type.Number({
+                        description: "Global screen y, top edge origin.",
+                    }),
+                    seq: Type.Number({
+                        description: "The snapshot sequence from the read whose picture you measured.",
+                    }),
+                }, { additionalProperties: false }),
+
+                async execute(_toolCallId, params) {
+                    const sock = process.env[SOCK_ENV];
+                    if (!sock) {
+                        return ok("computer_tap is not enabled in this session: no "
+                            + SOCK_ENV + " was provided.");
+                    }
+                    let reply;
+                    try {
+                        reply = await ask(sock, {
+                            op: "tap",
+                            app: params.app || "",
+                            point: { x: params.x, y: params.y },
+                            seq: params.seq,
+                        });
+                    } catch (error) {
+                        throw new Error("could not reach the window reader: " + String(error));
+                    }
+                    if (!reply || typeof reply !== "object") {
+                        throw new Error("the window reader sent something that is not an object.");
+                    }
+                    if (reply.ok !== true) {
+                        return ok("Refused: " + (reply.error || "no reason given."));
+                    }
+                    return ok(typeof reply.text === "string"
+                        ? reply.text
+                        : "(the reader returned no text)");
+                },
+            });
+
+            pi.registerTool({
                 name: "computer_open",
                 label: "Open an app or a URL",
                 description: [
@@ -1528,14 +1598,21 @@ final class PiRpcTransport: AgentTransport {
         learnedBashTokens = tokens
     }
 
-    /// P13 + P15.3: 从一批路径里挑出**业务扩展** —— MangoX 自管的三个都要滤掉, 它们由**轴**决定
-    /// 挂不挂 (approval = 恒挂, codemode = 档位轴, dream = 那一次 fire 的实例), 不能被业务扩展
-    /// 扫掠重复挂一遍。提成 static 纯函数是为了这条判据能**在门禁里变红**(实例侧只有 private 状态)。
+    /// P13 + P15.3: 从一批路径里挑出**业务扩展** —— MangoX 自管的这几个都要滤掉, 它们由**轴**决定
+    /// 挂不挂 (approval = 恒挂, codemode = 档位轴, dream = 那一次 fire 的实例, computer = 作用域
+    /// 开关), 不能被业务扩展扫掠重复挂一遍。提成 static 纯函数是为了这条判据能**在门禁里变红**
+    /// (实例侧只有 private 状态)。
+    ///
+    /// ⚠️ 漏一个的后果不是"多挂一次也没事": 同一个 `.ts` 会在同一次 spawn 里被
+    /// `--extension` **传两次**(一次来自这里, 一次来自它自己的那条轴参数) ⇒ 工具注册两遍。
+    /// 2026-11-10 实测就是漏了 `mangox-computer.ts`(它在面板里是"开着"的, 于是一路混进业务列表)。
+    /// 加新的自管扩展时, 这条过滤与 `ExtensionItem.builtInNames` **要一起改**。
     static func businessExtensionPaths(_ paths: [String]) -> [String] {
         paths.filter {
             !$0.hasSuffix("mangox-approval.ts")
                 && !$0.hasSuffix("mangox-codemode.ts")
                 && !$0.hasSuffix("mangox-dream.ts")
+                && !$0.hasSuffix("mangox-computer.ts")
         }
     }
 
@@ -1742,7 +1819,11 @@ final class PiRpcTransport: AgentTransport {
         //    每次读是为了让**生效时机**落在下一次 spawn —— 用户在设置里关掉 ⇒ 下一轮
         //    spawn 就不再给 env ⇒ 扩展根本不挂。存成字段会多出一个"改了设置但在途
         //    会话还开着"的窗口, 而那个窗口界面上看不见。
-        let computerBundles = ComputerSettings.shared.activeBundles
+        // ⚠️ 用的是 `activeAllowedBundles`（读 ∪ 视觉）**不是** `activeBundles`（纯读面）:
+        //    helper 这个名字问的是"这个 App 我能不能碰", 而截图那一路不需要 AX 树 ——
+        //    只勾了微信视觉的人, 用读面当判据会让助手压根不启动（`start` 空名单直接
+        //    `return nil`）, 而设置页三个勾都勾着。
+        let computerBundles = ComputerSettings.shared.activeAllowedBundles
         // 操作面(批 2b)单独读一次: 它是**第二档权限**, 与读面不同源(见 `activeActBundles`)。
         let computerActBundles = ComputerSettings.shared.activeActBundles
         // 接管检测(2026-11-02): 原来是"档位对了就装", 而 `interactive` 是默认档 ⇒ 用户什么都
@@ -1752,7 +1833,8 @@ final class PiRpcTransport: AgentTransport {
                                              actBundles: computerActBundles,
                                              imageBundles: ComputerSettings.shared.activeImageBundles,
                                              takeover: ComputerSettings.shared.shouldInstallTakeover(
-                                                 expectsHuman: approvalMode.expectsHumanAtKeyboard))
+                                                 expectsHuman: approvalMode.expectsHumanAtKeyboard),
+                                             tap: ComputerSettings.shared.tapEnabled)
         let computerExtPath = computerSock != nil ? Self.ensureComputerExtensionFile() : nil
         var args = spec.scriptArgs + ["--mode", "rpc"]
         // P12.1b + P13: 扩展参数 (关自动发现 + 补回内置 provider + 挂托管扩展 + codemode 层)。
@@ -1881,6 +1963,7 @@ final class PiRpcTransport: AgentTransport {
                                               imageBundles: ComputerSettings.shared.activeImageBundles,
                                               takeover: ComputerSettings.shared.shouldInstallTakeover(
                                                   expectsHuman: approvalMode.expectsHumanAtKeyboard),
+                                              tap: ComputerSettings.shared.tapEnabled,
                                               peerPid: ProcessInfo.processInfo.processIdentifier,
                                               inherited: ProcessInfo.processInfo.environment) {
             p.environment = env
@@ -2522,14 +2605,16 @@ final class PiRpcTransport: AgentTransport {
         //    也正因为如此, 走到这里的 computer 工具按定义都是非只读的(read 在 JS 里就放行),
         //    所以用前缀判据不会误伤 read。
         //
-        // ⚠️ **`computer_open` 查的是读面**(`activeBundles`), 不是操作面 —— 打开一个 App 与
-        //    "在 Dock 上点一下图标"是同一件事, 它不动 App 里的任何东西; 而清单页上写的是
-        //    「可读」「可操作」两档, 用户勾了「可读」就该能打开它。查操作面的话, 一个只勾了
-        //    读的 App **连打开都要动权限** —— 那是把两档权限合成了一档。
+        // ⚠️ **`computer_open` 查的是"允许碰"那一档**(`activeAllowedBundles` = 读 ∪ 视觉),
+        //    不是操作面 —— 打开一个 App 与"在 Dock 上点一下图标"是同一件事, 它不动 App 里的
+        //    任何东西; 而清单页上写的是「可读」「视觉」「可操作」三档, 用户勾了前两档里
+        //    任意一个就该能打开它。查操作面的话, 一个只勾了读的 App **连打开都要动权限** ——
+        //    那是把两档权限合成了一档。
+        //    （2026-11-10 从 `activeBundles` 换成它: 只勾视觉的 App——微信——也得能打开。）
         if ApprovalGate.isComputerTool(parts[3]) {
             let isOpen = parts[3] == Self.computerOpenToolName
             let allowed = isOpen
-                ? ComputerSettings.shared.activeBundles
+                ? ComputerSettings.shared.activeAllowedBundles
                 : ComputerSettings.shared.activeActBundles
             let bundle = ComputerSettings.shared.resolveBundle(query: card.title)
             if bundle.map({ allowed.contains($0) }) ?? true {
@@ -2827,6 +2912,13 @@ final class PiRpcTransport: AgentTransport {
             let op = (args["op"] as? String)?
                 .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             var cmd = op.isEmpty ? nil : op
+            // 第四档没有 `op`: 它唯一的参数是那个点。不写进 command 列, 卡上就只剩 App 名,
+            // 而审批时人要在**界面上**找它说的是哪个位置。
+            if name == Self.computerTapToolName {
+                let x = args["x"].map { "\($0)" } ?? "?"
+                let y = args["y"].map { "\($0)" } ?? "?"
+                return (app.isEmpty ? name : app, "tap (\(x),\(y))")
+            }
             // setValue 的正文要看得见: 审批时"要往这个框里写什么"就是这个动作的全部内容。
             if let text = args["text"] as? String, !text.isEmpty {
                 cmd = (cmd.map { $0 + " " } ?? "") + "\"" + String(text.prefix(60)) + "\""

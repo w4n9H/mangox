@@ -107,5 +107,80 @@ extension SmokeMain {
               "P6.3.3 真库: 首项是最新那一轮的首句 (实测 [\(scLive.first?.title ?? "nil")])")
         check(sc.sideChatTurns(for: UUID()).isEmpty,
               "P6.3.3 真库: 不存在的会话 ⇒ 空列表（侧栏点了也只会看到禁用态, 不会崩）")
+
+        // ── ⑦ 快照孤儿回收: 判据是"这个文件**有没有主**", 不是"它放了几天" ──
+        // 三个反例各红一条, 缺一个这一节就是恒真:
+        //   只断言"孤儿被清" ⇒ "把 side-snapshot-* 一律删"照样绿;
+        //   只断言"有主的留着" ⇒ "什么都不做"照样绿;
+        //   只认 `session_file` 一列 ⇒ **开了侧问没发消息**的那个快照被误删（它此刻唯一的
+        //   指向是 `fork_source_file`, 会话已经在侧栏里, 首回合会 --fork 一个不存在的文件）。
+        // ⚠️ transcript 根是**进程级**重定向 (守卫 27), 这里临时换成夹具目录再还原 ——
+        //   不换的话这一节会去扫用户真实的 `~/.mangox/pi-sessions/`。
+        let p634 = fixtureDir("p634")
+        let snapDir = p634 + "/sessions"
+        try? FileManager.default.createDirectory(atPath: snapDir, withIntermediateDirectories: true)
+        let scDirBackup = PiRpcTransport.sessionDirectoryOverride
+        PiRpcTransport.sessionDirectoryOverride = snapDir
+        defer { PiRpcTransport.sessionDirectoryOverride = scDirBackup }
+
+        let sc2 = ChatStore(transport: MockTransport(), dbPath: p634 + "/p634.db",
+                            managedExtensionsDir: p634 + "/ext")
+        sc2.mailbox.stopScheduler()
+        sc2.addProject(title: "p634", path: p634)
+        guard let sc2Pid = sc2.projects.last?.id else {
+            check(false, "P6.3.4 夹具: 建不出项目 (不是通过)")
+            return
+        }
+        sc2.createSession(in: sc2Pid)
+        guard let sc2Sid = sc2.selectedConversationId else {
+            check(false, "P6.3.4 夹具: 建不出会话 (不是通过)")
+            return
+        }
+        sc2.createSession(in: sc2Pid)
+        guard let scPendingSid = sc2.selectedConversationId, scPendingSid != sc2Sid else {
+            check(false, "P6.3.4 夹具: 建不出第二场会话 (不是通过)")
+            return
+        }
+        // 三种快照:
+        //   scOwn     —— 已落定的侧问 (`session_file` 认得它)
+        //   scForked  —— 侧问已进侧栏、**还没发消息** (`session_file` 是 NULL, 只有 `fork_source_file`)
+        //   scOrphan  —— 会话被删掉之后留下的（正是实测那 238 个）
+        let scOwn = snapDir + "/side-snapshot-" + UUID().uuidString + ".jsonl"
+        let scForked = snapDir + "/side-snapshot-" + UUID().uuidString + ".jsonl"
+        let scOrphan = snapDir + "/side-snapshot-" + UUID().uuidString + ".jsonl"
+        for f in [scOwn, scForked, scOrphan] {
+            try? "{}\n".write(toFile: f, atomically: true, encoding: .utf8)
+        }
+        try? sc2.persistence?.setSessionFile(id: sc2Sid, path: scOwn)
+        try? sc2.persistence?.markSideChat(id: scPendingSid, sideOf: sc2Sid,
+                                           sourceFile: scForked, turns: 2, at: .now)
+        let scRemoved = sc2.pruneOrphanSideSnapshots()
+        check(scRemoved == 1 && !FileManager.default.fileExists(atPath: scOrphan),
+              "P6.3.4 回收: 没人认领的快照被清掉 (实测清了 \(scRemoved) 个, 应为 1)")
+        check(FileManager.default.fileExists(atPath: scOwn),
+              "P6.3.4 回收: `session_file` 认领的**一条都不许动** —— 一律当孤儿, 这条立刻红"
+              + "（那快照还挂在一场侧问上, 上下文直接断层且不可恢复）")
+        check(FileManager.default.fileExists(atPath: scForked),
+              "P6.3.4 回收: **只认 `session_file` 会误杀这一条** —— 侧问已进侧栏、还没发消息,"
+              + "它此刻唯一的指向是 `fork_source_file`; 删了它, 那场侧问首回合就 --fork 一个不存在的文件")
+
+        // 删会话必须**立刻**带走快照 —— 泄漏的真源头就是这条路 (默认 `deleteTranscript: false`,
+        // 而快照不吃那个开关)。这里刻意用默认参数, 复现最普通的那次点击。
+        sc2.deleteConversation(scPendingSid)
+        check(!FileManager.default.fileExists(atPath: scForked),
+              "P6.3.4 删除: 删掉那场侧问 ⇒ 快照跟着走 —— 旧的半径只认 `session_file`,"
+              + "没落定的侧问那儿是 NULL ⇒ 行没了、文件永远躺着（实测 238 个就是这么攒的）")
+
+        // 接线: 同一个库上再开一个 store = 重启 App。回收**不该只在被手动调用时才发生**,
+        // 否则纯函数全绿、孤儿永远躺着 —— 这正是修这个问题之前的现场。
+        let scLeftover = snapDir + "/side-snapshot-" + UUID().uuidString + ".jsonl"
+        try? "{}\n".write(toFile: scLeftover, atomically: true, encoding: .utf8)
+        let scBoot = ChatStore(transport: MockTransport(), dbPath: p634 + "/p634.db",
+                               managedExtensionsDir: p634 + "/ext")
+        scBoot.mailbox.stopScheduler()
+        check(!FileManager.default.fileExists(atPath: scLeftover),
+              "P6.3.4 接线: `init` 开机时就回收了 —— 只写纯函数没人调, 这条红（孤儿永远不回收到）")
+        check(FileManager.default.fileExists(atPath: scOwn),
+              "P6.3.4 接线: 开机回收同样绕开有主的快照 (库里那条 `session_file` 还指着它)")
     }
 }

@@ -5,6 +5,39 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [0.2.11] - 2026-11-10
+
+本版主线 = **让没有可访问性树的 App（微信）也能用**：「视觉」从读面的一个子项升成**独立一档**，并补上它的另一半 —— 凭屏幕位置点一下。顺带把内置手册从"编号步骤"改写成"场景清单"。全量冒烟 **2362 项 ALL PASS** + `xcodebuild` BUILD SUCCEEDED 零 warning。
+
+### 新增
+
+- **`computer_tap`：凭屏幕位置点一下（默认关）**：`computer_open` / `read` / `act` 之外的第四个工具，只服务"这个界面压根没有编号可用"的场合（微信、画布类）。落地前先量了一次"能不能不动光标把点按下去"—— `CGEvent.postToPid` 在计算器「7」上试了三种变体（原样 / 补 `mouseEventWindowUnderMousePointer` 那两个 field / 先补 `mouseMoved`）**全部失败**（显示区 `0 → 0`），而同坐标的 HID 投递一次就成（`0 → 7`）⇒ 这条路只能是 `CGWarpMouseCursorPosition` + `.cghidEventTap`，**一定会挪你的真光标**：实测占 **74.1 ms**、归位误差 **0.0 / 0.0**。所以默认关，设置页单独一行「允许按坐标点击」，改完下一次对话生效
+- **十三道闸排在真正点下去之前**（`ComputerTapRule.refusal`，纯函数、每条都能造反例）：全局档开着 / 这个 App 勾了「可操作」/ 快照与此刻同进程（App 没重启过）/ 此刻是前台 / 左右键都没按着（**拖拽时手是静止的**，"人静"会放行，那一下正好插进人家拖拽中间）/ 人静 ≥ 400 ms / 坐标在屏幕范围内 / 快照记过窗口几何 / 窗口没挪（±2px）/ 点落在窗口内（右下边界不含）/ 这点上最顶层窗口是**自己** / 窗口号对得上 / **底下读到的文字未命中恒拒词**（付款 / 永久删除）
+- **微信进 computer use 名单，并带两节场景手册**：微信 4.1.13 的 AX 树是 **5 个节点 / 3 行 / 覆盖率 0%**（全是 14×16 匿名按钮），同一家公司的企业微信却有 570 节点 / 190 处文本 —— 不是权限问题，是这个 App 没实现可访问性。手册写死三条真机事实：编号是看图认出来的（没编号 = 没勾视觉）、必须前台才点得动、图里认错字是常态（小灰字 / 英文 ID / 形近字）
+- **Chrome 进名单（第三方，装了才列）**：与 Safari 共用浏览器那一节的场景。清单从此分两张表 —— **内置恒列**（不装也在）、**第三方查安装**（`NSWorkspace.urlForApplication`）。顺带覆盖"装了、勾过、后来卸载了"：下次启动就地摘掉
+
+### 变更
+
+- **「图片」改名「视觉」并升成独立一档**：不再要求先勾「可读」、也不再是读面的子集 —— 勾了它才允许走「ax视觉 / 纯视觉」两种读法。三档**正交**：可读只数 AX，「可操作」的来源放宽成 **可读 ∪ 视觉**（两条路都能给出编号）。⚠️ 两条须知：① `ComputerHost.start` 原来吃的是 `activeBundles`（纯读面），名单为空时直接 `return nil` ⇒ 只勾视觉的 App **助手压根不启动**，新增 `activeAllowedBundles`（读 ∪ 视觉），落点四处必须同源；② `decode` / `encode` 里原来有 `image.intersection(bundles)`，视觉升档之后只勾视觉的 App 会在**下次启动时被静默抹掉**，而界面上什么都不说 ⇒ 改成不裁剪，冒烟两条钉住它
+- **`setAct` 不再"开操作顺带开读"**：两条来源并列时补哪条都是错的 —— 补读面对微信是假话，补视觉等于偷开截图权限。一条来源都没有时它什么都不做（设置页置灰 + 写原因）
+- **内置应用手册改写成「通用手册 + 场景清单」**：从"每节 = 任务 + 编号步骤"改成两层 —— 节前 **19 条通则分四组**（认目标 / 选动词 / 判成败 / 别做的事，只付一次），每节 = **一行一个场景**（`- 删一条: …`），**不写编号步骤**（步骤由模型从 read 回来那棵树里现排）。本体 **4481 → 3499** 字，真注入 **4148**（段头 649），单节全部压在 **430** 以内；加一个 App 的边际成本从 380~890 降到 ~330
+- **手册预算 5300 → 4400（下调，不是上调）**：上一版就是在"还有空间"的心态里从 5000 涨到 5300 的。现在的上限**压在实测值上**（4400 对 4148、430 对单节最大 409、整份 3500 对 3499）—— 下一次写胖应当**当场红**，而不是"还能塞"
+
+### 修复
+
+- **侧问快照泄漏（`~/.mangox/pi-sessions/` 里 238 个 `side-snapshot-*`，全 10 月的）**：原来的唯一删除点是"读会话文件"那条路径的 `defer` ⇒ **开了侧问但没发消息 / 中途关窗 / App 退出，快照就永久留下**。修的时候发现原计划有个更坏的坑：只认 `sessions.session_file` 判"有没有主"会把**首回合还没落定的侧问快照**当孤儿删掉（那时 `session_file` 是 NULL，唯一指向是 `fork_source_file`），而那场侧问还在侧栏里、首回合要去 `--fork` 一个已经被删的文件 —— **清早了比不回收更坏**。两处一起改：删除路径按 `side-snapshot-` 前缀**恒删**（不吃 `deleteTranscript` 开关）+ 开机 `pruneOrphanSideSnapshots()` 兜底（有主 = `session_file` ∪ `fork_source_file` ∪ 内存里的 `pendingForkTemp`）
+- **`computer_open` 的「已在运行 ⇒ 只切前台」是假成功**：`NSRunningApplication.activate(options:)` 在裸 CLI 进程里**返回 true 却什么都不做**（判别实验：`open -b com.apple.finder` 让位 → `isActive=false` → 调 `activateAllWindows` 返回 true → 1 秒后 `isActive` 仍 false）。回执写着「已经切到前台」，而 App 还在后面 —— 下一步 `act` 点不动（后台点击无效）、`tap` 报「不是前台」，两个都指向与真实原因无关的地方。改成 `NSWorkspace.shared.open(<App 包 URL>)`（实测真置前，且 **pid 与窗口数都不变** ⇒ 没有另起一份）+ **按效果判**：`isFrontmost` 轮询 1.5 s，没到前台就如实回失败并要求人自己点一下 Dock，**不拿返回码当结果**
+- **内置扩展的归属账（面板在三处说错话，全是零红灯）**：`mangox-computer.ts` 是随包内置的（`computerExtensionSource`，每次 spawn 落盘、内容不同才写），但没进 `builtInNames`（给了删除按钮 = 打地鼠）、没进 `unswitchableNames`（给了一个**按不动的开关**）、没进 `builtInToolNames`（不展开工具名）。再往下一层更糟：`businessExtensionPaths` 的过滤名单漏了它 ⇒ 同一次 spawn `--extension` **传两次**、工具**注册两遍**。自管扩展一共五个（approval / codemode / dream / computer 由轴决定挂载，全部滤出业务列表），而 `web-search` **反过来**必须留在业务列表（它真受面板开关控制）
+- **英文界面一直静默回落中文**：`en.lproj/Localizable.strings` 停在 **990** 条 —— tap 的 24 条回执与视觉档改过的几条文案都没跟着 `--write`。⚠️ `gen_strings --check` 只比对源码 key ↔ 词表，**不保证 `.strings` 落了盘**；改了词表必须跟一次 `--write`。现在 1022 条
+
+### 工程
+
+- **`run.sh` ③s「helper 里不许发合成事件」开成窄口（不是放开）**：它本来是 11-04 那条"禁全局键鼠"红线的代码表达。改成四根柱子 —— 只许 `ComputerServer.swift` 一处发 · 处数必须**正好 2**（down / up）· `hidClick` 出现次数必须 = 2（定义 + 调用）· `ComputerTapRule.refusal` 的行号必须**排在** `hidClick(at: cg` **之前**；外加 `.cghidEventTap` / `defer … 归位` / `primaryHeight - saved.y` 三条存在性断言。反例自证：多加一发 ⇒ 数出 3 ≠ 2 ⇒ 红
+- **两条新增的源码守卫**：③p2 —— helper 全仓**禁** `.activate(options:`，且置前那条分支必须写成 `guard Self.isFrontmost(bundle:pid:) else`（防"为了治假成功又回到按返回码收尾"）；③x —— 拿 `PiRpcTransport` 里的 `mangox-*.ts` 字面量逐条对账 `builtInNames`，**少登记一个就是工具注册两遍**
+- **两条判据本身的错（都不是这批改动引入的）**：① `isTaskLine` 用 `components(separatedBy: "\n### ")` 拆任务，把**第一行**的 `###` 漏掉了 ⇒ "≥2 个任务"实际要求 ≥3 个；四节都 ≥4 个所以两个月没红过，微信正好 2 个才撞出来。改成按行前缀数，并在注释里写明"错的那天必须表现成红，而不是表现成'这节写得不合格'"。②「表外第三方」的样本换过两次（Chrome → 微信），每次都因为它后来进了白名单而**反向变红** ⇒ 改成合成 bundle `com.example.not-in-covered` —— 判据守的是"不在 covered 里就不许进提示词"，与那个 App 存不存在无关，合成样本结构上不可能被支持
+- **`NSWorkspace.shared.frontmostApplication` 在 helper 里是定格查询**（裸进程不抽 run loop）⇒ 新增 `isFrontmost(bundle:pid:)` 走 `runningApplications(withBundleIdentifier:)` + `.isActive`，与既有的那条已验过的路同源
+- **新冒烟两套**：`T-EXT-BUILTIN` 24 条（内置扩展删不掉 / 对它 toggle 无效 / 五个各给对的答案 / 反例证明 toggle 本身没坏）与 `CaseComputerTap` 46 条（十三道闸逐条 + 回执点名命中的那个恒拒词）
+
 ## [0.2.10] - 2026-11-09
 
 本版主线 = **修掉「回车之后白屏一下、滚一下滚轮才恢复输出」**：渲染没丢，是提交那一拍把视线锚到了错的节点上。全量冒烟 **2273 项 ALL PASS** + `xcodebuild` Debug BUILD SUCCEEDED 零 warning。

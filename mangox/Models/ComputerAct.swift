@@ -370,6 +370,193 @@ enum ComputerPointRule {
     }
 }
 
+// MARK: - 纯视觉动手（2026-11-10, 第四档）
+
+/// 按坐标点一下 —— **不经过任何 `AXUIElement`**。
+///
+/// 存在的唯一原因: 有些 App 的 AX 树只剩窗口外壳(微信实测 5 节点 / 覆盖率 0%), 一条编号都没有,
+/// 而**图是看得见的**。`press` 的 `point` 走的是"翻译回元素"(`AXUIElementCopyElementAtPosition`),
+/// 那类 App 永远翻译不回来 ⇒ 结构上看得到、一步也动不了。这一档补的就是它。
+///
+/// ⚠️ **它不是 `press + point` 的放宽版, 是另一条路**:
+///    · `press` 的判据跑在**元素**上(三条恒拒 / 可写角色白名单 / 子动作表), 而这里没有元素;
+///    · 所以它自带一整套闸门(下面每条), 一条不过就拒, 且**每条说自己的话** ——
+///      合成一句"条件不满足"等于让人猜是哪一条, 而人猜错的下一步通常是"再试一次"。
+///    · 越界的动作(`setValue` / `confirm` / `custom`)一律不走这条路: 那三个的语义建在
+///      role 上, 没有 role 就没有判据。tap 只能"点一下"。
+///
+/// ⚠️ **代价必须写在脸上**: 它用**真鼠标**。2026-11-10 在计算器上实测: 从挪光标到还回去
+///    **74ms**, 归位精确到 0.0。但那 74ms 里光标真的在人眼前跳了一下 —— 所以下面有一半的闸
+///    是在确认"人这一刻没在用鼠标", 而且提示词与回执都不许把它说成"不打扰"。
+///
+/// ⚠️ 为什么不走 `CGEvent.postToPid`(只投给目标进程、不动光标): **实测不通**。三种变体
+///    (原样 / 补 `mouseEventWindowUnderMousePointer` / 先补一个 `mouseMoved`)在同一个坐标上
+///    全部点不动, 而同坐标的 HID 投递一次就成 —— AppKit 不认按 pid 投递的鼠标事件。
+///    数据在 `.workbuddy/memory/2026-11-10.md`(第五节)。谁要改回 pid 投递, 先复现那一组。
+enum ComputerTapRule {
+
+    /// 全局档的 env 键。**要就写 "1", 不要就删掉**(同 `MANGOX_COMPUTE_TAKEOVER`)。
+    ///
+    /// ⚠️ 键名住在**判据文件**里而不是各写一份: 本文件同时编进 App 与 helper 两个 target
+    ///    (`mangox-compute` 的 Sources 里有它), 所以两边引用的是**同一个常量**。
+    ///    抄成两个字面量的话, 改名那天不会编译报错, 只会**静默变成"档永远关着"** ——
+    ///    而界面上那个开关是开着的(`run.sh` ③ 那种跨 target 契约扫描就是这么来的)。
+    static let envKey = "MANGOX_COMPUTE_TAP"
+
+    /// 人最后一次动键鼠之后, 至少消停这么久才允许点。
+    ///
+    /// ⚠️ **不能复用 `ComputerTakeover.quietSeconds`(6 秒)**: 那条的语义是"这一轮让人,
+    ///    等机器静下来再继续", 6 秒合理; 这一条的语义是"按下去之前的 400ms 里人手上没东西",
+    ///    6 秒会让人想手动点一下都得先空等 —— 而人一旦不耐烦, 恰恰最可能在模型点的瞬间碰鼠标。
+    /// ⚠️ 也不能是 0: 取 0 等于"人正握着鼠标也照点", 而实测里人和模型同时抢鼠标是唯一
+    ///    真的踩过的坑(点错且无撤销)。
+    static let humanQuietMs = 400
+
+    /// 坐标底下读到这些字就**不点** —— 与 `press` 那两条恒拒**同一份词表**(同源, 不抄第二份)。
+    ///
+    /// ⚠️ 为什么是"派生"而不是自己列一份: 两份词表会漂 —— 而漂了之后同一个动作(比如付款)
+    ///    按编号会被拦、按坐标会放行, 于是"哪条路能过"变成了入口的属性, 不是动作的属性。
+    ///    那正是本仓最忌讳的一种不一致(同"两处各写一遍判据")。
+    /// ⚠️ 这一档的语义闸**必然弱于** `press`: `press` 判的是目标控件的角色与标题(高置信),
+    ///    这里只判"这一点底下的几个字"(可能是正文)。所以它会**误伤** —— 正文里写着
+    ///    "立即删除"的那一段会挡住一次合法的点击。认了: 误伤的代价是"这一步没点, 人自己来",
+    ///    而漏判的代价是"替你点了付款"。两个方向不对称, 所以宁可误。
+    /// ⚠️ 不另收裸的「删除」: `press` 也不拦它("移到废纸篓"必须放行), 这里加进来就又比
+    ///    `press` 严了 —— 同一个动作换个入口就不做了, 模型只会学到"别用 tap"。
+    static var taintedWords: [String] {
+        ComputerRedline.paymentWords + ComputerRedline.permanentDeleteWords
+    }
+
+    /// 一次 tap 的全部输入。**全是事实** —— 没有一个"大概", 判据只对照它们。
+    ///
+    /// ⚠️ 为什么把事实摊成一个结构而不是让判据自己去问系统: 与 `ComputerActScope` /
+    ///    `ComputerTakeover` 同一条纪律 —— 取事实的那一步(进程表 / 窗口表 / TCC)有坑且不可测,
+    ///    而"拿到之后怎么判"是纯的。摊开之后每条闸都能在冒烟里造出来。
+    struct Facts {
+        /// 全局档(设置页那个开关)。**默认关**。
+        var tapEnabled: Bool
+        /// 这个 App 勾了「可操作」没有。
+        var appActable: Bool
+        /// 回执里点名用的显示名。
+        var appName: String
+        /// 上次 read 时那个进程, 与此刻的进程 —— 不相等 = App 重启过。
+        var snapshotPid: Int32
+        var currentPid: Int32
+        /// 此刻前台是不是它。后台点不动(实测), 而且**会把它拽到前面**。
+        var isFrontmost: Bool
+        /// 此刻有没有鼠标键按着。**拖拽时手是静止的** ⇒ 光看"人静"会放行,
+        /// 而那一下正好插在人家拖拽中间。
+        var leftButtonDown: Bool
+        var rightButtonDown: Bool
+        /// 最近一次人类输入距今多少毫秒。`nil` = 监听没装上(拿不到事实, 不假装判断过)。
+        var sinceHumanInputMs: Int?
+        /// 要点的那个点(全局屏幕坐标, 左上原点)。
+        var point: ComputerPoint
+        /// 上次 read 记下的窗口外框, 与此刻的窗口外框。
+        var snapshotFrame: AXRect?
+        var currentFrame: AXRect?
+        /// 上次 read 记下的窗口号(`0` = 读的时候没认出来), 与此刻这点上最顶层窗口的窗口号。
+        var snapshotWindowNumber: Int
+        var topWindowNumber: Int
+        var topWindowPid: Int32
+        /// 这一点底下能读到的文字(读不到就是空串)。
+        var textUnderPoint: String
+    }
+
+    /// 两个外框算不算"同一个窗口位置"。容差 2px: AX 报的是整数, 而系统那边可能有亚像素抖动。
+    static func sameFrame(_ a: AXRect?, _ b: AXRect?, tolerance: Int = 2) -> Bool {
+        guard let a, let b else { return false }
+        return abs(a.x - b.x) <= tolerance && abs(a.y - b.y) <= tolerance
+            && abs(a.w - b.w) <= tolerance && abs(a.h - b.h) <= tolerance
+    }
+
+    /// 点在框里没有。**右下边界不含**(`x < x+w`): 窗口右边那一列属于隔壁。
+    static func contains(_ rect: AXRect?, _ p: ComputerPoint) -> Bool {
+        guard let r = rect else { return false }
+        return p.x >= Double(r.x) && p.x < Double(r.x + r.w)
+            && p.y >= Double(r.y) && p.y < Double(r.y + r.h)
+    }
+
+    /// 文字里命中的第一个恒拒词。`nil` = 没命中(或压根没读到字)。
+    static func taintedHit(_ text: String) -> String? {
+        let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !t.isEmpty else { return nil }
+        return taintedWords.first(where: { t.contains($0) })
+    }
+
+    /// 拒(`nil` = 可以点)。**顺序即代价序**: 先判不要钱的, 最后才碰窗口表。
+    static func refusal(_ f: Facts) -> String? {
+        // ① 档位
+        guard f.tapEnabled else {
+            return "「按坐标点击」这一档关着 ⇒ 没点。"
+                + "它默认关是因为可能点错、而且点错了没有撤销 ——"
+                + " 要开就在 设置 › 集成 › 电脑操作 里打开。"
+        }
+        // ② 这个 App 有没有被允许动
+        guard f.appActable else {
+            return "「\(f.appName)」还没勾「可操作」⇒ 没点。看得到不等于动得。"
+        }
+        // ③ 同上一次读的是不是同一个进程
+        guard f.snapshotPid == f.currentPid else {
+            return "「\(f.appName)」重启过了 ⇒ 你手上那份快照说的不是这个窗口, 没点。重新 read 一次。"
+        }
+        // ④ 前台
+        guard f.isFrontmost else {
+            return "「\(f.appName)」不在前台 ⇒ 没点。"
+                + "后台点不动(实测前后两帧一模一样), 而且真点下去会把它拽到最前面。"
+                + "先 computer_open 把它切上来, 再点。"
+        }
+        // ⑤ 手上按着键
+        guard !f.leftButtonDown, !f.rightButtonDown else {
+            return "你此刻正按着鼠标键(可能在拖拽) ⇒ 没点。松开之后再说一次。"
+        }
+        // ⑥ 人刚动过
+        if let ms = f.sinceHumanInputMs, ms < humanQuietMs {
+            return "你 \(ms) 毫秒前刚动过键鼠 ⇒ 没点。"
+                + "这一档用的是**真鼠标**, 我不能在人手上抢 —— 稍等一下再说一次。"
+        }
+        // ⑦ 坐标本身
+        guard abs(f.point.x) <= ComputerPointRule.maxAbsCoordinate,
+              abs(f.point.y) <= ComputerPointRule.maxAbsCoordinate else {
+            return "\(f.point.short) 不像屏幕上的点 ⇒ 没点。坐标是全局屏幕坐标、左上原点。"
+        }
+        // ⚠️ 这里**不另判"在不在某个屏幕上"**: ⑩ 已经把点钉在这个 App 的窗口里了, 而窗口
+        //    总在某个屏幕上。多判一道就要把 NSScreen 的**左下原点**换成左上原点, 那一步错了
+        //    会让每一次 tap 都被拒, 而错误信息长得像"模型算错了坐标"。
+        // ⑧ 快照有没有记下窗口位置
+        guard let snap = f.snapshotFrame else {
+            return "这份快照没记窗口位置 ⇒ 判不了 \(f.point.short) 是对着哪个窗口的 ⇒ 没点。"
+                + "重新 read 一次(这次的快照会带上窗口外框)。"
+        }
+        // ⑨ 窗口挪没挪
+        guard sameFrame(snap, f.currentFrame) else {
+            let now = f.currentFrame.map { $0.short } ?? "读不到了"
+            return "「\(f.appName)」的窗口挪过: 原来 \(snap.short), 现在 \(now) ⇒ 没点。"
+                + "图上的位置是相对窗口的, 窗口一动就全偏 —— 重新 read 一次再算。"
+        }
+        // ⑩ 点在不在这个窗口里
+        guard contains(snap, f.point) else {
+            return "\(f.point.short) 不在「\(f.appName)」的窗口 \(snap.short) 里 ⇒ 没点。"
+        }
+        // ⑪ 这一点上最顶层的是不是它
+        guard f.topWindowPid == f.currentPid else {
+            return "\(f.point.short) 落在**别的 App** 的窗口上(不是「\(f.appName)」) ⇒ 没点。"
+                + "要么窗口被挪走了, 要么这个点是照着另一张图算的。"
+        }
+        // ⑫ 有没有弹层盖在上面(同 pid 同 owner, 只比进程会放行)
+        if f.snapshotWindowNumber != 0, f.topWindowNumber != f.snapshotWindowNumber {
+            return "\(f.point.short) 上盖着「\(f.appName)」的另一个窗口(弹层 / 对话框) ⇒ 没点。"
+                + "先处理弹层, 或者重新 read 一次按新的来。"
+        }
+        // ⑬ 底下写着什么
+        if let word = taintedHit(f.textUnderPoint) {
+            return "\(f.point.short) 底下写着「\(word)」 ⇒ 没点。"
+                + "按坐标点这一档认不出控件语义, 这类词一律不替你点 —— 这一步你自己点。"
+        }
+        return nil
+    }
+}
+
 /// 一条动作请求 —— 与 `ComputerRequest.act` 的字段一一对应。
 struct ComputerActRequest: Equatable {
     let app: String

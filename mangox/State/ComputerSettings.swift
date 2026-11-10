@@ -49,6 +49,13 @@ final class ComputerSettings: ObservableObject {
     ///    因为另两把都发生在"你要了某个具体东西"之后, 只有它发生在 spawn 时。
     static let takeoverKey = "computer_takeover"   // "1" / 缺失 = 关
 
+    /// 第四档: 允许"认不出元素时按坐标点"(2026-11-10)。**默认关**。
+    ///
+    /// ⚠️ 独立一个键, 理由同上三条(合成一个键 ⇒ 老值静默改义), 而且它跟上面三档
+    ///    **不是一个维度**: 那三档是"这个 App 给不给", 这一档是"整个助手敢不敢用真鼠标"。
+    ///    全局档与逐 App 授权是两件事 —— 用户可能愿意给微信「可操作」, 但不愿意让我动他的鼠标。
+    static let tapKey = "computer_tap"             // "1" / 缺失 = 关
+
     // MARK: 状态
 
     /// 总开关。**默认关** —— 批 1 阶段没有作用域 UI 之前默认开 = 悄悄开一个面。
@@ -57,13 +64,20 @@ final class ComputerSettings: ObservableObject {
     /// 勾上的 bundle id —— **读面**。
     @Published private(set) var selected: Set<String> = [] { didSet { persist() } }
 
-    /// 勾上的 bundle id —— **操作面**。恒为 `selected` 的子集(不变量见 `decode`)。
+    /// 勾上的 bundle id —— **操作面**。恒为 **`selected ∪ imageSelected`** 的子集(不变量见 `decode`)。
+    ///
+    /// ⚠️ 2026-11-10 起不再是 `selected` 的子集: 两条路都能给出编号(AX 树 / 屏幕识别),
+    ///    要求"先能读 AX"等于把微信那种 AX 恒空的 App 永远挡在操作面外。
     @Published private(set) var actSelected: Set<String> = [] { didSet { persist() } }
 
-    /// 勾上的 bundle id —— **图像面**(批 3c)。同样恒为 `selected` 的子集。
+    /// 勾上的 bundle id —— **视觉面**（原「图像面」, 2026-11-10 boss 改名）。
     ///
     /// ⚠️ 与操作面不同, 它是"更贵的一档": 截图会带上**整个窗口的像素**, 包括文本层已经
     ///    遮掉的那些 ⇒ 用户必须**逐个 App 明确开**, 默认一个都不开(空 = 一张都不拍)。
+    ///
+    /// ⚠️ 2026-11-10 起它**不再要求先勾「可读」**, 也不再是读面的子集: 它升成了**独立的一档
+    ///    能力** —— 勾了它才允许走「ax视觉 / 纯视觉」这两条读法。微信的 AX 恒为 0 行,
+    ///    "先能读 AX 才给视觉"等于让唯一能用的那条路永远打不开。
     @Published private(set) var imageSelected: Set<String> = [] { didSet { persist() } }
 
     /// 接管检测的**意图**(不等于生效: 还要有「输入监控」权限, 见 `shouldInstallTakeover`)。
@@ -72,6 +86,13 @@ final class ComputerSettings: ObservableObject {
     ///    权限没给时开关照样可以开着 —— 用户点完允许要重启才生效, 那时若把开关弹回去,
     ///    他只会以为"点了没反应"; 而 helper 侧有 `granted` 那道与门 ⇒ 没权限就不装监听、不弹窗。
     @Published var takeoverEnabled: Bool = false { didSet { persist() } }
+
+    /// 允许"按坐标点"(第四档)。**默认关**, 且与逐 App 的授权是两个维度(见 `tapKey`)。
+    ///
+    /// ⚠️ 关掉它**不动**任何一档的勾: 它只管"认不出元素时敢不敢用真鼠标", 不改变
+    ///    「可读 / 视觉 / 可操作」给过什么。反过来说, 它开着也不代表谁都能点 ——
+    ///    真正的门仍是逐 App 的「可操作」。
+    @Published var tapEnabled: Bool = false { didSet { persist() } }
 
     /// 候选表注入 —— **只给冒烟用**(真机上恒 nil)。
     ///
@@ -119,19 +140,33 @@ final class ComputerSettings: ObservableObject {
     ///
     /// ⚠️ 这里**不再抄一份 bundle 字面量**: 白名单在两个地方漂过一次（`builtins` 上那条
     ///    "扩集合 = 两处一起改"就是为此写的）⇒ 顺序取**手册里的顺序**（写的人把常用的放前面）,
-    ///    集合以 `builtins` + `manualFree` 为准。
+    ///    集合以 `SopInjection.builtins` / `thirdParty` + `manualFree` 为准。
     /// ⚠️ 白名单里有、手册里**缺那一节**的 App 要**照样出现**（排在最后）: 漏节是另一件事
     ///    （`SopInjection.block` 的 `missing` 会点名、冒烟「手册本体」会红）, 而悄悄少一行更坏 ——
     ///    用户只会以为"这个 App 不支持", 没人会想到是手册漏了一节。
+    ///
+    /// ⚠️ **`installed` 为什么是参数而不是在这里现查**（2026-11-10 boss: 「内置应用可以写死,
+    ///    这种你需要考虑用户是否安装了」）:
+    ///    · 内置的**恒列**（跟着系统来, 不装也得有一行 —— 它本来就在那儿）;
+    ///    · 第三方（`SopInjection.thirdParty`）**装了才列**: 没装的人看到一个勾选框, 勾了只会
+    ///      得到"它现在没在跑", 而设置页是在承诺"这个 App 能用";
+    ///    · 但"装没装"是**环境事实**, 与 `running` 同族 ⇒ 必须由调用方注入, 不在这里查 ——
+    ///      否则冒烟会变成"依赖本机装了什么"（同守卫 28 那条: 测试不许依赖用户真实状态）。
+    ///    生产侧的取数在 `installedThirdParty()`（IO 的边缘）, 调用点只有 `refresh` /
+    ///    `pruneUnsupported`。
     /// `nonisolated`: 纯解析, 而冒烟（顶层代码）要在任意上下文里调它。
-    nonisolated static var supported: [String] {
+    nonisolated static func supported(installed: Set<String>) -> [String] {
         let doc = SopInjection.parse(SopManual.text)
+        /// 这一行该不该出现: 内置恒列; 第三方装了才列。
+        func allowed(_ b: String) -> Bool {
+            SopInjection.builtins.contains(b)
+                || (SopInjection.thirdParty.contains(b) && installed.contains(b))
+        }
         var seen = Set<String>()
         var out: [String] = []
         // 一节可以挂多个 App（浏览器那节）, 所以这里展平: 顺序 = 节序 × 节内顺序。
         for sec in doc.sections {
-            for b in sec.bundles
-            where SopInjection.builtins.contains(b) && seen.insert(b).inserted {
+            for b in sec.bundles where allowed(b) && seen.insert(b).inserted {
                 out.append(b)
             }
         }
@@ -142,7 +177,24 @@ final class ComputerSettings: ObservableObject {
         for b in SopInjection.builtins.sorted() where seen.insert(b).inserted {
             out.append(b)
         }
+        // 装了、手册也覆盖、但手册**漏了这一节**的第三方 ⇒ 同样要出现（理由见上一条注释）。
+        for b in SopInjection.thirdParty.sorted()
+        where installed.contains(b) && seen.insert(b).inserted {
+            out.append(b)
+        }
         return out
+    }
+
+    /// 第三方 App 里**装了**的那几个 —— 设置页只列它们。
+    ///
+    /// 判据是 LaunchServices 的"这机器上有没有这个 App"（`urlForApplication`），
+    /// 与"现在跑没跑"是两件事（后者见 `runningApps`）。
+    /// ⚠️ 与 `supported(installed:)` 分开: 那个必须是纯函数。IO 只留在这一个函数里,
+    ///    调用点负责取一次传进去 —— 与 `running` 的处理方式同源。
+    static func installedThirdParty() -> Set<String> {
+        Set(SopInjection.thirdParty.filter {
+            NSWorkspace.shared.urlForApplication(withBundleIdentifier: $0) != nil
+        })
     }
 
     /// **免手册**的应用 —— `supported` 里唯一不受"手册写没写它"约束的那几个。
@@ -254,6 +306,21 @@ final class ComputerSettings: ObservableObject {
         return selected.sorted()
     }
 
+    /// 真正下发给 helper 的**允许碰**名单 = **可读 ∪ 视觉**。
+    ///
+    /// ⚠️ 为什么不能直接用 `activeBundles`（2026-11-10）: 那个是**读面**(能不能读 AX)。
+    ///    helper 的 `MANGOX_COMPUTE_BUNDLES` 问的是另一件事 —— "这个 App 我能不能碰";
+    ///    截图那一路不需要 AX, 所以只勾了视觉的 App 也必须在里面。
+    ///    合成一个的代价是硬的: `ComputerHost.start` 在名单为空时**连进程都不起**
+    ///    ⇒ 只勾微信视觉的人, 助手压根不启动, 而设置页三个勾都勾着。
+    ///
+    /// ⚠️ 反过来也**不许**把两份并成一个属性: 设置页那个「可读 N 个」的计数按定义只数 AX
+    ///    (boss 2026-11-10: 「可读表示可以读 ax」), 并进来会让一个 AX 恒空的 App 也报"可读"。
+    var activeAllowedBundles: [String] {
+        guard enabled else { return [] }
+        return selected.union(imageSelected).sorted()
+    }
+
     /// 真正下发的**操作面** —— 同上的投影。
     ///
     /// ⚠️ 这里再取一次 `selected` 的交集不是多余的: `actSelected ⊆ selected` 的不变量
@@ -261,7 +328,10 @@ final class ComputerSettings: ObservableObject {
     ///    出事的那个方向(多发一个 App 的操作权)不值得省这一行。
     var activeActBundles: [String] {
         guard enabled else { return [] }
-        return actSelected.intersection(selected)
+        // ⚠️ 2026-11-10: 来源从"必须可读"放宽成 **可读 ∪ 视觉** —— 两条路都能给出编号
+        //    (AX 树 / 屏幕识别)。没有这一条, 微信那种 AX 恒空的 App 永远进不了操作面。
+        let sourced = selected.union(imageSelected)
+        return actSelected.intersection(sourced)
             .filter { !ComputerRedline.actBannedBundles.contains($0) }
             .sorted()
     }
@@ -323,6 +393,24 @@ final class ComputerSettings: ObservableObject {
         !ComputerRedline.actBannedBundles.contains(bundle)
     }
 
+    /// 上次那一次读，有没有读出**可寻址的东西**。
+    ///
+    /// 设置页拿它决定「可操作」要不要置灰：读出来 0 行 ⇒ 没有任何编号可动，
+    /// 那一格勾了也是空的。判据只有"0 行"这一条，**不设行数阈值** ——
+    /// 阈值是魔数，每接一个 App 都要回来调；而 0 与"有"之间没有灰区。
+    ///
+    /// ⚠️ 没有观测（`nil`）一律返回 `false`：**"不知道"不等于"不行"**。
+    ///    把未知当否，等于凭空给一个没量过的 App 判死刑。
+    ///
+    /// ⚠️ 2026-11-10 加 `hasVision`: 微信这类 App 的 AX 恒为 0 行, 但勾了「视觉」之后
+    ///    还有一条给编号的路(屏幕识别), 那时置灰就是**错杀**。所以 "0 行" 只有在
+    ///    **没有视觉**时才等于"没得动"。
+    nonisolated static func unaddressable(health: ReadHealth?, hasVision: Bool) -> Bool {
+        guard let health else { return false }
+        if hasVision { return false }
+        return health.rows == 0
+    }
+
     /// 真正下发的**图像面** —— 同上的投影。
     ///
     /// ⚠️ 这里是 `activeImageBundles` **再取一次交集 + 再过一遍硬禁区**: 图像是唯一能绕过
@@ -330,7 +418,10 @@ final class ComputerSettings: ObservableObject {
     ///    都不许拍**。这条不是"顺手加个过滤", 它是图像面能存在的前提。
     var activeImageBundles: [String] {
         guard enabled else { return [] }
-        return imageSelected.intersection(selected)
+        // ⚠️ 2026-11-10 起**不再与「可读」取交集**: 视觉从"读的一种附加表示"升成
+        //    独立的一档能力(勾了它才能走 ax视觉 / 纯视觉)。微信的 AX 恒为 0 行,
+        //    要求它同时勾「可读」等于让那条路永远打不开 —— 而它恰恰是唯一能用的路。
+        return imageSelected
             .filter { Self.canImage($0) }
             .sorted()
     }
@@ -371,9 +462,13 @@ final class ComputerSettings: ObservableObject {
     /// ⚠️ 单独抽出来是因为它既要被 `ChatStore` 在启动时调, 也要能被冒烟断言 ——
     ///    写进 `restore` 里就成了"只有真启动才验得到"的逻辑。
     ///
-    /// ⚠️ **不变量 `act ⊆ read` 在这里落一次**: 老库(批 1)里根本没有 `act` 这个键;
-    ///    手改过的库、或者"先勾操作再取消读"留下的组合, 都会让操作面里留着一个读不到的 App。
-    ///    那种状态没有意义, 而且它会悄悄把 `MANGOX_COMPUTE_ACT_BUNDLES` 填上。
+    /// ⚠️ **不变量 `act ⊆ (read ∪ image)` 在这里落一次**: 老库(批 1)里根本没有 `act` 这个键;
+    ///    手改过的库、或者"先勾操作再取消读"留下的组合, 都会让操作面里留着一个读不到也看不到的
+    ///    App。那种状态没有意义, 而且它会悄悄把 `MANGOX_COMPUTE_ACT_BUNDLES` 填上。
+    ///
+    /// ⚠️ **`image` 不再与 `bundles` 取交集**（2026-11-10）: 视觉升成独立一档之后,
+    ///    只勾了视觉的 App（微信）在读面里**本来就不在** —— 取交集会让它在下次启动时
+    ///    被静默抹掉, 而界面上什么都不会说。这是最难查的一类: 用户明明勾过。
     static func decode(enabledRaw: String?,
                        bundlesRaw: String?,
                        actRaw: String? = nil,
@@ -386,7 +481,7 @@ final class ComputerSettings: ObservableObject {
         let bundles = Set((bundlesRaw ?? "").split(separator: ",").map(String.init).filter { !$0.isEmpty })
         let act = Set((actRaw ?? "").split(separator: ",").map(String.init).filter { !$0.isEmpty })
         let image = Set((imageRaw ?? "").split(separator: ",").map(String.init).filter { !$0.isEmpty })
-        return (true, bundles, act.intersection(bundles), image.intersection(bundles))
+        return (true, bundles, act.intersection(bundles.union(image)), image)
     }
 
     /// 状态 → 落盘串。同样再取一次交集 —— `encode` 是另一条入口(测试、将来的导入导出)。
@@ -399,14 +494,15 @@ final class ComputerSettings: ObservableObject {
                                                             imageBundles: String) {
         (enabled ? "1" : "0",
          bundles.sorted().joined(separator: ","),
-         actBundles.intersection(bundles).sorted().joined(separator: ","),
-         imageBundles.intersection(bundles).sorted().joined(separator: ","))
+         actBundles.intersection(bundles.union(imageBundles)).sorted().joined(separator: ","),
+         imageBundles.sorted().joined(separator: ","))
     }
 
     // MARK: 操作
 
     func restore(enabledRaw: String?, bundlesRaw: String?, actRaw: String? = nil,
-                 imageRaw: String? = nil, takeoverRaw: String? = nil) {
+                 imageRaw: String? = nil, takeoverRaw: String? = nil,
+                 tapRaw: String? = nil) {
         let d = Self.decode(enabledRaw: enabledRaw, bundlesRaw: bundlesRaw,
                             actRaw: actRaw, imageRaw: imageRaw)
         enabled = d.enabled
@@ -419,6 +515,9 @@ final class ComputerSettings: ObservableObject {
         // 是已经全部就位的状态(放前面写的就是半截, 而半截也会被真落库)。
         // "不写 `?? true`" 是有意的: 老库没有这个键 ⇒ 关, 不是"沿用旧的偷偷开"。
         takeoverEnabled = takeoverRaw == "1"
+        // 第四档同款("缺键 = 关", 不写 `?? true`): 老库没有它 ⇒ 关。
+        // ⚠️ 放在最后: 与上一行同一个理由(它的 `didSet` 会 persist 一次)。
+        tapEnabled = tapRaw == "1"
     }
 
     /// 把模型给的 `app`(名字或 bundle id)落到 bundle 上 —— **认不出就 nil, 不猜**。
@@ -447,35 +546,45 @@ final class ComputerSettings: ObservableObject {
     func toggle(_ bundle: String) {
         if selected.contains(bundle) {
             selected.remove(bundle)
-            // ⚠️ 取消"可读"必须连带摘掉"可操作"与"图片": 否则留下"动得了但读不到"
-            //    / "拍得了但读不到"两种组合, 而它们在 helper 侧一定是被拒的 ——
-            //    设置页却还勾着, 人只会以为"这个功能时好时坏"。
-            if actSelected.contains(bundle) { actSelected.remove(bundle) }
-            if imageSelected.contains(bundle) { imageSelected.remove(bundle) }
+            // ⚠️ 取消"可读"要连带摘掉"可操作": 否则留下"动得了但读不到"这种组合,
+            //    而它在 helper 侧一定是被拒的 —— 设置页却还勾着, 人只会以为
+            //    "这个功能时好时坏"。
+            //
+            // ⚠️ 2026-11-10 起两个例外:
+            //    ① **视觉不摘**。它已经升成独立的一档(勾了它才能走 ax视觉 / 纯视觉),
+            //       不再依附于"能读 AX"。微信这种 AX 恒空的 App, 摘掉视觉就等于关死全部。
+            //    ② **有视觉时不摘可操作**。视觉那条路(屏幕识别)同样能给出编号 ⇒
+            //       "读不到 AX"不再等于"没有可寻址的东西"。
+            let hasVision = imageSelected.contains(bundle)
+            if !hasVision, actSelected.contains(bundle) { actSelected.remove(bundle) }
         } else {
             selected.insert(bundle)
         }
     }
 
-    /// 开/关某个 App 的**操作**权。带上读面(开操作必然要能读), 口令类恒不许开。
+    /// 开/关某个 App 的**操作**权。
+    ///
+    /// ⚠️ 2026-11-10 起前提从"必须先能读 AX"放宽成"必须有**一条能给编号的来源**": 可读(AX)
+    ///    或 视觉(屏幕识别)。两条都没有时**直接不生效** —— 不替人勾(上一批特意避开的错:
+    ///    自动勾会让人以为自己只开了一档)。设置页那边已经把这一格置灰并写了原因。
     func setAct(_ bundle: String, _ on: Bool) {
         guard Self.canAct(bundle) else { return }
         if on {
-            selected.insert(bundle)
+            guard selected.contains(bundle) || imageSelected.contains(bundle) else { return }
             actSelected.insert(bundle)
         } else {
             actSelected.remove(bundle)
         }
     }
 
-    /// 开/关某个 App 的**图像**面(批 3c)。同样带上读面; 硬禁区恒不许开。
+    /// 开/关某个 App 的**视觉**面（原「图片」）。
     ///
-    /// ⚠️ 与 `setAct` 的差别: 这里**不动** `actSelected` —— "能看"和"能按"是两件事,
-    ///    互相带上是上一批特意避开的错(会让人以为自己只开了一档)。
+    /// ⚠️ 与 `setAct` 的差别: 这里**不动** `actSelected` —— "能看"和"能按"是两件事。
+    /// ⚠️ 2026-11-10 起也**不动** `selected`（原先是"带上读面"）: 视觉升成独立一档,
+    ///    再逼着人勾「可读」等于把微信那种 App 挡在门外 —— 它的 AX 恒空, 勾了也读不出。
     func setImage(_ bundle: String, _ on: Bool) {
         guard Self.canImage(bundle) else { return }
         if on {
-            selected.insert(bundle)
             imageSelected.insert(bundle)
         } else {
             imageSelected.remove(bundle)
@@ -488,7 +597,8 @@ final class ComputerSettings: ObservableObject {
     ///    4 次 LaunchServices 查询 + 一次"谁在跑"（毫秒级）⇒ 原来那个**两段式**（先取运行态立刻上屏、
     ///    再后台扫几百个包洗完换一版）没有存在的理由了。去掉之后 `installed` 那份缓存也一起删掉。
     func refresh() {
-        let bundles = Self.supported
+        let installed = Self.installedThirdParty()
+        let bundles = Self.supported(installed: installed)
         let running = Self.runningApps(excluding: Bundle.main.bundleIdentifier)
         options = Self.options(bundles: bundles,
                                names: Self.displayNames(for: bundles,
@@ -506,9 +616,12 @@ final class ComputerSettings: ObservableObject {
     /// ⚠️ 必须**在 `onPersist` 接上之后**调: 否则摘掉的值只活在内存里, 库里躺的还是旧的 ⇒
     ///    下次启动再摘一遍, 而且"库 vs 界面"永远不一致。
     /// 返回值 = 被摘掉的 bundle（字母序）: 要留痕, 也要能断言。
+    ///
+    /// `installed`: 装着哪几个第三方 —— **必须由调用方给**（同 `supported(installed:)`）。
+    /// 顺带覆盖一个真实场景: 装了 Chrome、勾过、后来卸载了 ⇒ 那次启动就把它摘掉。
     @discardableResult
-    func pruneUnsupported() -> [String] {
-        let ok = Set(Self.supported)
+    func pruneUnsupported(installed: Set<String>) -> [String] {
+        let ok = Set(Self.supported(installed: installed))
         let dropped = selected.subtracting(ok)
             .union(actSelected.subtracting(ok))
             .union(imageSelected.subtracting(ok))
@@ -535,5 +648,6 @@ final class ComputerSettings: ObservableObject {
         // ⚠️ 恒写 "1"/"0" 而不是"只在开的时候写": 关掉时必须留下一个明确的 "0",
         //    否则下次启动读不到键 ⇒ 走"缺失 = 关"那条, 结论一样但看不出"是谁关的"。
         onPersist(Self.takeoverKey, takeoverEnabled ? "1" : "0")
+        onPersist(Self.tapKey, tapEnabled ? "1" : "0")
     }
 }

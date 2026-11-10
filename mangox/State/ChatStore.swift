@@ -766,19 +766,20 @@ final class ChatStore: ObservableObject {
                 bundlesRaw: store.loadSettingText(key: ComputerSettings.bundlesKey),
                 actRaw: store.loadSettingText(key: ComputerSettings.actBundlesKey),
                 imageRaw: store.loadSettingText(key: ComputerSettings.imageBundlesKey),
-                takeoverRaw: store.loadSettingText(key: ComputerSettings.takeoverKey))
+                takeoverRaw: store.loadSettingText(key: ComputerSettings.takeoverKey),
+                tapRaw: store.loadSettingText(key: ComputerSettings.tapKey))
             ComputerSettings.shared.onPersist = { [weak self] key, value in
                 self?.persistence?.saveSettingText(key: key, value: value)
             }
             // ⚠️ 这两行的**顺序**不能换:
             //    ① `pruneUnsupported` 会把"不在支持列表里"的旧勾选摘掉（2026-11-06 起只有手册
-            //       覆盖的那几个 App 能勾, 见 `ComputerSettings.supported`）—— 它靠 `didSet` 落库,
+            //       覆盖的那几个 App 能勾, 见 `ComputerSettings.supported(installed:)`）—— 它靠 `didSet` 落库,
             //       所以**必须在 `onPersist` 接上之后**跑, 否则摘掉的值只活在内存里、库里躺着旧的;
             //    ② `refresh` 把 `options` 填上。它原来靠设置页的 `onAppear` 触发, 而审批桥
             //       (`resolveBundle`) 在没有 `options` 时会退回"此刻正在跑的所有 App" ——
             //       那会把一个目录外的 App 认出来、再写一句"去设置里勾上"（而设置里根本没有它）。
             //       现在列表是固定白名单、刷新是毫秒级 ⇒ 启动就填好。
-            ComputerSettings.shared.pruneUnsupported()
+            ComputerSettings.shared.pruneUnsupported(installed: ComputerSettings.installedThirdParty())
             ComputerSettings.shared.refresh()
             capture.restore(CaptureHotkey.load(persistence: store))   // P8-T27 (P9.1d: 状态随 CaptureService)
         }
@@ -800,6 +801,10 @@ final class ChatStore: ObservableObject {
         // `attach` 是纯接线, 种数据不该藏在接线里（同"一件事只有一个地方做"那条）。
         scheduler.seedDreamTaskIfNeeded()
         knowledge.reloadProposals()   // P15.3: 提案列表的首屏数据 (收口处会再刷)
+        // 侧问快照的孤儿回收: 开机扫一次 —— 判据是"有没有主"而不是"放了几天" (见函数注释)。
+        // ⚠️ 必须在**任何新侧问**之前跑: 此刻 `pendingForkTemp` 恒空, 所以还躺着的
+        //   `side-snapshot-*` 全是上一个进程留下的遗腹子, 没有被误删的可能。
+        pruneOrphanSideSnapshots()
         scanExtensions()   // P3.11: 扫描 + 快照托管扩展列表 (池实例 spawn 期加载)
         syncWorkspaceContext()   // 文件树扫描 (P3.4); cwd 在每次 send 前按实例下发
         // P3.7: 注入块快照 (池实例 spawn 期消费)
@@ -936,12 +941,15 @@ final class ChatStore: ObservableObject {
     /// "有没有附件"要从 `events` 解出来 —— 行一删这两样都读不到了。
     private struct SessionDiskFootprint {
         let explicitTranscript: String?
+        /// 侧问的 fork 源（可能是源会话的 transcript，也可能是我们自己截的快照）。
+        let forkSource: String?
         let hasAttachments: Bool
     }
 
     private func diskFootprint(of id: UUID) -> SessionDiskFootprint {
         SessionDiskFootprint(
             explicitTranscript: persistence?.loadSessionFile(id: id),
+            forkSource: persistence?.sideChatInfo(id: id)?.sourceFile,
             hasAttachments: (((try? persistence?.loadMessages(sessionId: id)) ?? [])
                 .flatMap { $0.attachments ?? [] }.isEmpty) == false)
     }
@@ -959,6 +967,15 @@ final class ChatStore: ObservableObject {
             } else {
                 PiRpcTransport.removeSessionFile(for: id)            // pi 持久 transcript (派生路径)
             }
+        }
+        // **侧问快照恒删** —— 与上面的开关无关: `deleteTranscript` 说的是 agent 的记忆
+        // (会话 transcript), 而快照是我们自己截的一份副本, **唯一的消费者就是这场侧问**。
+        // 会话行一没, 它就成了谁也认领不到的孤儿（实测 238 个就是这么攒下来的）。
+        // 判据用前缀: `turns == nil` 的整文件入口把 `fork_source_file` 直接指向源会话的
+        // transcript, 那份**是** agent 的记忆, 归上面的开关管 ⇒ 这里绝不能碰。
+        if let fork = fp.forkSource,
+           (fork as NSString).lastPathComponent.hasPrefix("side-snapshot-") {
+            PiRpcTransport.removeSessionFile(atPath: fork)
         }
         if fp.hasAttachments {
             ImagePipeline.removeSessionAttachments(sessionID: id)
@@ -1146,8 +1163,11 @@ final class ChatStore: ObservableObject {
         //   ② 档位把扩展工具裁掉时(minimal 的 allowlist / codemode 只剩一个工具), 对方世界里
         //      根本没有这几个名字 ⇒ 不算"缺"。**挂载不看档位**(2026-10-29 定案), 但"看得见"
         //      看 `--tools` —— 少判②就会给每一个 minimal 会话报一条永远修不好的假警报。
+        //   ① 作用域为空 ⇒ 不起 helper ⇒ 扩展不挂（判据用 `activeAllowedBundles`,
+        //      与 `PiRpcTransport` 那一处**同源**: 只勾视觉的 App 也会让助手起来,
+        //      拿读面判会让一个挂着扩展的会话被误报"工具缺失"）。
         let expected = ToolFaceDrift.expectedToolNames(
-            computerMounted: !ComputerSettings.shared.activeBundles.isEmpty,
+            computerMounted: !ComputerSettings.shared.activeAllowedBundles.isEmpty,
             exposesExtensionTools: exposes)
         let miss = ToolFaceDrift.missing(pinned: pinned, expected: expected)
         toolFaceCache[sid] = (mtime, exposes, miss)
@@ -1722,6 +1742,63 @@ final class ChatStore: ObservableObject {
         if let tmp = pendingForkTemp.removeValue(forKey: sid) {
             try? FileManager.default.removeItem(atPath: tmp)
         }
+    }
+
+    // MARK: - 侧问快照的孤儿回收
+
+    /// 纯函数: 从"目录里现有的文件名"里挑出**没人认领**的侧问快照。
+    ///
+    /// 判据两条: ① 名字是快照 (`side-snapshot-` 前缀) ② 没有任何持有者指向它。
+    ///
+    /// ⚠️ 只比**文件名**不比整条路径: `session_file` 那一侧是 pi 回读出来的, 可能已被
+    ///   规范化 (实测 macOS 上 `/var` ↔ `/private/var` 这类符号链接解析)—— 比整条路径会把
+    ///   **还在用**的快照判成孤儿然后删掉, 而删除是不可逆的（侧问的上文直接断层）。
+    ///   快照名里带 UUID, 跨目录重名实际上不存在 ⇒ 退一档比文件名是安全的。
+    static func orphanSideSnapshots(files: [String], referenced: [String]) -> [String] {
+        let owned = Set(referenced.map { ($0 as NSString).lastPathComponent })
+        return files.filter {
+            let name = ($0 as NSString).lastPathComponent
+            return name.hasPrefix("side-snapshot-") && !owned.contains(name)
+        }
+    }
+
+    /// 回收没有主人的快照 —— `prepareForkSnapshot` 造出来的那批。
+    ///
+    /// **泄漏是怎么发生的**: 快照原来的唯一删除点是 `didReadSessionFile` 的 `defer`, 而"待删
+    /// 清单" (`pendingForkTemp`) **只活在内存**。真正把它留成孤儿的是**删会话那条路**:
+    /// `diskFootprint` 只认 `session_file`, 而没走完首回合的侧问那儿是 NULL ⇒
+    /// `deleteConversation` 删完行、文件原样躺着, 再没人知道它存在（实测 241 个 transcript
+    /// 里 238 个是这种东西, 而库里 `session_file` / `fork_source_file` 各 0 条）。
+    /// 那条路已经在 `removeSessionFiles` 里补上了（删除时立刻带走）; 这个开机扫描是**兜底**:
+    /// 历史遗留、以及任何绕过删除路径的情形（库被恢复 / 删行与 unlink 之间崩了）。
+    ///
+    /// **为什么判据是"有没有主"而不是"几天没动"**: 这两件事互不等价, 而只有前者是对的。
+    /// - 清早了 = 一个**还在侧栏里**的侧问被抽掉上下文（比不回收更坏, 且零信号）;
+    /// - 清晚了 = 磁盘多躺几个文件（可回收, 不致命）;
+    /// - mtime 根本不回答这个问题: 一个还活着的侧问完全可以躺在后台几小时不动。
+    ///
+    /// ⚠️ **"有主"必须两列都算**: 侧问在首回合落定之前 `session_file` 是 NULL, 唯一的指向是
+    ///   `fork_source_file`。只看 `session_file` ⇒ "开了侧问、没发消息"的那个快照在下次开机
+    ///   被删掉 —— 而那场侧问还在侧栏里, 首回合 `--fork` 一个不存在的文件。
+    ///
+    /// **为什么开机是安全时点**: `pendingForkTemp` 是内存态, 重启即失联 ⇒ 此刻任何还躺着的
+    /// `side-snapshot-*` 都不可能有会话在等它回读。调用期间仍然把内存里那一批算作"有主",
+    /// 所以这个函数在运行中被调用也不会误删正在等回读的快照。
+    @discardableResult
+    func pruneOrphanSideSnapshots() -> Int {
+        guard let persistence else { return 0 }
+        let dir = PiRpcTransport.sessionDirectory
+        let names = (try? FileManager.default.contentsOfDirectory(atPath: dir)) ?? []
+        // 有主 = 落库的两列 (`session_file` ∪ `fork_source_file`) ∪ 内存里正等着回读的那批。
+        let referenced = persistence.allSessionFileRefs() + Array(pendingForkTemp.values)
+        let orphans = Self.orphanSideSnapshots(files: names, referenced: referenced)
+        for name in orphans {
+            try? FileManager.default.removeItem(atPath: dir + "/" + name)
+        }
+        if !orphans.isEmpty {
+            Log.send("snapshot-prune", ["removed": "\(orphans.count)"])
+        }
+        return orphans.count
     }
 
     // MARK: - Send (只做入参整理, 生成逻辑在 transport)

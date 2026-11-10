@@ -26,6 +26,7 @@ extension SmokeMain {
         let readTool = PiRpcTransport.computerReadToolName
         let actTool = PiRpcTransport.computerActToolName
         let openTool = PiRpcTransport.computerOpenToolName
+        let tapTool = PiRpcTransport.computerTapToolName
         let mounted = ToolFaceDrift.expectedToolNames(computerMounted: true,
                                                       exposesExtensionTools: true)
         let unmounted = ToolFaceDrift.expectedToolNames(computerMounted: false,
@@ -54,11 +55,11 @@ extension SmokeMain {
         let oldPinned = ToolFaceDrift.pinnedToolNames(jsonl: oldSession)
         check(oldPinned == Set(["read", "bash", "grep", readTool]),
               "T-TFDRIFT 钉住的清单 = system 里 toolsAdded 的名字集 (实测 \(oldPinned.sorted()))")
-        check(ToolFaceDrift.missing(pinned: oldPinned, expected: mounted) == [actTool, openTool],
-              "T-TFDRIFT 老会话报缺 \(actTool) + \(openTool), 不连带 read (实测 \(ToolFaceDrift.missing(pinned: oldPinned, expected: mounted)))")
+        check(ToolFaceDrift.missing(pinned: oldPinned, expected: mounted) == [actTool, openTool, tapTool],
+              "T-TFDRIFT 老会话报缺 \(actTool) + \(openTool) + \(tapTool), 不连带 read (实测 \(ToolFaceDrift.missing(pinned: oldPinned, expected: mounted)))")
 
         // ② 新会话(工具面齐全) ⇒ 一句都不说
-        let fresh = systemLine(added: ["read", readTool, actTool, openTool])
+        let fresh = systemLine(added: ["read", readTool, actTool, openTool, tapTool])
         check(ToolFaceDrift.missing(pinned: ToolFaceDrift.pinnedToolNames(jsonl: fresh),
                                     expected: mounted).isEmpty,
               "T-TFDRIFT 工具面齐全时恒为空 (提示不许在正常会话里出现)")
@@ -99,7 +100,7 @@ extension SmokeMain {
 
         // ⑧ 排序稳定: 文案要逐字稳定, 不许每次换个次序 (Set 的遍历序是随机的)
         let sortedMiss = ToolFaceDrift.missing(pinned: ["read"], expected: mounted)
-        check(sortedMiss == [actTool, openTool, readTool],
+        check(sortedMiss == [actTool, openTool, readTool, tapTool],
               "T-TFDRIFT 缺失清单按字母序 (实测 \(sortedMiss))")
 
         // ⑨ 本次侧: 没挂 computer (作用域空) ⇒ 没有"该有"的工具 ⇒ 永不报缺

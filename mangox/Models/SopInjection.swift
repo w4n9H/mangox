@@ -71,10 +71,47 @@ enum SopInjection {
         "com.apple.Safari",     // Safari 网页 1598 行 / 2504 节点 / 781ms
     ]
 
+    /// 手册覆盖的**第三方** App —— **装了才列**, 不能像内置那样写死。
+    ///
+    /// 为什么单开一张表（2026-11-10 boss: 「内置应用可以写死，这种你需要考虑用户是否安装了」）:
+    ///   · `builtins` 的语义是**恒列** —— 出现在设置页, 不装也有一行。这对内置 App 成立
+    ///     （它们跟着系统来）; 对第三方就是**给一个永远读不到东西的勾选框**（没装 Chrome 的人
+    ///     勾上它, 只会得到"它现在没在跑"）。
+    ///   · 但"装了才列"**不等于**"手册不管它": 浏览器那一节的节头写着 Chrome, 注入时要认它
+    ///     ⇒ **注入判据是 `covered`, 列列表的判据还要再叠一层"装没装"**（见
+    ///     `ComputerSettings.supported(installed:)`）。
+    /// 加一个第三方 = 这张表加一行 + 手册里给它一个节头（**渲染上限不够时**再给
+    /// `ComputerAppProfile.lineLimits` 加一行）。
+    /// ⚠️ 那句"加一行"原来是无条件的, 2026-11-10 加微信时改成条件的: `lineLimits` 是
+    ///    **按 bundle 记的渲染上限**, 微信的 AX 恒 3 行、视觉那一路一屏也就几十块, 120 绰绰有余
+    ///    ⇒ 给它写一行等于写个默认值, 那是**没有读者的配置**(`ComputerAppProfile` 文件头
+    ///    明写"只放有消费者的字段")。网页类（Safari / Chrome）必须写, 因为 120 只够看到页头。
+    static let thirdParty: Set<String> = [
+        // Chrome 2026-11-10 实测（真源码探针, B 站首页）: 634 节点 / 222 行 / 5300 字 / 184ms,
+        // `webarea` + 56 个 `link` + 标签栏的 `radiobutton` 全在 —— 11-09 那条「网页节点恒为 0」
+        // 不再复现。⚠️ 新 profile 仍可能是空壳（renderer accessibility 默认不开）
+        // ⇒ 手册里"读不到 webarea 就请人开"的那句不能删。
+        "com.google.Chrome",
+        // 微信 2026-11-10 实测（真源码探针）: 主窗 **5 节点 / 3 行 / 101 字 / 0% 覆盖率**,
+        // 3 行全是 14×16 匿名 button。主二进制是 **x86_64（Rosetta）**、只链 Cocoa + 腾讯自家
+        // `ilink*` / `andromeda` / `ConfSDKdyn`, **没有 Chromium/Electron**, `strings` 里连
+        // `AXManualAccessibility` / `force-renderer-accessibility` 都不存在
+        // ⇒ **不是浏览器懒加载, 没有属性开关可解**, 只能走视觉那条路。
+        // ⚠️ 它与 Chrome 的差别在于"为什么进名单": Chrome 是 AX 能读但可能空壳,
+        //    微信是 AX **恒空**。同一个表(装了才列)装两种理由, 是因为列表的判据是
+        //    "装了没装", 不是"能不能读"; 能不能读由设置页那一列「读法」写着。
+        "com.tencent.xinWeChat",
+    ]
+
+    /// 手册**真正覆盖**的全部 App（**注入**判据）—— 内置 ∪ 第三方。
+    ///
+    /// ⚠️ 列列表**不许**直接用它: 第三方还要叠"装没装"（写死就是上面那条注释说的病）。
+    static var covered: Set<String> { builtins.union(thirdParty) }
+
     /// 手册里的一节 = 一个 App, **或一类 App**。
     ///
     /// 为什么允许一节挂多个 bundle（2026-11-09 boss 定, 原话「不要区分不同浏览器, 这样太浪费
-    /// 为数不多的空间了, 以浏览器操作手册的方向去做」）: 预算只有 4500 字, 而**同一件事**在
+    /// 为数不多的空间了, 以浏览器操作手册的方向去做」）: 整份预算只有 `Tune.sopTotalCharLimit`, 而**同一件事**在
     /// Safari 与 Chrome 上是同一条路（网页里点东西 / 换页 / 切标签）—— 写成两节等于把同一套
     /// 步骤讲两遍, 还多出一个"两节迟早会漂"的真源。
     ///
@@ -135,7 +172,9 @@ enum SopInjection {
     // MARK: - 组装
 
     /// - Parameters:
-    ///   - bundles: 当前**可读**名单（`ComputerSettings.activeBundles`）。
+    ///   - bundles: 当前**允许碰**的名单（`ComputerSettings.activeAllowedBundles` = 可读 ∪ 视觉）。
+    ///     ⚠️ 不是纯读面: 只勾了「视觉」的 App（微信）也该看到自己那一节, 否则它进得了操作面、
+    ///        却永远拿不到"怎么做"的说明 —— 那正是它最容易点错的时候。
     ///   - actBundles: 当前**可操作**名单（`activeActBundles`）—— 只用来在节头写清"能不能点"。
     ///   - manual: 手册正文。生产恒为 `SopManual.text`; 冒烟传样本 ⇒ 每条判据都能造边界。
     ///   - verifiedOn: 验手册的那天（`yyyy-MM-dd`）。空串 / 认不出 ⇒ 段头**如实说**"没写",
@@ -154,9 +193,9 @@ enum SopInjection {
                       budget: Int = Tune.sopTotalCharLimit) -> Result {
         var out = Result()
         guard !bundles.isEmpty else { return out }   // 名单空 = computer use 没开/没勾 ⇒ 整段不出现
-        // 只认**内置应用**（见 `builtins`）。名单里的第三方 App 静默跳过、**不点名**:
-        // 它不是"这份手册缺席", 而是"不在这份文档的范围内"。
-        let wanted = Set(Array(bundles).filter { builtins.contains($0) })
+        // 只认**手册覆盖的** App（`covered` = 内置 ∪ 第三方）。名单里**表外**的 App
+        // 静默跳过、**不点名**: 它不是"这份手册缺席", 而是"不在这份文档的范围内"。
+        let wanted = Set(Array(bundles).filter { covered.contains($0) })
         guard !wanted.isEmpty else { return out }
         // 手册是空的 = 没有手册 ⇒ 安静。⚠️ 不许走到下面去拼: 那时每一节都"漏了", 会拼出一个
         // 只有段头 + 「全都没带上」的空壳, 模型读到的意思变成"手册在这里、只是没内容"。

@@ -751,7 +751,7 @@ struct SettingsView: View {
     private var computerSection: some View {
         VStack(alignment: .leading, spacing: 12) {
             settingRow(title: "电脑操作",
-                       detail: "全局开关: 开 = 常规与完整模式的会话都能读你勾过的应用的界面, 不是只对当前会话生效 (极简与 codemode 档看不到这些工具)。再给某个 App 勾上「可操作」它才能按按钮/填输入框 —— 勾上就是允许, 不再逐次问你; 没勾的一律只读。再给某个 App 勾上「图片」, 我在文本读不出内容时才会截这个窗口的图当兜底 (默认关: 图里是像素, 会绕过输入框的遮蔽)。让助手打开一个 App 只需要「可读」(那等于替你点一下图标)") {
+                       detail: "全局开关: 开 = 常规与完整模式的会话都能读你勾过的应用的界面, 不是只对当前会话生效 (极简与 codemode 档看不到这些工具)。再给某个 App 勾上「可操作」它才能按按钮/填输入框 —— 勾上就是允许, 不再逐次问你; 没勾的一律只读。再给某个 App 勾上「视觉」, 它才允许看这个应用的屏幕 —— 文字读得出来时按文字走(图只补颜色和图标), 读不出来时按图数编号; 默认关, 因为图里是像素, 会绕过输入框的遮蔽。让助手打开一个 App 只需要「可读」或「视觉」(那等于替你点一下图标)") {
                 Toggle("", isOn: $computer.enabled)
                     .toggleStyle(.switch)
                     .controlSize(.small)
@@ -816,6 +816,8 @@ struct SettingsView: View {
             permissionRow(.inputMonitoring)
             Divider().overlay(CodexTheme.divider)
             takeoverRow
+            Divider().overlay(CodexTheme.divider)
+            tapRow
         }
     }
 
@@ -908,6 +910,38 @@ struct SettingsView: View {
         permissionLamps = ComputerPermission.snapshot()
     }
 
+    /// 第四档(2026-11-10): 允许在认不出元素时按坐标点。
+    ///
+    /// ⚠️ 这一行**只表达一个全局意图**, 与逐 App 的三个勾是两个维度: 那三个勾说"这个 App
+    ///    给不给", 这一行说"整个助手敢不敢动你的鼠标"。所以它跟接管检测并排,
+    ///    不放进 App 列表 —— 放进去会让人以为要逐 App 再开一遍。
+    /// ⚠️ 副标题必须写**代价**: 好处(微信能点)是它存在的理由, 代价(可能点错、没有撤销、
+    ///    光标会动一下)才是人拿来判断的信息。
+    private var tapRow: some View {
+        HStack(alignment: .center, spacing: 10) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("允许按坐标点击")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(CodexTheme.textPrimary)
+                Text("有些应用只看得见画面、认不出控件（比如微信）。开着：我能照着画面上的位置点下去。")
+                    .font(.system(size: 11))
+                    .foregroundStyle(CodexTheme.textMuted)
+                    .fixedSize(horizontal: false, vertical: true)
+                Text("代价：可能点到别的地方，而且没有撤销；点的那一下你的光标会动。")
+                    .font(.system(size: 11))
+                    .foregroundStyle(CodexTheme.toolRunning)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            Toggle("", isOn: Binding(get: { computer.tapEnabled },
+                                     set: { computer.tapEnabled = $0 }))
+                .toggleStyle(.switch)
+                .controlSize(.small)
+                .labelsHidden()
+                .fixedSize()
+        }
+    }
+
     /// 深链到系统设置里的**那一页**。⚠️ token 拼错不会报错, 只会静默打开首页
     /// ⇒ 那三个 token 由 `CaseComputerPure` 逐字钉住, 别凭记忆改。
     private func openPermissionSettings(_ p: ComputerPermission) {
@@ -915,7 +949,8 @@ struct SettingsView: View {
         NSWorkspace.shared.open(url)
     }
 
-    /// 列表 = **固定白名单**（`ComputerSettings.supported` ⇒ 手册覆盖、真机量过的那几个）。
+    /// 列表 = **固定白名单**（`ComputerSettings.supported(installed:)` ⇒ 手册覆盖、真机量过的那几个;
+    /// 第三方只列**装了的**, 见 `SopInjection.thirdParty`）。
     ///
     /// ⚠️ 演变史: 只列"正在运行"⇒ boss 问「浏览器怎么都没有」; 改成"已安装 ∪ 运行中"⇒ 几百行,
     ///    大半没量过（2026-11-06 boss: 「应用太多了, 而且很多都不确定能不能跑通」）⇒ 固定列表。
@@ -939,7 +974,9 @@ struct SettingsView: View {
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 // 白名单本身就是一句话承诺 ⇒ 必须写在列表旁边, 而不是让人猜"为什么只有这几个"。
-                Text("只列真机量过的内置应用：大部分在手册里写了怎么读、哪些事做不到。别的应用界面差异太大，量不准，先不开。")
+                // ⚠️ 2026-11-10 起列表里可能出现**第三方**（装了的 Chrome）⇒ 文案必须说清
+                //    "内置恒列 / 第三方装了才出现", 否则那行 Chrome 看起来像是凭空冒出来的。
+                Text("只列真机量过的应用：内置的几个恒列，第三方的（如 Chrome）装了才会出现。大部分在手册里写了怎么读、哪些事做不到；别的应用界面差异太大，量不准，先不开。")
                     .font(.system(size: 10))
                     .foregroundStyle(CodexTheme.textMuted)
                     .fixedSize(horizontal: false, vertical: true)
@@ -954,6 +991,23 @@ struct SettingsView: View {
                 }
             }
         }
+    }
+
+    /// 这一行「靠什么读」。**只读展示**, 不是开关。
+    ///
+    /// 三种取值与降级链一一对应: 文字树 → 屏幕识别 → 只剩图。
+    /// 当前这一版只会出现前两种的**前一种**和"只能看图" —— 「屏幕识别」那条路(OCR 合成)
+    /// 还没接进来, 接进来之后这里会多一个取值, 而页面代码不用改(它只读 `rows`)。
+    ///
+    /// 没观测过就写「未测量」: **不猜**。等真机读过一次, 它自己会变成上面某一个。
+    private func readPathText(_ health: ComputerSettings.ReadHealth?) -> String {
+        guard let health else { return L("未测量") }
+        // 0 行 = 只有窗口外壳。
+        // ⚠️ 单位「行」必须跟语言走 ⇒ 整句进词表 + `String(format:)`, **不许**写成
+        //    `L("文字树") + " · \(n) 行"`（本地化禁令⑤：插值不进 `L()`, 反过来也一样 ——
+        //    拆开拼就把中文单位焊死在句子里了, 英文界面会读成 "Text tree · 42 行"）。
+        if health.rows == 0 { return L("只能看图") }
+        return String(format: L("文字树 · %lld 行"), health.rows)
     }
 
     private func computerRow(_ app: ComputerSettings.Option) -> some View {
@@ -985,9 +1039,25 @@ struct SettingsView: View {
                             .foregroundStyle(CodexTheme.toolRunning)
                     }
                 }
-                Text(verbatim: app.bundle)
-                    .font(.system(size: 10))
-                    .foregroundStyle(CodexTheme.textMuted)
+                // 「靠什么读」= **只读标注, 不是开关**。
+                // 用户判断不了"这个 App 的 AX 有 42 行还是 3 行", 让他选等于让他替我做技术
+                // 选型; 而选错的后果不对称(选纯视觉去动 = 点错且无撤销) ⇒ 由后台按 App 现判,
+                // 这里只把结果写出来。用大白话, 不出现 AX / OCR 这些词。
+                HStack(spacing: 5) {
+                    Text(verbatim: app.bundle)
+                        .font(.system(size: 10))
+                        .foregroundStyle(CodexTheme.textMuted)
+                    Text(verbatim: "·")
+                        .font(.system(size: 10))
+                        .foregroundStyle(CodexTheme.textMuted)
+                    Text(verbatim: readPathText(health))
+                        .font(.system(size: 10))
+                        // 读不出东西的那一行要**看得出来**(黄色), 否则"能读"和"只能看图"
+                        // 在列表里长得一样 —— 而它们能不能动手, 差的是整整一档。
+                        .foregroundStyle(ComputerSettings.unaddressable(health: health,
+                                                                       hasVision: shootable)
+                                         ? CodexTheme.toolRunning : CodexTheme.textMuted)
+                }
             }
             Spacer(minLength: 0)
             // 两档权限**正交但有序**: 操作面必须在读面之下 —— 没勾读时"可操作"整格灰掉，
@@ -998,15 +1068,19 @@ struct SettingsView: View {
                 // 上次读爆了 ⇒ **不许再勾上**(勾了也只是再等一次 12 秒);
                 // 但已经勾着的仍可取消 —— 否则人想去掉它都去不掉。
                 .disabled(!readable && blocked)
-            // 批 3c 第三档: **图片**。紧挨着「可读」是因为它属于读面的一种(像素表示),
-            // 但**默认关**: 截图会带上整个窗口的像素, 包括文本层已经遮掉的那些 ⇒
-            // 它必须是逐个 App 明确开, 不许"跟着读面一起开"。
+            // 第三档: **视觉**（原「图片」, 2026-11-10 boss 改名）。
+            //
+            // ⚠️ 它**不依附于「可读」**: 这一档管的是"允许我看它的屏幕", 而看屏幕不需要 AX
+            //    树 —— 微信那种 AX 恒为 0 行的 App, 挂着 `disabled(!readable)` 就等于永远勾不上,
+            //    而它恰恰是唯一能用的那条路。
+            // ⚠️ 勾上之后才允许走「ax视觉 / 纯视觉」两种读法: 一条是用 AX 树当骨架、图只补
+            //    颜色与图标; 一条是纯粹看图数编号。由后台按 App 现判(见 `readPathText`),
+            //    不让人选 —— 选错的代价不对称(纯视觉去动 = 点错且无撤销)。
             if mayShoot {
-                Toggle(L("图片"), isOn: Binding(get: { shootable },
+                Toggle(L("视觉"), isOn: Binding(get: { shootable },
                                                set: { computer.setImage(app.bundle, $0) }))
                     .toggleStyle(.checkbox)
-                    .disabled(!readable)
-                    .help(L("开了它, 文本读不出内容时我才会去截这个窗口的图当兜底。截图带的是整个窗口的像素, 所以默认关"))
+                    .help(L("开了它我才能看这个应用的屏幕：文字读不出来时按图数编号, 文字读得出时图只用来补颜色和图标。默认关, 因为截图带的是整个窗口的像素"))
             } else {
                 Text(L("不可截图"))
                     .font(.system(size: 10))
@@ -1014,10 +1088,20 @@ struct SettingsView: View {
                     .help(L("口令 / 系统设置类应用: 一张都不拍 —— 像素会绕过输入框的遮蔽"))
             }
             if mayAct {
+                // ⚠️ 两个前提, 缺一不可:
+                //    ① **有一条能给编号的路** —— 读 AX 或 视觉, 都没有时勾了也是空的
+                //       (2026-11-10 起这两个是并列的两条来源, 不再是"读 ⊃ 视觉");
+                //    ② 上次读出来 0 行**且没勾视觉** ⇒ 没有可寻址的东西。
+                //    做不到的事不给勾, 比勾了之后失败好(同"只列量过的应用")。
+                let dead = ComputerSettings.unaddressable(health: health, hasVision: shootable)
+                let sourced = readable || shootable
                 Toggle(L("可操作"), isOn: Binding(get: { actable },
                                                 set: { computer.setAct(app.bundle, $0) }))
                     .toggleStyle(.checkbox)
-                    .disabled(!readable)
+                    .disabled(!sourced || dead)
+                    .help(!sourced ? L("先给它一条读法：勾「可读」或「视觉」—— 没有编号就没有能点的东西")
+                          : dead ? L("上次读出来 0 行 —— 这个应用没有可寻址的东西, 勾了也动不了")
+                          : "")
             } else {
                 // ⚠️ 口令/系统类应用占**同一个位置**的禁用态，而不是干脆不显示:
                 //    不显示的话用户会以为"这批功能不支持这个 App"，于是去别处找开关。
@@ -1039,7 +1123,7 @@ struct SettingsView: View {
                 .font(.system(size: 11))
                 .foregroundStyle(CodexTheme.textMuted)
                 .fixedSize(horizontal: false, vertical: true)
-        } else if computer.selected.isEmpty {
+        } else if computer.activeAllowedBundles.isEmpty {
             Text("开了但一个都没勾 ⇒ 所有会话都用不了 (空 = 不开放, 不是全都行)")
                 .font(.system(size: 11))
                 .foregroundStyle(CodexTheme.toolRunning)
@@ -1064,9 +1148,12 @@ struct SettingsView: View {
                         .font(.system(size: 11))
                         .foregroundStyle(computer.activeActBundles.isEmpty
                                          ? CodexTheme.textMuted : CodexTheme.toolDone)
-                    // 图像面也单独报数: 三档代价不同(读最便宜 / 动最危险 / 截图最贵),
-                    // 只报前两个会让人以为"没开图片就是没开", 而它恰恰是绕过遮蔽的那一档。
-                    Text("图片")
+                    // 视觉也单独报数: 三档代价不同(读最便宜 / 动最危险 / 看屏幕最贵),
+                    // 只报前两个会让人以为"没开视觉就是没开", 而它恰恰是绕过遮蔽的那一档,
+                    // 也是 AX 恒空的 App（微信）唯一能走的那一档。
+                    // ⚠️ 与「可读」**不同源**: 可读只数 AX（boss: 「可读表示可以读 ax」）,
+                    //    视觉是独立的一档, 两者可以互不包含。
+                    Text("视觉")
                         .font(.system(size: 11))
                         .padding(.leading, 6)
                         .foregroundStyle(computer.activeImageBundles.isEmpty
@@ -1084,7 +1171,10 @@ struct SettingsView: View {
                     .foregroundStyle(CodexTheme.textMuted)
                     .fixedSize(horizontal: false, vertical: true)
                 // 列表是**数据**不是文案 ⇒ verbatim, 不进词表。
-                Text(verbatim: computer.activeBundles.joined(separator: "\n"))
+                // ⚠️ 列 `activeAllowedBundles`（读 ∪ 视觉）而不是 `activeBundles`: 这一行是
+                //    "真正下发的那份名单"的自证, 只列读面会让"微信勾了视觉但看不到在这行里"
+                //    变成一个查不出原因的谜（它确实在名单里, 只是不在读面）。
+                Text(verbatim: computer.activeAllowedBundles.joined(separator: "\n"))
                     .font(.system(size: 10))
                     .foregroundStyle(CodexTheme.textMuted)
                     .fixedSize(horizontal: false, vertical: true)

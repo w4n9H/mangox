@@ -9,23 +9,30 @@
 //  两组判据, 别混:
 //    ① **组装**（①~⑫）: 传样本手册进 `block`, 把每种边界造出来（名单空 / 漏节 / 超预算 / 陈旧 / 档位）。
 //    ② **本体**（⑬）: 直接盯 `SopManual.text` —— 它现在住在代码里、改一次要发一次版,
-//       所以"写法"必须由门禁守, 不能靠写的人自觉（单节字数 / 任务线结构 / 覆盖白名单 / 不写编号 / 日期不造假）。
+//       所以"写法"必须由门禁守, 不能靠写的人自觉（单节字数 / 场景清单结构 / 不许抄通则 /
+//       覆盖白名单 / 不写编号 / 日期不造假）。
 //
 
 import Foundation
 
 extension SmokeMain {
 
-    /// 一节是不是写成了**任务线**: ≥2 个 `### 任务` 小标题, 且合计 ≥2 条编号步骤（`1. ` 这种）。
+    /// 一节是不是写成了**场景清单**: ≥2 行 `- 场景: …`, 且**一条编号步骤都没有**。
     ///
+    /// ⚠️ 2026-11-10 第四次改（boss:「单个应用 sop 应该是极致简化…还是要带上场景, 比如
+    ///    `- 新建行程` / `- 修改` / `- 删除`, 一行一个场景, 语句高效易懂」）。
+    ///    换判据不是放宽, 是**分工变了**: 步骤由模型从 read 回来的那棵树里现排, 手册只交代
+    ///    "这个场景里不能想当然的那一点" ⇒ **编号步骤现在是错的** —— 它会让手册重新长出
+    ///    整套流程, 而"每节各写一遍整套流程"正是这次膨胀的病根（六节 3541 字里约 1000 是模板）。
     /// ⚠️ 抽成函数, 为的是让**正例与反例走同一段逻辑**。反例若另写一份判定, 那一份会自己漂成
     ///    恒真 —— 而它恰恰是"上面那条不是恒真"的唯一证据（判据本身也可以是错的, 见 10-14 的教训）。
-    static func isTaskLine(_ body: String) -> Bool {
-        let tasks = body.components(separatedBy: "\n### ").count - 1
-        let steps = body.components(separatedBy: "\n").filter {
+    static func isScenarioList(_ body: String) -> Bool {
+        let lines = body.components(separatedBy: "\n")
+        let scenes = lines.filter { $0.hasPrefix("- ") }.count
+        let steps = lines.filter {
             $0.range(of: #"^\d+\. "#, options: .regularExpression) != nil
-        }
-        return tasks >= 2 && steps.count >= 2
+        }.count
+        return scenes >= 2 && steps == 0
     }
 
     @MainActor
@@ -88,15 +95,22 @@ extension SmokeMain {
         check(seg.contains("验证于 \(SopManual.verifiedOn)"),
               "T-SOP 段头带整份手册的验证日期 (实际: \(SopManual.verifiedOn))")
 
-        // ⑤ 白名单: 第三方 App 就算手册里有那一节、名单里也勾了, 也不注入、不点名
-        let third = SopInjection.block(bundles: ["com.google.Chrome"], actBundles: [],
+        // ⑤ 白名单: **表外**的第三方就算名单里勾了, 也不注入、不点名
+        //    ⚠️ 样本必须**两张表都不在**的 App, 而这条已经踩过两次: Chrome（11-10 进了
+        //       `thirdParty`）、微信（同一天也进了）。每换一次样本都是同一个坑:
+        //       拿"真 App"当表外样本 ⇒ 它哪天被支持了, 这条就"反向变红", 而那种红会被
+        //       误读成"白名单写错了"。
+        //    ⇒ 现在用一个**永远不会被支持**的合成 bundle: 判据守的是"不在 `covered` 里的
+        //       App 不许进提示词", 与那个 App 存不存在无关。
+        let outsider = "com.example.not-in-covered"
+        let third = SopInjection.block(bundles: [outsider], actBundles: [],
                                        manual: sample, now: now)
         check(third.text == nil && third.missing.isEmpty,
-              "T-SOP 第三方 App 不注入也不点名 (不在范围里, 点名会让模型去 read 一份不维护的手册)")
-        let mixed = SopInjection.block(bundles: ["com.google.Chrome", "com.apple.Notes"],
+              "T-SOP 表外第三方不注入也不点名 (不在范围里, 点名会让模型去 read 一份不维护的手册)")
+        let mixed = SopInjection.block(bundles: [outsider, "com.apple.Notes"],
                                        actBundles: [], manual: sample, now: now)
         check(mixed.injected == ["com.apple.Notes"],
-              "T-SOP 名单里混着第三方 App 时只注入内置那几节 (实际: \(mixed.injected))")
+              "T-SOP 名单里混着表外第三方时只注入手册覆盖那几节 (实际: \(mixed.injected))")
 
         // ⑥ 白名单里有、手册里没那一节 = **两边不同步**（加了 App 忘了写手册）⇒ 必须点名
         //    ⚠️ 造"漏节"的 App 必须**白名单里有、样本里没有**: 曾用 reminders, 后来样本补上了它 ⇒
@@ -192,8 +206,8 @@ extension SmokeMain {
         // 误判成"少了一个 App 的手册"。
         let bundles = Set(manual.sections.flatMap(\.bundles))
 
-        check(bundles == SopInjection.builtins,
-              "T-SOP 手册恰好覆盖白名单那 \(SopInjection.builtins.count) 个 App、不多不少"
+        check(bundles == SopInjection.covered,
+              "T-SOP 手册恰好覆盖白名单那 \(SopInjection.covered.count) 个 App（内置 + 第三方）、不多不少"
               + " (手册多出来的节永远不会被注入 = 死内容; 少一节 = 那个 App 没有手册。"
               + " 实际: \(bundles.sorted()))")
 
@@ -208,31 +222,44 @@ extension SmokeMain {
         check(!manual.preamble.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
               "T-SOP 手册要有通则 (编号会变 / act 回执只给 diff 这两条对每个 App 都成立, 只写一次)")
 
-        // 单节字数 + 结构: 每节必须写成**任务线**（`### 任务名` + 编号步骤）, 且必须有版本
+        // 单节字数 + 结构: 每节必须写成**场景清单**（一行一个场景）, 且必须有版本
         // —— 版本决定模型该不该照着做; 没有版本号 = 无法判断这节是不是上一个系统版本的界面。
         //
-        // ⚠️ 2026-11-06 换过一次判据: 原来要求每节含 `### 找`（把知识按「找 / 做 / 成 / 别」四类切）。
-        //    那个结构**不是 SOP** —— 同一件事的步骤被切碎分到四个抽屉里, 模型得自己拼一条路出来;
-        //    更硬的一条: 「成」一个 App 只有一段, 可一个 App 有四五件事（备忘录那段的「成」
-        //    其实只覆盖"删一条", 建一条 / 追加 / 打开都没有判据）。
-        //    现在按**任务**切: 一条线 = 目标 + 编号步骤, 每步的判据跟在同一行后面。
-        // 上限 = 整份预算的 1/5: 它的用处是"单个 App 不许吃掉大半预算", 不是"每节都必须短"。
-        // ⚠️ 2026-11-09 从 700 提到 900: 浏览器那节要写「Safari 已验 / Chrome 要人先开
-        //    accessibility」—— 那是**决策信息**, 砍掉它模型就会在 Chrome 的空壳上瞎点。
-        let tooLong = manual.sections.filter { $0.body.count > 900 }.map { "\($0.title)=\($0.body.count)" }
+        // ⚠️ 这条判据换过三次, 每一次都是"结构换了、判据跟着换":
+        //    · 0.2.5 要求每节含 `### 找`（知识按「找 / 做 / 成 / 别」四类切）—— 那个结构不是 SOP,
+        //      一件事的步骤被切碎分到四个抽屉里;
+        //    · 11-06 改成「`### 任务` + 编号步骤」—— 解决了切碎, 但每个 App 又长成一本独立小手册;
+        //    · 11-10 改成「一行一个场景」—— 通法归通则, 节里只留"这里跟通法不一样"。
+        //    ⇒ **编号步骤现在是错的**: 它会让手册重新长出整套流程。这就是下面那条断言的方向。
+        // 单节上限压在实测值上（实测最大 409）: 上限的用处是"单个 App 不许再长回一整本手册",
+        // 不是"每节都必须短"。留大额余量 = 提前发许可, 上一版从 700 涨到 900 就是这么涨的。
+        let tooLong = manual.sections.filter { $0.body.count > 430 }.map { "\($0.title)=\($0.body.count)" }
         check(tooLong.isEmpty,
-              "T-SOP 单节 ≤900 字 (每轮都进提示词; 超了就是写了没人要的东西。实际超: \(tooLong))")
-        // 判据 = 这一节里 **≥2 个 `### 任务`**、且合计 **≥2 条编号步骤**。
-        // 散文体 / 只有分类小标题的写法两条都过不了 —— 那正是"模型还得自己拼步骤"的样子。
-        let notTaskLine = manual.sections.filter { !Self.isTaskLine($0.body) }.map(\.title)
-        check(notTaskLine.isEmpty,
-              "T-SOP 每节要写成任务线 (≥2 个 `### 任务` 且合计 ≥2 条编号步骤; 写成散文或"
-              + "按知识分类切, 模型还得自己拼步骤。实际不合格: \(notTaskLine))")
+              "T-SOP 单节 ≤430 字 (每轮都进提示词; 超了多半是把整套流程又写回来了。实际超: \(tooLong))")
+        // 判据 = 这一节里 **≥2 行 `- ` 场景**、且**零条编号步骤**。
+        let notScenes = manual.sections.filter { !Self.isScenarioList($0.body) }.map(\.title)
+        check(notScenes.isEmpty,
+              "T-SOP 每节要写成场景清单 (≥2 行 `- 场景: …` 且一条编号步骤都没有; 编号步骤会让手册"
+              + "重新长出整套流程 —— 那是 11-10 之前六节 3541 字的来源。实际不合格: \(notScenes))")
         // 反例自证: 同一段判定喂它的**反面**必须判不合格, 否则上面那条对任何输入都返回空 = 恒真。
-        // 用的正是被换掉的那种写法（一个 `###` 小标题 + 一段描述, 没有编号）—— 它曾经是四段结构的常态。
-        check(!Self.isTaskLine("\n### 找\n- 左栏 outline：每个 cell 的 title 自带计数。\n"
-                               + "- 分组行只有一个 statictext。"),
-              "T-SOP 反例: 按知识分类切、没有编号步骤的写法必须判不合格 (否则上面那条是恒真的)")
+        // 用的正是 11-06~11-10 那种写法（`### 任务` + 编号步骤）。
+        check(!Self.isScenarioList("\n### 建一条\n1. `press button \"新建备忘录\"`\n"
+                                   + "2. read 一次：计数 +1 = 成\n"),
+              "T-SOP 反例: `### 任务` + 编号步骤的旧写法必须判不合格 (否则上面那条是恒真的)")
+        // 同一件事的第二面: 节里**不许重新抄通则**。抄回来就是模板, 而模板是这次膨胀的元凶
+        // （六节里约 1000 字是六份各写一遍的"验证 / 先问用户 / 动作表"）。
+        // ⚠️ 扫的是措辞不是语义 —— 它治不了"换个说法接着抄", 但它能让**照抄**当场红,
+        //    而那恰恰是最省事的退路。
+        let echoes = ["read 一次", "= 成", "先问用户", "重读"]
+        var echoHits: [String] = []
+        for sec in manual.sections {
+            for w in echoes where sec.body.contains(w) {
+                echoHits.append("\(sec.title):\(w)")
+            }
+        }
+        check(echoHits.isEmpty,
+              "T-SOP 节里不许重复通则的句式 (扫描 \(echoes); 节该写\"这个 App 特殊在哪\", 不是把"
+              + "通法再抄一遍 —— 那份由通则付一次就够。实际命中: \(echoHits))")
         let noVersion = manual.sections.filter { $0.version.isEmpty }
             .map { $0.bundles.joined(separator: "+") }
         check(noVersion.isEmpty,
@@ -240,8 +267,10 @@ extension SmokeMain {
 
         // 整份上限: 一个是"全都装得下"的绝对量级, 一个是运行时预算 —— 两条都要成立,
         // 否则 `block` 会在真机上**静默截尾**, 而这里是唯一能提前发现它的地方。
-        check(SopManual.text.count <= 4500 && SopManual.text.count <= Tune.sopTotalCharLimit,
-              "T-SOP 整份 ≤4500 字且在预算 \(Tune.sopTotalCharLimit) 内 (实际 \(SopManual.text.count) 字)")
+        // ⚠️ 3500 与运行时的 4400 不是同一个数（后者含段头）; 两个都压在实测值上（实测 3402 / 4235）,
+        //    理由见 `SopManual` 文件头 ①: 留大额余量 = 提前发膨胀许可。
+        check(SopManual.text.count <= 3500 && SopManual.text.count <= Tune.sopTotalCharLimit,
+              "T-SOP 整份 ≤3500 字且在预算 \(Tune.sopTotalCharLimit) 内 (实际 \(SopManual.text.count) 字)")
 
         // 不许写具体编号: 编号每次 read 都变, 写死即过期数据（而且是**看起来最精确的**过期数据）
         check(SopManual.text.range(of: "#\\s*\\d", options: .regularExpression) == nil,
@@ -250,12 +279,12 @@ extension SmokeMain {
         // 真注入量: 用**真手册 + 最宽的那一档**（六节全在 + codemode 段 + 日期行）直接量,
         // 而不是"手册字数 + 猜一个段头大小"。⚠️ `block` 的 `budget` 只卡各节, 段头是固定成本 ——
         // 所以"总字数在预算内"这条**只能**在这里断言, 别处推不出来。
-        let widest = SopInjection.block(bundles: Array(SopInjection.builtins),
-                                        actBundles: Array(SopInjection.builtins),
+        let widest = SopInjection.block(bundles: Array(SopInjection.covered),
+                                        actBundles: Array(SopInjection.covered),
                                         codemode: true, now: now)
-        check(widest.injected.count == SopInjection.builtins.count && widest.missing.isEmpty,
+        check(widest.injected.count == SopInjection.covered.count && widest.missing.isEmpty,
               "T-SOP 真手册在最宽一档下白名单里的节全都要进、一条都不许掉 (实际进 "
-              + "\(widest.injected.count)/\(SopInjection.builtins.count) 节, "
+              + "\(widest.injected.count)/\(SopInjection.covered.count) 节, "
               + "没带上 \(widest.missing))")
         check(widest.chars <= Tune.sopTotalCharLimit,
               "T-SOP 真注入量(含段头) ≤ 预算 \(Tune.sopTotalCharLimit) (实际 \(widest.chars) 字; "

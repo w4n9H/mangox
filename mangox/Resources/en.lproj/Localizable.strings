@@ -7,7 +7,7 @@
    **本文件由 scripts/l10n/gen_strings.py --write 生成, 别手改** ——
    译文改 scripts/l10n/en_values.py 的 VALUES, 再跑 --write。
 
-   条数: 990
+   条数: 1022
 */
 
 " (值:\"%@\")" = " (value: %@)";
@@ -28,13 +28,19 @@
 " 想按它的话用 press。" = " To press it instead, use press.";
 " 未选" = " none";
 " 电脑" = " Computer";
+" 要开就在 设置 › 集成 › 电脑操作 里打开。" = " turn it on in Settings › Integrations › Computer control.";
 "# 快照 · 前台:%@ · 窗口:%@" = "# Snapshot · front:%@ · window:%@";
 "#%@ 在这份快照里查不到对应元素 ⇒ 没动。重新读一次。" = "#%@ has no matching element in this snapshot ⇒ nothing was done. Read again.";
 "#%@ 属于旧快照(你手上 seq=%@, 现在是 %@)" = "#%@ belongs to an older snapshot (you hold seq=%@, it is %@ now)";
+"%@ 上盖着「%@」的另一个窗口(弹层 / 对话框) ⇒ 没点。" = "Another \"%@\" window (a sheet or a dialog) covers %@ ⇒ nothing was tapped.";
+"%@ 不像屏幕上的点 ⇒ 没点。坐标是全局屏幕坐标、左上原点。" = "%@ does not look like a point on screen ⇒ nothing was tapped. Coordinates are global screen coordinates, origin at the top left.";
 "%@ 不像屏幕上的点(超出 ±%lld) ⇒ 没动。" = "%@ does not look like a point on a screen (outside ±%lld) - nothing was done.";
+"%@ 不在「%@」的窗口 %@ 里 ⇒ 没点。" = "%@ is not inside \"%@\" window %@ ⇒ nothing was tapped.";
 "%@ 字" = "%@ chars";
+"%@ 底下写着「%@」 ⇒ 没点。" = "Under %@ it says \"%@\" ⇒ nothing was tapped.";
 "%@ 得按编号来 —— 它要知道动的是哪一格。" = "%@ has to go by row number - it needs to know which row it is moving.";
 "%@ 拷贝失败: %@" = "Failed to copy %@: %@";
+"%@ 落在**别的 App** 的窗口上(不是「%@」) ⇒ 没点。" = "%@ lands on **another app**'s window (not \"%@\") ⇒ nothing was tapped.";
 "%lld 个" = "%lld";
 "%lld 个人格文件 frontmatter 破损, 未注入且已禁止新建 key: %@" = "%lld persona files have broken frontmatter — not injected, and creating keys is blocked: %@";
 "%lld 个人格文件是「按需」的, 模型不知道它们存在: %@" = "%lld persona files are “on demand” — the model does not know they exist: %@";
@@ -154,6 +160,7 @@
 "✓ 连通, 勾选后保存" = "✓ Reachable — tick the models and save";
 "✓ 采纳入库" = "✓ Accepted and stored";
 "「%@」上没有含「%@」的动作 —— %@ ⇒ 没动。" = "\"%@\": no action matching \"%@\" -- %@ ⇒ nothing done.";
+"「%@」不在前台 ⇒ 没点。" = "\"%@\" is not in front ⇒ nothing was tapped.";
 "「%@」不在开放名单里 ⇒ 我不动它。" = "%@ is not on the open list ⇒ I will not touch it.";
 "「%@」不接受聚焦(系统说这个控件的焦点不可设) ⇒ 没动。" = "%@ will not take focus (the system says its focus attribute is not settable) ⇒ nothing was done.";
 "「%@」只开了「读」, 没开「操作」⇒ 我不动它。" = "Only Read is enabled for %@, not Act ⇒ I will not touch it.";
@@ -164,10 +171,14 @@
 "「%@」是口令/系统类应用 ⇒ 我永远不操作它, 只读。" = "%@ is a password manager or a system app ⇒ it stays read-only, always.";
 "「%@」没有「确认」这个动作 —— %@ ⇒ 没动。" = "%@ has no confirm action — %@ ⇒ nothing was done.";
 "「%@」没有菜单可开 —— %@ ⇒ 没动。" = "\"%@\": no menu to open -- %@ ⇒ nothing done.";
+"「%@」的窗口挪过: 原来 %@, 现在 %@ ⇒ 没点。" = "\"%@\" window moved: it was %@, now it is %@ ⇒ nothing was tapped.";
 "「%@」还没勾「可操作」⇒ 没动它。到「设置 → 电脑操作」里给这个 App 勾上" = "%@ is not marked actable ⇒ I did not touch it. Tick it under Settings → Computer actions.";
+"「%@」还没勾「可操作」⇒ 没点。看得到不等于动得。" = "\"%@\" is not marked \"Can act\" ⇒ nothing was tapped. Being visible is not the same as being actionable.";
 "「%@」还没勾「可读」⇒ 没打开它。到「设置 → 电脑操作」里给这个 App 勾上" = "%@ is not marked readable ⇒ I did not open it. Tick it under Settings → Computer actions.";
 "「%@」这一格要的是日期时间(例: 2026-11-04 17:30)," = "\"%@\": this cell takes a date-time (e.g. 2026-11-04 17:30),";
+"「%@」重启过了 ⇒ 你手上那份快照说的不是这个窗口, 没点。重新 read 一次。" = "\"%@\" was restarted ⇒ the snapshot you hold is not this window, so nothing was tapped. Read again.";
 "「%@」附近没有可写的滚动条(它自己和上面几层都没有) ⇒ 滚不动。" = "There is no writable scroll bar around %@ (not on it, nor a few levels above it) ⇒ it cannot be scrolled.";
+"「按坐标点击」这一档关着 ⇒ 没点。" = "\"Click by position\" is off ⇒ nothing was tapped.";
 "一" = "Mon";
 "一行一个地址; 名单外的信静默丢弃并移入 Trash" = "One address per line; mail from anyone else is silently dropped and moved to Trash.";
 "三" = "Wed";
@@ -184,6 +195,7 @@
 "上次 %@" = "%@ last time";
 "上次收信 %@" = "Last received %@";
 "上次没读完(已置灰):" = "Not fully read last time (greyed out):";
+"上次读出来 0 行 —— 这个应用没有可寻址的东西, 勾了也动不了" = "Last read came back with 0 rows - this app has nothing addressable, so ticking Act would do nothing";
 "上次退出时回合还在跑, 重启后无法结算" = "A turn was still running when you last quit; it cannot be settled after restart.";
 "下单" = "Place order";
 "下载落盘/上传文件" = "downloading or uploading files";
@@ -226,6 +238,7 @@
 "仍然覆盖" = "Overwrite anyway";
 "从托管区删除" = "Remove from managed area";
 "付款" = "Payment";
+"代价：可能点到别的地方，而且没有撤销；点的那一下你的光标会动。" = "Cost: it can land somewhere else and there is no undo; the cursor moves for that click.";
 "任务" = "Task";
 "任务删除后停止调度。工作日志文件始终保留; 日志会话可选删除。" = "Deleting a task stops scheduling. The work log file is always kept; the log session is optional.";
 "任务台" = "Task bar";
@@ -239,9 +252,11 @@
 "位置" = "Location";
 "低" = "Low";
 "低 · 每 30 分钟" = "Low · every 30 min";
+"你 %@ 毫秒前刚动过键鼠 ⇒ 没点。" = "You touched the keyboard or mouse %@ ms ago ⇒ nothing was tapped.";
 "你写的" = "You wrote it";
 "你手动压缩了上下文 · %lld → %lld tokens" = "You compacted the context · %lld → %lld tokens";
 "你是谁" = "Who You Are";
+"你此刻正按着鼠标键(可能在拖拽) ⇒ 没点。松开之后再说一次。" = "You are holding a mouse button right now (dragging, most likely) ⇒ nothing was tapped. Ask again after you let go.";
 "侧问 · %@" = "Side · %@";
 "侧问创建失败：快照回读未完成 (回合未成功)" = "Could not start the side chat: the snapshot could not be read back (the turn did not succeed).";
 "侧问快照创建失败：无法读取源会话记忆文件" = "Could not create the side-chat snapshot: the source session's memory file is unreadable.";
@@ -261,13 +276,17 @@
 "停用" = "Disabled";
 "停用后不再收信 (绑定关系保留)" = "Once disabled it stops receiving mail (the binding is kept).";
 "允许" = "Allow";
+"允许按坐标点击" = "Allow clicking by position";
 "允许锁屏运行" = "Allow running while locked";
+"先 computer_open 把它切上来, 再点。" = "Bring it forward with computer_open first, then tap.";
 "先删除 Inbox agent「%@」" = "Delete the Inbox agent “%@” first";
+"先处理弹层, 或者重新 read 一次按新的来。" = "Deal with the sheet first, or read again and work from the new picture.";
+"先给它一条读法：勾「可读」或「视觉」—— 没有编号就没有能点的东西" = "Give it a way to read first: tick \"Read\" or \"Vision\" - without row numbers there is nothing to act on";
 "免手册（界面极简，量一次就穷尽）：%@" = "No manual needed (tiny UI, one measurement covers it): %@";
 "全局" = "Global";
 "全局串行 (同一时刻只跑一个远程任务)" = "Global serial (only one remote task runs at a time)";
 "全局唤起捕获输入条: 输入后回车即以无人值守模式开跑 (关审批 + Minimal 档); Esc 或点击外部关闭" = "Global hotkey opens the capture bar: type and press Enter to run unattended (approval off, Minimal mode); Esc or clicking outside closes it.";
-"全局开关: 开 = 常规与完整模式的会话都能读你勾过的应用的界面, 不是只对当前会话生效 (极简与 codemode 档看不到这些工具)。再给某个 App 勾上「可操作」它才能按按钮/填输入框 —— 勾上就是允许, 不再逐次问你; 没勾的一律只读。再给某个 App 勾上「图片」, 我在文本读不出内容时才会截这个窗口的图当兜底 (默认关: 图里是像素, 会绕过输入框的遮蔽)。让助手打开一个 App 只需要「可读」(那等于替你点一下图标)" = "Global switch: on means sessions in the standard and full modes can read the apps you ticked, not just the current conversation (the minimal and codemode modes do not see these tools). Ticking \"Act\" for an app is what lets it press buttons and fill fields - a tick is permission, it will not ask again; anything unticked is read-only. Ticking \"Image\" is what lets me fall back to a screenshot of that window when the text read comes back empty (off by default: a screenshot is pixels, and pixels bypass the mask on input fields). Opening an app only needs \"Read\" (it is the same as clicking its icon for you)";
+"全局开关: 开 = 常规与完整模式的会话都能读你勾过的应用的界面, 不是只对当前会话生效 (极简与 codemode 档看不到这些工具)。再给某个 App 勾上「可操作」它才能按按钮/填输入框 —— 勾上就是允许, 不再逐次问你; 没勾的一律只读。再给某个 App 勾上「视觉」, 它才允许看这个应用的屏幕 —— 文字读得出来时按文字走(图只补颜色和图标), 读不出来时按图数编号; 默认关, 因为图里是像素, 会绕过输入框的遮蔽。让助手打开一个 App 只需要「可读」或「视觉」(那等于替你点一下图标)" = "Global switch: on means sessions in the standard and full modes can read the apps you ticked, not just the current conversation (the minimal and codemode modes do not see these tools). Ticking \"Act\" for an app is what lets it press buttons and fill fields - a tick is permission, it will not ask again; anything unticked is read-only. Ticking \"Vision\" is what allows me to look at that app's screen - when the text read works I go by the text (the picture only fills in colours and icons), and when it comes back empty I number things from the picture; off by default because a picture is pixels and pixels bypass the mask on input fields. Opening an app only needs \"Read\" or \"Vision\" (it is the same as clicking its icon for you)";
 "全文" = "Full text";
 "全部丢弃" = "Discard all";
 "全部采纳" = "Accept all";
@@ -283,7 +302,7 @@
 "内容没变时不会写盘, 也不会留下一条变更记录" = "Nothing is written when the content is unchanged, and no revision is recorded";
 "内容较长 · 展开" = "Long content · Expand";
 "内置" = "Built-in";
-"内置审批扩展, 不可停用" = "Built-in approval extension, cannot be disabled";
+"内置扩展, 不可停用" = "Built-in extension, cannot be disabled";
 "写" = "Write";
 "写 #" = "Write #";
 "写一篇新笔记 (存到全局笔记目录, 下一轮组装就会带上它)" = "Write a new note (stored in the global notes directory; the next assembly picks it up)";
@@ -363,11 +382,12 @@
 "只作用于这个 Inbox 起的会话, 不改变你当前会话的模型与档位" = "Applies only to sessions started by this Inbox; your current session's model and mode are untouched.";
 "只保证 MangoX 自己不被休眠打断。任务实际是在后台进程里跑的，系统会不会让它变慢，这条设置影响不到。" = "This only keeps MangoX itself from being interrupted by sleep. Tasks actually run in the background, and this setting cannot affect whether the system slows them down.";
 "只出提案，不改任何文件" = "Proposals only, no files touched";
-"只列真机量过的内置应用：大部分在手册里写了怎么读、哪些事做不到。别的应用界面差异太大，量不准，先不开。" = "Only built-in apps measured on a real machine: most have a manual saying how to read them and what they cannot do. Other apps vary too much to measure reliably, so they stay closed for now.";
+"只列真机量过的应用：内置的几个恒列，第三方的（如 Chrome）装了才会出现。大部分在手册里写了怎么读、哪些事做不到；别的应用界面差异太大，量不准，先不开。" = "Only apps measured on a real machine: the built-in ones are always listed, third-party ones (such as Chrome) appear only when installed. Most have a manual saying how to read them and what they cannot do; other apps vary too much to measure reliably, so they stay closed for now.";
 "只收 .md (大小写敏感); 若你刚要删或改名, 这条就是唯一的线索" = "Only .md is picked up (case-sensitive); if you just deleted or renamed something, this line is the only trace of it";
 "只是不再挂载, 目录与里面的文件一个都不动。" = "It is only unmounted — the directory and every file inside stay untouched.";
-"只有勾了「图片」的 App 才会截窗口。给完要重启 MangoX 才生效 —— 灯不会当场变, 别以为没给成。" = "Only apps with \"Image\" ticked get a window screenshot. Granting it takes effect only after you restart MangoX - the lamp will not flip right away, so do not read that as a failure.";
+"只有勾了「视觉」的 App 才会截窗口。给完要重启 MangoX 才生效 —— 灯不会当场变, 别以为没给成。" = "Only apps with \"Vision\" ticked get a window screenshot. Granting it takes effect only after you restart MangoX - the lamp will not flip right away, so do not read that as a failure.";
 "只有菜单里才有的功能, 在这一格上这条路走不通, 那就如实告诉用户。" = "Anything that exists only in a menu cannot be reached through this cell -- say so honestly.";
+"只能看图" = "Picture only";
 "只读命令静默放行, 其余弹审批卡等待点击。" = "Read-only commands pass silently; anything else raises an approval card and waits for a click.";
 "只读命令静默放行, 危险命令自动拒绝并记下原因 (回执告知) — 远程驱动用。" = "Read-only commands pass silently; dangerous ones are refused automatically with the reason recorded (and sent back in the receipt) — for remote-driven work.";
 "只读显示本轮真正发出去的注入块 —— 门禁绿 ≠ 改对了" = "Read-only view of the injection block actually sent this turn — a green gate does not mean it is right";
@@ -377,6 +397,7 @@
 "右边是空的 —— 采纳后这篇进系统废纸篓, 还能在那里捞回来。" = "The right side is empty — accepting moves this note to the system Trash, where you can still recover it.";
 "名字" = "Name";
 "名称" = "Name";
+"后台点不动(实测前后两帧一模一样), 而且真点下去会把它拽到最前面。" = "a click in the background does not land (measured: the two frames are byte-identical), and a real one would drag it to the front.";
 "向上" = "Up";
 "向下" = "Down";
 "含「%@」的动作有 %lld 个(%@), 分不清你要哪个 ⇒ 没动。" = "Actions matching \"%@\": %lld of them (%@), so which one you want is ambiguous ⇒ nothing done.";
@@ -393,7 +414,7 @@
 "回合完成通知" = "Turn completion notifications";
 "回执发送失败: %@" = "Could not send the receipt: %@";
 "回执未发出: Inbox「%@」的账号/收件实现不可用" = "No receipt sent: the account or receiving path for Inbox “%@” is unavailable";
-"图片" = "Image";
+"图上的位置是相对窗口的, 窗口一动就全偏 —— 重新 read 一次再算。" = "Positions in the picture are relative to the window, so moving it shifts every one of them — read again and measure again.";
 "图片: %@" = "Image: %@";
 "图片已不存在 (附件文件被移动或删除)" = "The image is gone (the file was moved or deleted)";
 "在 App 外改完文件后点这里; 已开着的会话仍需重启引擎才生效" = "Click here after editing files outside the app; running sessions still need an engine restart";
@@ -433,6 +454,7 @@
 "它能做的只有：" = "the only thing it offers is ";
 "它能执行的是：" = "It can run: ";
 "它锁住这些 key，DB 条目里不能再用:" = "It locks these keys, which DB items can no longer use:";
+"它默认关是因为可能点错、而且点错了没有撤销 ——" = "It is off by default because it can land in the wrong place and there is no undo —";
 "完成" = "Done";
 "完整地址, 如 you@example.com" = "Full address, e.g. you@example.com";
 "完整模式" = "Full mode";
@@ -503,7 +525,7 @@
 "并发已达上限 (%lld), 捕获未发送" = "Concurrency limit reached (%lld); capture not sent";
 "并发已达上限 (%lld), 请等待任务结束或在设置中调高" = "Concurrency limit reached (%lld) — wait for a task to finish or raise the limit in settings";
 "开了但一个都没勾 ⇒ 所有会话都用不了 (空 = 不开放, 不是全都行)" = "On, but nothing is ticked, so no session can use it (empty means not open, not everything)";
-"开了它, 文本读不出内容时我才会去截这个窗口的图当兜底。截图带的是整个窗口的像素, 所以默认关" = "With this on, I fall back to a screenshot of this window only when the text read comes back empty. A screenshot carries the whole window as pixels, so it stays off by default";
+"开了它我才能看这个应用的屏幕：文字读不出来时按图数编号, 文字读得出时图只用来补颜色和图标。默认关, 因为截图带的是整个窗口的像素" = "With this on I am allowed to look at this app's screen: when the text read comes back empty I number things from the picture, and when it works the picture only fills in colours and icons. Off by default, because a screenshot carries the whole window as pixels";
 "开启电脑操作" = "Turn on computer use";
 "开始 Dream" = "Start Dream";
 "开着：你一动键鼠，我就停下让路。关着：我正要点一个按钮、你同时动鼠标，落到谁手里是随机的。" = "On: the moment you touch keyboard or mouse, I step aside. Off: if I am about to click a button while you move the mouse, it is a coin toss who lands it.";
@@ -560,6 +582,7 @@
 "按 #" = "Press #";
 "按 (" = "Press (";
 "按下新组合键…" = "Press a new key combination…";
+"按坐标点这一档认不出控件语义, 这类词一律不替你点 —— 这一步你自己点。" = "Clicking by position cannot tell what a control means, so I never tap these words for you — this step is yours.";
 "按需加载" = "Loaded on demand";
 "按频率轻检查触发条件, 条件成立才执行动作 (条件驱动)" = "Lightweight checks of the trigger condition at an interval; the action runs only once it holds (condition-driven)";
 "捕获消息落库" = "Persist captured messages";
@@ -613,6 +636,7 @@
 "文件将从托管区移除, 此操作不可撤销。" = "The file will be removed from the managed area; this cannot be undone.";
 "文件类型构成 (共 %lld 个已识别文件)" = "File types (out of %lld recognized files)";
 "文件还在磁盘上 — 用文本编辑器另存为 UTF-8 即可" = "The files are still on disk — re-save them as UTF-8 in a text editor";
+"文字树 · %lld 行" = "Text tree · %lld rows";
 "新" = "New";
 "新会话" = "New session";
 "新会话-%@" = "New session-%@";
@@ -665,6 +689,7 @@
 "最近收信 %@" = "Last received %@";
 "最高" = "Max";
 "有些 App(尤其网页内容)不把滚动条交给系统 —— 那就趁早告诉用户这一页我一次读不完," = "Some apps — web content in particular — never hand a scroll bar to the system, so tell the user early that this page cannot be read in one go,";
+"有些应用只看得见画面、认不出控件（比如微信）。开着：我能照着画面上的位置点下去。" = "Some apps only show a picture and expose no controls (WeChat, for one). On: I can click where the picture says to.";
 "有任务在跑时不让电脑休眠，跑完自动恢复；没任务时照常休眠" = "Keeps the computer awake while a task is running and lets it sleep again afterwards";
 "服务商" = "Provider";
 "服务端未返回该邮件 (UID 已不存在或被移走)" = "The server returned no such message (the UID no longer exists or was moved)";
@@ -674,6 +699,7 @@
 "未找到 pi CLI, Agent 引擎不可用。请安装 pi 后重启 MangoX。" = "pi CLI not found; the agent engine is unavailable. Install pi and restart MangoX.";
 "未找到 pi CLI, 捕获未发送" = "pi CLI not found; capture not sent";
 "未找到可执行的 pi。已按顺序查找:" = "No executable pi found. Looked in this order:";
+"未测量" = "Not measured";
 "未知" = "Unknown";
 "未知失败" = "Unknown failure";
 "未知错误" = "Unknown error";
@@ -838,12 +864,14 @@
 "行标题是文件名加上一句固定说明（如 SOUL.md - 我是谁）；表外的文件就只有文件名" = "A row title is the file name plus a fixed description (e.g. SOUL.md - Who I Am); files outside the list show only the file name";
 "补跑" = "Catch up";
 "补跑只跑最近一次; 忽略 = 认下这批, 不再提示" = "Catch up runs only the most recent one; Ignore accepts this batch and stops asking";
+"要么窗口被挪走了, 要么这个点是照着另一张图算的。" = "Either the window moved, or that point was measured from a different picture.";
 "要保存" = "Save";
 "要写内容请直接 setValue; 它连 AXValue 也不吃的话, 说明这类 App 只能靠" = "To write into it, use setValue directly; if it will not take AXValue either, that app only responds to ";
 "要写的内容是空的 ⇒ 没动。清空某一栏请你自己来。" = "The text to write is empty ⇒ nothing was done. Clearing a field is your call.";
 "要写的内容有 %lld 个字, 超过 %@ 的上限 ⇒ 没写。" = "The text is %lld characters, over the %@ limit ⇒ nothing was written.";
 "要动列表里的某一条, 就点名**那一行**自己。" = "To act on one item in a list, name **that row** itself.";
 "要让它能动, 请在 设置 › 集成 › 电脑操作 里给它开「可操作」。" = "To let it act, tick Act for it under Settings › Integrations › Computer use.";
+"视觉" = "Vision";
 "解析失败: %@" = "Parsing failed: %@";
 "触发条件 (每轮轻检查)" = "Trigger condition (checked lightly each round)";
 "触发条件与动作为必填" = "Trigger condition and action are required";
@@ -873,6 +901,7 @@
 "请选择" = "Choose one";
 "请选择邮箱" = "Choose a mailbox";
 "读" = "Read";
+"读不到了" = "unreadable";
 "读不动" = "Can't read";
 "读与操作哪些应用" = "Which apps can be read or acted on";
 "读任何 App 的界面都靠它。没有它, 读界面会直接报错。" = "Reading any app's interface depends on it. Without it, a read fails outright.";
@@ -913,6 +942,7 @@
 "这一场没有可提炼的正文（只有工具输出）" = "No text to distill here (tool output only)";
 "这一格没有自定义动作, 想按它的话用 press。" = "This cell declares no custom actions; use press if you only meant to click it.";
 "这一格要提交, 请先看它支持哪个动作; 一个都不支持就如实告诉用户," = "To submit this field, look at which actions it actually offers; if it offers none, tell the user plainly,";
+"这一档用的是**真鼠标**, 我不能在人手上抢 —— 稍等一下再说一次。" = "This mode uses the real mouse, and I will not take it out of your hand — try again in a moment.";
 "这一步是永久删除(不进废纸篓), 无法恢复 ⇒ 我不点。要删的话请你自己来, 或者告诉我改用「移到废纸篓」。" = "This deletes permanently (it skips the Trash) and cannot be undone, so I will not click it. Delete it yourself, or tell me to move it to the Trash instead.";
 "这一步涉及付款/下单 ⇒ 我不点。金额与对象要你自己确认过才行。" = "This is a payment or an order, so I will not click it. You need to confirm the amount and the recipient yourself.";
 "这一段会进每轮 prompt 的索引段, 逐字就是 agent 收到的" = "This section goes into the index of every prompt, word for word as the agent receives it";
@@ -924,6 +954,7 @@
 "这个目录里没有可读的文档" = "No readable documents in this directory";
 "这个路径不在笔记目录里" = "That path is outside the notes directory";
 "这么长的东西多半是搞错了对象。" = "That much text usually means the wrong field was picked.";
+"这份快照没记窗口位置 ⇒ 判不了 %@ 是对着哪个窗口的 ⇒ 没点。" = "This snapshot did not record the window frame ⇒ cannot tell which window %@ is against ⇒ nothing was tapped.";
 "这份快照里没有 #%@(一共 %@ 项) ⇒ 没动。" = "This snapshot has no #%@ (it has %@ items) ⇒ nothing was done.";
 "这句话会进每轮 prompt 的索引 —— agent 靠它判断要不要来查这个目录。" = "This sentence goes into the index of every prompt — the agent uses it to decide whether to look into this directory.";
 "这是单独一次，不会移动每日 dream 的时间窗口。" = "One-off run — it will not shift the daily dream window.";
@@ -971,6 +1002,7 @@
 "重启引擎生效" = "Restart the engine to apply";
 "重启引擎生效 (知识改动将注入)" = "Restart the engine to apply (knowledge changes are injected)";
 "重命名" = "Rename";
+"重新 read 一次(这次的快照会带上窗口外框)。" = "Read again (that snapshot will carry the window frame).";
 "重新检测" = "Check again";
 "重新生成" = "Regenerate";
 "重新读取" = "Reread";

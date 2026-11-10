@@ -847,9 +847,17 @@ extension SmokeMain {
         check(cs.actSelected.isEmpty && cs.activeActBundles.isEmpty,
               "T-ACT 取消可读必须连带摘掉可操作 (否则留下动得了但读不到的组合)")
         cs.setAct("com.apple.Safari", true)
-        check(cs.selected.contains("com.apple.Safari")
-                && cs.activeActBundles == ["com.apple.Safari"],
-              "T-ACT 开操作会顺带开读 (反方向那一步由设置页的禁用态守)")
+        // ⚠️ 2026-11-10 换了判据: 原来这条守的是"开操作会顺带开读"（那时 `setAct` 里有一句
+        //    `selected.insert`）。现在**两条来源（可读 / 视觉）并列**, 自动补哪一条都是错的 ——
+        //    补「可读」对微信那种 AX 恒空的 App 是假话; 补「视觉」等于悄悄开了截图权限
+        //    （图像面全仓的铁律是"逐个 App 显式开"）。
+        //    ⇒ 一条来源都没有时它**什么都不做**, 也不替人勾（设置页那边是置灰 + 写原因）。
+        check(cs.selected.isEmpty && cs.activeActBundles.isEmpty,
+              "T-ACT 一条读法都没有时开操作权不生效, 也不替人勾 (自动补读面 = 假话, 自动补视觉 = 偷开截图)")
+        cs.setSelected(["com.apple.Safari"])
+        cs.setAct("com.apple.Safari", true)
+        check(cs.activeActBundles == ["com.apple.Safari"],
+              "T-ACT 有了读法之后才下得去 (操作面的前提是'有编号', 不是'勾了就算')")
         cs.setAct("com.1password.1password", true)
         check(!cs.actSelected.contains("com.1password.1password")
                 && !cs.selected.contains("com.1password.1password"),

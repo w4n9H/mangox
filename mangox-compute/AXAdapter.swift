@@ -240,7 +240,9 @@ enum AXAdapter {
 
     /// 位置 + 尺寸。`AXValue` 里装的是 CGPoint / CGSize, 取不出来就当没有 ——
     /// 坐标只写给人看, 它是**可缺失**的(缺失不影响模型按编号寻址)。
-    private static func rect(_ el: AXUIElement) -> AXRect? {
+    ///
+    /// ⚠️ `tap` 那道几何闸也要用它(见 `frontWindowFrame`) ⇒ 不再是 private。
+    static func rect(_ el: AXUIElement) -> AXRect? {
         var posRaw: CFTypeRef?
         var sizeRaw: CFTypeRef?
         var point = CGPoint.zero
@@ -260,6 +262,27 @@ enum AXAdapter {
         }
         guard hasPoint, hasSize else { return nil }
         return AXRect(x: Int(point.x), y: Int(point.y), w: Int(size.width), h: Int(size.height))
+    }
+
+    /// 前端窗口的**外框** —— 不建树, 只问两个属性。
+    ///
+    /// ⚠️ 为什么不能直接用快照上的 `windowFrame`: `tap` 要判的是"**此刻**窗口还在不在原处",
+    ///    而快照是过去那一刻的。拿旧值跟自己比等于恒真。
+    /// ⚠️ 为什么不用 `frontWindowTree`: 那是一整棵树(微信以外的 App 也要 200ms~1s, 费 3000 节点
+    ///    的预算), 而这里只要 4 个整数。`tap` 每点一次都要问一遍, 用建树去问就是把"点一下"
+    ///    的代价抬到"读一次"。
+    static func frontWindowFrame(pid: pid_t) -> AXRect? {
+        let app = AXUIElementCreateApplication(pid)
+        var focused: CFTypeRef?
+        if AXUIElementCopyAttributeValue(app, kAXFocusedWindowAttribute as CFString, &focused) == .success,
+           let w = focused {
+            return rect(w as! AXUIElement)
+        }
+        var windows: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(app, kAXWindowsAttribute as CFString, &windows) == .success,
+              let raw = windows, let list = raw as? [AXUIElement], let first = list.first
+        else { return nil }
+        return rect(first)
     }
 
     // MARK: - 批 2b: 动作
@@ -571,6 +594,26 @@ enum AXAdapter {
                                                    Float(point.x), Float(point.y), &hit)
         guard err == .success else { return nil }
         return hit
+    }
+
+    /// 这一点底下能读到的**文字** —— `tap` 的语义闸用(付款 / 删除那类词)。
+    ///
+    /// ⚠️ 它**不是**语义判断, 是"能看见几个字": 微信这类 App 在这一点上只回得出
+    ///    `AXApplication`(一个字的都没有), 于是那一档少了这道闸 —— 回执里要说清
+    ///    "底下没读到字, 所以我看不出这是不是付款键", 不许假装它被判过。
+    /// ⚠️ 取三个属性而不是只取 title: 按钮文字常在 value 里, 图标按钮只有一个 description。
+    static func text(at point: CGPoint) -> String {
+        guard let el = element(at: point) else { return "" }
+        var parts: [String] = []
+        for key in [kAXTitleAttribute, kAXValueAttribute, kAXDescriptionAttribute,
+                    kAXHelpAttribute] {
+            var raw: CFTypeRef?
+            guard AXUIElementCopyAttributeValue(el, key as CFString, &raw) == .success,
+                  let s = raw as? String else { continue }
+            let t = s.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !t.isEmpty, !parts.contains(t) { parts.append(t) }
+        }
+        return parts.joined(separator: " ")
     }
 
     /// 元素属于哪个进程 —— 坐标寻址的第二道判据(命中的是不是**这次在读的那个 App**)。

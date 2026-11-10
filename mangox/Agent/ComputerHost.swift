@@ -92,12 +92,19 @@ final class ComputerHost {
         /// 批 3b: 这一档要不要"人在动键鼠就让路"。**也算作用域的一部分** ——
         /// 它同样只在 helper 启动时读一次 env ⇒ 换了档位不重启就等于没换(同 `read/act` 那条教训)。
         var takeover: Bool
+        /// 第四档(2026-11-10): 允许"认不出元素时按坐标点"。同族 —— 只在启动时读一次 env。
+        ///
+        /// ⚠️ 少了这一项, 用户打开那个开关之后**下一次会话才生效**, 而设置页已经是开着的;
+        ///    症状是"我明明开了, 它还是说没开"(与 `read/act` 那次踩过的坑同形)。
+        var tap: Bool
 
-        init(read: [String], act: [String], image: [String] = [], takeover: Bool = false) {
+        init(read: [String], act: [String], image: [String] = [], takeover: Bool = false,
+             tap: Bool = false) {
             self.read = read.sorted()
             self.act = act.sorted()
             self.image = image.sorted()
             self.takeover = takeover
+            self.tap = tap
         }
     }
 
@@ -111,13 +118,14 @@ final class ComputerHost {
                actBundles: [String] = [],
                imageBundles: [String] = [],
                takeover: Bool = false,
+               tap: Bool = false,
                peerPid: pid_t = ProcessInfo.processInfo.processIdentifier,
                bundlePath: String = Bundle.main.bundlePath) -> String? {
         guard !allowedBundles.isEmpty else { return nil }
         // ⚠️ **复用之前先比名单**：helper 只在启动时读一次 env，进程活着不等于名单还是那一批。
         //    见 `Scope` 上那段（boss 报「我明明加了」就是这个）。
         let wanted = Self.Scope(read: allowedBundles, act: actBundles,
-                                image: imageBundles, takeover: takeover)
+                                image: imageBundles, takeover: takeover, tap: tap)
         if let socketPath, process?.isRunning == true, runningScope == wanted {
             return socketPath
         }
@@ -145,6 +153,8 @@ final class ComputerHost {
         //    用户在终端 export 过它再从那个 shell 起 App, 就变成"档位是无人值守, 却在装监听",
         //    而界面上没有任何地方说得清这件事。
         env[Self.takeoverEnvKey] = takeover ? "1" : nil
+        // 第四档同款: **要就写 "1", 不要就删掉**。键名取自判据文件(两个 target 共用一个常量)。
+        env[ComputerTapRule.envKey] = tap ? "1" : nil
         p.environment = env
 
         do {
@@ -191,10 +201,11 @@ final class ComputerHost {
                             actBundles: [String] = [],
                             imageBundles: [String] = [],
                             takeover: Bool = false,
+                            tap: Bool = false,
                             peerPid: pid_t,
                             inherited: [String: String]) -> [String: String]? {
         let keys = [sockEnvKey, allowedBundlesEnvKey, actBundlesEnvKey, imageBundlesEnvKey,
-                    peerPidEnvKey, parentPidEnvKey, takeoverEnvKey]
+                    peerPidEnvKey, parentPidEnvKey, takeoverEnvKey, ComputerTapRule.envKey]
         if socketPath == nil, keys.allSatisfy({ inherited[$0] == nil }) { return nil }
         var env = existing ?? inherited
         env[sockEnvKey] = socketPath
@@ -206,6 +217,8 @@ final class ComputerHost {
         // 批 3b: 没 socket(不挂扩展) ⇒ 连这个键一起清掉。"没人用的 env 留着"就是下次
         // 排查时的一条假线索(它会看起来像"这一档装了监听")。
         env[takeoverEnvKey] = (socketPath != nil && takeover) ? "1" : nil
+        // 第四档同款: 没 socket 就一起清掉(同一理由: 留着的 env 会变成排查时的假线索)。
+        env[ComputerTapRule.envKey] = (socketPath != nil && tap) ? "1" : nil
         return env
     }
 }

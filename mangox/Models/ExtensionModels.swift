@@ -58,15 +58,29 @@ struct ExtensionItem: Identifiable {
     /// ⚠️ **"不可删除" ≠ "不可停用"** —— 见 `unswitchableNames`。这是**两件事**,
     /// 早先挤在 `isBuiltIn` 一个名字里同时当"删除守卫"与"开关守卫", 加 web-search 时才必须拆开:
     /// 它归我们维护（不许删）, 但用户**应该**能把它静音。
-    static let builtInNames: Set<String> = ["mangox-approval", "mangox-dream", "mangox-web-search"]
+    /// ⚠️ **判据是「MangoX 自己会往托管目录写哪些 `.ts`」**, 不是"谁看起来像我们写的" ——
+    /// 凡 `PiRpcTransport` 里会出现 `mangox-*.ts` 的那些, 都必须在这里登记。
+    /// 漏一个的后果: 面板给它**删除按钮**(点一下又回来 = 打地鼠), 而且它还会拿到一个按不动的
+    /// 启停开关(见 `unswitchableNames`)。门禁在 `run.sh` ③x: 拿那份字面量逐条对账,
+    /// 加第 6 个自管扩展时不用记得手动登记。
+    static let builtInNames: Set<String> = ["mangox-approval", "mangox-codemode", "mangox-dream",
+                                           "mangox-web-search", "mangox-computer"]
 
-    /// 自带扩展里**连启停开关都不给**的那些 —— approval 四档恒挂、dream 只在那次 fire 挂。
+    /// 自带扩展里**连启停开关都不给**的那些 —— approval 四档恒挂、codemode 由**档位轴**决定、
+    /// dream 只在那次 fire 挂、computer 由**作用域开关**决定。
     /// 集差 = **可停用**的自带扩展, 目前只有 `mangox-web-search`（它的挂载由"有没有配 Key"决定,
     /// 但用户仍可主动静音）。
     ///
     /// ⚠️ **开关相关的判据一律用它, 别再用 `isBuiltIn`** —— 后者现在是"不可删除"的意思,
     /// 拿它当开关守卫会把 web-search 变成"不可停用", 而那是**标记比事实说得多**（说谎）。
-    static let unswitchableNames: Set<String> = ["mangox-approval", "mangox-dream"]
+    ///
+    /// ⚠️ `mangox-computer` / `mangox-codemode` 为什么在这里（2026-11-10 补）：它们的挂载走
+    /// `PiRpcTransport.extensionArguments(computerExtensionPath:codemodeExtensionPath:)` 那两条
+    /// **独立参数**（外加 `businessExtensionPaths` 把它们从业务列表里滤掉）⇒ 面板那个开关对它们
+    /// **完全无效**。给一个按不动的开关就是"开关在说谎"。它们真正的开关是:
+    /// computer → 设置 › 集成 › 电脑操作 的作用域; codemode → 档位。
+    static let unswitchableNames: Set<String> = ["mangox-approval", "mangox-codemode",
+                                                 "mangox-dream", "mangox-computer"]
 
     /// 内置扩展**注册出来的工具名**, 按扩展名查 —— 面板在那一行下面展开它们。
     ///
@@ -80,6 +94,9 @@ struct ExtensionItem: Identifiable {
     static let builtInToolNames: [String: [String]] = [
         "mangox-dream": PiRpcTransport.dreamToolNames,
         "mangox-web-search": PiRpcTransport.webSearchToolNames,
+        // computer 那四个名字由 helper 侧的执行面决定 (`computerToolNames`), 与内嵌 TS 同源同改;
+        // 漏登记只有一处后果 —— 它跑过一次(磁盘有文件)之后那一行不再展开工具名, **零红灯**。
+        "mangox-computer": PiRpcTransport.computerToolNames,
     ]
 
     /// 内置扩展里**按需挂载**的那几个。不在这张名单里的内置 = **恒挂**（approval 就是）。

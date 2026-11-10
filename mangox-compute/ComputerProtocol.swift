@@ -30,8 +30,18 @@ enum ComputerRequest: Decodable {
     ///    元素上。所以 `index` 与 `point` 互斥(两个都给直接拒, 见 `ComputerPointRule`)。
     case act(app: String, op: String, index: Int, seq: Int, text: String,
              direction: String, point: ComputerPoint?)
-    /// 打开(或切到前台)一个 App —— P18 批 2d。
+    /// 按坐标点一下 —— **不经过任何元素**(第四档, 2026-11-10)。
     ///
+    /// ⚠️ 为什么不复用 `act` 的 `point`: 那条路的语义是"坐标只是一种输入方式, 它会先被翻译回
+    ///    元素, 之后判据照旧跑在元素上"(`ComputerProtocol.swift:29` 那句)。而这一档要服务的
+    ///    恰恰是**翻译不回来**的界面(微信主窗 5 节点 / 覆盖率 0%, 自绘画布, 游戏)。
+    ///    把两件事塞进同一个 op, 等于给那九条判据开一个"有时候没有元素"的第二语义 ——
+    ///    而判据的输入一变, 它就不再是同一条判据了。
+    ///
+    /// ⚠️ `seq` 在这里同样必填: 坐标是照着**某一份快照**的窗口几何算出来的, 没有 seq 就不知道
+    ///    它对着哪个窗口 —— 而窗口挪动是常态(实测微信一小时挪了三次)。
+    case tap(app: String, point: ComputerPoint?, seq: Int)
+    /// 打开(或切到前台)一个 App —— P18 批 2d。
     /// ⚠️ 为什么不复用 `act`: 打开一个 App **不动它里面的任何东西**, 与"在 Dock 上点一下图标"
     ///    同一件事; 而"进去之后能做什么"仍然由操作面那道门管(`actBundles`)。两件事两个 op,
     ///    授权也就落在两道不同的门上(读面 vs 操作面)。
@@ -70,6 +80,12 @@ enum ComputerRequest: Decodable {
                         //    不能让"坐标读坏了"悄悄退化成"按编号"(那条路 index=0 会被判据拒,
                         //    但报的原因会是"没有 #0", 与真实原因无关)。
                         point: try c.decodeIfPresent(ComputerPoint.self, forKey: .point))
+        case "tap":
+            // `point` 缺了**不在解码层填** —— 让 server 拒并说清"要点哪儿";
+            // 解码层回一句机器话, 模型只会当成故障重试。
+            self = .tap(app: try c.decodeIfPresent(String.self, forKey: .app) ?? "",
+                        point: try c.decodeIfPresent(ComputerPoint.self, forKey: .point),
+                        seq: try c.decodeIfPresent(Int.self, forKey: .seq) ?? -1)
         case "open":
             // 空 `app` 交给 server 拒(并说清"打开哪个"): 解码阶段回一句机器话,
             // 模型只会把 `dataCorrupted` 当成故障重试。

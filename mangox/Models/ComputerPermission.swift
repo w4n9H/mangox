@@ -62,7 +62,7 @@ enum ComputerPermission: String, CaseIterable, Identifiable {
         case .inputMonitoring:
             return L("不用单独给。辅助功能一给，键盘监听就有了 —— 所以系统设置那一页里看不到 MangoX，那是正常的，不是漏装。")
         case .screenRecording:
-            return L("只有勾了「图片」的 App 才会截窗口。给完要重启 MangoX 才生效 —— 灯不会当场变, 别以为没给成。")
+            return L("只有勾了「视觉」的 App 才会截窗口。给完要重启 MangoX 才生效 —— 灯不会当场变, 别以为没给成。")
         }
     }
 

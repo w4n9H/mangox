@@ -145,7 +145,8 @@ struct ExtensionsView: View {
     ///
     /// ⚠️ 分派判据是**挂载策略** (`isOnDemand`), **不能只看 `isBuiltIn`**:
     ///   · 条件不满足 (P10.1b 缺 key) → 不给开关, 挂一颗"缺什么"的胶囊 —— 给了开关就是**说谎**
-    ///   · 恒挂不给开关 (`unswitchableNames`: approval) → 禁用开关 + "不可停用"
+    ///   · 挂载不看面板开关的不给开关 (`unswitchableNames`: approval / codemode / dream / computer)
+    ///     → 禁用开关 + "不可停用"
     ///   · 按需挂载 (dream)    → 不给开关, 挂一颗胶囊 —— 给它开关就是**说谎**
     ///   · 其余 (普通托管 + **可停用的自带**, 如 web-search) → 常规开关
     ///
@@ -180,7 +181,8 @@ struct ExtensionsView: View {
                 // ⚠️ 开关的**禁用**判据是 `unswitchableNames`（不给开关）, **不是** `isBuiltIn`
                 //    （不可删除）—— 两者在 web-search 上分家: 它归自带所以不可删, 但它**可停用**;
                 //    拿 `isBuiltIn` 当开关守卫会把它变成"不可停用", 而那是说谎。
-                //    这一档实际只有 approval 走到（dream 走上面 onDemand 分支）。
+                //    这一档实际有两个: approval（四档恒挂）与 computer（挂载由作用域决定）——
+                //    codemode 走的是档位轴, 也不看面板那个开关。三个都不给。
                 //    ⚠️ `.help(...)` 那句**必须留在一行内** —— `scan_wiring.py` 判据是"取字面量
                 //    **开引号之前同一行**的前缀", 把 `LK(` 折到上一行 ⇒ 它只看到 `? ` ⇒ 判成未接线（实测变红）。
                 CodexMiniToggle(isOn: Binding(
@@ -188,7 +190,7 @@ struct ExtensionsView: View {
                     set: { _ in store.toggleExtension(item) }
                 ),
                 disabled: ExtensionItem.unswitchableNames.contains(item.name))
-                .help(LK(ExtensionItem.unswitchableNames.contains(item.name) ? "内置审批扩展, 不可停用" : "启停 (重启引擎生效)"))
+                .help(LK(ExtensionItem.unswitchableNames.contains(item.name) ? "内置扩展, 不可停用" : "启停 (重启引擎生效)"))
             }
         } else {
             Text(item.source.label)

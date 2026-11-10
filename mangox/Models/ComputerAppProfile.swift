@@ -14,13 +14,14 @@ import Foundation
 ///      · 地址栏在 AX 层根本驱动不了 —— 导航走 `ComputerAddress` + `NSWorkspace`（实测过：
 ///        Safari 的 `confirm`、Chrome 的 `press` 都回 ok 而页面不动）；
 ///      · 标签栏与前进/后退只活在手册的**文案**里，代码从不按角色名去找它们；
-///      · `needsRendererAX` 属于「Chrome 准入」，那件事没做，没有消费者
+///      · `needsRendererAX` 属于「Chrome 准入」。⚠️ Chrome 2026-11-10 已经进名单（能读了），
+///        但"**检测网页节点为 0 ⇒ 置灰 + 说原因**"那件事仍然没做，所以它还是**没有消费者**
 ///        ⇒ 建了就是会烂的第二真源（表里写着 `true`，而没有一行代码读它）。
 ///    加字段的正确姿势：**先有读它的代码，再加**。
 ///
 /// ⚠️ 手册正文与白名单**不归这张表**：前者住 `SopManual.text`（几百字文案，由
-///    `SopInjection.parse` 切节），后者是 `ComputerSettings.supported` 从
-///    「手册节 ∩ `builtins` ∪ `manualFree`」**算**出来的 —— 那边已经把"再抄一份 bundle
+///    `SopInjection.parse` 切节），后者是 `ComputerSettings.supported(installed:)` 从
+///    「手册节 ∩（`builtins` ∪ 装了的 `thirdParty`）∪ `manualFree`」**算**出来的 —— 那边已经把"再抄一份 bundle
 ///    字面量"这件事消灭过一次（见 `supported` 的注释），别从这里引回来。
 enum ComputerAppProfile {
 
@@ -43,6 +44,10 @@ enum ComputerAppProfile {
         // ⚠️ 这是**渲染**上限，与 `AXAdapter` 那两道读的预算（12 秒 / 3000 节点）不是一回事：
         //    前者省上下文，后者防挂死，两者不要混。
         "com.apple.Safari": 3000,
+        // Chrome 2026-11-10 进名单时补的。实测（同一支探针、B 站首页）**222 行 / 5300 字**,
+        // 而 120 行只到正文开头 —— 与 Safari 同一个道理。⚠️ 它比 Safari 少一半是页面差异,
+        // 不是能力差异: 网页类页面在一个量级上（Safari 的 GitHub 仓库页 1598 行）。
+        "com.google.Chrome": 3000,
     ]
 
     /// 表里点过名的 App —— 门禁用它判「被描述的是不是一个**真在清单里**的 App」。

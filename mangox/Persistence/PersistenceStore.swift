@@ -503,6 +503,27 @@ final class PersistenceStore {
         return optionalText(rows.first ?? [:], "session_file")
     }
 
+    /// **所有**还指着某个 transcript 文件的会话 —— 侧问快照的孤儿回收只读这一列。
+    ///
+    /// 两列都要, 少一列就会把**在用的**快照当孤儿删掉:
+    /// - `session_file`: 已回读、被会话认领的记忆文件（侧问首回合成功后才有值）;
+    /// - `fork_source_file`: 侧问**还没发消息/没落定**时唯一的指向 —— 会话已经在侧栏里,
+    ///   但 `session_file` 仍是 NULL。只看前者 ⇒ 开了侧问没发消息的那场, 快照在下次开机
+    ///   被清掉, 而那场侧问还在列表里、首回合 `--fork` 一个不存在的文件。
+    ///
+    /// ⚠️ 不要改成扫 `events`: 那里是消息, 不是绑定。判据必须与"谁真正持有这个文件"同源,
+    ///   否则会得出"这文件没人用"的假结论, 然后把还在用的快照删掉。
+    func allSessionFileRefs() -> [String] {
+        let rows = (try? db.query("""
+            SELECT session_file AS ref FROM sessions
+              WHERE session_file IS NOT NULL AND session_file <> ''
+            UNION
+            SELECT fork_source_file FROM sessions
+              WHERE fork_source_file IS NOT NULL AND fork_source_file <> ''
+            """)) ?? []
+        return rows.compactMap { optionalText($0, "ref") }
+    }
+
     /// 侧问信息 (nil = 非侧问会话)。
     func sideChatInfo(id: UUID) -> (sideOf: UUID, sourceFile: String, turns: Int, at: Date)? {
         let rows = (try? db.query("""

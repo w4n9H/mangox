@@ -365,17 +365,75 @@ fi
 #      而注入(`event.post(...)` / `CGEventPost`)是按坐标点**任何**地方的**第二套寻址** ——
 #      它绕开编号 ⇒ 三条恒拒(付款 / 永久删除 / 存盘)判不起来。判据因此从"helper 里不许出现
 #      CGEvent"(批 2b 的写法, 那时监听还没做)收窄成"不许**发**事件"。
-#   ② tap 被系统踢掉(`kCGEventTapDisabledByTimeout`)之后必须**自己重装**。不重装不会有任何报错,
-#      只是从那一刻起"人有没有动"永远答"没有" ⇒ 接管这道门**静默消失**, 而门禁里没有一条
-#      断言看得到真机上的 tap 状态。
-#   ③ 这条判据只在 App 说"这一档有人在"时才装 —— 缺省必须是**不装**(无人值守档反过来会误停)。
+#   ⚠️ **2026-11-10 又改了一次口径(纯视觉动手 `tap` 落地, boss 拍板"开成窄口")**:
+#      坐标寻址没有被**放开**, 而是被**围起来了**。围栏 = `ComputerTapRule.refusal` 的十三道闸:
+#      档位 / 可操作 / 同进程 / 前台 / 没按键 / 人静 400ms / 坐标范围 / 快照有几何 / 窗口没挪 /
+#      点在窗口内 / 顶上窗口是自己 / 窗口号对得上 / **底下读到付款·永久删除就拒** —— 最后那一闸
+#      正是 ① 说的三条恒拒在这一档上的对应物(词表与 `press` 同源, 不抄第二份)。
+#      于是判据从"不许发"收窄成"**只许 `hidClick` 这一处发, 且调用点必须排在判据之后**"。
+#      ⚠️ 下面每一条都在钉围栏的**某一根柱子**: 谁发 / 发几发 / 排在谁后面 / 光标还不还。
+#      少一根它就退回成"第二套寻址" —— 而回退之后**编译得过、界面上也没有任何异样**。
 for f in mangox-compute/*.swift; do
+    [ "$f" = "mangox-compute/ComputerServer.swift" ] && continue
     if has_code "$f" '\.post\(|CGEventPost'; then
-        echo "FAIL - $f 里在**发**合成事件 (event.post / CGEventPost)" >&2
-        echo "       发事件 = 按坐标点任何地方的第二套寻址, 三条恒拒判不起来" >&2
+        echo "FAIL - $f 里在发合成事件 (event.post / CGEventPost)" >&2
+        echo "       全仓只允许 ComputerServer.swift 的 hidClick 一处发(围栏见本节 ①)" >&2
         exit 1
     fi
 done
+if ! has_code mangox-compute/ComputerServer.swift '\.post\(tap: \.cghidEventTap\)'; then
+    echo "FAIL - hidClick 不再经 .cghidEventTap 投递" >&2
+    echo "       改回 postToPid 就点不动(三种变体实测全失败, 见 ComputerTapRule 文件头)" >&2
+    exit 1
+fi
+TAP_POST_N="$(count_code mangox-compute/ComputerServer.swift '\.post\(')"
+if [ "$TAP_POST_N" != "2" ]; then
+    echo "FAIL - helper 里发合成事件的处数是 ${TAP_POST_N}, 应该只有 down/up 两发" >&2
+    exit 1
+fi
+TAP_HIDCALL_N="$(count_code mangox-compute/ComputerServer.swift 'hidClick\(at')"
+if [ "$TAP_HIDCALL_N" != "2" ]; then
+    echo "FAIL - hidClick 出现 ${TAP_HIDCALL_N} 次(定义 + 调用应为 2) ⇒ 窄口又多开了一处" >&2
+    exit 1
+fi
+TAP_RULE_LINE="$(awk '/ComputerTapRule\.refusal\(/ { print NR; exit }' mangox-compute/ComputerServer.swift)"
+TAP_CLICK_LINE="$(awk '/hidClick\(at: cg/ { print NR; exit }' mangox-compute/ComputerServer.swift)"
+if [ -z "$TAP_RULE_LINE" ] || [ -z "$TAP_CLICK_LINE" ] || [ "$TAP_RULE_LINE" -ge "$TAP_CLICK_LINE" ]; then
+    echo "FAIL - 按坐标点的判据与执行顺序不对 (rule@${TAP_RULE_LINE:-?} click@${TAP_CLICK_LINE:-?})" >&2
+    echo "       十三道闸必须排在 hidClick 之前 —— 反了等于'先点了再问能不能点', 而这一档没有撤销" >&2
+    exit 1
+fi
+if ! has_code mangox-compute/ComputerServer.swift 'defer .*CGWarpMouseCursorPosition\(restore\)'; then
+    echo "FAIL - hidClick 不再把光标还回去(它就在你眼前被挪走了, 不还等于抢鼠标)" >&2
+    exit 1
+fi
+if ! has_code mangox-compute/ComputerServer.swift 'primaryHeight - saved\.y'; then
+    echo "FAIL - 光标归位不再做左下→左上原点换算" >&2
+    echo "       2026-11-10 实测: 少了这一步差 36px, 而回执照样写着'归位了'" >&2
+    exit 1
+fi
+# 协议那一半(解码)只活在 helper 里, 冒烟编不到它 ⇒ 只能扫源码:
+# `point` 缺了必须解成 nil、由 server 拒并说清"要点哪儿" —— 在解码层编一个默认点(比如 0,0)
+# 就等于把"模型没给坐标"变成"模型要左上角", 而它是模型最容易照做的那一个坐标。
+if ! has_code mangox-compute/ComputerProtocol.swift 'case tap\(app: String, point: ComputerPoint\?, seq: Int\)'; then
+    echo "FAIL - ComputerRequest 里没有独立的 tap 分支(并进 act 就是给九条判据开第二语义)" >&2
+    exit 1
+fi
+TAP_BRANCH="$(awk '/case "tap":/{f=1; next} f && /^        case "/{exit} f {print}' mangox-compute/ComputerProtocol.swift)"
+case "$TAP_BRANCH" in
+    *'decodeIfPresent(ComputerPoint.self, forKey: .point)'*) ;;
+    *)
+        echo "FAIL - tap 的坐标没走 decodeIfPresent(缺坐标时会被塞一个默认点)" >&2
+        exit 1
+        ;;
+esac
+case "$TAP_BRANCH" in
+    *'?? ComputerPoint'*|*'decode(ComputerPoint'*)
+        echo "FAIL - tap 在解码层给坐标填了默认值" >&2
+        echo "       缺坐标要在 server 拒并说清'要点哪儿'; 填 0,0 等于把'没给'变成'点左上角'" >&2
+        exit 1
+        ;;
+esac
 if ! has_code mangox-compute/HumanInputTap.swift 'options: \.listenOnly'; then
     echo "FAIL - 人类接管的监听不再是 listenOnly (它就没有资格改/吞用户的事件)" >&2
     exit 1
@@ -551,6 +609,53 @@ for NEEDLE in 'ComputerRedline.refusal' 'ComputerRedline.savePromptDecision'; do
         echo "FAIL - ComputerActGuard 里少了 $NEEDLE (判据表还在, 但没人用它)" >&2
         exit 1
     fi
+done
+# ③p2 「切前台」那条路: `NSRunningApplication.activate(options:)` 在 helper 这种**裸进程**里
+#     **返回 true 却什么都不做**(2026-11-10 实测: 先把前台让给访达, 再调 `.activateAllWindows`,
+#     返回值 true, `isActive` 仍是 false)。症状与 ③p 同族但更坏 —— 它是**动作**在撒谎:
+#     回执写「已经切到前台」, 而 App 还在后面, 接下来 act/tap 要么点不动(后台点击无效)、
+#     要么被「不是前台」拒掉, 两种都指向一个和真实原因无关的地方。
+#     ⇒ ① 这个 API 一处都不许再出现在 helper 里; ② `open` 的 `.activate` 分支必须**按效果判**
+#        (`isFrontmost` 轮询), 不许拿返回码当结果。
+for f in mangox-compute/*.swift; do
+    if has_code "$f" '\.activate\(options:'; then
+        echo "FAIL - $f 又在用 NSRunningApplication.activate(options:)" >&2
+        echo "       它在裸进程里返回 true 但什么都不做 ⇒ 回执会说'已切前台'而它还在后面" >&2
+        echo "       改用 NSWorkspace.shared.open(App 包 URL)(实测真置前, 且不会另起一份)" >&2
+        exit 1
+    fi
+done
+if ! has_code mangox-compute/ComputerServer.swift 'guard Self\.isFrontmost\(bundle: t\.bundle, pid: t\.pid\) else'; then
+    echo "FAIL - computer_open 的「只切前台」不再按效果判 (置前请求发出去了 ≠ 它到了前台)" >&2
+    exit 1
+fi
+
+# ③x 内置扩展的归属账（2026-11-10，boss 问「mangox-computer.ts 是内置在代码中吗」时查出来）。
+#    判据 = **MangoX 自己会往托管目录写的 `mangox-*.ts`, 一个不少地都要在 `builtInNames` 里** ——
+#    不是"谁看起来像我们写的"。漏一个的后果全在面板上, 而且**零红灯**: 删除按钮点了又回来(打地鼠),
+#    外加一个按不动的启停开关(它的挂载走独立参数, 不看面板那个 enabled 列表)。
+#    输入取 `PiRpcTransport.swift` 里的**字面量**(真源, 常量与字面量两种写法都覆盖)
+#    ⇒ 加第 6 个自管扩展时不用记得手动登记这条账。
+#    ⚠️ 这条只管"会不会漏登记"; 「挂载那几条轴」另有判据 —— `businessExtensionPaths` 必须把同一批
+#       都滤掉(漏一个就是同一次 spawn 里 `--extension` 传两次、工具注册两遍),
+#       那条是纯函数断言, 在冒烟 `T-EXT-BUILTIN` 里(见 `caseBuiltInExtensions`)。
+AUTO_EXT_FILES="$(grep -oE '"mangox-[a-z-]+\.ts"' mangox/Agent/PiRpcTransport.swift \
+                  | tr -d '"' | sort -u)"
+if [ -z "$AUTO_EXT_FILES" ]; then
+    echo "FAIL - 一个自管扩展文件名都没扫到 ⇒ ③x 这条账是空转的" >&2
+    exit 1
+fi
+BUILTIN_NAMES_LINE="$(awk '/static let builtInNames/,/\]/' mangox/Models/ExtensionModels.swift | tr '\n' ' ')"
+for one in $AUTO_EXT_FILES; do
+    nm="${one%.ts}"
+    case "$BUILTIN_NAMES_LINE" in
+        *"\"$nm\""*) ;;
+        *)
+            echo "FAIL - $one 会由 MangoX 自己写进托管目录, 但 \"$nm\" 不在 builtInNames 里" >&2
+            echo "       面板会给它删除按钮(点一下又回来)和一个按不动的启停开关, 而零红灯" >&2
+            exit 1
+            ;;
+    esac
 done
 if ! has_code mangox-compute/AXAdapter.swift 'AXUIElementPerformAction'; then
     echo "FAIL - AXAdapter 不再调 AXUIElementPerformAction (按不动了, 但它会一直说'按了')" >&2

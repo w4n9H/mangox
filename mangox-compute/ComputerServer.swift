@@ -38,6 +38,14 @@ final class ComputerServer {
     ///    (App 侧 `ComputerHost.Scope` 已经把 `image` 算进比较, 所以会自动重启)。
     let imageRaw: String
 
+    /// 全局档: 允许"认不出元素时按坐标点"(第四档, 2026-11-10)。**缺省 = 关**。
+    ///
+    /// ⚠️ 与名单同族: 只在启动时读一次 env ⇒ 改了要重启 helper 才生效
+    ///    (App 侧 `ComputerHost.Scope` 把它算进比较, 所以会自动重启)。
+    /// ⚠️ 它是**全局**的, 不是逐 App 的: 这一档的风险是"用真鼠标点", 与"哪个 App"无关 ——
+    ///    逐 App 的是「可操作」那道门(见 `actBundles`)。
+    let tapEnabled: Bool
+
     /// 上一次读的快照 + 编号到元素的表。**按 bundle 存**, 不是全局一个:
     /// 读 Safari 不该让 Finder 的编号失效(同时读两个 App 是常态)。
     struct Cached {
@@ -46,6 +54,14 @@ final class ComputerServer {
         let seq: Int
         let snapshot: AXSnapshot
         let trees: AXAdapter.Trees
+        /// 读那一刻的**窗口号**(`CGWindowList` 那个 id; `0` = 没认出来)。
+        ///
+        /// ⚠️ 为什么快照上已经有 `windowFrame` 还要记它: `tap` 要判"这一点上最顶层的是不是
+        ///    同一个窗口"。同一个 App 的弹层与主窗**同 pid 同 owner**, 只比 frame 时若两者
+        ///    几何恰好接近就会放行 —— 窗口号是唯一能分开它们的身份。
+        /// ⚠️ 认不出来时记 0 而不是猜一个: `tap` 那道闸在 0 时**退化成只比 frame**, 并如实
+        ///    少判一道(见 `ComputerTapRule.refusal` ⑫), 不假装判过。
+        let windowNumber: Int
     }
 
     private var cache: [String: Cached] = [:]
@@ -72,6 +88,8 @@ final class ComputerServer {
         self.imageRaw = env[ComputerShotRule.envKey] ?? ""
         // 批 3b: 只有 App 判定"这一档有人在"才下发 "1"。缺省 = 不装(不是"都装")。
         self.takeoverWanted = env[HumanInputTap.envKey] == "1"
+        // 第四档: 同样"要就写 1, 不要就删掉"。缺键 = 关(不是"都开")。
+        self.tapEnabled = env[ComputerTapRule.envKey] == "1"
     }
 
     static let allowedBundlesEnvKey = "MANGOX_COMPUTE_ALLOWED_BUNDLES"
@@ -309,6 +327,9 @@ final class ComputerServer {
 
         case .open(let app, let url):
             return handleOpen(app: app, url: url)
+
+        case .tap(let app, let point, let seq):
+            return handleTap(app: app, point: point, seq: seq)
         }
     }
 
@@ -337,8 +358,20 @@ final class ComputerServer {
             //    所以卡片上没有缩略图 —— 这句是用户唯一能看到的凭据。
             // ⚠️ 措辞是"原样画面", 不许写成"已脱敏/已涂黑": 图像面**不做任何像素遮蔽**
             //    (2026-10-30 boss 定), 标记一旦比事实说得多, 用户就会拿一张带明文的图当安全的用。
-            return .success(text: text + "\n\n（附了一张 \(png.count / 1024) KB 的截图, "
-                            + "是这个窗口的原样画面。）",
+            //
+            // ⚠️ **坐标基准**(2026-11-10): 模型要"按图上的位置点", 唯一能做的是把图内像素
+            //    换算成屏幕坐标, 而**窗口在屏幕的哪儿它推不出来**。三件套(窗口原点 + 图尺寸 +
+            //    1:1)缺一件, 它算出来的点就整体偏移 —— 而偏移后的点击和正常点击长得一模一样,
+            //    零报错。这条不是贴心, 是"按坐标点"这件事能不能成立的前提。
+            var note = "（附了一张 \(png.count / 1024) KB 的截图, 是这个窗口的原样画面。"
+            if let f = root.frame {
+                note += "图与窗口 1:1; 窗口左上角在屏幕 (\(f.x),\(f.y)), 尺寸 \(f.w)×\(f.h)。"
+                note += tapEnabled
+                    ? "要按图上的位置点: 屏幕坐标 = 窗口左上角 + 图内像素, 用 computer_tap。"
+                    : "要按图上的位置点, 得先在 设置 › 集成 › 电脑操作 里打开「按坐标点击」那一档。"
+            }
+            note += "）"
+            return .success(text: text + "\n\n" + note,
                             seq: seq,
                             image: ComputerImage(mimeType: "image/png",
                                                  data: png.base64EncodedString()))
@@ -361,8 +394,66 @@ final class ComputerServer {
                           trees: AXAdapter.Trees,
                           snapshot: AXSnapshot) -> Int {
         seqCounter += 1
-        cache[bundle] = Cached(pid: pid, name: name, seq: seqCounter, snapshot: snapshot, trees: trees)
+        cache[bundle] = Cached(pid: pid, name: name, seq: seqCounter, snapshot: snapshot,
+                               trees: trees,
+                               // 窗口号**只在读的时候认一次**: 认它要靠"几何对得上"去窗口表里
+                               // 找, 而读的那一刻是唯一确定"这份快照说的是哪个窗口"的时刻。
+                               windowNumber: Self.windowNumber(pid: pid, frame: snapshot.windowFrame))
         return seqCounter
+    }
+
+    /// 从系统的窗口表里认出"pid + 这个外框"的那个窗口号。认不出 ⇒ 0。
+    ///
+    /// ⚠️ 为什么按几何反查而不是拿 AX 的窗口 id: AX 只在私有 API(`_AXUIElementGetWindow`)
+    ///    里给窗口号, 用了就是"某天系统换实现, 这一档静默失效"。几何反查唯一的弱点是两个
+    ///    几何完全相同的窗口 —— 那时返回先命中的那个, 而 `tap` 那边还有 frame 比对兜着。
+    static func windowNumber(pid: pid_t, frame: AXRect?) -> Int {
+        guard let frame else { return 0 }
+        let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID)
+            as? [[String: Any]] ?? []
+        for w in list {
+            guard (w[kCGWindowOwnerPID as String] as? pid_t) == pid,
+                  let b = w[kCGWindowBounds as String] as? [String: Any],
+                  let x = b["X"] as? CGFloat, let y = b["Y"] as? CGFloat,
+                  let width = b["Width"] as? CGFloat, let height = b["Height"] as? CGFloat
+            else { continue }
+            if abs(Int(x) - frame.x) <= 2, abs(Int(y) - frame.y) <= 2,
+               abs(Int(width) - frame.w) <= 2, abs(Int(height) - frame.h) <= 2 {
+                return (w[kCGWindowNumber as String] as? Int) ?? 0
+            }
+        }
+        return 0
+    }
+
+    /// 这个 pid 现在是不是前台。**不许换回 `NSWorkspace.shared.frontmostApplication`** ——
+    /// 它在这个不抽 run loop 的裸进程里返回的是**首次查询那一刻**的快照(见 `frontmost()` 与
+    /// 门禁 ③p)。`runningApplications(withBundleIdentifier:)` + `isActive` 是每次真问系统的
+    /// 同步查询, 也就与 `frontmost()` 走的是同一条已经验过的路。
+    static func isFrontmost(bundle: String, pid: pid_t) -> Bool {
+        NSRunningApplication.runningApplications(withBundleIdentifier: bundle)
+            .first { $0.processIdentifier == pid }?.isActive ?? false
+    }
+
+    /// 这一点上**最顶层**的那个窗口是谁。`nil` = 桌面上没有任何窗口盖着这一点。
+    ///
+    /// ⚠️ `CGWindowListCopyWindowInfo` 给的是**从前到后**的顺序(最前面的第一个) ⇒ 直接取
+    ///    第一个命中的就是"人眼看到的那一个"。
+    /// ⚠️ 不许按 `layer` 过滤: 弹层是 layer 3、主窗是 layer 0 —— 按 layer 过一遍就
+    ///    **看不见弹层**, 于是"盖在上面的是谁"这一判据变成假肯定(2026-10-30 踩过)。
+    static func topWindow(at point: CGPoint) -> (pid: pid_t, number: Int)? {
+        let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID)
+            as? [[String: Any]] ?? []
+        for w in list {
+            guard let b = w[kCGWindowBounds as String] as? [String: Any],
+                  let x = b["X"] as? CGFloat, let y = b["Y"] as? CGFloat,
+                  let width = b["Width"] as? CGFloat, let height = b["Height"] as? CGFloat
+            else { continue }
+            if point.x >= x, point.x < x + width, point.y >= y, point.y < y + height {
+                return ((w[kCGWindowOwnerPID as String] as? pid_t) ?? -1,
+                        (w[kCGWindowNumber as String] as? Int) ?? 0)
+            }
+        }
+        return nil
     }
 
     // MARK: - 动作面 (批 2b)
@@ -397,6 +488,111 @@ final class ComputerServer {
         guard !HumanInputTap.shared.keyboardVisible else { return nil }
         return "\n— ⚠️ 接管检测只看得到鼠标: 没给「输入监控」权限, 键盘上的动作我看不见。"
             + "要我停下, 直接说。"
+    }
+
+    // MARK: - 纯视觉动手（第四档, 2026-11-10）
+
+    /// `tap` 的入口。判据全在 `ComputerTapRule`(纯函数, 冒烟造得出反例), 这里只取事实 + 执行。
+    ///
+    /// ⚠️ 它**不经过** `ComputerActGuard`: 那九条判据的输入是"元素"(角色 / 子动作 / 可写),
+    ///    而这一档恰恰没有元素。想"复用一下"就等于用一群拿不到输入的判据去背书 ——
+    ///    它们要么恒真(全放行), 要么恒假(全拒), 两种都比没有更糟。
+    private func handleTap(app: String, point: ComputerPoint?, seq: Int) -> ComputerResponse {
+        guard AXIsProcessTrusted() else {
+            return .failure("辅助功能权限还没授予 ⇒ 动不了界面。"
+                            + "请在 系统设置 › 隐私与安全性 › 辅助功能 里勾上 MangoX。")
+        }
+        guard let point else {
+            return .failure("要按坐标点, 得给坐标(屏幕上那个点) ⇒ 没点。"
+                            + "坐标是全局屏幕坐标、左上原点: 图里那个位置 + 窗口左上角。")
+        }
+        let candidates = candidatesInScope()
+        guard !candidates.isEmpty else {
+            return .failure(emptyScopeNote(verb: "点"))
+        }
+        guard let t = resolve(query: app, in: candidates) else {
+            return .failure(refusal(query: app, available: candidates, verb: "点"))
+        }
+        guard let cached = cache[t.bundle] else {
+            return .failure("还没读过「\(t.name)」⇒ 我不知道窗口在哪, 也就判不了 \(point.short) "
+                            + "是在点哪儿 ⇒ 没点。先 computer_read 一次。")
+        }
+        // ⚠️ 与 act 同一条纪律: 坐标是照着**某一份快照**的窗口几何算出来的。seq 对不上
+        //    说明中间界面动过(窗口挪了 / 换了一页), 那个点在屏幕上还指不指着原来那东西没人知道。
+        guard seq == cached.seq else {
+            return .failure("你手上是第 \(seq) 份快照, 而「\(t.name)」最新的是第 \(cached.seq) 份 "
+                            + "⇒ 没点。中间界面动过, 坐标已经不可信了 —— 重新 read 一次再算。")
+        }
+
+        let now = ProcessInfo.processInfo.systemUptime
+        let installed = HumanInputTap.shared.isInstalled
+        // 监听没装上 ⇒ `nil`(拿不到事实, 不假装判过); 装上了但从没人碰过 ⇒ 无穷久(没人动, 放行)。
+        let since: Int? = !installed ? nil
+            : HumanInputTap.shared.lastHumanInputAt.map { Int(((now - $0) * 1000).rounded()) }
+                ?? Int.max
+        let cg = CGPoint(x: point.x, y: point.y)
+        let top = Self.topWindow(at: cg)
+        let under = AXAdapter.text(at: cg)
+        let facts = ComputerTapRule.Facts(
+            tapEnabled: tapEnabled,
+            appActable: actBundles.contains(t.bundle),
+            appName: t.name,
+            snapshotPid: cached.pid,
+            currentPid: t.pid,
+            isFrontmost: Self.isFrontmost(bundle: t.bundle, pid: t.pid),
+            leftButtonDown: CGEventSource.buttonState(.combinedSessionState, button: .left),
+            rightButtonDown: CGEventSource.buttonState(.combinedSessionState, button: .right),
+            sinceHumanInputMs: since,
+            point: point,
+            snapshotFrame: cached.snapshot.windowFrame,
+            currentFrame: AXAdapter.frontWindowFrame(pid: t.pid),
+            snapshotWindowNumber: cached.windowNumber,
+            topWindowNumber: top?.number ?? 0,
+            topWindowPid: top?.pid ?? -1,
+            textUnderPoint: under)
+        if let why = ComputerTapRule.refusal(facts) { return .failure(why) }
+        return hidClick(at: cg, name: t.name, seq: cached.seq, underPoint: under)
+    }
+
+    /// 真把这一点按下去 —— **全仓唯一一次动真光标**的地方。
+    ///
+    /// 四件事一件都不能省:
+    ///   ① 事件走 `.cghidEventTap`: `postToPid` 实测点不动(三种变体全失败, 见
+    ///      `ComputerTapRule` 文件头), 所以"不动光标"这条路不存在;
+    ///   ② 点完**必须**把光标还回去 —— `defer` 兜住, 中途返回也还;
+    ///   ③ 回执要说清"用了鼠标", 不许把它写成"没打扰你";
+    ///   ④ 点到了 ≠ 点对了: 界面变没变要再 read 一次才知道, 回执不许替它下结论。
+    private func hidClick(at point: CGPoint, name: String, seq: Int,
+                          underPoint: String) -> ComputerResponse {
+        // ⚠️ `NSEvent.mouseLocation` 是**左下原点**, `CGWarpMouseCursorPosition` 收的是
+        //    **左上原点**。不换算就"还回原位"会把它丢到屏幕另一头(2026-11-10 实测差 36px,
+        //    而当时的回执里写着"归位了")。
+        let primaryHeight = NSScreen.screens.first?.frame.height ?? 0
+        let saved = NSEvent.mouseLocation
+        let restore = CGPoint(x: saved.x, y: primaryHeight - saved.y)
+        let src = CGEventSource(stateID: .hidSystemState)
+        CGWarpMouseCursorPosition(point)
+        defer { CGWarpMouseCursorPosition(restore) }
+        guard let down = CGEvent(mouseEventSource: src, mouseType: .leftMouseDown,
+                                 mouseCursorPosition: point, mouseButton: .left),
+              let up = CGEvent(mouseEventSource: src, mouseType: .leftMouseUp,
+                               mouseCursorPosition: point, mouseButton: .left) else {
+            return .failure("造不出鼠标事件 ⇒ 没点。")
+        }
+        down.post(tap: .cghidEventTap)
+        usleep(25_000)
+        up.post(tap: .cghidEventTap)
+
+        var note = "在 \(ComputerPoint(x: point.x, y: point.y).short) 点了一下「\(name)」。"
+            + "\n— 这一下是**按坐标**点的, 不是按控件: 我只保证点到了那个位置, "
+            + "不代表界面上真的发生了你想要的。要确认就再 read 一次。"
+        note += underPoint.isEmpty
+            ? "\n— 这一点底下我没读到任何文字, 所以看不出它是不是付款 / 删除那种键。"
+            : "\n— 这一点底下读到的是「\(underPoint.prefix(40))」。"
+        if !HumanInputTap.shared.isInstalled {
+            note += "\n— ⚠️ 接管检测没装上 ⇒ 我没法确认你手上有没有鼠标。"
+        }
+        return .success(text: note, seq: seq)
     }
 
     /// act 的入口: **先让路, 再干活, 最后补一句能力缺口**。
@@ -800,7 +996,30 @@ final class ComputerServer {
             }
             // 已经在跑 ⇒ **只切前台**, 不再 launch 一次: 有些 App 被再 launch 会开新窗口
             // (用户眼里就是"它怎么又开了一个")。
-            _ = NSRunningApplication(processIdentifier: t.pid)?.activate(options: [.activateAllWindows])
+            //
+            // ⚠️ 不许用 `NSRunningApplication.activate(options:)` —— 在这个**裸进程**里它
+            //    **返回 true 却什么都没做**(2026-11-10 实测: 先把前台让给访达, 再调
+            //    `.activateAllWindows`, 返回值 true 而 `isActive` 仍是 false)。后果是回执写
+            //    「已经切到前台」而它还在后面, 下一步 act/tap 要么点不动(后台点击无效)要么被
+            //    「不是前台」拒掉 —— 典型的"回执在撒谎、零红灯"。
+            //    `NSWorkspace.open(<App 包 URL>)` 才是真的置前: 实测 isActive=true, 而 pid
+            //    与窗口数都不变(55577→55577 / 2→2 ⇒ 没有另起一份), 与下面 launch 那条分支
+            //    用的是同一个 API。
+            guard let appURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: t.bundle) else {
+                return .failure("找不到「\(t.name)」的 App 包(\(t.bundle)) ⇒ 没法把它切到前台。")
+            }
+            guard NSWorkspace.shared.open(appURL) else {
+                return .failure("系统拒绝了这次置前请求 ⇒ 「\(t.name)」还在后面, 什么都没动。")
+            }
+            // **按效果判**, 不按返回码: 置前请求发出去了也未必真到前台(实测 `activate` 就是这样)。
+            for _ in 0..<15 {
+                if Self.isFrontmost(bundle: t.bundle, pid: t.pid) { break }
+                usleep(100_000)
+            }
+            guard Self.isFrontmost(bundle: t.bundle, pid: t.pid) else {
+                return .failure("置前请求发出去了, 但 1.5 秒内「\(t.name)」没到前台"
+                                + "(可能被系统挡了) ⇒ 请人自己点一下它的 Dock 图标, 或者先别动它。")
+            }
             return .success(text: "「\(t.name)」本来就在运行 ⇒ 已经切到前台(没有新开窗口)。"
                             + "接下来用 computer_read 读它。")
 

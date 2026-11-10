@@ -542,67 +542,104 @@ extension SmokeMain {
         check(cs.activeBundles.isEmpty,
               "T-COMPUTER 关掉 ⇒ 立刻回到空 (不存在'关了但在途会话还开着'的窗口)")
 
-        // MARK: 图像面(批 3c) —— 两把钥匙 + 一条硬禁区
+        // MARK: 视觉面(批 3c; 2026-11-10 从「图片」升成**独立一档**)
         //
-        // 图像是**读的第二种表示**: 它进不了动作面(像素里没有编号), 却是遮蔽机制唯一的
-        // 绕过口(文本值被换成 `••••`, 像素里是原样)。所以下面每条都在守同一件事 ——
-        // "默认一张都不拍; 拍了的那几个必须是用户逐个点过的"。
+        // 它进不了动作面(像素里没有编号), 却是遮蔽机制唯一的绕过口(文本值被换成 `••••`,
+        // 像素里是原样)。所以下面每条都在守同一件事 —— "默认一张都不拍; 拍了的那几个
+        // 必须是用户逐个点过的"。
+        // ⚠️ 2026-11-10 起它**不再依附于「可读」**: 勾了它才允许走「ax视觉 / 纯视觉」两种读法,
+        //    而 AX 恒空的 App(微信, 主窗 5 节点)只有这一条路 ⇒ 两条判据跟着翻了个面。
 
-        // ① 两把钥匙缺一不可: 总开关开了只代表"允许读/操作", 图片要**额外**勾。
+        // ① 两把钥匙缺一不可: 总开关开了只代表"允许碰", 视觉要**额外**勾。
         //    ⚠️ 反例: 让 `activeImageBundles` 直接返回 `selected` ⇒ 这条立刻红。
         let ci = ComputerSettings()
         ci.enabled = true
         ci.setSelected(["com.apple.Safari"])
         check(ci.activeImageBundles.isEmpty,
-              "T-COMPUTER 总开关开着但没勾图片 ⇒ 一张都不拍 (图片是独立的一把钥匙)")
+              "T-COMPUTER 总开关开着 + 勾了可读, 但没勾视觉 ⇒ 一张都不拍 (视觉是独立的一把钥匙)")
 
         ci.setImage("com.apple.Safari", true)
         check(ci.activeImageBundles == ["com.apple.Safari"],
-              "T-COMPUTER 勾了才下发图像面")
-        check(ci.activeBundles == ["com.apple.Safari"],
-              "T-COMPUTER 勾图片要连带勾上读面 (拍得了但读不到没有意义)")
+              "T-COMPUTER 勾了才下发视觉面")
 
-        // ② 不变量 `图像 ⊆ 读`: 摘掉读面, 图片必须跟着消失。
-        ci.toggle("com.apple.Safari")
-        check(ci.activeImageBundles.isEmpty && ci.selected.isEmpty,
-              "T-COMPUTER 取消可读必须连带摘掉图片 (否则设置页勾着、helper 却必拒, 人以为时好时坏)")
+        // ② **正交**: 勾视觉不再连带勾读面, 取消读面也不再摘掉视觉。
+        //    ⚠️ 两个反例分别打这两条: 在 `setImage` 里补一句 `selected.insert` ⇒ 第一条红;
+        //       在 `toggle` 里补一句 `imageSelected.remove` ⇒ 第二条红。
+        let cv = ComputerSettings()
+        cv.enabled = true
+        cv.setImage("com.tencent.xinWeChat", true)
+        check(cv.selected.isEmpty && cv.activeImageBundles == ["com.tencent.xinWeChat"],
+              "T-COMPUTER 勾视觉不再连带勾读面 (微信 AX 恒空 ⇒ 逼它先勾读面等于那条路永远打不开)")
+        check(cv.activeAllowedBundles == ["com.tencent.xinWeChat"],
+              "T-COMPUTER 只勾视觉的 App 也在**下发名单**里 (用纯读面当判据 ⇒ helper 压根不启动, "
+              + "而设置页三个勾都勾着)")
+        cv.setSelected(["com.tencent.xinWeChat"])
+        cv.toggle("com.tencent.xinWeChat")
+        check(cv.activeImageBundles == ["com.tencent.xinWeChat"],
+              "T-COMPUTER 取消可读不摘视觉 (摘了 = 把这个 App 的全部能力一起关死)")
 
-        // ③ 排序在**投影层**(`activeImageBundles`)做过一次, env 那层照原样拼 ——
+        // ③ 操作面的前提是"**有一条能给编号的来源**", 不是"读得到 AX" ⇒ 可读 ∪ 视觉。
+        cv.setAct("com.tencent.xinWeChat", true)
+        check(cv.activeActBundles == ["com.tencent.xinWeChat"],
+              "T-COMPUTER 只靠视觉也能开操作面 (两条路都给编号: AX 树 / 屏幕识别)")
+        // 反例方向: 两条来源都没有时**不替人勾上**(上一批特意避开的错: 自动勾会让人
+        // 以为自己只开了一档)。
+        cv.setAct("com.apple.mail", true)
+        check(!cv.actSelected.contains("com.apple.mail"),
+              "T-COMPUTER 一条读法都没有时「可操作」不生效, 也不替人勾上")
+
+        // ④ 排序在**投影层**(`activeImageBundles`)做过一次, env 那层照原样拼 ——
         //    与 `allowedBundles` / `actBundles` 同待遇。`Set` 的迭代顺序不稳定且与插入序
         //    无关 ⇒ 不在投影层排, 同样的勾选每次会拼出不同的 env 串, "改了什么"看不出来。
-        ci.setImage("com.z", true)
-        ci.setImage("com.a", true)
-        check(ci.activeImageBundles == ["com.a", "com.z"],
-              "T-COMPUTER 图像面按字典序下发 (Set 迭代序不稳 ⇒ 不排序就没法 diff)")
+        let cv2 = ComputerSettings()
+        cv2.enabled = true
+        cv2.setImage("com.z", true)
+        cv2.setImage("com.a", true)
+        check(cv2.activeImageBundles == ["com.a", "com.z"],
+              "T-COMPUTER 视觉面按字典序下发 (Set 迭代序不稳 ⇒ 不排序就没法 diff)")
 
-        // ④ 硬禁区: 口令/系统类一个像素都不许拍。视图置灰之外还得有这一道 ——
+        // ⑤ 硬禁区: 口令/系统类一个像素都不许拍。视图置灰之外还得有这一道 ——
         //    视图那层被改坏不会有任何红灯, 只会在真机上把密码拍成图。
         check(!ComputerSettings.canImage("com.1password.1password"),
               "T-COMPUTER 口令类恒不许截图 (文本遮蔽在像素里不成立)")
-        ci.setImage("com.1password.1password", true)
-        check(!ci.activeImageBundles.contains("com.1password.1password")
-              && !ci.selected.contains("com.1password.1password"),
+        cv2.setImage("com.1password.1password", true)
+        check(!cv2.activeImageBundles.contains("com.1password.1password")
+              && !cv2.selected.contains("com.1password.1password"),
               "T-COMPUTER 硬禁区连勾都勾不上 (判据在状态层, 不靠视图禁用)")
 
-        // ⑤ 两档互不牵连 —— "能看"与"能按"是两个开关, 互相带上是上一批特意避开的错。
-        ci.setAct("com.apple.mail", true)
-        ci.setImage("com.apple.mail", false)
-        check(ci.activeActBundles == ["com.apple.mail"],
-              "T-COMPUTER 关图片不许动操作面 (setImage 不碰 actSelected)")
+        // ⑥ 两档互不牵连 —— "能看"与"能按"是两个开关, 互相带上是上一批特意避开的错。
+        cv2.setAct("com.a", true)         // 来源是视觉: 允许
+        cv2.setImage("com.a", false)
+        check(cv2.actSelected.contains("com.a"),
+              "T-COMPUTER 关视觉不许动操作面 (setImage 不碰 actSelected)")
+        // ⚠️ 但**投影**要跟着挡: 勾选记着"我打算能动它", 而两条来源都没了 ⇒ 不下发。
+        //    这两条合起来才是完整的话: 状态层不替人改主意, 发送层不替人放宽。
+        check(cv2.activeActBundles.isEmpty,
+              "T-COMPUTER 来源没了就不下发操作面 (act 记着意图, 投影按 可读 ∪ 视觉 挡掉)")
 
-        // ⑥ 落盘: 图片同样存**身份**且落在读面内; 空集写成空串。
+        // ⑦ 落盘: 视觉同样存**身份**, 但**不再被读面裁剪**, 操作面按 可读 ∪ 视觉 裁。
         check(ComputerSettings.decode(enabledRaw: "1",
                                       bundlesRaw: "com.apple.Safari",
-                                      imageRaw: "com.apple.Safari,com.apple.mail").imageBundles
-                == ["com.apple.Safari"],
-              "T-COMPUTER 反解时图片取与读面的交集 (手改过的库写成超集 ⇒ 剪掉)")
+                                      imageRaw: "com.apple.Safari,com.tencent.xinWeChat").imageBundles
+                == ["com.apple.Safari", "com.tencent.xinWeChat"],
+              "T-COMPUTER 反解时视觉**不**与读面取交集 (取交集 ⇒ 只勾视觉的 App 下次启动被静默抹掉, "
+              + "而界面上什么都不会说)")
+        check(ComputerSettings.decode(enabledRaw: "1", bundlesRaw: "com.apple.Safari",
+                                      actRaw: "com.tencent.xinWeChat",
+                                      imageRaw: "com.tencent.xinWeChat").actBundles
+                == ["com.tencent.xinWeChat"],
+              "T-COMPUTER 操作面的上界是 可读 ∪ 视觉, 不是纯读面")
+        check(ComputerSettings.encode(enabled: true, bundles: [],
+                                      imageBundles: ["com.tencent.xinWeChat"]).imageBundles
+                == "com.tencent.xinWeChat",
+              "T-COMPUTER 视觉落盘不跟着读面裁剪 (读面为空时那条唯一的路不能被丢掉)")
         check(ComputerSettings.encode(enabled: true,
                                       bundles: ["com.apple.mail", "com.apple.Safari"],
                                       imageBundles: ["com.apple.Safari"]).imageBundles
                 == "com.apple.Safari",
-              "T-COMPUTER 图片落盘串排序稳定")
+              "T-COMPUTER 视觉落盘串排序稳定")
         check(ComputerSettings.encode(enabled: true, bundles: ["x"]).imageBundles.isEmpty,
-              "T-COMPUTER 没勾图片 ⇒ 落盘是**空串**而不是缺键 (缺键读不出'用户明确关了')")
+              "T-COMPUTER 没勾视觉 ⇒ 落盘是**空串**而不是缺键 (缺键读不出'用户明确关了')")
 
         // ⑦ 下发: 这个键**恒设**, 空串 = 一张都不拍 —— 与 `takeover` 的"不要就删"不同。
         //    区别在于 `takeover` 缺键只影响"要不要监听", 而这里缺键会让 helper 以为
@@ -813,12 +850,29 @@ extension SmokeMain {
         //      · 收敛的 4 条(摘了谁 / 白名单内不动 / 三档一起收 / 幂等) ⇒ 一次调用能全判, 并成 ⑥。
         //    **条数不是指标**: 该减少的是"断言行", 不是"独立失败模式"。
 
-        // ① 目录漂移: 白名单 = 手册覆盖 ∪ 免手册, 且无重复
-        let supported = ComputerSettings.supported
-        let allowed = SopInjection.builtins.union(ComputerSettings.manualFree)
+        // ① 目录漂移: 白名单 = 内置 ∪ (第三方 ∩ 装了) ∪ 免手册, 且无重复
+        //    环境事实显式喂: 「这几个第三方都装了」那一档（它决定第三方那几行出不出现）。
+        //    ⚠️ 期望值**从表里算**, 不写字面量清单: 写字面量的话每加一个 App 都要回来改一次,
+        //       而"回来改断言"这个动作会让"漏加"与"断言写错"长得一模一样。
+        let supported = ComputerSettings.supported(installed: SopInjection.thirdParty)
+        let allowed = SopInjection.covered.union(ComputerSettings.manualFree)
         check(Set(supported) == allowed && Set(supported).count == supported.count,
               "T-COMPUTER 可勾清单 == 手册覆盖 ∪ 免手册, 且无重复 (实测 \(supported)) —— "
               + "两处各留一份清单就会各说各话")
+        // ①b **内置写死 / 第三方查安装** —— 2026-11-10 boss 的要求, 三条各守一个失败模式:
+        //     ① 没装的人不该看到它（写死 = 给一个永远读不到东西的勾选框）;
+        //     ② 内置**不许**因为"没装"而消失（它们恒列, 跟着系统来）;
+        //     ③ 两张表不许重叠（重叠 = "恒列"与"装了才列"两套语义打架, 谁赢看代码顺序）。
+        let notInstalled = ComputerSettings.supported(installed: [])
+        check(!notInstalled.contains("com.google.Chrome") && supported.contains("com.google.Chrome"),
+              "T-COMPUTER 第三方 App 装了才列 (没装的人不会在设置页看到它)")
+        check(Set(notInstalled).isSubset(of: Set(supported))
+                && Set(supported).subtracting(notInstalled) == SopInjection.thirdParty,
+              "T-COMPUTER `installed` 只影响第三方那几行 (内置一个都不许因为'没装'而消失, 它们恒列; "
+              + "实测差异: \(Set(supported).subtracting(notInstalled).sorted()))")
+        check(SopInjection.builtins.isDisjoint(with: SopInjection.thirdParty),
+              "T-COMPUTER 内置 / 第三方两张表不许重叠 (实测交集: "
+              + "\(SopInjection.builtins.intersection(SopInjection.thirdParty).sorted()))")
         // ② 免手册名单的边界: 它是"省掉一节 SOP"的例外, 不是"随便加一个 App"的口子。
         check(Set(ComputerSettings.manualFree).isDisjoint(with: SopInjection.builtins)
                 && Set(ComputerSettings.manualFree).isDisjoint(with: ComputerRedline.actBannedBundles),
@@ -826,14 +880,17 @@ extension SmokeMain {
               + "(「界面简单」不是绕开恒拒的理由) —— 实测 \(ComputerSettings.manualFree)")
 
         // ② 目录外的 App: **既"装着"也"跑着", 仍然不许出现** —— 这次改动的全部产品要求
-        //    ⚠️ 样本用 Chrome 不用 Safari: Safari 2026-11-06 已经进白名单了, 拿它当"目录外"
-        //       这条会**反向变红**（而那种红会被误读成"白名单漏了它"）。
+        //    ⚠️ 越界样本必须挑一个**真的不在白名单里**的（且要长期不在）:
+        //       先用 Safari（11-06 进名单后红）→ 换 Chrome（**11-10 也进名单了**）；
+        //       现在用邮件 —— 它 11-04 被 boss 明确移出白名单（见 `builtins` 那条注释），
+        //       是最有据的一个"目录外"。挑错样本这条会**反向变红**, 而那种红会被误读成
+        //       "白名单漏了它"。
         let fixed = ComputerSettings.options(
             bundles: supported,
             names: ["com.apple.Notes": "备忘录"],
             running: [ComputerTarget.Candidate(bundle: "com.apple.Notes", name: "Notes", pid: 9),
-                      ComputerTarget.Candidate(bundle: "com.google.Chrome", name: "Chrome", pid: 8)])
-        check(!fixed.contains { $0.bundle == "com.google.Chrome" },
+                      ComputerTarget.Candidate(bundle: "com.apple.mail", name: "Mail", pid: 8)])
+        check(!fixed.contains { $0.bundle == "com.apple.mail" },
               "T-COMPUTER 正在跑但不在白名单里的 App 不出现 (否则又回到'几百行, 大半没量过')")
         check(fixed.contains { $0.bundle == "com.apple.Notes" && $0.running && $0.name == "备忘录" },
               "T-COMPUTER 白名单里的照样出现、在跑的打标记、名字用传进来的那个")
@@ -861,17 +918,17 @@ extension SmokeMain {
         // ⑤ 启动收敛（`pruneUnsupported`）: 一次调用把四件事一起判 ——
         //    摘的正是目录外那个 / 白名单内一根不动 / 三档一起收 / 第二遍什么都不摘(幂等)。
         //    拆成四条只会让"同一份前置"重复四遍, 红的还是同一次改坏。
-        //    ⚠️ 越界样本同样用 Chrome（Safari 已进白名单, 拿它当越界值这条会恒红）。
+        //    ⚠️ 越界样本同样用邮件（Chrome 11-10 已进白名单, 拿它当越界值这条会恒红）。
         let pruner = ComputerSettings()
         pruner.restore(enabledRaw: "1",
-                       bundlesRaw: "com.apple.Notes,com.google.Chrome",
-                       actRaw: "com.google.Chrome",
-                       imageRaw: "com.google.Chrome")
-        check(pruner.selected.contains("com.google.Chrome"),
+                       bundlesRaw: "com.apple.Notes,com.apple.mail",
+                       actRaw: "com.apple.mail",
+                       imageRaw: "com.apple.mail")
+        check(pruner.selected.contains("com.apple.mail"),
               "T-COMPUTER 前置: `restore` 如实还原越界值 (收敛是产品决定, 不属于'还原')")
-        let dropped = pruner.pruneUnsupported()
-        let twice = pruner.pruneUnsupported()
-        check(dropped == ["com.google.Chrome"]
+        let dropped = pruner.pruneUnsupported(installed: [])
+        let twice = pruner.pruneUnsupported(installed: [])
+        check(dropped == ["com.apple.mail"]
                 && pruner.selected == ["com.apple.Notes"]
                 && pruner.actSelected.isEmpty && pruner.imageSelected.isEmpty
                 && twice.isEmpty,
@@ -984,12 +1041,14 @@ extension SmokeMain {
         // ⇒ 不给它更大的上限，这个 App 等于只能读个标题栏。
         check(AXSnapshot.renderLineLimit(for: "com.apple.Safari") == 3000,
               "T-COMPUTER Safari 渲染上限 3000 行 (实测 GitHub 仓库页 1598 行; 120 行只够看页头)")
+        check(AXSnapshot.renderLineLimit(for: "com.google.Chrome") == 3000,
+              "T-COMPUTER Chrome 渲染上限 3000 行 (实测 B 站首页 222 行; 120 行只到正文开头)")
         let narrow = SopInjection.builtins
-            .subtracting(["com.apple.Safari"])      // 唯一被放宽的那个（上面单独判）
+            .subtracting(["com.apple.Safari"])      // 唯一被放宽的内置（Chrome 不在这张表里）
             .union(["com.apple.calculator"])        // 免手册的那个也不是网页
             .union(["com.example.unconfigured"])    // 压根没配过的
         check(narrow.allSatisfy { AXSnapshot.renderLineLimit(for: $0) == 120 },
-              "T-COMPUTER 只给 Safari 放宽: 其余内置 + 计算器 + 未配置的仍然是 120 "
+              "T-COMPUTER 只给浏览器放宽: 其余内置 + 计算器 + 未配置的仍然是 120 "
               + "(它们的树只有几百行, 放开是纯亏 —— 这份文本每轮都留在上下文里。实际: "
               + "\(narrow.filter { AXSnapshot.renderLineLimit(for: $0) != 120 }.sorted()))")
         // 行为面: 上限要**真的**影响渲染 —— 只查上面那张表证明不了它会被用上。
@@ -1002,14 +1061,17 @@ extension SmokeMain {
               "T-COMPUTER 上限真的生效 (120 行: \(capped.count) 字且带截断提示; "
               + "3000 行: \(roomy.count) 字全量)")
         // 收口（2026-11-09）：差异只许住在 `ComputerAppProfile` 的表里，而**表点名的 App
-        // 必须真的在清单里** —— `supported` 是从「手册节 ∩ builtins ∪ manualFree」**算**出来的，
-        // 它不认这张表。所以"表里加一行、手册没加节"的后果是：读法放宽了，而用户在设置页
-        // 根本勾不到这个 App（等于这个 App 不存在）。加 Chrome 时最容易踩的就是这一脚。
+        // 必须真的在清单里** —— `supported(installed:)` 是从「手册节 ∩（builtins ∪ 装了的
+        // thirdParty）∪ manualFree」**算**出来的，它不认这张表。所以"表里加一行、手册没加节"
+        // 的后果是：读法放宽了，而用户在设置页根本勾不到这个 App（等于这个 App 不存在）。
+        // ⚠️ "装了 Chrome"这一档必须显式喂 —— 不喂的话 Chrome 从清单里消失，这条会红在
+        //    一个与"表 vs 清单"无关的原因上（2026-11-10 起 Chrome 在 thirdParty）。
         let strayProfiles = ComputerAppProfile.profiledBundles
-            .filter { !ComputerSettings.supported.contains($0) }
+            .filter { !ComputerSettings.supported(installed: ["com.google.Chrome"]).contains($0) }
         check(strayProfiles.isEmpty,
               "T-COMPUTER 读法表点名的 App 必须真在清单里 (否则那张表在描述一个勾不到的东西; "
-              + "实际越界: \(strayProfiles) —— 清单 = \(ComputerSettings.supported))")
+              + "实际越界: \(strayProfiles) —— 清单 = "
+              + "\(ComputerSettings.supported(installed: ["com.google.Chrome"])))")
 
         // 只有空白的文本(空格/换行)等于没有 —— 那些行在屏幕上什么也不显示
         let blankText = AXSnapshot.build(root: AXNode(role: "AXWindow", title: "w", children: [

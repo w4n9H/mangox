@@ -51,11 +51,13 @@ extension SmokeMain {
             caseSopInjection,
             caseApprovalGate,
             caseComputerAct,
+            caseComputerTap,
             caseComputerKind,
             caseToolFaceDrift,
             caseActScope,
             caseCodeBlockLines,
             caseDiagnosticLog,
+            caseBuiltInExtensions,
         ]
     }
 

@@ -223,3 +223,33 @@ mangox/Models/ComputerAct.swift|它有的是：
 mangox/Models/ComputerAct.swift| 只是要按一下的话用 press。
 mangox/Models/ComputerAct.swift|把名字说得更准一些。
 mangox/Models/ComputerAct.swift| 你说的「%@」不是 ⇒ 没动。快照里这一格的值就是能写回去的样子。
+
+# P18 第四档(2026-11-10): `ComputerTapRule` 的十三道闸回执 —— 同 E 族(进的是**模型上下文**,
+# 不是界面), 住在与 helper 共用的纯函数里, 包 L() 会让"界面语言 = 英文"时给模型发英文回执。
+# ⚠️ 豁免的只是「必须接线」这一道, 译文仍在词表里(gen_strings 照收)。
+# ⚠️ 这里有**片段**(一句话拆成几个字面量拼): 「它默认关…——」+「 要开就在…」是一句。
+#    登记时不许带尾空格(本文件逐行 strip, 登不进来) —— 所以那两个片段的空格放在**下一段开头**。
+mangox/Models/ComputerAct.swift|「按坐标点击」这一档关着 ⇒ 没点。
+mangox/Models/ComputerAct.swift|它默认关是因为可能点错、而且点错了没有撤销 ——
+mangox/Models/ComputerAct.swift| 要开就在 设置 › 集成 › 电脑操作 里打开。
+mangox/Models/ComputerAct.swift|「%@」还没勾「可操作」⇒ 没点。看得到不等于动得。
+mangox/Models/ComputerAct.swift|「%@」重启过了 ⇒ 你手上那份快照说的不是这个窗口, 没点。重新 read 一次。
+mangox/Models/ComputerAct.swift|「%@」不在前台 ⇒ 没点。
+mangox/Models/ComputerAct.swift|后台点不动(实测前后两帧一模一样), 而且真点下去会把它拽到最前面。
+mangox/Models/ComputerAct.swift|先 computer_open 把它切上来, 再点。
+mangox/Models/ComputerAct.swift|你此刻正按着鼠标键(可能在拖拽) ⇒ 没点。松开之后再说一次。
+mangox/Models/ComputerAct.swift|你 %@ 毫秒前刚动过键鼠 ⇒ 没点。
+mangox/Models/ComputerAct.swift|这一档用的是**真鼠标**, 我不能在人手上抢 —— 稍等一下再说一次。
+mangox/Models/ComputerAct.swift|%@ 不像屏幕上的点 ⇒ 没点。坐标是全局屏幕坐标、左上原点。
+mangox/Models/ComputerAct.swift|这份快照没记窗口位置 ⇒ 判不了 %@ 是对着哪个窗口的 ⇒ 没点。
+mangox/Models/ComputerAct.swift|重新 read 一次(这次的快照会带上窗口外框)。
+mangox/Models/ComputerAct.swift|「%@」的窗口挪过: 原来 %@, 现在 %@ ⇒ 没点。
+mangox/Models/ComputerAct.swift|读不到了
+mangox/Models/ComputerAct.swift|图上的位置是相对窗口的, 窗口一动就全偏 —— 重新 read 一次再算。
+mangox/Models/ComputerAct.swift|%@ 不在「%@」的窗口 %@ 里 ⇒ 没点。
+mangox/Models/ComputerAct.swift|%@ 落在**别的 App** 的窗口上(不是「%@」) ⇒ 没点。
+mangox/Models/ComputerAct.swift|要么窗口被挪走了, 要么这个点是照着另一张图算的。
+mangox/Models/ComputerAct.swift|%@ 上盖着「%@」的另一个窗口(弹层 / 对话框) ⇒ 没点。
+mangox/Models/ComputerAct.swift|先处理弹层, 或者重新 read 一次按新的来。
+mangox/Models/ComputerAct.swift|%@ 底下写着「%@」 ⇒ 没点。
+mangox/Models/ComputerAct.swift|按坐标点这一档认不出控件语义, 这类词一律不替你点 —— 这一步你自己点。
