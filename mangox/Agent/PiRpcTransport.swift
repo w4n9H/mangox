@@ -1208,9 +1208,10 @@ final class PiRpcTransport: AgentTransport {
                     "scroll with computer_act, then read again. Values in password fields arrive masked; a",
                     "masked value is one you were never given.",
                     "",
-                    "`includeImage` adds a screenshot: only when the user allowed images for that app, and only",
-                    "when the outline is nearly empty. A picture carries no row numbers, so it never replaces a",
-                    "read. When there is no picture, the text says why -- do not retry it in a loop.",
+                    "`includeImage` adds a screenshot of that same window, if the user turned vision on for",
+                    "the app. A picture carries no row numbers, so it never replaces a read: ask for one when",
+                    "the outline is thin or is the only way to see what is there -- and remember it costs",
+                    "context. When there is no picture the text says why; do not retry it in a loop.",
                 ].join("\n"),
                 parameters: Type.Object({
                     app: Type.Optional(Type.String({
@@ -1218,7 +1219,7 @@ final class PiRpcTransport: AgentTransport {
                     })),
                     includeImage: Type.Optional(Type.Boolean({
                         description: "Also return a screenshot of the window (only if the user"
-                            + " enabled images for this app).",
+                            + " turned vision on for this app).",
                     })),
                 }, { additionalProperties: false }),
 

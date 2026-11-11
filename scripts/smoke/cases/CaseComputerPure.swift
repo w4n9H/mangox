@@ -693,6 +693,36 @@ extension SmokeMain {
         check(zeroSize.width == 1 && zeroSize.height == 1,
               "T-COMPUTER 零尺寸窗口算出 1×1 而不是 0 (SCK 收到 0 直接抛错)")
 
+        // ④ 长边上限: 超过就等比缩到 maxEdge。**两个方向同一条** —— 同一个分支, 但漏了哪个
+        //    方向要能从文案看出来(竖长窗口缩错了会撑爆字节, 横长窗口缩错了会变形)。
+        //    ⚠️ 走**真正的入口** `captureSize` 而不是直接调 `fit`: 只测 `fit` 的话, 谁把
+        //    `captureSize` 改回"窗口多大就拍多大", 这条照样绿(纯函数没坏, 是它没被用上)。
+        let edge = ComputerShotRule.maxEdge
+        var badFit: [String] = []
+        for (label, w, h) in [("横长", 3008, 1692), ("竖长", 1200, 2400)] {
+            let s = ComputerShotRule.captureSize(window: AXRect(x: 0, y: 0, w: w, h: h))
+            // 长边必须**正好**是上限, 短边按同一比例(±1px 取整)。
+            let expectShort = Int((Double(min(w, h)) * Double(edge) / Double(max(w, h))).rounded())
+            guard max(s.width, s.height) == edge,
+                  min(s.width, s.height) == max(1, expectShort) else {
+                badFit.append("\(label) \(w)×\(h)→\(s.width)×\(s.height) 期望短边 \(expectShort)")
+                continue
+            }
+        }
+        check(badFit.isEmpty,
+              "T-COMPUTER 超过长边 \(edge) 的窗口等比缩到 \(edge) 且不变形 (缩错 = 字节撑爆或 SCK 非等比拉伸; 错: \(badFit))")
+
+        // ⑤ **只缩不放**: 装得下的窗口原样返回(放大只会更糊, 还白涨字节)。
+        //    ⚠️ 正好等于上限那一格必须在"不缩"这一侧 —— 判据写成 `>=` 会把它缩成同一尺寸,
+        //    看着一样, 但走的是"重采样"那条路(多一次全画布拷贝)。
+        var grew: [String] = []
+        for (w, h) in [(800, 600), (edge, edge), (edge - 1, 400)] {
+            let s = ComputerShotRule.captureSize(window: AXRect(x: 0, y: 0, w: w, h: h))
+            if s.width != w || s.height != h { grew.append("\(w)×\(h)→\(s.width)×\(s.height)") }
+        }
+        check(grew.isEmpty,
+              "T-COMPUTER 装得下的窗口一律原样返回, 不放大也不重采样 (改: \(grew))")
+
         // MARK: 落盘串 —— 存 bundle id 本身, 不存位置
 
         let dScope = ComputerSettings.decode(enabledRaw: "1",

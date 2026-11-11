@@ -281,3 +281,9 @@ mangox/Models/ComputerAct.swift|先 computer_open 把它切上来。
 mangox/Models/ComputerAct.swift|你此刻正按着鼠标键 ⇒ 没写。松开之后再说一次。
 mangox/Models/ComputerAct.swift|你 %@ 毫秒前刚动过键鼠 ⇒ 没写。
 mangox/Models/ComputerAct.swift|人正在打字时我不往他那行里插字 —— 稍等一下再说一次。
+# 第十道闸(2026-11-11 代码评审): 焦点落在什么控件上。⚠️ 第一个 `%@` 是 App 名、第二个是
+# **角色名**(`AXOutline` 这种 AX 契约字面量, 不译) —— 这条拒的是"往列表里敲字符会变成
+# 按键跳转", 回执必须点名落在哪个角色上, 否则人只知道没写、不知道是点错了地方。
+mangox/Models/ComputerAct.swift|「%@」此刻的焦点在「%@」上, 不是能写字的输入框 ⇒ 没写。
+mangox/Models/ComputerAct.swift|先点进输入框(或者用 computer_act 的 focus)再写。
+mangox/Models/ComputerAct.swift|往列表 / 表格里敲字符会变成「按键跳转」, 那是动作, 不是打字。

@@ -44,6 +44,29 @@ final class HumanInputTap {
     private var port: CFMachPort?
     private var didStart = false
 
+    /// 我们自己注入的事件打的记号 —— 回调见到同值就**不算人类输入**。
+    ///
+    /// ⚠️ 为什么必须有它(2026-11-11 代码评审抓出来的): `hidClick` / `hidType` 往
+    ///    `.cghidEventTap` 投递, 而这条监听挂在下游的 `.cgSessionEventTap` ⇒
+    ///    **我们自己点的那一下、敲的那个键, 一定会先经过这里**。不分辨来源的后果:
+    ///    ① 紧接着的第二步被 `humanQuietMs` = 400ms 拒掉, 而话术写着"你 47 毫秒前刚动
+    ///       过键鼠" —— 把我们的动作说成你的;
+    ///    ② 更远一点, `ComputerTakeover` 那个 6 秒窗用的是同一个时间戳 ⇒ 一次 tap/type
+    ///       之后**接下来 6 秒的每一次 act 都回"刚才有人动了鼠标"**, 而人根本没碰。
+    ///    ⚠️ 它只在模型往返 < 400ms 时才显形 —— 这条 bug 一直靠 LLM 的延迟侥幸活着。
+    ///
+    /// ⚠️ 记号打在**事件本身**(`eventSourceUserData`), 不是"投递时开一个时间窗":
+    ///    时间窗会把真实的人类输入一起吃掉, 而"看见人"恰恰是这一档存在的全部理由。
+    static let selfInjectedTag: Int64 = 0x4D47_5853_454C_46   // "MGXSELF"
+
+    /// 给要投递的事件盖上"这一发是我打的"(见 `selfInjectedTag` 上那两条)。
+    ///
+    /// ⚠️ 点按与打字的**每一个**事件都要盖: down / up 各一次, 回车那两下也是。
+    ///    漏一个的表现与没做这件事一模一样 —— 那一发会被记成人类输入。
+    static func stampSelfInjected(_ event: CGEvent) {
+        event.setIntegerValueField(.eventSourceUserData, value: selfInjectedTag)
+    }
+
     /// 键盘事件到底看不看得见。**缺"输入监控"权限时系统只把鼠标事件喂给 tap**,
     /// 那时 tap 照样"装上"了、鼠标照样能看见 ⇒ 只说"你一动键盘我就让路"就是回执在编事实。
     private(set) var keyboardVisible = false
@@ -136,6 +159,12 @@ final class HumanInputTap {
         let me = Unmanaged<HumanInputTap>.fromOpaque(refcon).takeUnretainedValue()
         if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
             me.rearm()
+            return Unmanaged.passUnretained(event)
+        }
+        // ⚠️ 我们自己注入的那一发**不算人类输入** —— 理由与代价见 `selfInjectedTag`。
+        //    少了这一句: 点完一件事之后 400ms 内再动手会被拒, 而回执把原因说成"你刚动过";
+        //    接管检测那 6 秒窗也会被我们自己填满。两者都不会有任何红灯。
+        if event.getIntegerValueField(.eventSourceUserData) == HumanInputTap.selfInjectedTag {
             return Unmanaged.passUnretained(event)
         }
         me.noteHumanInput()

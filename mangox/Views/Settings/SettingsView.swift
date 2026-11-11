@@ -1114,6 +1114,18 @@ struct SettingsView: View {
                                                set: { computer.setImage(app.bundle, $0) }))
                     .toggleStyle(.checkbox)
                     .help(L("开了它我才能看这个应用的屏幕：文字读不出来时按图数编号, 文字读得出时图只用来补颜色和图标。默认关, 因为截图带的是整个窗口的像素"))
+                // ⚠️ 风险必须**常驻**, 不能只写在 `.help()` 里(悬停才看见)也不能只写在设计文档里。
+                //    这一档在微信这种 AX 恒空的 App 上**没有语义闸** —— 第十三道"恒拒词"闸读不到
+                //    文字就永远不命中 ⇒ 那个 App 上剩下的只有"授权 + 前台 + 人静 + 窗口没挪"。
+                //    后果不是"点歪了看得见", 而是"凭坐标点 + 往焦点里写字 + 回车能发出一条撤不回
+                //    的消息"。只在勾着的时候显示: 没勾就没有这个风险, 文字也不该常驻在那儿。
+                if shootable {
+                    Text(L("⚠️ 这一档没有语义闸: 读不出文字时我只能凭坐标点、往焦点里写字 —— 点错当场发生, 回车发出去的消息撤不回"))
+                        .font(.system(size: 10))
+                        .foregroundStyle(CodexTheme.textMuted)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(.top, 2)
+                }
             } else {
                 Text(L("不可截图"))
                     .font(.system(size: 10))

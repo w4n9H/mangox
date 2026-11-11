@@ -54,7 +54,36 @@ enum ComputerShotRule {
     ///
     /// **1 倍**而不是 2 倍: 图是"看一眼长什么样"的兜底, 不是给人看的成品; 2 倍会让 PNG
     /// 体积翻四倍, 而这些字节要作为 `ImageContent` 进模型的上下文 —— 省下来的额度更有用。
+    ///
+    /// ⚠️ **再叠一道长边上限**(2026-11-11 补): 1 倍只是去掉"Retina 那 4 倍", 窗口本身多大
+    ///    它还是多大 —— 6K 上满窗就是 3008×1692, 一个贴满缩略图的窗口编出来能顶到模型侧
+    ///    的单图上限。上限卡在**交给 SCK 的 `config.width/height`** 上, 不在拿到图之后重绘:
+    ///    少一次全画布拷贝, 也少一处"画布建不出来"的失败分支(`encode` 至今只编码)。
     static func captureSize(window: AXRect) -> (width: Int, height: Int) {
-        (max(1, window.w), max(1, window.h))
+        fit(width: max(1, window.w), height: max(1, window.h))
+    }
+
+    /// 交给模型的图,**长边硬上限**(像素)。
+    ///
+    /// ⚠️ 与 App 侧 `ImagePipeline.maxSendSide` **是同一个数**: 用户发的图和截图最后进的是
+    ///    同一个上下文, 上限不该有两份。但两个 target 编不到一起去(`mangox-compute` 里没有
+    ///    `ImagePipeline`), 只能靠 `run.sh` 的源码事实锁住"这两处写的是同一个数"。
+    static let maxEdge = 1536
+
+    /// 等比缩进一个 `maxEdge` 的正方形框。**只缩不放** —— 装得下就原样返回。
+    ///
+    /// 长边取**正好** `maxEdge`(不是四舍五入的结果), 短边按同一比例算: 四边各自取整会让
+    /// 宽高比飘一点点, 而 SCK 是按比例把画面塞进这个尺寸的 —— 飘了就是**非等比拉伸**
+    /// (`capture` 上面那段注释记着这个坑)。
+    static func fit(width: Int, height: Int,
+                    maxEdge: Int = ComputerShotRule.maxEdge) -> (width: Int, height: Int) {
+        let w = max(1, width), h = max(1, height)
+        guard maxEdge > 0, max(w, h) > maxEdge else { return (w, h) }
+        if w >= h {
+            let nh = Int((Double(h) * Double(maxEdge) / Double(w)).rounded())
+            return (maxEdge, max(1, nh))
+        }
+        let nw = Int((Double(w) * Double(maxEdge) / Double(h)).rounded())
+        return (max(1, nw), maxEdge)
     }
 }

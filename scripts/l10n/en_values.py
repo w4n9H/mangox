@@ -1147,6 +1147,7 @@ VALUES = {
     '不可截图': 'No image',
     '口令 / 系统设置类应用: 一张都不拍 —— 像素会绕过输入框的遮蔽': 'Password / system-settings apps: never captured - pixels would bypass the mask on input fields',
     '开了它我才能看这个应用的屏幕：文字读不出来时按图数编号, 文字读得出时图只用来补颜色和图标。默认关, 因为截图带的是整个窗口的像素': 'With this on I am allowed to look at this app\'s screen: when the text read comes back empty I number things from the picture, and when it works the picture only fills in colours and icons. Off by default, because a screenshot carries the whole window as pixels',
+    '⚠️ 这一档没有语义闸: 读不出文字时我只能凭坐标点、往焦点里写字 —— 点错当场发生, 回车发出去的消息撤不回': '⚠️ This tier has no semantic gate: when I cannot read the text I click by coordinates and type into whatever has focus - a misclick lands immediately, and a message sent with Return cannot be recalled',
     '全局开关: 开 = 常规与完整模式的会话都能读你勾过的应用的界面, 不是只对当前会话生效 (极简与 codemode 档看不到这些工具)。再给某个 App 勾上「可操作」它才能按按钮/填输入框 —— 勾上就是允许, 不再逐次问你; 没勾的一律只读。再给某个 App 勾上「视觉」, 它才允许看这个应用的屏幕 —— 文字读得出来时按文字走(图只补颜色和图标), 读不出来时按图数编号; 默认关, 因为图里是像素, 会绕过输入框的遮蔽。让助手打开一个 App 只需要「可读」或「视觉」(那等于替你点一下图标)': 'Global switch: on means sessions in the standard and full modes can read the apps you ticked, not just the current conversation (the minimal and codemode modes do not see these tools). Ticking "Act" for an app is what lets it press buttons and fill fields - a tick is permission, it will not ask again; anything unticked is read-only. Ticking "Vision" is what allows me to look at that app\'s screen - when the text read works I go by the text (the picture only fills in colours and icons), and when it comes back empty I number things from the picture; off by default because a picture is pixels and pixels bypass the mask on input fields. Opening an app only needs "Read" or "Vision" (it is the same as clicking its icon for you)',
     '读不动': "Can't read",
     '超时': 'timed out',
@@ -1232,6 +1233,11 @@ VALUES = {
     '你此刻正按着鼠标键 ⇒ 没写。松开之后再说一次。': 'You are holding a mouse button right now ⇒ nothing was typed. Ask again after you let go.',
     '你 %@ 毫秒前刚动过键鼠 ⇒ 没写。': 'You touched the keyboard or mouse %@ ms ago ⇒ nothing was typed.',
     '人正在打字时我不往他那行里插字 —— 稍等一下再说一次。': 'I will not type into the line someone is already typing in -- try again in a moment.',
+    # 第十道闸(2026-11-11): 焦点落在什么控件上。⚠️ 三个 `%@`/句子里第一个是 App 名、第二个是
+    # **角色名**(`AXOutline` 这种)—— 角色名不译, 它是 AX 的契约字面量, 模型要靠它去查说明。
+    '「%@」此刻的焦点在「%@」上, 不是能写字的输入框 ⇒ 没写。': '"%@" has focus on "%@" right now, which is not a text field ⇒ nothing was typed.',
+    '先点进输入框(或者用 computer_act 的 focus)再写。': 'Click into a text field first (or use computer_act with focus), then write.',
+    '往列表 / 表格里敲字符会变成「按键跳转」, 那是动作, 不是打字。': 'Typing into a list or a table turns into type-select, which is an action, not text entry.',
     '申请': 'Request',
     ' 想按它的话用 press —— 但按它不等于打开它的菜单。': ' Use press if you only meant to click it -- but clicking is not opening its menu.',
     '「%@」没有菜单可开 —— %@ ⇒ 没动。': '"%@": no menu to open -- %@ ⇒ nothing done.',

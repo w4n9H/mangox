@@ -633,6 +633,28 @@ enum AXAdapter {
         string(el, kAXRoleAttribute) ?? ""
     }
 
+    /// 此刻**键盘焦点**在哪个角色上。`nil` = 这个 App 答不出来(微信那种 AX 恒空的树)。
+    ///
+    /// ⚠️ 为什么要它(2026-11-11 代码评审): `computer_type` 写的是"当前焦点", 而焦点落在
+    ///    **列表 / 表格**上时, 注入的字符会变成"按键跳转"(Finder 里敲一个 `f` 就跳到某个
+    ///    文件), 空格是预览 —— 那是动作, 不是打字。原来这条链上没有任何一步问过"焦点是
+    ///    不是能写字的控件", 回执照样说"往当前焦点写了"。
+    /// ⚠️ 但**不能因为读不到就拒**: 微信的 AX 树恒空, 而它恰恰是这一档唯一的真实用例。
+    ///    所以调用方拿到 `nil` 时放行, 只在回执里说明"这一格我没判过"(判据那一侧见
+    ///    `ComputerTypeRule.editableRoles`)。
+    /// ⚠️ 起点必须是 `AXUIElementCreateApplication(pid)`: 焦点是**这个 App 的**属性,
+    ///    与"坐标上是谁"不同(那条要用 systemWide, 见 `element(at:)`)。
+    static func focusedRole(pid: pid_t) -> String? {
+        var raw: CFTypeRef?
+        let err = AXUIElementCopyAttributeValue(AXUIElementCreateApplication(pid),
+                                                kAXFocusedUIElementAttribute as CFString,
+                                                &raw)
+        guard err == .success, let raw, CFGetTypeID(raw) == AXUIElementGetTypeID() else {
+            return nil
+        }
+        return roleName(of: raw as! AXUIElement)
+    }
+
     /// AX 的受保护内容标记(`AXProtectedContent`)。取不到就当**不是**受保护 ——
     /// 这条判据的兜底是角色名(`ComputerRedline.isPasswordRole`), 两条任一生效即遮。
     ///

@@ -430,15 +430,74 @@ if ! has_code mangox-compute/ComputerServer.swift 'keyboardSetUnicodeString'; th
     echo "FAIL - 打字不再走 keyboardSetUnicodeString (改按物理键位映射就写不了中文)" >&2
     exit 1
 fi
-if ! has_code mangox-compute/ComputerServer.swift 'min\(start \+ 20'; then
+if ! has_code mangox-compute/ComputerServer.swift 'min\(i \+ 20'; then
     echo "FAIL - 一次送的不再按 20 个 UTF-16 单元分段" >&2
     echo "       keyboardSetUnicodeString 的硬上限是 20, 超了会被**静默截断**(一个字都不报错)" >&2
+    exit 1
+fi
+# ⚠️ 2026-11-11 代码评审: 20 单元的切分点必须是**字符边界**。原来写的是
+#    `Array(text.utf16)` + `min(start + 20, …)`, 一个 emoji / 扩展 B 汉字占 2 个单元,
+#    跨边界就被劈成两个**孤代理** ⇒ 目标 App 收到替换字符或什么都不收, 全程零报错。
+#    真机只量过中文(BMP, 一字符一单元) ⇒ 那种切法在那里永远是对的, 所以验收看不见。
+if ! has_code mangox-compute/ComputerServer.swift 'for ch in text'; then
+    echo "FAIL - 打字的切分不再按 Character 走(硬切 UTF-16 单元会劈开代理对: emoji 与扩展 B 汉字)" >&2
+    echo "       判据 = 循环源是 `for ch in text`, 不是 `for` 一个 UTF-16 数组" >&2
+    exit 1
+fi
+if has_code mangox-compute/ComputerServer.swift 'Array\(text\.utf16\)'; then
+    echo "FAIL - 又把整段拆成 UTF-16 单元数组再切 (代理对会被劈成两半, 而这条链一声不响)" >&2
     exit 1
 fi
 if ! has_code mangox-compute/ComputerServer.swift 'virtualKey: 36'; then
     echo "FAIL - 提交那一下不再按 return(36)" >&2
     exit 1
 fi
+# ③y 模拟输入与"人在不在"的账(2026-11-11 代码评审抓出来两条):
+#
+#   ① **我们自己发的键鼠事件必须盖记号**。`hidClick` / `hidType` 走 `.cghidEventTap`,
+#      而 `HumanInputTap` 挂在下游的 `.cgSessionEventTap` ⇒ 我们点的那一下、敲的那个键
+#      一定会先经过它。不盖记号的后果: 紧接着的第二步被 `humanQuietMs`=400ms 拒掉, 而话术
+#      写着"你 47 毫秒前刚动过键鼠"; 更远一点, 接管检测那 6 秒窗也用同一个时间戳 ⇒
+#      一次 tap/type 之后**接下来 6 秒的每次 act 都回"刚才有人动了鼠标"**。两者都零红灯,
+#      而且只在模型往返 < 400ms 时显形 —— 它一直靠 LLM 的延迟侥幸活着。
+#
+#   ② **动过界面就必须把旧快照作废**。`finishAct` 早就是"重读 + 换号 + 明说旧编号作废",
+#      而 `hidClick` / `hidType` 原来把 seq 原样返回 ⇒ 界面刚变过, `seq` 判据却照样放行,
+#      模型能拿旧编号接着 act, 按到语义已经变了的那一格。
+TAG_N="$(count_code mangox-compute/ComputerServer.swift 'HumanInputTap\.stampSelfInjected\(')"
+if [ "$TAG_N" != "6" ]; then
+    echo "FAIL - 给自注入事件盖记号的是 ${TAG_N} 处 (应为 6 = 点按两发 + 成段写字两发 + 回车两发)" >&2
+    echo "       漏掉的那一发会被自己的只读监听记成人类输入 ⇒ 下一步 400ms 内被拒, 而话术怪到人头上" >&2
+    exit 1
+fi
+if ! has_code mangox-compute/HumanInputTap.swift 'setIntegerValueField\(\.eventSourceUserData'; then
+    echo "FAIL - 记号不再写进 eventSourceUserData (记号必须跟着事件走, 时间窗会把真实输入一起吃掉)" >&2
+    exit 1
+fi
+if ! has_code mangox-compute/HumanInputTap.swift 'getIntegerValueField\(\.eventSourceUserData\)'; then
+    echo "FAIL - 回调不再比对自注入记号 ⇒ 我们自己发的键鼠被记成人类输入" >&2
+    exit 1
+fi
+INVALIDATE_N="$(count_code mangox-compute/ComputerServer.swift 'invalidateSnapshot\(')"
+if [ "$INVALIDATE_N" != "3" ]; then
+    echo "FAIL - invalidateSnapshot 出现 ${INVALIDATE_N} 次 (定义 + 点按 + 写字应为 3)" >&2
+    echo "       动过界面不作废旧快照 ⇒ 模型能拿旧编号接着 act, 而 UI 已经变了" >&2
+    exit 1
+fi
+# 焦点那一条只活在 helper 侧(取事实), 判据在 `ComputerTypeRule`(冒烟里钉着)。
+# 这里守的是"取事实那一步还在": 没人问过焦点, 上面那条闸就永远拿不到输入。
+if ! has_code mangox-compute/ComputerServer.swift 'AXAdapter\.focusedRole\(pid:'; then
+    echo "FAIL - 打字不再问'焦点落在什么控件上' ⇒ 往列表里敲字符会变成按键跳转, 而回执说'写了'" >&2
+    exit 1
+fi
+# 视觉那一档改名之后, helper 里**一处**都不许再出现旧名 —— 回执让人去勾一个不存在的勾选框,
+# 而这种漂移冒烟断言不到(helper 不在冒烟编译范围), 只能扫源码。
+for f in mangox-compute/*.swift; do
+    if has_code "$f" '「图片」'; then
+        echo "FAIL - $f 还在说「图片」(2026-11-10 已改名「视觉」) ⇒ 那句话指向一个不存在的勾选框" >&2
+        exit 1
+    fi
+done
 # 协议那一半(解码)只活在 helper 里, 冒烟编不到它 ⇒ 只能扫源码:
 # `point` 缺了必须解成 nil、由 server 拒并说清"要点哪儿" —— 在解码层编一个默认点(比如 0,0)
 # 就等于把"模型没给坐标"变成"模型要左上角", 而它是模型最容易照做的那一个坐标。
@@ -535,6 +594,25 @@ fi
 #    两者差一个标题栏时, 按 AX 框设宽度会让 SCK 非等比缩放 ⇒ 画面整个变形。
 if ! has_code mangox-compute/ComputerShot.swift 'captureSize\(window: axRect\(win\.frame\)\)'; then
     echo "FAIL - 输出尺寸不再取自 SCWindow.frame (改回 AX 窗口框 ⇒ 差一个标题栏就非等比缩放)" >&2
+    exit 1
+fi
+# ⚠️ 长边上限要落在**交给 SCK 的那个尺寸**上, 不是拿到图之后再缩: 后者多一次全画布拷贝,
+#    也多一处"画布建不出来"的失败分支。谁把 `captureSize` 改回"窗口多大就拍多大",
+#    在 6K 屏 + 贴满缩略图的窗口上就会顶到模型侧的单图上限 —— 而且报的是上游错误,
+#    模型看到的东西里没有一个字指向"图太大"。纯函数那半边仍全绿, 只有这里能拦住。
+if ! has_code mangox/Models/ComputerShotRule.swift 'fit\(width: max\(1, window\.w\)'; then
+    echo "FAIL - captureSize 不再过 fit (窗口多大就拍多大 ⇒ 大窗口的 PNG 会顶到单图上限)" >&2
+    echo "       上限必须压在 config.width/height 上, 不能拿到图之后再重绘" >&2
+    exit 1
+fi
+# 两个数必须**是同一个数**: App 侧用户发的图与 helper 拍的截图, 最后进的是同一个上下文。
+# ⚠️ 两个 target 各自编译(`mangox-compute` 里没有 `ImagePipeline`) ⇒ 类型系统帮不上忙,
+#    只能靠这条源码事实 —— 打歪一处就是两套预算, 而两套都不会报错。
+SHOT_EDGE="$(awk '/static let maxEdge = /{ for (i = 1; i <= NF; i++) if ($i ~ /^[0-9]+$/) print $i }' mangox/Models/ComputerShotRule.swift)"
+SEND_EDGE="$(awk '/static let maxSendSide/ { for (i = 1; i <= NF; i++) if ($i ~ /^[0-9]+$/) print $i }' mangox/Agent/ImagePipeline.swift)"
+if [ -z "$SHOT_EDGE" ] || [ "$SHOT_EDGE" != "$SEND_EDGE" ]; then
+    echo "FAIL - 截图长边上限 ${SHOT_EDGE:-取不到} ≠ 发图长边上限 ${SEND_EDGE:-取不到}" >&2
+    echo "       用户发的图和截图进同一个上下文 ⇒ 这个上限只能有一个数" >&2
     exit 1
 fi
 if ! has_code mangox/Models/ComputerShotRule.swift '"MANGOX_COMPUTE_IMAGE_BUNDLES"'; then

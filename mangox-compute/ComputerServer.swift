@@ -356,8 +356,8 @@ final class ComputerServer {
                             root: AXNode, includeImage: Bool) -> ComputerResponse {
         guard includeImage else { return .success(text: text, seq: seq) }
         guard ComputerShotRule.allowed(bundle: bundle, raw: imageRaw) else {
-            return .success(text: text + "\n\n（这个 App 没开「图片」⇒ 这次没有截图。"
-                            + "要图的话请在 设置 › 集成 › 电脑操作 里给它勾上「图片」, 默认是关的。）",
+            return .success(text: text + "\n\n（这个 App 没开「视觉」⇒ 这次没有截图。"
+                            + "要图的话请在 设置 › 集成 › 电脑操作 里给它勾上「视觉」, 默认是关的。）",
                             seq: seq)
         }
         switch ComputerShot.capture(pid: pid, root: root, bundle: bundle) {
@@ -411,6 +411,20 @@ final class ComputerServer {
                                // 窗口号**只在读的时候认一次**: 认它要靠"几何对得上"去窗口表里
                                // 找, 而读的那一刻是唯一确定"这份快照说的是哪个窗口"的时刻。
                                windowNumber: Self.windowNumber(pid: pid, frame: snapshot.windowFrame))
+        return seqCounter
+    }
+
+    /// 把某个 App 的快照**作废**: 换一个新序号并丢掉缓存。
+    ///
+    /// ⚠️ 为什么不是"把 seq 加一、快照照留": `seq` 的语义是"**这份**快照说的是此刻的界面"。
+    ///    模拟输入之后它已经不成立了, 而留着旧编号只会让模型在错的树上接着动。
+    ///    `act` 那边(`finishAct`)早就是"重读 + 换号 + 明说旧编号全部作废"; 这里补的是
+    ///    **同一条纪律**, 只是不再重读 —— 读一次最坏 12 秒, 而模型本来就要自己看结果。
+    /// ⚠️ 清缓存而不是只换号: 换了号但缓存里还留着旧快照的话, 下一次 `tap` / `type`
+    ///    的 `seq == cached.seq` 会拿**新号**去比**旧快照**, 看着像"你已经重读过了"。
+    private func invalidateSnapshot(bundle: String) -> Int {
+        seqCounter += 1
+        cache[bundle] = nil
         return seqCounter
     }
 
@@ -563,7 +577,7 @@ final class ComputerServer {
             topWindowPid: top?.pid ?? -1,
             textUnderPoint: under)
         if let why = ComputerTapRule.refusal(facts) { return .failure(why) }
-        return hidClick(at: cg, name: t.name, seq: cached.seq, underPoint: under)
+        return hidClick(at: cg, name: t.name, bundle: t.bundle, underPoint: under)
     }
 
     /// 真把这一点按下去 —— **全仓唯一一次动真光标**的地方。
@@ -574,7 +588,7 @@ final class ComputerServer {
     ///   ② 点完**必须**把光标还回去 —— `defer` 兜住, 中途返回也还;
     ///   ③ 回执要说清"用了鼠标", 不许把它写成"没打扰你";
     ///   ④ 点到了 ≠ 点对了: 界面变没变要再 read 一次才知道, 回执不许替它下结论。
-    private func hidClick(at point: CGPoint, name: String, seq: Int,
+    private func hidClick(at point: CGPoint, name: String, bundle: String,
                           underPoint: String) -> ComputerResponse {
         // ⚠️ `NSEvent.mouseLocation` 是**左下原点**, `CGWarpMouseCursorPosition` 收的是
         //    **左上原点**。不换算就"还回原位"会把它丢到屏幕另一头(2026-11-10 实测差 36px,
@@ -591,20 +605,31 @@ final class ComputerServer {
                                mouseCursorPosition: point, mouseButton: .left) else {
             return .failure("造不出鼠标事件 ⇒ 没点。")
         }
+        // ⚠️ 盖上"这是我发的"(2026-11-11 评审): 这两发会经过我们自己挂的那条
+        //    `.cgSessionEventTap` 监听, 不盖就被记成"人类刚动过鼠标" ⇒ 下一步 400ms 内
+        //    被拒, 而话术说"你刚动过"; 接管检测那 6 秒窗也会被我自己的点击填满。
+        HumanInputTap.stampSelfInjected(down)
+        HumanInputTap.stampSelfInjected(up)
         down.post(tap: .cghidEventTap)
         usleep(25_000)
         up.post(tap: .cghidEventTap)
 
+        // ⚠️ 点完就把这份快照作废(同 `finishAct` 那条"旧编号全部作废"的纪律)。
+        //    不作废的后果: 界面刚被动过(点开一个会话 / 弹出一个面板), 而 `seq` 判据照样
+        //    放行 ⇒ 模型能拿**旧编号**接着 `act`, 按到的可能是语义已经变了的那一格, 零报错。
+        let newSeq = invalidateSnapshot(bundle: bundle)
         var note = "在 \(ComputerPoint(x: point.x, y: point.y).short) 点了一下「\(name)」。"
             + "\n— 这一下是**按坐标**点的, 不是按控件: 我只保证点到了那个位置, "
             + "不代表界面上真的发生了你想要的。要确认就再 read 一次。"
         note += underPoint.isEmpty
             ? "\n— 这一点底下我没读到任何文字, 所以看不出它是不是付款 / 删除那种键。"
             : "\n— 这一点底下读到的是「\(underPoint.prefix(40))」。"
+        note += "\n— 界面刚被动过 ⇒ 那份快照和里面的编号全部作废(新 seq=\(newSeq))。"
+            + " 要接着动就先 computer_read 一次。"
         if !HumanInputTap.shared.isInstalled {
             note += "\n— ⚠️ 接管检测没装上 ⇒ 我没法确认你手上有没有鼠标。"
         }
-        return .success(text: note, seq: seq)
+        return .success(text: note, seq: newSeq)
     }
 
     /// `type` 的入口。判据全在 `ComputerTypeRule`(纯函数, 冒烟造得出反例), 这里只取事实 + 执行。
@@ -641,6 +666,11 @@ final class ComputerServer {
         let since: Int? = !installed ? nil
             : HumanInputTap.shared.lastHumanInputAt.map { Int(((now - $0) * 1000).rounded()) }
                 ?? Int.max
+        // ⚠️ 焦点落在**哪个角色**上 —— 有 AX 的 App 读得到, 微信这类读不到(`nil`)。
+        //    读得到就判(往列表里敲字符会变成"按键跳转", 敲空格是预览, 两个都是动作);
+        //    读不到就放行, 但**在回执里说清这一格没判过**(见 `focusKnown`)。
+        //    既不假装判过, 也不因为读不到就把整档关死 —— 后者会让微信那条唯一的路消失。
+        let focused = AXAdapter.focusedRole(pid: t.pid)
         let facts = ComputerTypeRule.Facts(
             typeEnabled: typeEnabled,
             appActable: actBundles.contains(t.bundle),
@@ -652,49 +682,109 @@ final class ComputerServer {
             rightButtonDown: CGEventSource.buttonState(.combinedSessionState, button: .right),
             sinceHumanInputMs: since,
             text: text,
-            submit: submit)
+            submit: submit,
+            focusedRole: focused)
         if let why = ComputerTypeRule.refusal(facts) { return .failure(why) }
-        return hidType(text: text, submit: submit, name: t.name, seq: cached.seq,
-                       monitored: installed)
+        return hidType(text: text, submit: submit, name: t.name, bundle: t.bundle,
+                       monitored: installed, focusKnown: focused != nil)
     }
 
     /// 真把这段字敲进去 —— **全仓唯一一处发键盘事件**。
     ///
-    /// 三件事:
+    /// 四件事:
     ///   ① **一段一段送, 每段 ≤ 20 个 UTF-16 单元** —— `keyboardSetUnicodeString` 的硬上限,
     ///      超了会被**静默截断**(一个字都不报错, 只是后面那些没进去);
+    ///      ⚠️ 切分点是**字符边界**不是单元边界, 见函数体里那段(代理对会被劈成两半);
     ///   ② 走 `.cghidEventTap`, 与鼠标那条同一个理由(按 pid 投递对 AppKit 无效);
-    ///   ③ 回执**只报"敲了"**, 不报"发出去了" —— 发送是目标 App 收到回车之后的事,
+    ///   ③ 每一发都盖"这是我发的"(否则被自己的只读监听记成人类输入);
+    ///   ④ 回执**只报"敲了"**, 不报"发出去了" —— 发送是目标 App 收到回车之后的事,
     ///      只有再 read 一次才知道。
-    private func hidType(text: String, submit: Bool, name: String, seq: Int,
-                         monitored: Bool) -> ComputerResponse {
+    private func hidType(text: String, submit: Bool, name: String, bundle: String,
+                         monitored: Bool, focusKnown: Bool) -> ComputerResponse {
         let src = CGEventSource(stateID: .hidSystemState)
-        let units = Array(text.utf16)
-        var start = 0
-        while start < units.count {
-            let end = min(start + 20, units.count)
-            let chunk = Array(units[start..<end])
+
+        /// 送一段(至多 20 个 UTF-16 单元)。`false` = 造不出事件。
+        /// ⚠️ 每一发都盖上"这是我发的": 不盖就被那条只读监听记成人类输入(见 `hidClick` 同段)。
+        func send(_ units: [UniChar]) -> Bool {
             guard let down = CGEvent(keyboardEventSource: src, virtualKey: 0, keyDown: true),
                   let up = CGEvent(keyboardEventSource: src, virtualKey: 0, keyDown: false) else {
-                return .failure("造不出键盘事件 ⇒ 没写进去。")
+                return false
             }
-            chunk.withUnsafeBufferPointer { buf in
+            units.withUnsafeBufferPointer { buf in
                 down.keyboardSetUnicodeString(stringLength: buf.count, unicodeString: buf.baseAddress)
                 up.keyboardSetUnicodeString(stringLength: buf.count, unicodeString: buf.baseAddress)
             }
+            HumanInputTap.stampSelfInjected(down)
+            HumanInputTap.stampSelfInjected(up)
             down.post(tap: .cghidEventTap)
             up.post(tap: .cghidEventTap)
-            start = end
             usleep(2_000)
+            return true
         }
 
+        /// 造不出事件时的回执。**必须说清已经送出去多少** —— 整段重发的后果是重复文字,
+        /// 而模型看不出前一半已经进去了。
+        func failure(_ sentUnits: Int) -> ComputerResponse {
+            guard sentUnits > 0 else {
+                return .failure("造不出键盘事件 ⇒ 一个字都没写进去。")
+            }
+            return .failure("造不出键盘事件 ⇒ **前面那部分已经写进去了**(约 \(sentUnits) 个字符位),"
+                            + " 后面的没写。别整段重发 —— 会重复, 先 read 看一眼现在是什么样。")
+        }
+
+        // ⚠️ 按 **Character** 切, 不按 UTF-16 单元硬切(2026-11-11 代码评审):
+        //    一个 emoji / 扩展 B 汉字占 2 个单元, 硬切会把它劈成两个**孤代理** ⇒
+        //    目标 App 收到的是替换字符或者干脆什么都不收, 而这条链上一声不响。
+        //    真机只量过中文(全在 BMP, 一个字符一个单元) ⇒ 那种切法在那里永远是对的,
+        //    所以这个洞在验收时**看不见**。
+        //    ⚠️ 反向边界: 一个 Character 自己的单元数就可能 > 20(ZWJ 家庭 emoji),
+        //       那时只能在它内部切 —— 那已经等于发出去两个字符, 认了这个下界。
+        var chunk: [UniChar] = []
+        var sent = 0
+        for ch in text {
+            let u = Array(String(ch).utf16)
+            if u.count > 20 {
+                if !chunk.isEmpty {
+                    guard send(chunk) else { return failure(sent) }
+                    sent += chunk.count
+                    chunk = []
+                }
+                var i = 0
+                while i < u.count {
+                    let piece = Array(u[i..<min(i + 20, u.count)])
+                    guard send(piece) else { return failure(sent) }
+                    sent += piece.count
+                    i += 20
+                }
+                continue
+            }
+            if chunk.count + u.count > 20 {
+                guard send(chunk) else { return failure(sent) }
+                sent += chunk.count
+                chunk = []
+            }
+            chunk.append(contentsOf: u)
+        }
+        if !chunk.isEmpty {
+            guard send(chunk) else { return failure(sent) }
+            sent += chunk.count
+        }
+
+        // ⚠️ 与点按同一条纪律: 动过界面就作废旧编号。打字改变的是"输入框里现在有什么",
+        //    而 `seq` 承诺的是"这份快照说的是此刻的界面" —— 它已经不成立了;
+        //    真需要接着写就再 read 一次(读一次很便宜, 拿旧编号动错一格很贵)。
+        let newSeq = invalidateSnapshot(bundle: bundle)
         var note = "往「\(name)」的当前焦点写了 \(text.count) 个字。"
         if submit {
             guard let down = CGEvent(keyboardEventSource: src, virtualKey: 36, keyDown: true),
                   let up = CGEvent(keyboardEventSource: src, virtualKey: 36, keyDown: false) else {
                 return .success(text: note + "\n— ⚠️ 那次回车没造出来 ⇒ 只写进去了, 没交出去。",
-                                seq: seq)
+                                seq: newSeq)
             }
+            // ⚠️ 回车这两下**同样要盖记号**: 它也是我们发的, 不盖就把"我按了回车"
+            //    记成"人刚动过键盘" ⇒ 接管检测随后的 6 秒全拒。
+            HumanInputTap.stampSelfInjected(down)
+            HumanInputTap.stampSelfInjected(up)
             down.post(tap: .cghidEventTap)
             usleep(15_000)
             up.post(tap: .cghidEventTap)
@@ -704,10 +794,15 @@ final class ComputerServer {
         } else {
             note += "\n— 没按回车。要交出去就再说一次并带上 submit。"
         }
+        note += "\n— 界面刚被动过 ⇒ 那份快照和里面的编号全部作废(新 seq=\(newSeq))。"
+            + " 要接着动就先 computer_read 一次。"
+        if !focusKnown {
+            note += "\n— ⚠️ 焦点落在哪一格我读不到(这个 App 不暴露它) ⇒ 我没法确认字真的进了输入框。"
+        }
         if !monitored {
             note += "\n— ⚠️ 接管检测没装上 ⇒ 我无法确认你手上是不是正在打字, 这次是盲写的。"
         }
-        return .success(text: note, seq: seq)
+        return .success(text: note, seq: newSeq)
     }
 
     /// act 的入口: **先让路, 再干活, 最后补一句能力缺口**。

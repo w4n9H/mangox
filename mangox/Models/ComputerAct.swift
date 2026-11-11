@@ -587,6 +587,20 @@ enum ComputerTypeRule {
     /// 那一下既撤不回(可能被下一拍回车发出去), 也会把界面撑爆。
     static let maxChars = 2000
 
+    /// 焦点落在这些角色上, 才算"在写字"。
+    ///
+    /// **白名单**, 不是黑名单: 不认识的控件一律按"不是输入框"处理。方向是刻意选的 ——
+    /// 误挡的代价是"这一步没写, 人自己打"; 漏放的代价是往列表 / 画布里敲字符, 而那些字符
+    /// 在不少 App 里是**动作**(Finder 敲一个 `f` 就跳到某个文件, 空格是预览, 回车是打开)。
+    ///
+    /// ⚠️ `AXWebArea` 也收: 网页里的 contenteditable 在不同浏览器上会报成 `AXTextArea`
+    ///    或 `AXWebArea`, 只认前者会把"在网页输入框里打字"整条路挡掉。
+    /// ⚠️ 这个判据**只在读得到焦点时**生效: 微信那种 AX 恒空的 App 一律读到 `nil`,
+    ///    那边放行 —— 它恰恰是这一档唯一的真实用例(见 `Facts.focusedRole`)。
+    static let editableRoles: Set<String> = [
+        "AXTextField", "AXTextArea", "AXSearchField", "AXComboBox", "AXWebArea",
+    ]
+
     /// 一次 type 的全部输入。**全是事实**, 判据只对照它们(同 `ComputerTapRule.Facts` 的纪律)。
     struct Facts {
         /// 全局档(设置页那个「模拟键盘输入」开关)。**默认关**。
@@ -606,6 +620,12 @@ enum ComputerTypeRule {
         var text: String
         /// 写完要不要补一次回车。
         var submit: Bool
+        /// 焦点落在哪个角色上。**`nil` = 这个 App 答不出来**(微信这类 AX 恒空)。
+        ///
+        /// ⚠️ 这一格是"能判就判, 判不了不假判": 有值 ⇒ 必须落在 `editableRoles` 里;
+        ///    `nil` ⇒ 放行, 但调用方要在回执里写明"这一格没判过"。不判的原因不是懒 ——
+        ///    是微信那棵树里**没有**这个属性, 判不了。
+        var focusedRole: String? = nil
     }
 
     /// 文本里的换行 / 控制字符。`nil` = 干净。
@@ -681,7 +701,13 @@ enum ComputerTypeRule {
         guard !f.leftButtonDown, !f.rightButtonDown else {
             return "你此刻正按着鼠标键 ⇒ 没写。松开之后再说一次。"
         }
-        // ⑨ 人刚动过键鼠
+        // ⑨ 焦点落在什么控件上 —— **读得到才判**(读不到是微信那一档, 见 `Facts.focusedRole`)
+        if let role = f.focusedRole, !editableRoles.contains(role) {
+            return "「\(f.appName)」此刻的焦点在「\(role)」上, 不是能写字的输入框 ⇒ 没写。"
+                + "先点进输入框(或者用 computer_act 的 focus)再写。"
+                + "往列表 / 表格里敲字符会变成「按键跳转」, 那是动作, 不是打字。"
+        }
+        // ⑩ 人刚动过键鼠
         if let ms = f.sinceHumanInputMs, ms < humanQuietMs {
             return "你 \(ms) 毫秒前刚动过键鼠 ⇒ 没写。"
                 + "人正在打字时我不往他那行里插字 —— 稍等一下再说一次。"

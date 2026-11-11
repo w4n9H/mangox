@@ -7,7 +7,7 @@
    **本文件由 scripts/l10n/gen_strings.py --write 生成, 别手改** ——
    译文改 scripts/l10n/en_values.py 的 VALUES, 再跑 --write。
 
-   条数: 1045
+   条数: 1049
 */
 
 " (值:\"%@\")" = " (value: %@)";
@@ -157,6 +157,7 @@
 "⚠️ 未找到 pi CLI, 无法发送。请确认已安装 pi 并重启 MangoX (或检查 pi 安装路径)。" = "⚠️ pi CLI not found, cannot send. Make sure pi is installed and restart MangoX (or check its install path).";
 "⚠️ 本地库写入失败 (%@), 数据可能未保存" = "⚠️ Writing to the local database failed (%@); data may not be saved.";
 "⚠️ 系统通知未授权 —— 请到 系统设置 → 通知 → MangoX 开启" = "⚠️ Notifications are not authorized — enable them in System Settings → Notifications → MangoX.";
+"⚠️ 这一档没有语义闸: 读不出文字时我只能凭坐标点、往焦点里写字 —— 点错当场发生, 回车发出去的消息撤不回" = "⚠️ This tier has no semantic gate: when I cannot read the text I click by coordinates and type into whatever has focus - a misclick lands immediately, and a message sent with Return cannot be recalled";
 "✓ 完成 · 耗时 %02d:%02d" = "✓ Done · took %02d:%02d";
 "✓ 已保存" = "✓ Saved";
 "✓ 连接正常 (IMAP 登录 + 列 INBOX)" = "✓ Connected (IMAP login + listed INBOX)";
@@ -173,6 +174,7 @@
 "「%@」是 %@," = "%@ is %@,";
 "「%@」是 %@, " = "%@ is %@, ";
 "「%@」是口令/系统类应用 ⇒ 我永远不操作它, 只读。" = "%@ is a password manager or a system app ⇒ it stays read-only, always.";
+"「%@」此刻的焦点在「%@」上, 不是能写字的输入框 ⇒ 没写。" = "\"%@\" has focus on \"%@\" right now, which is not a text field ⇒ nothing was typed.";
 "「%@」没有「确认」这个动作 —— %@ ⇒ 没动。" = "%@ has no confirm action — %@ ⇒ nothing was done.";
 "「%@」没有菜单可开 —— %@ ⇒ 没动。" = "\"%@\": no menu to open -- %@ ⇒ nothing done.";
 "「%@」的窗口挪过: 原来 %@, 现在 %@ ⇒ 没点。" = "\"%@\" window moved: it was %@, now it is %@ ⇒ nothing was tapped.";
@@ -294,6 +296,7 @@
 "先 computer_open 把它切上来。" = "Bring it forward with computer_open first.";
 "先删除 Inbox agent「%@」" = "Delete the Inbox agent “%@” first";
 "先处理弹层, 或者重新 read 一次按新的来。" = "Deal with the sheet first, or read again and work from the new picture.";
+"先点进输入框(或者用 computer_act 的 focus)再写。" = "Click into a text field first (or use computer_act with focus), then write.";
 "先给它一条读法：勾「可读」或「视觉」—— 没有编号就没有能点的东西" = "Give it a way to read first: tick \"Read\" or \"Vision\" - without row numbers there is nothing to act on";
 "免手册（界面极简，量一次就穷尽）：%@" = "No manual needed (tiny UI, one measurement covers it): %@";
 "全局" = "Global";
@@ -557,6 +560,7 @@
 "当前内容会记进变更史; 文件移到「废纸篓」, 还能捞回来。" = "The current content goes into the revision history; the file moves to the Trash, so it can still be recovered.";
 "当前模型不支持图片输入, 请在设置中改用多模态模型后再发" = "The current model does not accept images — switch to a multimodal model in settings and send again";
 "彻底删除" = "Delete permanently";
+"往列表 / 表格里敲字符会变成「按键跳转」, 那是动作, 不是打字。" = "Typing into a list or a table turns into type-select, which is an action, not text entry.";
 "待审批" = "Needs approval";
 "待审核 · 提炼候选" = "To review · distilled candidates";
 "待运行" = "Pending";

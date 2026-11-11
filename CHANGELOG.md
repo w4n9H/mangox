@@ -5,9 +5,9 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
-## [0.2.11] - 2026-11-10
+## [0.2.11] - 2026-11-11
 
-本版主线 = **让没有可访问性树的 App（微信）也能用**：「视觉」从读面的一个子项升成**独立一档**，并补上它的另一半 —— 凭屏幕位置点一下、往焦点里写一段字。顺带把内置手册从"编号步骤"改写成"场景清单"。全量冒烟 **2400 项 ALL PASS** + `xcodebuild` BUILD SUCCEEDED 零 warning。
+本版主线 = **让没有可访问性树的 App（微信）也能用**：「视觉」从读面的一个子项升成**独立一档**，并补上它的另一半 —— 凭屏幕位置点一下、往焦点里写一段字。顺带把内置手册从"编号步骤"改写成"场景清单"。全量冒烟 **2384 项 ALL PASS** + `xcodebuild` BUILD SUCCEEDED 零 warning。
 
 ### 新增
 
@@ -31,7 +31,14 @@
 - **侧问快照泄漏（`~/.mangox/pi-sessions/` 里 238 个 `side-snapshot-*`，全 10 月的）**：原来的唯一删除点是"读会话文件"那条路径的 `defer` ⇒ **开了侧问但没发消息 / 中途关窗 / App 退出，快照就永久留下**。修的时候发现原计划有个更坏的坑：只认 `sessions.session_file` 判"有没有主"会把**首回合还没落定的侧问快照**当孤儿删掉（那时 `session_file` 是 NULL，唯一指向是 `fork_source_file`），而那场侧问还在侧栏里、首回合要去 `--fork` 一个已经被删的文件 —— **清早了比不回收更坏**。两处一起改：删除路径按 `side-snapshot-` 前缀**恒删**（不吃 `deleteTranscript` 开关）+ 开机 `pruneOrphanSideSnapshots()` 兜底（有主 = `session_file` ∪ `fork_source_file` ∪ 内存里的 `pendingForkTemp`）
 - **`computer_open` 的「已在运行 ⇒ 只切前台」是假成功**：`NSRunningApplication.activate(options:)` 在裸 CLI 进程里**返回 true 却什么都不做**（判别实验：`open -b com.apple.finder` 让位 → `isActive=false` → 调 `activateAllWindows` 返回 true → 1 秒后 `isActive` 仍 false）。回执写着「已经切到前台」，而 App 还在后面 —— 下一步 `act` 点不动（后台点击无效）、`tap` 报「不是前台」，两个都指向与真实原因无关的地方。改成 `NSWorkspace.shared.open(<App 包 URL>)`（实测真置前，且 **pid 与窗口数都不变** ⇒ 没有另起一份）+ **按效果判**：`isFrontmost` 轮询 1.5 s，没到前台就如实回失败并要求人自己点一下 Dock，**不拿返回码当结果**
 - **内置扩展的归属账（面板在三处说错话，全是零红灯）**：`mangox-computer.ts` 是随包内置的（`computerExtensionSource`，每次 spawn 落盘、内容不同才写），但没进 `builtInNames`（给了删除按钮 = 打地鼠）、没进 `unswitchableNames`（给了一个**按不动的开关**）、没进 `builtInToolNames`（不展开工具名）。再往下一层更糟：`businessExtensionPaths` 的过滤名单漏了它 ⇒ 同一次 spawn `--extension` **传两次**、工具**注册两遍**。自管扩展一共五个（approval / codemode / dream / computer 由轴决定挂载，全部滤出业务列表），而 `web-search` **反过来**必须留在业务列表（它真受面板开关控制）
-- **英文界面一直静默回落中文**：`en.lproj/Localizable.strings` 停在 **990** 条 —— tap 的 24 条回执与视觉档改过的几条文案都没跟着 `--write`。⚠️ `gen_strings --check` 只比对源码 key ↔ 词表，**不保证 `.strings` 落了盘**；改了词表必须跟一次 `--write`。现在 1022 条
+- **英文界面一直静默回落中文**：`en.lproj/Localizable.strings` 停在 **990** 条 —— tap 的 24 条回执与视觉档改过的几条文案都没跟着 `--write`。⚠️ `gen_strings --check` 只比对源码 key ↔ 词表，**不保证 `.strings` 落了盘**；改了词表必须跟一次 `--write`。现在 **1049** 条
+- **我们自己发的键鼠被当成"你在用电脑"**（代码评审抓的，零红灯）：`hidClick` / `hidType` 走 `.cghidEventTap`，而 `HumanInputTap` 挂在下游的 `.cgSessionEventTap` ⇒ 我们点的那一下、敲的那个键**一定会先经过它**，于是 `lastHumanInputAt` 被自己刷新。后果是接着的第二步被 400ms 的「人静」拒掉、话术写成"你 47 毫秒前刚动过键鼠"；更远一点，接管检测那个 6 秒窗也被填满 ⇒ 一次点按之后**接下来 6 秒的每次 `act` 都回"刚才有人动了鼠标"**，而人根本没碰。现在每一发都盖 `eventSourceUserData` 记号，只读监听见到同值直接放过。⚠️ 这条只在模型往返 < 400ms 时显形 —— 它一直靠 LLM 的延迟侥幸活着
+- **动过界面却没作废旧编号**：`finishAct` 早就是"重读 + 换号 + 明说旧编号作废"，而 `hidClick` / `hidType` 把 `seq` 原样返回、缓存不动 ⇒ 界面刚变过，`seq` 判据照旧放行，模型能拿**旧编号**接着 `act`，按到的可能是语义已经变了的那一格。现在两者都调 `invalidateSnapshot`（换新号 + 清缓存），回执里明说"那份快照作废了"
+- **打字会劈开代理对**：原来按 `Array(text.utf16)` 每 20 个单元硬切，一个 emoji / 扩展 B 汉字占 2 个单元，跨边界就被切成两个**孤代理** ⇒ 目标 App 收到替换字符或什么都不收，全程零报错。真机只量过中文（全在 BMP，一字符一单元）⇒ 那种切法在那里永远是对的，所以验收看不见。改成按 `Character` 累加、单元数不超 20 才切
+- **打字不问"焦点在哪个控件上"**：往列表 / 表格里注入字符会变成「按键跳转」（Finder 敲一个 `f` 就跳到某个文件），空格是预览 —— 那是动作，不是打字。新增第十道闸：`AXFocusedUIElement` 读得到就判，角色必须落在 `editableRoles` 白名单里；**读不到（微信那种 AX 恒空）放行**，但回执要写明"这一格我没判过"，不假装判过
+- **回执让人去勾一个已经不存在的勾选框**：视觉那一档 2026-11-10 从「图片」改名，`finishRead` 那句仍写「图片」⇒ 用户去找一个不叫这个名字的东西。顺带加了一条源码门：helper 里一处都不许再出现旧名
+- **截图没有尺寸上限，而且绕过了客户端压缩**：用户发的图走 `ImagePipeline.compressForSend`（长边 ≤1536），而 helper 拍的图是在内嵌 TS 里直接装配成 `{type:"image"}` 交给模型的 —— 一个字节都没缩。1 倍只是省掉了 Retina 那 4 倍，窗口本身多大它还是多大（6K 满窗 3008×1692，一个贴满缩略图的窗口编出来就是几 MB）。超了模型侧的单图上限，报的是**上游错误**，模型看到的东西里没有一个字指向"图太大"。现在长边上限压在**交给 SCK 的那个尺寸**上（`ComputerShotRule.maxEdge`，与 App 侧发图是同一个数），装得下的一律原样、**只缩不放** —— 少一次全画布重绘，也少一处"画布建不出来"的失败分支
+- **「视觉」这一档的风险只写在悬停提示里**：微信这种 AX 恒空的 App 上，第十三道「恒拒词」闸读不出文字就**永远不命中** ⇒ 那个 App 上只剩"授权 + 前台 + 人静 + 窗口没挪"四道，而它的动作面是**凭坐标点 + 往焦点里写字**：点错当场发生，回车发出去的消息撤不回。这句话原来只在 `.help()` 里（悬停才看见，等于没有）。现在勾上「视觉」之后，那一行下面**常驻**一句风险文案（不勾不显示）
 
 ### 工程
 
@@ -39,7 +46,9 @@
 - **两条新增的源码守卫**：③p2 —— helper 全仓**禁** `.activate(options:`，且置前那条分支必须写成 `guard Self.isFrontmost(bundle:pid:) else`（防"为了治假成功又回到按返回码收尾"）；③x —— 拿 `PiRpcTransport` 里的 `mangox-*.ts` 字面量逐条对账 `builtInNames`，**少登记一个就是工具注册两遍**
 - **两条判据本身的错（都不是这批改动引入的）**：① `isTaskLine` 用 `components(separatedBy: "\n### ")` 拆任务，把**第一行**的 `###` 漏掉了 ⇒ "≥2 个任务"实际要求 ≥3 个；四节都 ≥4 个所以两个月没红过，微信正好 2 个才撞出来。改成按行前缀数，并在注释里写明"错的那天必须表现成红，而不是表现成'这节写得不合格'"。②「表外第三方」的样本换过两次（Chrome → 微信），每次都因为它后来进了白名单而**反向变红** ⇒ 改成合成 bundle `com.example.not-in-covered` —— 判据守的是"不在 covered 里就不许进提示词"，与那个 App 存不存在无关，合成样本结构上不可能被支持
 - **`NSWorkspace.shared.frontmostApplication` 在 helper 里是定格查询**（裸进程不抽 run loop）⇒ 新增 `isFrontmost(bundle:pid:)` 走 `runningApplications(withBundleIdentifier:)` + `.isActive`，与既有的那条已验过的路同源
-- **新冒烟两套**：`T-EXT-BUILTIN` 24 条（内置扩展删不掉 / 对它 toggle 无效 / 五个各给对的答案 / 反例证明 toggle 本身没坏）与 `CaseComputerTap` 46 条（十三道闸逐条 + 回执点名命中的那个恒拒词）
+- **新冒烟三套**：`T-EXT-BUILTIN` 24 条（内置扩展删不掉 / 对它 toggle 无效 / 五个各给对的答案 / 反例证明 toggle 本身没坏）与 `CaseComputerTap` 46 条（十三道闸逐条 + 回执点名命中的那个恒拒词）；`CaseComputerType` **19** 条 —— 一条 check 管**一个独立的失败模式**：同一道闸的多种输入（`\n` / `\r\n` / `\r`、左右键、几种该放行的焦点）合成一条并由文案点名漏的是哪一个，**不同闸之间绝不合并**（合了之后一条红说不清是哪道闸坏了，那种红等于没红）
+- **`run.sh` 新增五条源码事实**（评审那批全部落在 helper 里，冒烟编不到，只能扫源）：自注入记号的**处数必须 = 6**（点按两发 / 成段写字两发 / 回车两发）、记号必须写进并比对 `eventSourceUserData`、`invalidateSnapshot` 的处数 = 3、打字切分必须是 `for ch in text` 且**不许**再出现 `Array(text.utf16)`、helper 里一处都不许说「图片」。反例逐条自证：少盖一个 ⇒ 数出 5 ≠ 6 红；点按后不作废 ⇒ 数出 2 ≠ 3 红；文案退回旧名 ⇒ 红；按单元硬切 ⇒ 红；摘掉焦点闸 ⇒ `T-TYPE` **精确 1 红**（只红「焦点在列表上 ⇒ 拒」那条，回执里直接写"实际: 放行了"），而"前台先于焦点"仍绿
+- **`run.sh` 再加两条源码事实**（截图那道上限）：`captureSize` 必须过 `fit`（改回"窗口多大就拍多大"，在 6K 屏上就会顶到单图上限，而纯函数那半边仍全绿）；截图长边上限与发图长边上限**必须是同一个数**（两个 target 各自编译，类型系统帮不上忙）。反例：`maxEdge` 改成 2048 ⇒ 红；比例算错 + 取消"只缩不放" ⇒ `T-COMPUTER` **4 红**（含既有的「1 倍」与「零尺寸」两条 —— 说明它真的走到了那条路径，不是新断言在旁边自说自话）
 
 ## [0.2.10] - 2026-11-09
 

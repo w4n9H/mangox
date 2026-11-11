@@ -34,7 +34,7 @@ enum ComputerShot {
     ///   ② 找不到窗口 / 拍失败 ⇒ 报告, 别重试
     ///
     /// ⚠️ "没在名单里"**不在这里判**: 那是 App 层的授权判断, 由 `ComputerServer.finishRead`
-    ///    先拦(它还负责在"没开图片"时仍把文本交回去)。
+    ///    先拦(它还负责在"没开视觉"时仍把文本交回去)。
     static func capture(pid: pid_t, root: AXNode, bundle: String)
         -> Result<Data, ComputerShotRule.ShotFailure> {
         guard let window = root.frame else {
