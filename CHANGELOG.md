@@ -5,6 +5,18 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [0.2.12] - 2026-11-11
+
+本版主线 = **修掉 0.2.11 带进来的「引擎根本起不来」**：扩展源码里多了一个右括号，pi 加载扩展时当场 ParseError ⇒ 引擎启动后立刻退出，App 整个用不了（而 pi 明明在，界面上那句"未找到可执行的 pi"把人引向完全无关的方向）。全量冒烟 **2385 项 ALL PASS** + `xcodebuild` BUILD SUCCEEDED 零 warning。
+
+### 修复
+
+- **0.2.11 装上就起不来**：`mangox-computer.ts` 里 `computer_type` 的工具声明多了一个右括号（`Type.String({…})` 后面应是 `,` 却写成 `)),`），pi 加载扩展时报 `ParseError: Unexpected token, expected ","`（`:363:14`）⇒ **引擎启动后立即退出（退出码 1）**。已修。⚠️ 这个错在 0.2.11 里**冒烟 2382 条全绿**、编译零 warning、本地化四道全绿 —— 因为守它的那道门是假的（见工程）
+
+### 工程
+
+- **「扩展语法正确」那条断言在 0.2.11 里恒真**：它用的是 `node --experimental-strip-types --check`，而 `--check` **只校验 CommonJS** —— 遇到含 `import` 的 ESM 文件**静默跳过并退 0**（实测：同一份文件末尾追加 `const a = );` 仍退 0）。于是这份扩展从写进来到发出去，一次都没被真解析过。换成 `module.stripTypeScriptTypes()`（node 自己的 TS 解析器，真会抛），并补一条**判据的判据**：把一段故意写坏的 TS 喂给同一个检查器，必须被拒 —— **恒绿的门等于没有门**。反例自证：把那个右括号放回去 ⇒ **精确 1 红**（`exit 1: Expected ',', got ')'`）
+
 ## [0.2.11] - 2026-11-11
 
 本版主线 = **让没有可访问性树的 App（微信）也能用**：「视觉」从读面的一个子项升成**独立一档**，并补上它的另一半 —— 凭屏幕位置点一下、往焦点里写一段字。顺带把内置手册从"编号步骤"改写成"场景清单"。全量冒烟 **2384 项 ALL PASS** + `xcodebuild` BUILD SUCCEEDED 零 warning。

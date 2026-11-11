@@ -522,7 +522,13 @@ extension SmokeMain {
         check(syntax.found,
               "T-COMPUTER 扩展语法门跑得起来 (需要 node; 找不到就红, 不静默跳过)")
         check(syntax.ok,
-              "T-COMPUTER 扩展源码语法正确 (node --experimental-strip-types --check; \(syntax.detail))")
+              "T-COMPUTER 扩展源码语法正确 (node 的 stripTypeScriptTypes 真解析; \(syntax.detail))")
+        // ⚠️ **判据的判据**: 上面那条绿了不代表检查器在工作 —— 0.2.11 就是拿
+        //    `node --check` 当语法门, 而它对含 `import` 的 ESM 一律退 0 ⇒ 扩展里多一个
+        //    右括号照样全绿, 直到 pi 加载失败、**引擎起不来**。所以这里再喂一段坏 TS。
+        let fake = nodeCheckRejectsBroken()
+        check(fake.ok,
+              "T-COMPUTER 语法门真的会判错 (喂一段写坏的 TS 必须被拒, 恒绿的门 = 没有门; \(fake.detail))")
 
         // MARK: 开关与作用域 —— 关 ⇒ 空, 无论勾过什么
 
@@ -1301,11 +1307,29 @@ extension SmokeMain {
     ///
     /// 返回值三态分开（`found` / `ok` / `detail`）是刻意的：**"没跑起来"与"跑起来但语法错"
     /// 必须是两条断言** —— 合成一条的话，node 不在的机器上会显示"语法正确"（假绿）。
+    ///
+    /// ⚠️ **不能用 `node --check`**（2026-11-11 实锤）：`--check` 只校验 CommonJS，遇到含
+    ///    `import` 的 ESM 文件**静默跳过并退 0** —— 于是这道门对这份扩展**永远绿**，
+    ///    连 `const a = );` 这种错都判不出来。0.2.11 就是这么发出去的：扩展里多了一个右括号，
+    ///    2382 条断言全绿，而 pi 一加载就 ParseError ⇒ **引擎根本起不来**。
+    ///    现在改成调 `module.stripTypeScriptTypes()`：那是 node 自己的 TS 解析器，真的会抛。
+    /// ⚠️ 门本身要能红 —— 见 `nodeCheckRejectsBroken`，喂一段写坏的 TS 给它，必须报错。
     @MainActor
     static func runNodeSyntaxCheck(_ file: String) -> (found: Bool, ok: Bool, detail: String) {
+        // ⚠️ 只做**解析**: `stripTypeScriptTypes` 剥类型时顺带解析, 语法错就抛; 它不执行文件。
+        let script = """
+        const { stripTypeScriptTypes } = require("node:module");
+        const fs = require("node:fs");
+        try {
+          stripTypeScriptTypes(fs.readFileSync(process.argv[1], "utf8"));
+        } catch (e) {
+          console.error(String((e && e.message) || e));
+          process.exit(1);
+        }
+        """
         let p = Process()
         p.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-        p.arguments = ["node", "--experimental-strip-types", "--check", file]
+        p.arguments = ["node", "--experimental-strip-types", "-e", script, file]
         let pipe = Pipe()
         p.standardError = pipe
         p.standardOutput = pipe
@@ -1319,11 +1343,37 @@ extension SmokeMain {
         p.waitUntilExit()
         // `env` 找不到命令时退出码是 127 —— 那是"这台机器没有 node", 不是"源码有语法错"。
         if p.terminationStatus == 127 { return (false, false, "env 里找不到 node") }
+        // ⚠️ 滤掉 node 自己的 `ExperimentalWarning` 那两行: 它每次都往 stderr 写, 混进来会让
+        //    通过的那条断言也带一长串噪音, 久了就没人读了。
         let out = (String(data: data, encoding: .utf8) ?? "")
             .split(separator: "\n")
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty && !$0.contains("ExperimentalWarning")
+                      && !$0.contains("trace-warnings") }
             .prefix(2)
             .joined(separator: " ⏎ ")
         return (true, p.terminationStatus == 0,
                 "exit \(p.terminationStatus)" + (out.isEmpty ? "" : ": \(out)"))
+    }
+
+    /// **这支检查器是真会判错的吗** —— 拿一段故意写坏的 TS 喂给它，必须报错。
+    ///
+    /// ⚠️ 这条门就是为"门本身是假的"准备的。0.2.11 的教训：`node --check` 对含 `import`
+    ///    的文件一律退 0，而所有断言（含"语法正确"那条）照样全绿 —— **判据的判据没人看**。
+    ///    所以这里不只判"扩展能过"，还判"坏的过不去"。
+    @MainActor
+    static func nodeCheckRejectsBroken() -> (found: Bool, ok: Bool, detail: String) {
+        let dir = fixtureDir("computer-ext-broken")
+        let path = dir + "/broken.ts"
+        let bad = """
+        import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+        const x = Type.String({ description: "a" })),
+        export default x;
+        """
+        try? bad.write(toFile: path, atomically: true, encoding: .utf8)
+        let r = runNodeSyntaxCheck(path)
+        // `ok == false` 才是对的: 这段**必须**被拒。
+        // ⚠️ 必须带上 `r.found`: node 根本没跑起来时 `r.ok` 也是 false, 光取反会**假绿**。
+        return (r.found, r.found && !r.ok, r.detail)
     }
 }

@@ -1468,7 +1468,7 @@ final class PiRpcTransport: AgentTransport {
                     })),
                     text: Type.String({
                         description: "The text to type. No line breaks. At most 2000 characters.",
-                    })),
+                    }),
                     submit: Type.Optional(Type.Boolean({
                         description: "Press Return once after typing (usually means send / confirm)."
                             + " Default false.",
