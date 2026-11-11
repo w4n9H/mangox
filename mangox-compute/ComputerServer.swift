@@ -365,28 +365,36 @@ final class ComputerServer {
             // ⚠️ 取 `.message` 而不是直接插值 `why`: `String(describing:)` 会把结构体整个
             //    打成 `ShotFailure(message: "…")` —— 那句机器话会原样进模型上下文。
             return .success(text: text + "\n\n（\(why.message)）", seq: seq)
-        case .success(let png):
+        case .success(let shot):
             // ⚠️ 必须说"附了一张": 这类图**不落 attachments**(见 App 侧 `isScreenShot`),
             //    所以卡片上没有缩略图 —— 这句是用户唯一能看到的凭据。
             // ⚠️ 措辞是"原样画面", 不许写成"已脱敏/已涂黑": 图像面**不做任何像素遮蔽**
             //    (2026-10-30 boss 定), 标记一旦比事实说得多, 用户就会拿一张带明文的图当安全的用。
             //
-            // ⚠️ **坐标基准**(2026-11-10): 模型要"按图上的位置点", 唯一能做的是把图内像素
-            //    换算成屏幕坐标, 而**窗口在屏幕的哪儿它推不出来**。三件套(窗口原点 + 图尺寸 +
-            //    1:1)缺一件, 它算出来的点就整体偏移 —— 而偏移后的点击和正常点击长得一模一样,
-            //    零报错。这条不是贴心, 是"按坐标点"这件事能不能成立的前提。
-            var note = "（附了一张 \(png.count / 1024) KB 的截图, 是这个窗口的原样画面。"
+            // ⚠️ **坐标基准**(2026-11-10, 11-11 更正): 模型要"按图上的位置点", 唯一能做的是把
+            //    图内像素换算成屏幕坐标, 而**窗口在屏幕的哪儿它推不出来**。三件套(窗口原点 +
+            //    图尺寸 + 比例)缺一件, 它算出来的点就整体偏移 —— 而偏移后的点击和正常点击长得
+            //    一模一样, 零报错。
+            //    ⚠️ 比例**不许写死 1:1**: 0.2.11 起大窗长边封顶 1536 ⇒ 图被等比缩小过, 而那句
+            //    1:1 照样会说谎。这里一律报**图自己的像素尺寸**, 1:1 只在两边真相等时才说。
+            var note = "（附了一张 \(shot.png.count / 1024) KB 的截图, 是这个窗口的原样画面。"
             if let f = root.frame {
-                note += "图与窗口 1:1; 窗口左上角在屏幕 (\(f.x),\(f.y)), 尺寸 \(f.w)×\(f.h)。"
+                let oneToOne = shot.width == f.w && shot.height == f.h
+                note += "图 \(shot.width)×\(shot.height) 像素; "
+                note += oneToOne
+                    ? "与窗口 1:1"
+                    : "窗口是 \(f.w)×\(f.h) 逻辑点(大窗长边封顶 1536 ⇒ 图被等比缩小过)"
+                note += "; 窗口左上角在屏幕 (\(f.x),\(f.y))。"
                 note += tapEnabled
-                    ? "要按图上的位置点: 屏幕坐标 = 窗口左上角 + 图内像素, 用 computer_tap。"
+                    ? (oneToOne ? "要按图上的位置点: 屏幕坐标 = 窗口左上角 + 图内像素, 用 computer_tap。"
+                                : "要按图上的位置点: 屏幕坐标 = 窗口左上角 + 图内像素 × (窗口宽 ÷ 图宽), 用 computer_tap。")
                     : "要按图上的位置点, 得先在 设置 › 集成 › 电脑操作 里打开「按坐标点击」那一档。"
             }
             note += "）"
             return .success(text: text + "\n\n" + note,
                             seq: seq,
                             image: ComputerImage(mimeType: "image/png",
-                                                 data: png.base64EncodedString()))
+                                                 data: shot.png.base64EncodedString()))
         }
     }
 

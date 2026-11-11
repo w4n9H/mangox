@@ -27,7 +27,12 @@ import UniformTypeIdentifiers
 
 enum ComputerShot {
 
-    /// 拍一张。成功返回 PNG 字节; 失败返回**人话**(由调用方原样回给模型)。
+    /// 拍一张。成功返回 PNG 字节 + **图自己的像素尺寸**; 失败返回**人话**(由调用方原样回给模型)。
+    ///
+    /// ⚠️ 为什么要把像素尺寸一起带回去: 0.2.11 起大窗长边会封顶到 1536 ⇒ 图可能**被等比缩小过**。
+    ///    回执若还写死"图与窗口 1:1", 模型就会拿图内像素当屏幕偏移用, 而**窗口越大偏得越多**
+    ///    —— 它按 1:1 算出来的点照样点得下去, 只是点在别处, 而回执里没有一个字是假话之外的线索。
+    ///    唯一可信的尺寸是 `CGImage` 自己的 `width/height`, 不是窗口框、也不是"我记得设过这个值"。
     ///
     /// 失败原因按"模型下一步该做什么"分类, 不合并:
     ///   ① 没有屏幕录制权限 ⇒ 让用户去系统设置(唯一一条**只能由人**解开的)
@@ -35,8 +40,14 @@ enum ComputerShot {
     ///
     /// ⚠️ "没在名单里"**不在这里判**: 那是 App 层的授权判断, 由 `ComputerServer.finishRead`
     ///    先拦(它还负责在"没开视觉"时仍把文本交回去)。
+    struct Shot {
+        let png: Data
+        let width: Int
+        let height: Int
+    }
+
     static func capture(pid: pid_t, root: AXNode, bundle: String)
-        -> Result<Data, ComputerShotRule.ShotFailure> {
+        -> Result<Shot, ComputerShotRule.ShotFailure> {
         guard let window = root.frame else {
             return .failure(ComputerShotRule.ShotFailure(
                 "这个窗口没有几何信息 ⇒ 我不知道要拍多大一块, 就不拍了。"
@@ -55,7 +66,9 @@ enum ComputerShot {
         case .failure(let why):
             return .failure(why)
         case .success(let image):
-            return encode(image)
+            return encode(image).map {
+                Shot(png: $0, width: image.width, height: image.height)
+            }
         }
     }
 
@@ -101,15 +114,16 @@ enum ComputerShot {
 
     /// 同步拍一张。helper 的 socket 循环是同步的, 而 SCK 只有 async API。
     ///
-    /// ⚠️ **实测过**: 这个"主线程 `sem.wait()` + `Task.detached`"的写法在裸可执行里不会死锁
-    ///    (权限缺失时能正常抛出 TCC 错误)。如果哪天 SCK 改成必须回主队列, 表现会是**整个
-    ///    helper 卡死**而不是报错 —— 那时得把 accept 循环挪到后台线程。
+    /// ⚠️ **主线程不能一直堵着**(2026-11-11 更正): 之前这里写的是"实测不会死锁", 那条只在
+    ///    **没有屏幕录制权限**时成立 —— TCC 同步拒绝, 一次 XPC 都不发。真给了权限之后
+    ///    SCK 的完成回调要回 **main queue**, 而主线程正卡在 `sem.wait()` 上 ⇒ 回调永远排不上队
+    ///    ⇒ 每次截图都等满 8 秒报"捕捉服务卡住了"。现在改成"20ms 等 + 泵一次主队列"。
     ///
     /// ⚠️ **等待必须有超时**(2026-10-30 补): helper 是**单线程串行**服务(accept → 处理 → 关闭),
     ///    `captureImage` 一旦不返回(显示器休眠 / TCC 状态异常 / 系统卡顿), 这唯一一个线程就
     ///    永久阻塞 ⇒ accept 循环再也不转 —— **进程还活着, 但整个 computer use 死了**,
     ///    用户只能重启 App。客户端 10s 会超时, 所以它看到的是"截图超时", 而**之后每一次读
-    ///    同样超时**, 永远回不来。无超时的 `sem.wait()` 等于把一次故障变成一次永久故障。
+    ///    同样超时**, 永远回不来。无超时的等 = 把一次故障变成一次永久故障。
     ///
     /// ⚠️ 只截**那一个窗口**(`desktopIndependentWindow`), 不是整个屏幕: 桌面、别的窗口、
     ///    壁纸都不在过滤器里。窗口被别的窗口挡住也照样拍得到 —— 取的是它自己的表面。
@@ -148,12 +162,23 @@ enum ComputerShot {
                       + "里勾上 MangoX, 然后重开 MangoX(改这项要重启才生效)。"))
             }
         }
-        // ⚠️ 带超时等, 而且**超时也算一次明确的失败**: 返回给人话, 让模型换路, 别重试。
-        //    后台那个 Task 之后若还是回来了, 写进 `box` 也没人再读 —— 不会污染下一次请求。
-        guard sem.wait(timeout: .now() + captureTimeout) == .success else {
-            return .failure(ComputerShotRule.ShotFailure(
-                "截图等了 \(Int(captureTimeout)) 秒还没回来 ⇒ 这次没有图"
-                + "(屏幕可能在休眠, 或者捕捉服务卡住了)。换别的路 —— 反复重试也是一样的结果。"))
+        // ⚠️ 等的时候**必须泵主队列**(2026-11-11 实证, 根因修复): SCK 的完成回调派回
+        //    **main queue**, 而 helper 的 socket 循环就在主线程 —— 直接 `sem.wait()` 把主线程
+        //    堵死, 回调永远排不上队 ⇒ **每次截图都等满 8 秒, 然后报"捕捉服务卡住了"**。
+        //    过去那句"实测不会死锁"是在**没权限**那侧测的: TCC 是同步拒绝, 根本走不到 XPC。
+        //    实测(裸可执行, 同一个窗口): 堵住主线程 **9 秒没回来** / 泵主队列 **0.07 秒拿到图**。
+        //    超时仍算一次明确的失败(给人话、让模型换路), 只是等待期间主线程不再被占死。
+        let deadline = Date().addingTimeInterval(captureTimeout)
+        while sem.wait(timeout: .now() + 0.02) == .timedOut {
+            if Date() >= deadline {
+                return .failure(ComputerShotRule.ShotFailure(
+                    "截图等了 \(Int(captureTimeout)) 秒还没回来 ⇒ 这次没有图"
+                    + "(屏幕可能在休眠, 或者捕捉服务卡住了)。换别的路 —— 反复重试也是一样的结果。"))
+            }
+            // 20ms 一跳: 既让主队列上的回调有机会跑, 又不至于把 CPU 烧掉。后台那个 Task 之后
+            // 若还是回来了, 写进 `box` 也没人再读 —— 不会污染下一次请求。
+            _ = RunLoop.current.run(mode: .default,
+                                   before: Date(timeIntervalSinceNow: 0.02))
         }
         return box.result ?? .failure("截图没有返回结果(内部错误) ⇒ 这次没有图。")
     }

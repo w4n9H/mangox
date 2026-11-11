@@ -590,6 +590,21 @@ if ! has_code mangox-compute/ComputerShot.swift 'ignoreShadowsSingleWindow = tru
     echo "FAIL - 单窗口截图又带上了阴影 (四周多出几十像素透明边)" >&2
     exit 1
 fi
+# ⚠️ 等 SCK 回来时必须**泵主队列**(2026-11-11 根因修复): `SCShareableContent` /
+#    `SCScreenshotManager` 的完成回调派回 **main queue**, 而 helper 的 socket 循环就在主线程。
+#    直接 `sem.wait(timeout: .now() + captureTimeout)` 会把主线程堵死 ⇒ 回调永远排不上队
+#    ⇒ **每次截图都等满 8 秒然后报"捕捉服务卡住了"**。现场两份轨迹读数: 两次带图 read
+#    各 8.0s, 而同一时刻 `screencapture` CLI 251ms 就出了图 ⇒ 不是屏幕休眠、不是权限。
+#    ⚠️ "没权限时不死锁"证明不了什么: TCC 是同步拒绝, 一次 XPC 都不发。
+if ! has_code mangox-compute/ComputerShot.swift 'RunLoop\.current\.run\(mode:'; then
+    echo "FAIL - 等截图结果时不再泵主队列 (SCK 回调派回 main queue ⇒ 每次截图都等满 8 秒)" >&2
+    echo "       主线程既跑 socket 循环又堵在 sem.wait 上, 回调永远排不上队" >&2
+    exit 1
+fi
+if has_code mangox-compute/ComputerShot.swift 'guard sem\.wait\(timeout: \.now\(\) \+ captureTimeout\)'; then
+    echo "FAIL - 又回到「主线程裸等 8 秒」的写法 (回调派回 main queue ⇒ 必然超时)" >&2
+    exit 1
+fi
 # ⚠️ 判据是"与界面树几何对齐": 尺寸一律取 `SCWindow.frame`, 不取 AX 的窗口框 ——
 #    两者差一个标题栏时, 按 AX 框设宽度会让 SCK 非等比缩放 ⇒ 画面整个变形。
 if ! has_code mangox-compute/ComputerShot.swift 'captureSize\(window: axRect\(win\.frame\)\)'; then
@@ -617,6 +632,21 @@ if [ -z "$SHOT_EDGE" ] || [ "$SHOT_EDGE" != "$SEND_EDGE" ]; then
 fi
 if ! has_code mangox/Models/ComputerShotRule.swift '"MANGOX_COMPUTE_IMAGE_BUNDLES"'; then
     echo "FAIL - 判据侧的图像名单 env 名不见了" >&2
+    exit 1
+fi
+# ⚠️ 回执里的"1:1"必须**按图自己的像素尺寸**算, 不许写成常量: 0.2.11 起大窗长边封顶 1536
+#    ⇒ 图会被等比缩小, 而写死的 1:1 会让模型拿图内像素当屏幕偏移用 —— 点得下去, 点在别处,
+#    且零报错。图尺寸只能来自 `CGImage.width/height`(`ComputerShot.Shot`)。
+if has_code mangox-compute/ComputerServer.swift '图与窗口 1:1'; then
+    echo "FAIL - 截图回执又把「图与窗口 1:1」写死了 (大窗被缩过 ⇒ 按图标点会整体偏)" >&2
+    exit 1
+fi
+if ! has_code mangox-compute/ComputerServer.swift 'shot\.width'; then
+    echo "FAIL - 截图回执不再报图自己的像素尺寸 (模型算不出 图宽÷窗口宽 这个比例)" >&2
+    exit 1
+fi
+if ! has_code mangox-compute/ComputerShot.swift 'Shot\(png: \$0, width: image\.width'; then
+    echo "FAIL - 图尺寸不再取自 CGImage 自己 (改回窗口框 ⇒ 大窗被缩时报的尺寸是错的)" >&2
     exit 1
 fi
 if ! has_code mangox/Agent/ComputerHost.swift '"MANGOX_COMPUTE_IMAGE_BUNDLES"'; then
