@@ -1318,6 +1318,53 @@ if ! has_code scripts/diag/scenario_cleanup.swift '!inMenuBar\(\$0\)'; then
     exit 1
 fi
 
+# ③v 电脑操作助手: **一个会话一份, 且会话收它就得收** (2026-11-12)。
+#
+#   现场(boss 报「一个会话 computer_read 过微信之后, 另一个会话就读不了了」):
+#     每开一个会话 spawn 一个 `mangox-compute`(各握一条 socket、各执一份「辅助功能 + 屏幕录制」),
+#     而 `shutdown()` 只 terminate pi, **从不 terminate helper** ⇒ 两个 helper 同时在跑
+#     (其中一个已跑 1 小时 33 分), `~/.mangox/compute-*.sock` 越攒越多
+#     (helper 的 SIGTERM 只 exit(0), 不 unlink)。
+#
+#   ⚠️ 中途试过"全局共享一份", **不行**(2026-11-12 当天否掉): `Scope` 里 `takeover` 取自
+#      **每会话**的 `approvalMode` ⇒ 两个会话档位不同就互相把对方的 helper 重启掉, 而 socket
+#      路径每次 spawn 换 UUID ⇒ 先起的那个会话永远连不上(`ECONNREFUSED`)。
+#      boss 拍板: 每会话独立, 2~3 份可接受。⇒ 下面这几条**不许**再推回"共享一份"。
+#
+#   ⚠️ 这一段只能扫源码事实: T-HOST 测的是 `ComputerHost` 自己的行为,
+#      而"transport 有没有在会话结束时收掉它"是**调用方**的错 —— 实测造反例
+#      (把 `shutdown()` 里那句 `stop()` 删掉)时, **T-HOST 一条都不红**。
+if has_code mangox/Agent/ComputerHost.swift 'static let shared = ComputerHost\(\)'; then
+    echo "FAIL - ComputerHost 又变回全局单例 (Scope.takeover 每会话不同 ⇒ 两个会话互相踢, 后起的那个把先起的连不上)" >&2
+    echo "       boss 2026-11-12 拍板: 每会话一份, 隔离优先" >&2
+    exit 1
+fi
+if ! has_code mangox/Agent/PiRpcTransport.swift 'private let computerHost = ComputerHost\(\)'; then
+    echo "FAIL - transport 不再各自持一份助手 (每会话一份是拍板结果, 见 ComputerHost 上那段)" >&2
+    exit 1
+fi
+# 会话结束必须**真的收**: 只 terminate pi 不收助手, 就是那个跑了 1 小时 33 分的进程。
+if ! awk '/func shutdown\(\)/,/^    }/' mangox/Agent/PiRpcTransport.swift | grep -c 'computerHost\.stop\(\)' >/dev/null; then
+    echo "FAIL - shutdown() 不再收助手 (只 terminate pi ⇒ helper 留在后台, 每开一个会话多一个)" >&2
+    exit 1
+fi
+if ! has_code mangox/Agent/PiRpcTransport.swift 'computerHost\.stop\(\)'; then
+    echo "FAIL - transport 里没有真的 stop() (助手永远不会被收)" >&2
+    exit 1
+fi
+# 收的时候要把 socket 文件也删掉: helper 自己只 exit(0), **不 unlink**。
+if ! has_code mangox/Agent/ComputerHost.swift 'unlink\(path\)'; then
+    echo "FAIL - 收助手时不再 unlink socket 文件 (helper 的 SIGTERM 只 exit, 不清就在 ~/.mangox 攒死 socket)" >&2
+    exit 1
+fi
+# ⚠️ `unlink` 用的必须是**清字段之前**存下来的那份: 先 `socketPath = nil` 再 unlink
+#    永远是空操作 —— 编译过、跑起来"看着有", 而 socket 一个都没清(实测踩过)。
+if ! has_code mangox/Agent/ComputerHost.swift 'let dying = socketPath'; then
+    echo "FAIL - unlink 又拿 socketPath 直接用了 (先清字段后读 = 那句 unlink 永不执行)" >&2
+    exit 1
+fi
+
+
 # ④ 冒烟主文件的**体量棘轮** (2026-10-19) —— 判据 = 行数**只减不增**。
 #    为什么要有这条: 冒烟已长到 7000+ 行, 而且几乎全在**一个函数 `run()`** 里
 #    (Swift 函数体不能跨文件 ⇒ 只要它还是一个大函数, 就必然是一个大文件)。

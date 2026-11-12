@@ -59,6 +59,7 @@ extension SmokeMain {
             caseDiagnosticLog,
             caseBuiltInExtensions,
             caseComputerType,
+            caseComputerHost,
         ]
     }
 

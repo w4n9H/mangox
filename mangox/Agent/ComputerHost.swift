@@ -72,6 +72,24 @@ final class ComputerHost {
 
     // MARK: - 状态
 
+    /// ⚠️ **一个会话一份**(2026-11-12 boss 拍板), 不是全局单例。
+    ///
+    ///    前情: 这里原来就长这样, 但**从来没有人停过它们** —— 每开一个会话 spawn 一个 helper
+    ///    (每个都握着「辅助功能 + 屏幕录制」两份 TCC), `shutdown()` 只 terminate pi,
+    ///    helper 一个都不收(实测: 两个 helper 同时在跑, 其中一个已运行 1 小时 33 分;
+    ///    `~/.mangox/compute-*.sock` 越攒越多)。修过错法的那一版先试过"全局共享一份",
+    ///    结论是**不行**:
+    ///
+    ///    `Scope` 里有一项是**每会话**的 —— `takeover` 取自 `approvalMode.expectsHumanAtKeyboard`。
+    ///    两个会话档位不同(「每步确认」/「全自动」) ⇒ 作用域不同 ⇒ 共享的那一份被反复重启;
+    ///    而 socket 路径每次 spawn 都换 UUID ⇒ 先起的那个会话的 pi 拿着旧路径**永远连不上**
+    ///    (症状就是 `ECONNREFUSED`)。共享一份还逼着所有会话排队在同一个串行 `accept` 上。
+    ///    ⇒ 隔离优先: 会话之间**不许**互相影响, 哪怕代价是 N 份进程。实测 2~3 份可接受
+    ///      (而且 `start` 在名单为空时根本不起进程, 没开这一档的会话零成本)。
+    ///
+    ///    ⚠️ 所以本类的**唯一**生命周期责任是: 会话收 ⇒ `stop()` 必须真把进程和 socket 收掉。
+    ///       `PiRpcTransport.shutdown()` 负责调它(见那边的注释), 门在 `T-HOST` + `run.sh` ③v。
+
     private var process: Process?
     private(set) var socketPath: String?
     /// 起 socket 那次**实际下发**的作用域。复用前拿它跟这次要的比 —— 见 `Scope` 的注释。
@@ -128,7 +146,8 @@ final class ComputerHost {
                type: Bool = false,
                peerPid: pid_t = ProcessInfo.processInfo.processIdentifier,
                bundlePath: String = Bundle.main.bundlePath) -> String? {
-        guard !allowedBundles.isEmpty else { return nil }
+        // ⚠️ 空名单 = 没开放 ⇒ 不起进程(也没开这一档的会话零成本: 不 spawn、不占 TCC)。
+        if allowedBundles.isEmpty { return nil }
         // ⚠️ **复用之前先比名单**：helper 只在启动时读一次 env，进程活着不等于名单还是那一批。
         //    见 `Scope` 上那段（boss 报「我明明加了」就是这个）。
         let wanted = Self.Scope(read: allowedBundles, act: actBundles,
@@ -136,6 +155,8 @@ final class ComputerHost {
         if let socketPath, process?.isRunning == true, runningScope == wanted {
             return socketPath
         }
+        // 名单变了（或进程不在）⇒ 旧的必须收掉：留着一个按旧名单办的助手，
+        // 模型会一直拿到"不在范围内"，而人看到的设置页是勾着的。
         // 名单变了（或进程不在）⇒ 旧的必须收掉：留着一个按旧名单办的助手，
         // 模型会一直拿到"不在范围内"，而人看到的设置页是勾着的。
         if process?.isRunning == true { stop() }
@@ -185,14 +206,29 @@ final class ComputerHost {
         return sock
     }
 
-    /// 收。App 侧 `terminate()` 之后 helper 自己也会因为探活失败退出(双保险, 不是靠一层)。
+    /// 收: 结束进程 + 删 socket 文件。**会话结束必须调它**。
+    ///
+    /// App 侧 `terminate()` 之后 helper 自己也会因为探活失败退出(双保险, 不是靠一层)。
+    /// 幂等 —— 没起过、已经收过, 都是空操作。
+    ///
+    /// ⚠️ 两步都**不能省**:
+    ///    ① `terminate()` —— 原来 `shutdown()` 只拆 pi, helper 一个都不停, 于是每开一个会话
+    ///       就多一个握着「辅助功能 + 屏幕录制」的子进程(实测有一个跑了 1 小时 33 分)。
+    ///    ② `unlink(socket)` —— helper 的 SIGTERM 处理器只 `exit(0)`, **不 unlink**;
+    ///       不清就在 `~/.mangox/` 攒死 socket。那些文件不是"无害的空文件": 排查时
+    ///       `ls ~/.mangox/*.sock` 会指向一个**根本没人在听的路径**, 而这正是
+    ///       "读不到界面"最像的那种现场(2026-11-11 实测攒了两个)。
     func stop() {
         process?.terminate()
         process = nil
+        // ⚠️ 顺序: 先记下路径再清字段 —— 清完再读 `socketPath` 永远是 nil,
+        //    那一步 unlink 就成了**永远不执行**的代码(看着有, 实际没跑)。实测踩过。
+        let dying = socketPath
         socketPath = nil
         // ⚠️ 作用域标记必须跟着清: 留着它, 下次 `start` 会以为"这个名单已经下发过了",
         //    而实际上进程已经没了 —— 那正好是这条判据要防的反面。
         runningScope = nil
+        if let path = dying { unlink(path) }
     }
 
     // MARK: - 环境 (纯函数)

@@ -153,6 +153,15 @@ final class PiRpcTransport: AgentTransport {
     /// 协议侧入口 (P10.1b)。key 变更后需重启引擎才生效。
     func updateWebSearchKey(_ key: String?) { webSearchKey = key }
 
+    /// **一个会话一份**(2026-11-12 boss 拍板)。
+    ///
+    /// ⚠️ 别改成 `ComputerHost.shared`: 试过, 不行。`Scope` 里 `takeover` 取自**每会话**的
+    ///    `approvalMode` ⇒ 两个会话档位不同就互相把对方的 helper 重启掉, 而 socket 路径每次
+    ///    spawn 换 UUID ⇒ 先起的那个会话永远连不上(`ECONNREFUSED`)。隔离优先。
+    ///
+    /// ⚠️ 所以这里**必须**在会话结束时 `stop()` —— 原来 `shutdown()` 只拆 pi,
+    ///    helper 一个都不收: 每开一个会话多一个握着辅助功能 + 屏幕录制的子进程
+    ///    (实测有一个跑了 1 小时 33 分), `~/.mangox/` 里的死 socket 越攒越多。
     private let computerHost = ComputerHost()
 
     /// P7-M3: 接收自管模型物化产物 (ChatStore 在模型变更时推送)。
@@ -1764,6 +1773,10 @@ final class PiRpcTransport: AgentTransport {
     /// transcript 已由 pi 按行持久化到 --session 文件, 强杀不丢已产出内容。
     func shutdown() {
         teardownProcess()
+        // ⚠️ 会话没了 ⇒ 助手必须一起收(2026-11-11/12)。原来这里只拆 pi, **助手一个都不收**:
+        //    每开一个会话多一个握着辅助功能 + 屏幕录制的子进程, 直到 App 退出。
+        //    `stop()` 是幂等的(没起过就是空操作), 所以不必先判断"这次到底借过没有"。
+        computerHost.stop()
     }
 
     func refreshCapabilities() {
@@ -2053,6 +2066,8 @@ final class PiRpcTransport: AgentTransport {
             // 诊断日志: 拉不起来这件事原来是**完全静默**的（`send` 那边只 `guard process != nil`），
             // 而 UI 上已把 `runningTurns` 置了位 ⇒ 表现是"生成中…"常亮、什么都不来。
             Log.process("spawn-failed", ["err": String(describing: error).prefix(120).description])
+            // ⚠️ pi 没起来 ⇒ 这次起的助手也没人要了, 当场收掉(同 `shutdown`)。
+            computerHost.stop()
             return
         }
         process = p
