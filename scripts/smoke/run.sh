@@ -329,6 +329,25 @@ if [ -z "$COMPUTE_DEPTH" ] || [ "$COMPUTE_DEPTH" -lt 24 ]; then
     exit 1
 fi
 
+# ③w 客户端的等待**必须比助手自己的墙钟上限更长** (2026-11-13, 企业微信那次)。
+#    助手保证"最迟 12 秒交卷, 哪怕只读到一部分"; 而扩展那边原来是 10 秒就 `destroy()` ——
+#    ⇒ 助手每次慢读的成果**必然**被丢掉, 模型看到的是"连不上/超时"这种**故障**,
+#      而不是"我只读到前面一部分"。它会以为工具坏了, 然后重试、再超时, 再重试。
+#    ⚠️ 两个数住在两个 target、两种语言里(一个是 Swift 常量, 一个是 JS 字符串), 没有任何
+#      编译器会替你看这个关系 —— 改一个忘了另一个, 行为只是静默退化成"永远超时"。
+JS_WAIT_MS="$(awk '/const TIMEOUT_MS = [0-9]+;/ { for (i = 1; i <= NF; i++) { gsub(/;/, "", $i); if ($i ~ /^[0-9]+$/) print $i } }' mangox/Agent/PiRpcTransport.swift)"
+HELPER_WAIT_S="$(awk '/static let readTimeout: TimeInterval = / { for (i = 1; i <= NF; i++) { gsub(/[^0-9.]/, "", $i); if ($i ~ /^[0-9]+(\.[0-9]+)?$/) print int($i) } }' mangox-compute/AXAdapter.swift)"
+if [ -z "$JS_WAIT_MS" ] || [ -z "$HELPER_WAIT_S" ]; then
+    echo "FAIL - 取不到两边的等待上限 (JS ${JS_WAIT_MS:-?} / helper ${HELPER_WAIT_S:-?}s)" >&2
+    echo "       取不到就说明这两个常量被改名或挪走了 ⇒ 这条判据当场失效, 必须一起改" >&2
+    exit 1
+fi
+if [ "$JS_WAIT_MS" -le $((HELPER_WAIT_S * 1000)) ]; then
+    echo "FAIL - 客户端等 ${JS_WAIT_MS}ms, 而助手自己 ${HELPER_WAIT_S}s 才交卷 ⇒ 慢读的成果永远送不到" >&2
+    echo "       模型只会看到 no reply / 连不上, 于是重试; 而重试还是同样的结局" >&2
+    exit 1
+fi
+
 # ③v 「某个 App 读起来不一样」只许写在 `ComputerAppProfile` 的表里 (2026-11-09, 收口那一步)。
 #    加 Safari 那轮的全部差异只有**渲染上限**一件事, 但它被写成了一句按 bundle 字面量分叉的
 #    三元表达式, 藏在 AXSnapshot 里。再加一个浏览器就会变成 `bundle == A || bundle == B ? … : …`

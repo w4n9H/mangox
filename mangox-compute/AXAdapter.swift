@@ -153,6 +153,40 @@ enum AXAdapter {
 
     // MARK: - 翻译
 
+    /// **一次批量取**的那几个属性。顺序即解码顺序, 两者必须一致(见 `decode`)。
+    ///
+    /// ⚠️ 为什么要批量(2026-11-13 实测, 探针 `/tmp/axcost`): 企业微信 2237 节点、每节点 8 次
+    ///    单独取属性 = **20135 次跨进程往返 = 10.46 秒**, 直接撞满 `readTimeout` 12 秒。
+    ///    而同一个元素重复读只要 30~36 µs —— **它不慢, 是我们的读法把往返次数放大了 8 倍**。
+    ///    改成一次拿 7 个: 实测 0.554 → 0.161 ms/元素 (**3.4×**)。
+    ///    慢的根源是 CEF: 企业微信的 AX 元素是渲染进程里的**远端对象**, 每多一次往返就多一次
+    ///    "去渲染树里把那个 web 节点找出来"。越深越贵 (d7 ≈ 0.6 ms / d9 ≈ 1.5 ms)。
+    private static let batchNames: [String] = [
+        kAXRoleAttribute, kAXTitleAttribute, kAXDescriptionAttribute, kAXIdentifierAttribute,
+        kAXValueAttribute, kAXPositionAttribute, kAXSizeAttribute,
+    ]
+
+    /// 子节点**恒为空**的 role —— 不问 `children`, 每个节点省一次往返。
+    ///
+    /// ⚠️ 白名单是**量出来的**, 不是"按钮不该有子节点"这种推理 (那会剪错):
+    ///    2026-11-13 用 `/tmp/axcost/roles` 扫企业微信(2237 节点) + Chrome, 按 role 统计
+    ///    `maxKids`。结论: **1237/2310 个节点 (54%) 属于子节点恒为空的 role**, 其中
+    ///    `AXStaticText` 854 + `AXImage` 343 就占 97%。
+    /// ⚠️ 反面同样重要: `AXButton` / `AXRadioButton` / `AXRow` 的 maxKids 都是 **1**,
+    ///    `AXGroup` 4, `AXCell` 7, `AXToolbar` 13, `AXSplitGroup` 32, `AXTable` **273**
+    ///    ⇒ 这些一个都不能进白名单, 否则整棵子树凭空消失 (且零报错)。
+    /// ⚠️ 刻意**没**收进来: `AXLink`(10) / `AXPopUpButton`(15) / `AXColumn`(3) / `AXUnknown`(1)
+    ///    —— 样本里 maxKids=0, 但语义上保不齐 (Link 在别的框架里能包东西, Unknown 更不用说)。
+    ///    为了 29 次往返赌正确性不值得。
+    private static let leafRoles: Set<String> = [
+        "AXStaticText",     // 文本叶子
+        "AXImage",          // 图片叶子
+        "AXSplitter",       // 分隔条
+        "AXTextField",      // 输入框
+        "AXValueIndicator", // 滑轨手柄
+        "AXCheckBox",       // 复选框
+    ]
+
     private static func build(_ el: AXUIElement,
                               depth: Int,
                               path: [Int],
@@ -161,26 +195,32 @@ enum AXAdapter {
         budget.left -= 1
         elements[AXSnapshot.pathKey(path)] = el
 
-        let role = string(el, kAXRoleAttribute) ?? ""
-        let title = string(el, kAXTitleAttribute) ?? ""
+        // 一次往返拿 7 个属性。**批量失败就退回逐个读** —— 有些 App 不认批量取,
+        // 那时宁可慢也不能把整棵树读成空壳(空壳在快照上与"这个窗口什么都没有"长得一样)。
+        let attrs = fetchAttrs(el)
+        let role = attrs?.role ?? string(el, kAXRoleAttribute) ?? ""
+        let title = attrs?.title ?? string(el, kAXTitleAttribute) ?? ""
         // ⚠️ 这一行不是"顺手多读一个属性": 实测 Safari 的工具栏按钮**标题是空的, 名字只在
         //    `AXDescription` 里**(Chrome 两个都写) ⇒ 不读它, Safari 那一排按钮在快照里全是
         //    无名的 `[n] button`, 模型只能靠编号点数、人也看不懂审批卡。取舍在 `AXSnapshot.label`。
-        let detail = string(el, kAXDescriptionAttribute) ?? ""
-        let identifier = string(el, kAXIdentifierAttribute) ?? ""
-        let value = string(el, kAXValueAttribute) ?? ""
-        // ⚠️ `AXSubrole` **只对文本类问**: 它是每节点一次 IPC(3000 节点 = 3000 次往返), 而
-        //    密码框的身份只可能出现在文本类元素上(实测 Safari / AppKit 都是
-        //    `AXRole = AXTextField` + `AXSubrole = AXSecureTextField`)。
+        let detail = attrs?.detail ?? string(el, kAXDescriptionAttribute) ?? ""
+        let identifier = attrs?.identifier ?? string(el, kAXIdentifierAttribute) ?? ""
+        let value = attrs?.value ?? string(el, kAXValueAttribute) ?? ""
+        // ⚠️ `AXSubrole` **只对文本类问**: 它是每节点一次 IPC, 而密码框的身份只可能出现在
+        //    文本类元素上(实测 Safari / AppKit 都是 `AXRole = AXTextField` + `AXSubrole = AXSecureTextField`)。
         //    ⚠️ 漏了它, 网页密码框两条判据(role 名 / AXProtectedContent)全落空 ——
         //    文本靠 WebKit 自己返回 `••••••` 侥幸没泄, 而**图像面一点没涂**(2026-10-30 实测)。
+        // ⚠️ 它**不在批量名单里**: 只有文本类要, 放进批量等于给每个节点白加一次载荷。
         let subrole = role.localizedCaseInsensitiveContains("textfield")
             ? (string(el, kAXSubroleAttribute) ?? "") : ""
         let actions = actionNames(el)
-        let frame = rect(el)
+        // 批量不可用（`attrs == nil`）才为方框补两个单独往返；批量成功而这一档是 CFNull，
+        // 说明它本来就没有几何，补也是一样的空 —— 不再白花两次。
+        let frame = attrs == nil ? rect(el) : attrs!.frame
 
         var children: [AXNode] = []
-        if depth < maxDepth, budget.left > 0, !budget.expired {
+        // 叶子 role 不问 children(白名单的判据见 `leafRoles`)。
+        if depth < maxDepth, budget.left > 0, !budget.expired, !leafRoles.contains(role) {
             var raw: CFTypeRef?
             if AXUIElementCopyAttributeValue(el, kAXChildrenAttribute as CFString, &raw) == .success,
                let value = raw, let list = value as? [AXUIElement] {
@@ -214,9 +254,60 @@ enum AXAdapter {
                       children: children)
     }
 
+    /// 一次往返取回的那 7 个属性。**`nil` = 这次批量整体失败了**（不是"某个属性没有值"）。
+    private struct Fetched {
+        var role = ""
+        var title = ""
+        var detail = ""
+        var identifier = ""
+        var value = ""
+        var frame: AXRect?
+    }
+
+    /// 一次往返取回 `batchNames` 那 7 个属性。
+    ///
+    /// ⚠️ 返回结构体而不是"每个属性各一个 Optional": 批量**成功**时, 某个属性取不到就是它
+    ///    **不支持**, 不该再为它补一次单独往返 —— 那等于把省下来的往返又还回去。
+    ///    只有整批失败(有些 App 不认这个 API)才返回 `nil`, 让调用方退回逐个读。
+    ///
+    /// ⚠️ "取不到"在批量里的表示**不是文档说的 `CFNull`**: 2026-11-13 用
+    ///    `/tmp/axcost/verifysnap` 逐元素对拍(企业微信 / Chrome / 访达)测到, 在同一个元素上
+    ///    逐个读返回 `attributeUnsupported`, 而批量在同一档给的是一个 **`AXValue`,
+    ///    子类型 `AXValueType = 5` (cfBoolean)** —— 是"有值"的形状, 只是值没有意义。
+    ///    这**不影响输出**: `text()` 只认 String/NSNumber/Date, `rect()` 只认 cgPoint/cgSize,
+    ///    那个哨兵两边都落空 ⇒ 与逐个读的 nil 等价(对拍实测: 节点数 / 行数 / 抹掉坐标后的文本全同)。
+    ///    记在这里是因为: **将来往 `batchNames` 里加一个"布尔型"属性, 这个哨兵就会被当真值读进去。**
+    private static func fetchAttrs(_ el: AXUIElement) -> Fetched? {
+        var raw: CFArray?
+        let err = AXUIElementCopyMultipleAttributeValues(
+            el, batchNames as CFArray, AXCopyMultipleAttributeOptions(rawValue: 0), &raw)
+        guard err == .success, let arr = raw, CFArrayGetCount(arr) == batchNames.count else { return nil }
+
+        func at(_ i: Int) -> CFTypeRef? {
+            guard let p = CFArrayGetValueAtIndex(arr, i) else { return nil }
+            let obj = unsafeBitCast(p, to: CFTypeRef.self)
+            // 只判 `CFNull` 挡不住上面那个哨兵 —— 它靠下游两个解码器**都不认它的子类型**才恰好等价。
+            return CFGetTypeID(obj) == CFNullGetTypeID() ? nil : obj
+        }
+        var f = Fetched()
+        f.role = text(at(0)) ?? ""
+        f.title = text(at(1)) ?? ""
+        f.detail = text(at(2)) ?? ""
+        f.identifier = text(at(3)) ?? ""
+        f.value = text(at(4)) ?? ""
+        f.frame = rect(position: at(5), size: at(6))
+        return f
+    }
+
     private static func string(_ el: AXUIElement, _ attribute: String) -> String? {
         var raw: CFTypeRef?
         guard AXUIElementCopyAttributeValue(el, attribute as CFString, &raw) == .success else { return nil }
+        return text(raw)
+    }
+
+    /// 把一个 AX 属性值翻成文本（批量与逐个读**共用同一套**转换, 否则两条路的输出会不一样）。
+    private static func text(_ raw: CFTypeRef?) -> String? {
+        guard let raw else { return nil }
         if let s = raw as? String { return s }
         // 数字型的值(滑块、步进器)AX 给的是 NSNumber —— 转成字符串, 否则模型看不见当前值。
         if let n = raw as? NSNumber { return n.stringValue }
@@ -242,21 +333,32 @@ enum AXAdapter {
     /// 坐标只写给人看, 它是**可缺失**的(缺失不影响模型按编号寻址)。
     ///
     /// ⚠️ `tap` 那道几何闸也要用它(见 `frontWindowFrame`) ⇒ 不再是 private。
+    /// ⚠️ 建树那条路**不走这里**(`fetchAttrs` 把 pos/size 一起批量拿了); 这个入口留给
+    ///    "只要四个整数"的调用点, 别为一次几何判断建整棵树。
     static func rect(_ el: AXUIElement) -> AXRect? {
         var posRaw: CFTypeRef?
         var sizeRaw: CFTypeRef?
+        if AXUIElementCopyAttributeValue(el, kAXPositionAttribute as CFString, &posRaw) != .success {
+            posRaw = nil
+        }
+        if AXUIElementCopyAttributeValue(el, kAXSizeAttribute as CFString, &sizeRaw) != .success {
+            sizeRaw = nil
+        }
+        return rect(position: posRaw, size: sizeRaw)
+    }
+
+    /// 两个原始值 → 一个方框。逐个读与批量读**共用这一份解析** —— 两条路不许各写一遍,
+    /// 否则"批量读出来的框"与"单独读出来的框"会静默不一致(而两者在快照里长得一样)。
+    private static func rect(position posRaw: CFTypeRef?, size sizeRaw: CFTypeRef?) -> AXRect? {
         var point = CGPoint.zero
         var size = CGSize.zero
         var hasPoint = false
         var hasSize = false
-
-        if AXUIElementCopyAttributeValue(el, kAXPositionAttribute as CFString, &posRaw) == .success,
-           let raw = posRaw, CFGetTypeID(raw) == AXValueGetTypeID() {
+        if let raw = posRaw, CFGetTypeID(raw) == AXValueGetTypeID() {
             let v = raw as! AXValue
             if AXValueGetType(v) == .cgPoint, AXValueGetValue(v, .cgPoint, &point) { hasPoint = true }
         }
-        if AXUIElementCopyAttributeValue(el, kAXSizeAttribute as CFString, &sizeRaw) == .success,
-           let raw = sizeRaw, CFGetTypeID(raw) == AXValueGetTypeID() {
+        if let raw = sizeRaw, CFGetTypeID(raw) == AXValueGetTypeID() {
             let v = raw as! AXValue
             if AXValueGetType(v) == .cgSize, AXValueGetValue(v, .cgSize, &size) { hasSize = true }
         }

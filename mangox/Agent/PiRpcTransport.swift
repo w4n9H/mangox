@@ -1126,7 +1126,15 @@ final class PiRpcTransport: AgentTransport {
         import { connect } from "node:net";
 
         const SOCK_ENV = "MANGOX_COMPUTE_SOCK";
-        const TIMEOUT_MS = 10000;
+
+        // ⚠️ **必须大于 helper 自己的 `AXAdapter.readTimeout`(12 秒)**, 否则那道闸永远看不见:
+        //    助手保证"最迟 12 秒交卷, 哪怕只读到一部分", 而这边 10 秒就 destroy 了 socket ——
+        //    于是每次慢读的结果都是"连不上/超时"这种**故障**, 而不是助手辛苦写出来的
+        //    "只读到前面一部分"。实测(2026-11-13, 企业微信): 助手 12 秒时已经把 695 项快照
+        //    准备好了, 而模型看到的是 `no reply within 10000ms` ⇒ 它以为工具坏了, 会重试。
+        //    20 秒 = 12 秒 + 渲染/传输余量(含可选截图, 实测 <1 秒)。
+        //    `run.sh` ③w 钉着"这个数 > 那边那个数", 改一个忘了另一个会红。
+        const TIMEOUT_MS = 20000;
 
         function ok(text) {
             return { content: [{ type: "text", text: text }], details: undefined };

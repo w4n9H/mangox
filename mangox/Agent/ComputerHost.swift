@@ -70,6 +70,62 @@ final class ComputerHost {
         home + "/.mangox/compute-" + id + ".sock"
     }
 
+    /// 这个路径上**真的有人在听吗**（不是"文件在不在"）。
+    ///
+    /// ⚠️ 为什么要这一条（2026-11-13 boss 实测）: `start()` 原来只等**文件出现**就返回路径,
+    ///    而"文件在"有两种: ① helper 正听着 ② helper 绑过又没了(它的 SIGTERM 处理器当时
+    ///    不 unlink, 见 `installTerminationCleanup`)。第 ② 种下 App 会把路径发下去、把扩展挂上,
+    ///    然后这一整轮每一次 `computer_read` 都是 `ECONNREFUSED` ——
+    ///    而模型看到的是"连不上", 人看到的是"设置页勾着"。
+    ///    ⇒ 判据必须是**连一次**(connect 成功 = backlog 里有监听者), 不是 `fileExists`。
+    ///
+    /// connect 之后立刻 close: helper 会 accept 到一个空连接, `recv` 返回 0 就关掉,
+    /// 不产生任何请求、不改任何状态(它的 accept 循环本来就是串行的, 多一个空连接零代价)。
+    /// ⚠️ `nonisolated`: 它只做一次 `connect` 系统调用, 不碰任何状态 —— 而判据要能在
+    ///    任意上下文里调(冒烟的等待循环、后台探测), 绑在 `@MainActor` 上只会逼调用方 await。
+    nonisolated static func socketIsListening(_ path: String) -> Bool {
+        let fd = socket(AF_UNIX, SOCK_STREAM, 0)
+        guard fd >= 0 else { return false }
+        defer { close(fd) }
+        var addr = sockaddr_un()
+        addr.sun_family = sa_family_t(AF_UNIX)
+        withUnsafeMutableBytes(of: &addr.sun_path) { buf in
+            let bytes = path.utf8
+            // 留一格给结尾的 NUL —— `sun_path` 是 C 串, 写满就没有终止符了。
+            let n = min(bytes.count, buf.count - 1)
+            buf.copyBytes(from: Array(bytes.prefix(n)))
+        }
+        let size = socklen_t(MemoryLayout<sockaddr_un>.size)
+        let ok = withUnsafePointer(to: &addr) { ptr in
+            ptr.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                connect(fd, $0, size) == 0
+            }
+        }
+        return ok
+    }
+
+    /// 扫掉 `<home>/.mangox/compute-*.sock` 里**没人在听**的那些。
+    ///
+    /// ⚠️ 为什么要有它（2026-11-13）: 死 socket 不会自己消失 —— 实测攒了 4 个
+    ///    (11-10 / 11-11 / 14:37 / 15:38), 每个都指向一条**没人听的路径**。
+    ///    危害不是占几字节, 是**排查时会把它当成"进程还没起"**, 于是往错的方向查半天。
+    ///    App 的 `stop()` 和 helper 自己的信号处理器现在都会删各自那一个, 但**两边都漏掉的
+    ///    情况永远存在**(比如上一个 MangoX 实例被强杀) ⇒ 这里兜底。
+    ///
+    /// ⚠️ 判据是**连一次**, 不是看文件: 文件在有两种意思, 而只有"有人在听"才该留。
+    ///    连接成功 = accept backlog 里有监听者 ⇒ 那条是别人的(可能另一个 MangoX 实例的),
+    ///    **一个字节都别动**。
+    /// ⚠️ 只碰 `compute-<UUID>.sock` 这个名字形状, 目录里别的东西一概不看。
+    nonisolated static func sweepDeadSockets(home: String) {
+        let dir = home + "/.mangox"
+        guard let names = try? FileManager.default.contentsOfDirectory(atPath: dir) else { return }
+        for name in names where name.hasPrefix("compute-") && name.hasSuffix(".sock") {
+            let path = dir + "/" + name
+            if socketIsListening(path) { continue }
+            unlink(path)
+        }
+    }
+
     // MARK: - 状态
 
     /// ⚠️ **一个会话一份**(2026-11-12 boss 拍板), 不是全局单例。
@@ -157,9 +213,10 @@ final class ComputerHost {
         }
         // 名单变了（或进程不在）⇒ 旧的必须收掉：留着一个按旧名单办的助手，
         // 模型会一直拿到"不在范围内"，而人看到的设置页是勾着的。
-        // 名单变了（或进程不在）⇒ 旧的必须收掉：留着一个按旧名单办的助手，
-        // 模型会一直拿到"不在范围内"，而人看到的设置页是勾着的。
         if process?.isRunning == true { stop() }
+
+        // 起新的之前先把历代残留清掉（只清**没人在听**的, 见 `sweepDeadSockets`）。
+        Self.sweepDeadSockets(home: home)
 
         let sock = Self.socketPath(home: home, id: UUID().uuidString)
         let exe = Self.helperPath(bundlePath: bundlePath)
@@ -187,19 +244,64 @@ final class ComputerHost {
         env[ComputerTypeRule.envKey] = type ? "1" : nil
         p.environment = env
 
+        // ⚠️ **退出原因必须留一条记录**（2026-11-13 现场）: 老板报"12 秒读完之后 compute 进程
+        //    就没了、socket 文件还在", 事后**完全无法归因** —— 没有崩溃报告, helper 的 stderr
+        //    又被 `errPipe` 收走没人看。而 `terminationReason` 正好把两种死法分开:
+        //      `.exit`             = 它自己退了(包括被 SIGTERM 收掉 —— 我们的处理器里就是 exit(0))
+        //      `.unhandledSignal`  = 被信号打死(SIGKILL / 崩在信号上), 那才是"无故消失"
+        //    ⇒ 下次再发生, `~/.mangox/log` 里就有死因, 不用再猜。
+        //    ⚠️ 必须在 `run()` **之前**装上: 装晚了, 死得早的那个一条都记不下来。
+        func watch(_ proc: Process) {
+            proc.terminationHandler = { done in
+                Log.process("compute-exit", [
+                    "status": "\(done.terminationStatus)",
+                    "reason": done.terminationReason == .uncaughtSignal ? "signal" : "exit",
+                ])
+            }
+        }
+        watch(p)
+
         do {
             try p.run()
         } catch {
+            Log.process("compute-spawn-failed",
+                        ["err": String(describing: error).prefix(120).description])
             return nil
         }
         process = p
 
-        // ⚠️ 等 socket 真的出现再返回: 否则这一轮第一次 read 会撞上"连不上", 而且是
-        //    看不出原因的那种失败(模型只看到 ENOENT)。上限 500ms —— 再等就是在
-        //    主线程上睡觉了, 而 helper 起监听通常在毫秒级; 超时也**照常返回路径**
-        //    (慢不等于失败, 真失败会在 read 那一步说清楚)。
-        for _ in 0..<5 where !FileManager.default.fileExists(atPath: sock) {
-            usleep(100_000)
+        // ⚠️ 等**真的有人在听**再返回, 不是"等文件出现"。两者的差别就是 2026-11-13 那个
+        //    `ECONNREFUSED`: 文件在、人不在(绑过又没了), 而 App 照常把路径发下去。
+        //    ⚠️ **这里是主线程**（本类整体 `@MainActor`）⇒ 等待必须短。600ms 一次是实测够用的
+        //    （旧代码等 500ms 一直没出过"太慢"的问题, helper 起监听在毫秒级）。
+        //    ⚠️ 重试**一次**才认输 —— 起不来多半是瞬时的(刚停机、目录刚建),
+        //      但也不许无限重试: 上层靠 `nil` 决定"这一轮别挂扩展"。
+        //      两个上限相乘 = 最坏阻塞 1.2 秒, 这是这一版愿意付的上界。
+        var listening = false
+        for attempt in 0..<2 where !listening {
+            if attempt > 0 {
+                p.terminate()
+                unlink(sock)
+                let again = Process()
+                again.executableURL = p.executableURL
+                again.arguments = p.arguments
+                again.environment = p.environment
+                watch(again)
+                do { try again.run() } catch { break }
+                process = again
+            }
+            for _ in 0..<6 {
+                if Self.socketIsListening(sock) { listening = true; break }
+                usleep(100_000)
+            }
+        }
+        guard listening else {
+            // 起不来就**如实说**: 给一条连不上的路径, 换来的是整轮每一次读都 `ECONNREFUSED`,
+            // 而模型会把它读成"界面上什么都没有"。
+            process?.terminate()
+            process = nil
+            unlink(sock)
+            return nil
         }
         socketPath = sock
         runningScope = wanted
@@ -214,10 +316,13 @@ final class ComputerHost {
     /// ⚠️ 两步都**不能省**:
     ///    ① `terminate()` —— 原来 `shutdown()` 只拆 pi, helper 一个都不停, 于是每开一个会话
     ///       就多一个握着「辅助功能 + 屏幕录制」的子进程(实测有一个跑了 1 小时 33 分)。
-    ///    ② `unlink(socket)` —— helper 的 SIGTERM 处理器只 `exit(0)`, **不 unlink**;
-    ///       不清就在 `~/.mangox/` 攒死 socket。那些文件不是"无害的空文件": 排查时
-    ///       `ls ~/.mangox/*.sock` 会指向一个**根本没人在听的路径**, 而这正是
-    ///       "读不到界面"最像的那种现场(2026-11-11 实测攒了两个)。
+    ///    ② `unlink(socket)` —— 2026-11-13 之前 helper 的 SIGTERM 处理器只 `exit(0)`、
+    ///       **不删文件**, 全指望这里补刀; 现在它自己也删了(见 `installTerminationCleanup`),
+    ///       但这一步**仍然不能省**: 谁来发信号不归我们管(系统 / `killall` / 调试时手敲),
+    ///       而"App 收会话"是最确定会发生的那一次。
+    ///       那些死文件不是"无害的空文件": 排查时 `ls ~/.mangox/*.sock` 会指向一个
+    ///       **根本没人在听的路径**, 而这正是"读不到界面"最像的那种现场(2026-11-11 实测攒了两个,
+    ///       2026-11-13 攒到四个)。
     func stop() {
         process?.terminate()
         process = nil

@@ -127,7 +127,9 @@ extension SmokeMain {
         check(sa != nil && sb != nil && sa != sb,
               "T-HOST 两个会话各拿一条 socket (共享一份 = Scope.takeover 互相踢; 实际 \(sa ?? "nil") / \(sb ?? "nil"))")
         // 假 helper 真起来了没 —— 上一条在两边都 nil 时也"不等"(nil != nil 为 false, 但还是单独立一条)。
-        check([sa, sb].compactMap { $0 }.allSatisfy { FileManager.default.fileExists(atPath: $0) },
+        // ⚠️ 判据用 `socketIsListening` 而不是 `fileExists`: 「文件在」有两种含义,
+        //    而 App 发路径之前必须确认的是**后一种**(2026-11-13 的 ECONNREFUSED 就是这么来的)。
+        check([sa, sb].compactMap { $0 }.allSatisfy { ComputerHost.socketIsListening($0) },
               "T-HOST 两份假 helper 都真起了监听 (否则上面几条是 nil 的假绿)")
 
         // ② 同一份连借两次拿到同一条 socket —— 会话内复用, 不许反复重启。
@@ -156,6 +158,46 @@ extension SmokeMain {
         // ④ 空名单 = 没开放 ⇒ 不起进程(也没 socket)。
         let empty = ComputerHost().start(home: short, allowedBundles: [], bundlePath: bundle)
         check(empty == nil, "T-HOST 名单为空不起进程 (空不是「全都行」, 白占一条辅助功能授权)")
+
+        // ⑤ **「文件在」≠「有人在听」** —— 2026-11-13 那条 `ECONNREFUSED` 的全部内容。
+        //    现场是这样: helper 绑过 socket、然后没了(它的 SIGTERM 处理器当时不删文件),
+        //    而 `start` 只等 `fileExists` ⇒ 把一条**没人听的路径**发下去, 整轮每次读都失败。
+        //    ⇒ 判据必须连一次。这里故意造那个现场: 假 helper 收到 SIGTERM **不删文件**。
+        let stalePath = short + "/.mangox/compute-stale.sock"
+        let stale = Process()
+        // ⚠️ 可执行文件在 **bundle 里面**(`Contents/MacOS/mangox-compute`) —— `fakeHelper`
+        //    返回的是 bundle 路径。指到目录上 `run()` 会抛错, 而 `try?` 把它吞掉之后
+        //    `terminate()` 一个没跑起来的 Process 会直接 abort(实测 134)。
+        stale.executableURL = URL(fileURLWithPath: ComputerHost.helperPath(bundlePath: bundle))
+        stale.arguments = [stalePath]
+        do { try stale.run() } catch {
+            check(false, "T-HOST 假 helper 没起来: \(error) —— 下面两条会变成 nil 的假绿")
+        }
+        let cameUp = await waitUntil(
+            { ComputerHost.socketIsListening(stalePath) }, timeout: 5)
+        check(cameUp, "T-HOST socketIsListening 认得真在听的 socket (不认得 ⇒ 下面的「红」是假红)")
+        let pid = stale.processIdentifier
+        if pid > 0, kill(pid, 0) == 0 {
+            stale.terminate()
+            // ⚠️ 用 `kill(pid,0)` 判死活, 不用 `Process.isRunning`: 后者靠 KVO 通知,
+            //    在主线程被 `await` 占着的时候不一定会更新 ⇒ 判据会假红。
+            for _ in 0..<50 where kill(pid, 0) == 0 { usleep(100_000) }
+        }
+        let fileLeft = FileManager.default.fileExists(atPath: stalePath)
+        check(fileLeft && !ComputerHost.socketIsListening(stalePath),
+              "T-HOST 死 socket(文件在、人不在)必须判成「没在听」(文件在 ⇒ 假绿正是 ECONNREFUSED 的来源)")
+
+        // ⑥ 残留清扫: 只扫掉**没人听**的 `compute-*.sock`, 活的和别的文件一个都不许碰。
+        //    判据要三方同时成立才算数 —— 只验"死的那条没了"时, 一个"把目录清空"的实现也能全绿,
+        //    而那会**当场踢掉另一个 MangoX 实例**的助手。
+        ComputerHost.sweepDeadSockets(home: short)
+        let staleGone = !FileManager.default.fileExists(atPath: stalePath)
+        let liveKept = b.socketPath.map { ComputerHost.socketIsListening($0) } ?? false
+        let bystander = short + "/.mangox/keep-me.txt"
+        try? "x".write(toFile: bystander, atomically: true, encoding: .utf8)
+        ComputerHost.sweepDeadSockets(home: short)
+        check(staleGone && liveKept && FileManager.default.fileExists(atPath: bystander),
+              "T-HOST 清扫只删「没人听的 compute-*.sock」 (死 socket 留着, 活的/无关文件被删 = 更坏的错)")
 
         b.stop()
         try? FileManager.default.removeItem(atPath: short)

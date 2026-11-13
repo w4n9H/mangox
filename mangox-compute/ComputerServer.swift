@@ -18,6 +18,10 @@ import AppKit
 import Darwin
 import Foundation
 
+/// 信号处理器要删的那个文件 —— 必须是**全局 C 串**: `signal()` 的回调是纯 C 函数指针,
+/// 不许捕获 `self` 或局部变量。值在 `serve()` 里 `strdup` 一次(进程活多久就留多久)。
+private var signalCleanupPath: UnsafeMutablePointer<CChar>?
+
 final class ComputerServer {
 
     /// 允许连接的**祖先进程**: 本轮 pi 的 pid, 经 env 下发。
@@ -159,10 +163,22 @@ final class ComputerServer {
     }
 
     /// App 退出 / 崩溃时也得有人收: 否则留一个**还握着辅助功能权限的孤儿进程** + 一个废 socket。
+    ///
+    /// ⚠️ 2026-11-13 修的一处**注释在说谎**: 这里原来写的是"只做删文件 + 退出", 而函数体
+    ///    只有 `exit(0)` —— **没删**。后果不是抽象风险: `~/.mangox/` 里实测攒了 4 个
+    ///    `compute-*.sock`(11-10 / 11-11 / 14:37 / 15:38 各一个), 每一个都指向
+    ///    **根本没人在听的路径**, 而 `ECONNREFUSED` + "文件明明在" 正是"读不到界面"
+    ///    最难查的那种现场(排查的人会以为是进程还没起, 其实是进程起过又没了)。
+    ///    App 侧 `ComputerHost.stop()` 会补这一刀, 但**只有它收到信号来源时才补得上**;
+    ///    别的 SIGTERM(系统、`killall`、调试时手敲一个)没人补。
     private func installTerminationCleanup() {
+        // ⚠️ 路径要落成**全局 C 串**: `signal()` 的回调是纯 C 函数指针, **不许捕获**
+        //    (捕获了就编不过, 或者静静变成一个野指针)。`unlink` 是 async-signal-safe 的。
+        signalCleanupPath = strdup(path)
         for sig in [SIGTERM, SIGINT] {
             signal(sig) { _ in
                 // ⚠️ 只做"删文件 + 退出", 不做别的: 信号处理器里能安全调的函数就那么几个。
+                if let p = signalCleanupPath { unlink(p) }
                 exit(0)
             }
         }
