@@ -448,6 +448,26 @@ struct AXSnapshot: Equatable {
         return f.y - w.y < Self.fixedRegionBand
     }
 
+    /// 这一行是不是贴在**窗口底部**的固定区里（输入框 / 状态栏 / 底部工具栏）。
+    ///
+    /// 与 `isFixedRegion` 是**同一件事的反方向**：屏幕最下面那排控件，在 AX 遍历里同样排最后，
+    /// 所以"截断 = 切尾巴"一样会把它们切掉。实测起因（2026-11-13，企业微信 5.0.9）:
+    /// 输入框 `textarea (802,682) 600×234` 在 1264 行的树里排第 1195 行，底边距窗口底只有
+    /// **5pt** —— 只救顶部时，上限开到 400 也读不到它，而会话越长它越往后挪。
+    ///
+    /// ⚠️ 判据与顶部**故意不对称**: 顶部那条允许 `rel-y` 为负（"元素报在窗口外一点点"同样是
+    ///    chrome），这条**要求整个元素落在窗口内**。少了"在窗口内"这半个条件，同一棵 1264 行
+    ///    的树命中 **1056 行** —— 那时它抓的不是"贴底那排控件"，而是"所有底边低于窗口底的
+    ///    内容"（滚到窗口下方之外的全都算）。加上之后只命中 **7 行**，其中正好是那个输入框。
+    ///
+    /// ⚠️ 与顶部共用 `fixedRegionBand`: 48 是"chrome 那一带有多高"的量级，上下没有理由不同。
+    /// ⚠️ 拿不到坐标就一律当"不是" —— 同 `isFixedRegion`，没有判据就不猜。
+    func isBottomFixedRegion(_ row: Row) -> Bool {
+        guard let w = windowFrame, let f = row.frame else { return false }
+        guard f.y >= w.y - 1, f.y + f.h <= w.y + w.h + 1 else { return false }
+        return (w.y + w.h) - (f.y + f.h) < Self.fixedRegionBand
+    }
+
     /// 渲染要保留哪些行(下标升序)。
     ///
     /// 规则: 先按遍历序从头取, 取满之后**回头看尾巴** —— 从被截的那批里**第一个落在固定区的行**
@@ -465,12 +485,25 @@ struct AXSnapshot: Equatable {
     ///    最日常的场景在树稍大一点时就做不到, 而回执只会说"还有 N 项未显示"。
     ///    整段捞的理由是实测出来的**顺序事实**: chrome 在遍历末尾连成一片(工具栏 → 弹层 → 红绿灯),
     ///    一旦进了 chrome 区, 后面的都还是 chrome。
+    ///
+    /// ⚠️ **底部**走另一条路(2026-11-13): 那批行**不连成一片**(窗口底部那排控件散落在树的
+    ///    各处, 中间夹着被截的内容), 所以"整段捞"的策略搬不过来 —— 改成**逐行判** + 共用封顶。
+    ///    逐行判在这里是安全的, 因为判据要求"整体在窗口内且贴底", 它圈不进来远处的浮层。
     func keepIndices(limit: Int) -> [Int] {
         let total = rows.count
         guard limit > 0 else { return [] }
         guard total > limit else { return Array(0..<total) }
+        // ① 顶部固定区 —— 批 2l 的老逻辑, 一个字不动。
         let start = (limit..<total).first { isFixedRegion(rows[$0]) }
-        let rescued = start.map { Array(($0..<total).prefix(Self.fixedRegionCap)) } ?? []
+        let topRescued = start.map { Array(($0..<total).prefix(Self.fixedRegionCap)) } ?? []
+        // ② 底部固定区 —— 只认**没被①捞走**的那些, 与①共用同一个封顶。
+        //    先到先得(下标升序): 被截的那批里靠前的先捞, 与①"从第一个命中起"同一口味。
+        var bottomRescued: [Int] = []
+        for i in limit..<total where bottomRescued.count < Self.fixedRegionCap {
+            guard !topRescued.contains(i) else { continue }
+            if isBottomFixedRegion(rows[i]) { bottomRescued.append(i) }
+        }
+        let rescued = (topRescued + bottomRescued).sorted()
         let budget = max(0, limit - rescued.count)
         return Array(0..<budget) + rescued
     }

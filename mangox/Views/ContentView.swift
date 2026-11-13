@@ -134,6 +134,18 @@ struct ContentView: View {
             && !store.showExtensionsPanel && store.capsuleMode == .chat
     }
 
+    /// 主窗收缩下限的**宽** —— 按**当下状态**算，三档的账在 `Tune.windowMinWidth` 的注释里。
+    ///
+    /// 判据只有一条：正文列宽度一变，整条对话重新排版（1014 条消息 200~800ms），
+    /// 所以下限 = 「正文列 776 不被挤窄」那条线 + 一点点留白（`windowMinGutter`，左右各一半）；
+    /// 除此之外多一 pt 都是白送的空档。
+    /// 屏宽是安全阀（小屏 + 开工作区时封顶），逻辑住在被门禁覆盖的那个纯函数里。
+    private var minWidthFittingScreen: CGFloat {
+        Tune.windowMinWidth(sidebarCollapsed: store.sidebarCollapsed,
+                            workspaceVisible: store.workspaceVisible,
+                            screenWidth: NSScreen.main?.visibleFrame.width ?? .infinity)
+    }
+
     // MARK: - 主布局 (normal 形态)
 
     private var mainLayout: some View {
@@ -189,7 +201,7 @@ struct ContentView: View {
                     .transition(.move(edge: .trailing).combined(with: .opacity))
             }
         }
-        .frame(minWidth: Tune.windowMinSize.width, minHeight: Tune.windowMinSize.height)
+        .frame(minWidth: minWidthFittingScreen, minHeight: Tune.windowMinHeight)
         .animation(CodexTheme.animMed, value: store.sidebarCollapsed)
         .animation(CodexTheme.animMed, value: store.capsuleMode)
     }

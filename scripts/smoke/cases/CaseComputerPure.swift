@@ -259,6 +259,35 @@ extension SmokeMain {
         check(capText.contains("还有 16 项未显示") && shownRowCount(capText) == 120,
               "T-COMPUTER 封顶之后尾部那批照旧如实报数 (两个缺口可以同时存在)")
 
+        // MARK: 2026-11-13: 截断也不许吃掉**窗口底部**的固定区
+        //
+        // 与工具栏是**同一件事的反方向**: 屏幕最下面那排控件, 在 AX 遍历里同样排最后。
+        // 实测起因（企业微信 5.0.9）: 输入框 `textarea (802,682) 600×234` 在 1264 行的树里
+        // 排第 1195 行, 底边距窗口底只有 **5pt** —— 只救顶部 ⇒ **上限开多大都读不到它**
+        // （400 行试过, 无效; 会话越长它越往后挪）。
+        //
+        // ⚠️ 判据与顶部**故意不对称**: 顶部那条允许 `rel-y` 为负（"报在窗口外一点点"也算
+        //    chrome）; 底部这条**要求整个元素在窗口内**。少了这半个条件, 同一棵 1264 行的树
+        //    命中 **1056 行**（把滚到窗口下方之外的内容全算进来了）, 等于没救。
+        func bottomBarSnap(boxY: Int) -> AXSnapshot {
+            var kids = (1...200).map { AXNode(role: "AXStaticText", title: "第\($0)条") }
+            kids.append(AXNode(role: "AXTextArea", title: "",
+                               frame: AXRect(x: 100, y: boxY, w: 800, h: 90)))
+            let root = AXNode(role: "AXWindow", title: "长列表与输入框",
+                              frame: AXRect(x: 0, y: 0, w: 1200, h: 600), children: kids)
+            return AXSnapshot.build(root: root, appName: "x", windowTitle: "长列表与输入框")
+        }
+        // 贴底: 底边 590, 距窗口底 10pt ⇒ 必须捞回来
+        let bottomText = bottomBarSnap(boxY: 500).rendered()
+        check(bottomText.contains("[201] textarea"),
+              "T-COMPUTER 底部固定区(输入框)不许被渲染上限吃掉 —— 它在遍历末尾, 却在屏幕最下面")
+        check(shownRowCount(bottomText) == 120,
+              "T-COMPUTER 捞底部固定区同样要从内容那头让名额, 上界不许撑破 实际:\(shownRowCount(bottomText))")
+        // 反例: 同一个框挪到窗口中部(底边 290, 距底 310) ⇒ 它不是固定区, 不许捞
+        let midText = bottomBarSnap(boxY: 200).rendered()
+        check(!midText.contains("[201] textarea"),
+              "T-COMPUTER 判据是'贴窗口底'而不是'任何大框' —— 中部的大框照样该被截")
+
         // MARK: AX 树 —— 批 2m: 日期格要进快照, 而且**只有它**能借 identifier 当名字
         //
         // 造的是真机的形状(2026-11-04 实测): 日历事件编辑器展开时间之后是**四个**
@@ -1102,12 +1131,17 @@ extension SmokeMain {
         // 的后果是：读法放宽了，而用户在设置页根本勾不到这个 App（等于这个 App 不存在）。
         // ⚠️ "装了 Chrome"这一档必须显式喂 —— 不喂的话 Chrome 从清单里消失，这条会红在
         //    一个与"表 vs 清单"无关的原因上（2026-11-10 起 Chrome 在 thirdParty）。
+        // ⚠️ 2026-11-13 改成喂**全部** thirdParty: 逐个列的做法每加一个第三方 App 就假红一次
+        //    （加企业微信时正是如此）。"装了哪几个"是**环境事实**，而这条判据问的是
+        //    "表点名的 App 有没有入口" —— 喂全集才能让红只指向真越界
+        //    （表里写了个 `thirdParty` 里根本没有的 App）。
+        let allThirdParty = Set(SopInjection.thirdParty)
         let strayProfiles = ComputerAppProfile.profiledBundles
-            .filter { !ComputerSettings.supported(installed: ["com.google.Chrome"]).contains($0) }
+            .filter { !ComputerSettings.supported(installed: allThirdParty).contains($0) }
         check(strayProfiles.isEmpty,
               "T-COMPUTER 读法表点名的 App 必须真在清单里 (否则那张表在描述一个勾不到的东西; "
               + "实际越界: \(strayProfiles) —— 清单 = "
-              + "\(ComputerSettings.supported(installed: ["com.google.Chrome"])))")
+              + "\(ComputerSettings.supported(installed: allThirdParty)))")
 
         // 只有空白的文本(空格/换行)等于没有 —— 那些行在屏幕上什么也不显示
         let blankText = AXSnapshot.build(root: AXNode(role: "AXWindow", title: "w", children: [

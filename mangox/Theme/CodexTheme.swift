@@ -307,8 +307,54 @@ enum CodexTheme {
 enum Tune {
 
     // 窗口
-    static let windowMinSize     = CGSize(width: 1280, height: 820)
-    static let windowDefaultSize = CGSize(width: 1440, height: 900)
+    /// 收缩下限的**高**。⚠️ 与宽是两件事，分开定：重排只由**宽**触发（行高由列宽算出来），
+    /// 高度怎么变都不重新测量任何一行 ⇒ 它不参与下面那条判据，留一个"装得下输入区 + 两三行"的值即可。
+    static let windowMinHeight: CGFloat = 780
+
+    /// 拖到最窄时，正文列**左右各留**多少空白（下面用 `× 2`，每边 = 它的一半）。
+    ///
+    /// 2026-11-13 boss：「留白多一点吧诸如 10 20，留 1 太小了」—— 只留 1pt（半像素余量）时，
+    /// 拖到最窄窗口右缘会**贴着**正文列，视觉上读成"顶到边 / 被裁了"，而不是"这里是边距"。
+    /// 20 = 每边 10：比正文列自身的 48pt 内边距薄一档，但已经看得出是留白。
+    /// ⚠️ 顺手把"半像素防舍入"也兼掉了（20 ≫ 0.5pt，可用宽不可能舍入到 776 以下）。
+    /// ⚠️ **别超过 32**：再宽就是拖到最小也消不掉的死白 —— 旧值 1100 多出的那 67pt 就是前车之鉴。
+    static let windowMinGutter: CGFloat = 20
+
+    /// 收缩下限的**宽**。判据（2026-11-13 boss）:
+    /// **「在不触发对话区重新排版的前提下，窗口能调整的范围最大」**。
+    ///
+    /// 重排的开关只有一条线：正文列可用宽 < `chatColumnWidth` 776
+    /// (`chatContentWidth 680 + 2 × chatHPadding 48`)。低于它每行重新测量 ——
+    /// 1014 条消息的会话一次全量重排 **200~800ms**（量法与对照见 `WorkspaceWindowFit` 文件头）。
+    /// ⇒ 下限 = **临界线 + 看得见的一点点留白**：再窄一 pixel 必然重排；再宽就纯粹是死白。
+    ///    三档全部从布局常量派生，**一个数字都不许抄**：
+    ///     常态     侧栏 256 + 分隔线 1 + 正文列 776 + 留白 20 = 1053
+    ///     收起侧栏          分隔线 1 + 正文列 776 + 留白 20 =  797（1920 屏并排两窗各 960 的前提）
+    ///     开工作区   常态 + 面板 360 + 它的分隔线 1 = 1414（少了它，开面板后手动缩窗照样重排）
+    /// `screenWidth` 是**安全阀**：屏幕比下限还窄（小屏 + 开工作区）时封到屏宽，否则窗口被顶得比屏幕
+    /// 还宽、**再也拖不回来**（比"重排一次"坏得多）。传 `.infinity` = 不封顶。
+    ///
+    /// ⚠️ 上一版是写死的 **1100**，来历是**手感**不是需求：2026-11-13 boss「原 1280 在 1920 宽的屏上
+    ///    占 67%, 太宽了」⇒ 按"屏宽 57%"定到 1100（那天同时把默认宽 1440 降到 1280，见
+    ///    `windowDefaultSize`）。但手感和下限是两件事 —— 1100 比临界线 1033 多出的 **67pt 一个字都
+    ///    读不出来**，只是把"能拖到多窄"提前截断了 67pt。
+    static func windowMinWidth(sidebarCollapsed: Bool, workspaceVisible: Bool,
+                              screenWidth: CGFloat = .infinity) -> CGFloat {
+        var w = chatColumnWidth + 1                       // 正文列 + 它左边那条分隔线（侧栏收起也还在）
+        if !sidebarCollapsed { w += sidebarWidth }
+        if workspaceVisible { w += workspaceWidth + 1 }
+        return min(w + windowMinGutter, screenWidth)
+    }
+
+    /// 常态档（侧栏展开、无面板）。`mangoxApp` 那层外壳拿它兜底；
+    /// **真正的下限**由 `ContentView` 按当前状态算（`windowMinWidth`）—— 外壳这层恒 ≤ 它，不会顶回去。
+    static var windowMinSize: CGSize {
+        CGSize(width: windowMinWidth(sidebarCollapsed: false, workspaceVisible: false),
+               height: windowMinHeight)
+    }
+    /// 开机默认尺寸。跟着下限一起降 (原 1440×900 = 屏宽 75%, 基本顶满)。
+    /// ⚠️ 只在**首次**启动生效 —— macOS 记住上次的窗口框, 已有装在用户身上看不到这个值。
+    static let windowDefaultSize = CGSize(width: 1280, height: 860)
     /// 设置窗 (P14: 设置从主区整页覆盖升为**独立窗口**, 由 SettingsWindowController 承载)。
     /// 尺寸按 "8 个 section 里一眼能看见 3~4 段、其余滚动" 定; 2026-10-10 首版 760×640 实测偏挤 ⇒ 放大。
     static let settingsWindowSize    = CGSize(width: 920, height: 780)
@@ -551,7 +597,7 @@ enum Tune {
 
     // 定时任务 (P3.6/P3.9)
     static let scheduleHistoryCharLimit: Int = 4000    // 持续模式注入的近期摘录截取上限
-    static let scheduleLogEditorMinHeight: CGFloat = 160 // 编辑器"工作日志"区块最小高
+    static let scheduleLogEditorHeight: CGFloat = 360    // 展开后的"工作日志"编辑器**定高**(内部自滚); 13pt 正文约 20 行
 
     // P15.6 立了"dream 的会话摘要预算"这组数（取代"让模型自己去 bash 读 pi-sessions"—— 那条路没有上界）。
     // **P17 按 256k 上下文重拼**，三处有意改动：

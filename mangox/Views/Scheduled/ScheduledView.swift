@@ -1246,66 +1246,86 @@ struct ScheduledView: View {
     }
 
     /// 工作日志区块 (P3.9 交接文件): agent 运行期写、用户可改, 磁盘为准; 保存即写回。
+    ///
+    /// ⚠️ 必须**收起 + 展开后定高** (2026-11-12): 外层是 `ScrollView`, 它给子视图提的可用高度是
+    /// **无限** —— `TextEditor` 只给 `minHeight` 时会撑到整篇文字那么高, 交接日志越长整页越长,
+    /// 最后把编辑器顶成一条。所以展开后给**定高**(内部自己滚), 收起时整块只剩一行。
     private var workLogCard: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 8) {
-                Image(systemName: "doc.text")
-                    .font(.system(size: 11))
-                    .foregroundStyle(CodexTheme.textMuted)
-                Text("工作日志")
-                    .font(CodexTheme.fontSmall)
-                    .foregroundStyle(CodexTheme.textSecondary)
-                if let d = handoffUpdatedAt {
-                    Text("更新于 \(d.formatted(.relative(presentation: .named)))")
+                Button {
+                    withAnimation(CodexTheme.animFast) { showWorkLog.toggle() }
+                } label: {
+                    HStack(spacing: 8) {
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 9, weight: .semibold))
+                            .foregroundStyle(CodexTheme.textMuted)
+                            .rotationEffect(showWorkLog ? .degrees(90) : .zero)
+                        Image(systemName: "doc.text")
+                            .font(.system(size: 11))
+                            .foregroundStyle(CodexTheme.textMuted)
+                        Text("工作日志")
+                            .font(CodexTheme.fontSmall)
+                            .foregroundStyle(CodexTheme.textSecondary)
+                        if let d = handoffUpdatedAt {
+                            Text("更新于 \(d.formatted(.relative(presentation: .named)))")
+                                .font(CodexTheme.fontTiny)
+                                .foregroundStyle(CodexTheme.textMuted)
+                        }
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                Spacer()
+                if showWorkLog {
+                    Button("重新读取") { loadHandoff() }
+                        .buttonStyle(.plain)
+                        .font(CodexTheme.fontSmall)
+                        .foregroundStyle(CodexTheme.textSecondary)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 3)
+                        .contentShape(Rectangle())
+                        .help("丢弃本地修改, 重读磁盘文件")
+                    Button("保存日志") { saveHandoff() }
+                        .buttonStyle(.plain)
+                        .font(CodexTheme.fontSmall)
+                        .foregroundStyle(CodexTheme.textPrimary)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 3)
+                        .contentShape(Rectangle())
+                        .help("写回磁盘, 下次运行生效")
+                }
+            }
+            if showWorkLog {
+                ZStack(alignment: .topLeading) {
+                    TextEditor(text: $draftLog)
+                        .font(CodexTheme.fontBody)
+                        .scrollContentBackground(.hidden)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 10)
+                        .frame(height: Tune.scheduleLogEditorHeight)
+                    if draftLog.isEmpty {
+                        Text("首次运行前为空; agent 运行后会把关键进展写在这里, 也可手动编辑干预任务方向…")
+                            .font(CodexTheme.fontBody)
+                            .foregroundStyle(CodexTheme.textMuted)
+                            .padding(.leading, 12)
+                            .padding(.top, 10)
+                            .allowsHitTesting(false)
+                    }
+                }
+                .background(CodexTheme.bgComposer)
+                .clipShape(RoundedRectangle(cornerRadius: CodexTheme.radiusLg))
+                .overlay(
+                    RoundedRectangle(cornerRadius: CodexTheme.radiusLg)
+                        .stroke(CodexTheme.border.opacity(0.45), lineWidth: 1)
+                )
+                if let t = editingTask() {
+                    Text(store.handoffPath(for: t))
                         .font(CodexTheme.fontTiny)
                         .foregroundStyle(CodexTheme.textMuted)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
                 }
-                Spacer()
-                Button("重新读取") { loadHandoff() }
-                    .buttonStyle(.plain)
-                    .font(CodexTheme.fontSmall)
-                    .foregroundStyle(CodexTheme.textSecondary)
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 3)
-                    .contentShape(Rectangle())
-                    .help("丢弃本地修改, 重读磁盘文件")
-                Button("保存日志") { saveHandoff() }
-                    .buttonStyle(.plain)
-                    .font(CodexTheme.fontSmall)
-                    .foregroundStyle(CodexTheme.textPrimary)
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 3)
-                    .contentShape(Rectangle())
-                    .help("写回磁盘, 下次运行生效")
-            }
-            ZStack(alignment: .topLeading) {
-                TextEditor(text: $draftLog)
-                    .font(CodexTheme.fontBody)
-                    .scrollContentBackground(.hidden)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 10)
-                    .frame(minHeight: Tune.scheduleLogEditorMinHeight)
-                if draftLog.isEmpty {
-                    Text("首次运行前为空; agent 运行后会把关键进展写在这里, 也可手动编辑干预任务方向…")
-                        .font(CodexTheme.fontBody)
-                        .foregroundStyle(CodexTheme.textMuted)
-                        .padding(.leading, 12)
-                        .padding(.top, 10)
-                        .allowsHitTesting(false)
-                }
-            }
-            .background(CodexTheme.bgComposer)
-            .clipShape(RoundedRectangle(cornerRadius: CodexTheme.radiusLg))
-            .overlay(
-                RoundedRectangle(cornerRadius: CodexTheme.radiusLg)
-                    .stroke(CodexTheme.border.opacity(0.45), lineWidth: 1)
-            )
-            if let t = editingTask() {
-                Text(store.handoffPath(for: t))
-                    .font(CodexTheme.fontTiny)
-                    .foregroundStyle(CodexTheme.textMuted)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
             }
         }
     }
