@@ -28,7 +28,6 @@ extension SmokeMain {
 
         let store = ChatStore(transport: MockTransport(), dbPath: tpDb,
                               managedExtensionsDir: tpDir + "/ext")
-        store.mailbox.stopScheduler()
 
         // ---- ① 项目会话: 自动命名 ⇒ 重建 ⇒ 名字必须还在 ----
         store.addProject(title: "TP 项目", path: tpProjPath)
@@ -53,7 +52,6 @@ extension SmokeMain {
         // 重建 store = 走 loadProjects → loadItems, 与 App 启动完全同一条路
         let reborn = ChatStore(transport: MockTransport(), dbPath: tpDb,
                                managedExtensionsDir: tpDir + "/ext")
-        reborn.mailbox.stopScheduler()
         check(reborn.projects.first?.id == pid,
               "T-TITLEPERSIST ① 重建后读到的是**同一个项目行** (否则下面的标题断言对错了靶)")
         let rebornTitle = reborn.projects.first?.items.first(where: { $0.id == projSid })?.title
@@ -71,7 +69,6 @@ extension SmokeMain {
         store.renameConversation(chatSid, to: "平铺区改名")
         let reborn2 = ChatStore(transport: MockTransport(), dbPath: tpDb,
                                 managedExtensionsDir: tpDir + "/ext")
-        reborn2.mailbox.stopScheduler()
         let rebornChatTitle = reborn2.chats.first(where: { $0.id == chatSid })?.title
         check(rebornChatTitle == "平铺区改名",
               "T-TITLEPERSIST ② 平铺会话的标题重启后还在 (实测 \(rebornChatTitle ?? "nil"))")

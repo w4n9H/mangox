@@ -21,7 +21,6 @@ extension SmokeMain {
         let dir = fixtureDir("msgrev")
         let store = ChatStore(transport: MockTransport(), dbPath: dir + "/r.db",
                               managedExtensionsDir: dir + "/ext")
-        store.mailbox.stopScheduler()
         store.messages = []
 
         let r0 = store.messagesRevision

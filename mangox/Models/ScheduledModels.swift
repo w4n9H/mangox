@@ -6,6 +6,17 @@
 
 import Foundation
 
+/// P19 任务类型 —— 两档 + 一个只读归档态。
+/// `.execute`（Cron 定时）/ `.assistant`（助理）可新建、可保存；
+/// `.legacyWaiting` 是旧「Watch 条件值守」任务的归档态：**不可新建、不可保存、不可 fire**。
+/// ⚠️ 它**不落库**（`upsert` 写 NULL）：由 `condition` 非空派生 —— 条件值守的全部语义本来
+/// 就藏在 `condition` 里，多存一份只会让两边有机会不一致。
+enum TaskKind: String, Codable {
+    case execute
+    case assistant
+    case legacyWaiting
+}
+
 struct ScheduledTask: Identifiable {
     let id: UUID
     var name: String
@@ -31,6 +42,13 @@ struct ScheduledTask: Identifiable {
     var createdAt: Date = Date()
     /// P10.4 任务级执行配置 (nil = 跟随全局默认); fire 时只动日志会话 transport, 不碰全局。
     var config: SessionConfig? = nil
+    /// P19 任务类型。**解码顺序有讲究**: 先看 `condition` 非空 ⇒ `.legacyWaiting`,
+    /// 再看这里缺省 ⇒ `.execute`。顺序反了会把旧条件值守任务的「触发后动作」
+    /// 当成普通 prompt 每轮无条件执行 —— 静默变意, 比崩溃更坏。
+    var kind: TaskKind = .execute
+
+    /// 旧条件值守任务 = 只读归档: 不 fire、不保存、列表置灰。
+    var isLegacyWaiting: Bool { kind == .legacyWaiting }
 
     /// 解析失败 = cron 非法 (UI 上标记, 调度器跳过)。
     var cronExpr: CronExpr? { CronExpr.parse(cron) }

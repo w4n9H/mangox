@@ -11,9 +11,6 @@ import Combine
 @MainActor
 final class SchedulerService: ObservableObject {
 
-    /// 等待型任务完成标记 (HTML 注释: Markdown 渲染不可见, 客户端可解析)
-    static let doneMarker = "<!--task: done-->"
-
     // P3.6: 本地定时任务 (仅 App 运行期生效, launchd 后置)
     @Published var scheduledTasks: [ScheduledTask] = []
     @Published var showScheduledPanel: Bool = false
@@ -25,12 +22,9 @@ final class SchedulerService: ObservableObject {
     /// P17: 防 App Nap 的常驻断言。**必须强持有** —— 头文件明说对象一旦被释放断言就自动结束,
     /// 存成局部变量等于没加。`private(set)` 是为了让冒烟能断言"加上了 / 交还了"。
     private(set) var napAssertion: NSObjectProtocol?
-    // P3.10: 等待型任务 fire 的回合追踪 (P4.0.2 会话化: 日志会话 sid -> 任务 id)
-    private var fireTurnTask: [UUID: UUID] = [:]   // 在途 fire: 日志会话 -> 任务 id
-    private var fireDoneHit: Set<UUID> = []        // 本轮日志会话已命中 done 标记
     // P15.3: 在途的 dream fire —— 日志会话 -> 这次运行的 spool 文件。
-    // 与 `fireTurnTask` 分开: 那个只在**等待型**任务上有值（`condition` 非空）, 而 dream 是普通
-    // cron 任务 ⇒ 复用那个字典会让 dream 的收口被"等待型"的判据顺手漏掉。
+    // 只服务 dream 自己: 它管的是"一批提案的收口", 判据是这一条字典 + `dreamTargets`,
+    // 与任何"任务类型"的判据无关。
     private var dreamFires: [UUID: String] = [:]
     /// 定向 dream（`由此 Dream`）在途的日志会话 -> 目标会话 id。**只服务两件事**:
     /// ① 收口时发一句「dream 完成: N 条待审」到会话横幅（否则用户在侧栏看着自己那场会话，
@@ -583,7 +577,7 @@ final class SchedulerService: ObservableObject {
         }
     }
 
-    /// 停调度 + 交还断言（与 `startScheduler` 对称; MailboxSentinelService 同款）。
+    /// 停调度 + 交还断言（与 `startScheduler` 对称）。
     func stopScheduler() {
         schedulerTimer?.invalidate()
         schedulerTimer = nil
@@ -614,6 +608,10 @@ final class SchedulerService: ObservableObject {
     /// 并指令 agent 把关键进展写回交接文件——连续性靠文件携带, 磁盘为准零缓存。
     func runScheduledFire(_ task: ScheduledTask, at now: Date = Date(),
                           targeted: ConversationItem? = nil) {
+        // P19: 旧条件值守任务只读归档 —— 不 spawn、不写日志、不落痕。
+        // 它是全系统唯一一条「无人授权自动执行」的路（fire 恒 unattended: true），
+        // 封在这里就是把那条路拆掉；静默是刻意的，UI 上该行已标「旧类型（已停用）」。
+        if task.isLegacyWaiting { return }
         guard let store else { return }
         if let pid = task.projectId {
             guard store.projects.contains(where: { $0.id == pid }) else {
@@ -735,9 +733,6 @@ final class SchedulerService: ObservableObject {
                         dreamSpool: fireSpool)
         // P10.3 联动: 日志会话行带上任务配置 (点开会话即恢复其执行配置)
         if let cfg { store.persistence?.saveSessionConfig(id: logId, config: cfg) }
-        if let c = task.condition, !c.isEmpty {
-            fireTurnTask[logId] = task.id   // 等待型: 本回合结束扫 done 标记
-        }
         // P15.9: 定向 fire **不推进 `lastRunAt` / `runCount`** —— 它不是"这个定时任务的一次运行"。
         // `lastRunAt` 一被推到现在, 就吃掉"上次真跑在很久以前"的那段**补跑窗口**：
         // `dreamDigestSince` 取 `max(now - 36h, lastRunAt)`，36 小时是**地板**、改不动, 被吃掉的
@@ -964,41 +959,13 @@ final class SchedulerService: ObservableObject {
         return (try? content.write(toFile: path, atomically: true, encoding: .utf8)) != nil
     }
 
-    // MARK: - Prompt 组装 (P3.10)
-
-    /// P3.10 等待型 prompt: 两分支协议 (未成立→一句观察轻检查; 成立→查防重复记录→执行动作→done 标记)。
-    /// 轻检查轮不注入近期摘录 (token 经济); 交接文件保持极短且必注入 (含"已触发"防重复记录)。
-    private func buildWaitingPrompt(_ task: ScheduledTask, condition: String) -> String {
-        var sections: [String] = []
-        sections.append("""
-        【等待任务 · 本轮检查】
-        触发条件: \(condition)
-        要求: 用工具实际核实当前状态, 不要凭此前记忆推断; 不确定是否成立时按"未成立"处理。
-        - 若条件未成立: 只用一句话报告观察结果 (如"截至当前尚未…"), 不要执行任何其他动作。
-        - 若条件成立: 先读下方交接文件确认此前未触发过, 然后执行【触发后动作】, 完成后在回复最后单独一行输出: \(Self.doneMarker)
-        """)
-        var handoff = readHandoff(for: task)?.content
-        if (handoff ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            if let rebuilt = rebuildHandoff(from: task.logSessionId) {
-                saveHandoff(for: task, content: rebuilt)
-                handoff = rebuilt
-            }
-        }
-        if let h = handoff?.trimmingCharacters(in: .whitespacesAndNewlines), !h.isEmpty {
-            sections.append("【交接文件】\n\(h)")
-        }
-        sections.append("【触发后动作】\n\(task.prompt)")
-        return sections.joined(separator: "\n\n")
-    }
+    // MARK: - Prompt 组装 (P3.9/P3.10)
 
     /// 持续模式 prompt 组装 (P3.9): 交接文件全文 (长期记忆) + 近期运行摘录 (短期上下文)
     /// + 本次指令 + 写回指令。文件丢失时从日志会话 (run-log) 静默重建。
-    /// 等待型 (condition 非空) 走等待协议; 普通 prompt 原样返回。
+    /// P19: 条件值守档已整体移除，这里不再有「等待协议」分支 —— 旧任务归 `.legacyWaiting` 且不 fire。
     /// P9.1b 惯例: **internal** —— 冒烟要断言"存量旧行不影响 dream"（那个失效模式在别处零红灯）。
     func buildScheduledPrompt(_ task: ScheduledTask, targeted: ConversationItem? = nil) -> String {
-        if let c = task.condition, !c.isEmpty {
-            return buildWaitingPrompt(task, condition: c)
-        }
         // P15.6: dream 的输入 = **App 侧算好的有界摘要**, 挂在指令之后一起发出去。
         // 刻意不写进 `task.prompt`: 那一段是用户在编辑器里看见、会去改的东西, 而摘要是
         // **每次 fire 现算的**派生数据 —— 混进去会让"任务指令"这一栏每次都不一样。
@@ -1071,39 +1038,9 @@ final class SchedulerService: ObservableObject {
         return record
     }
 
-    // MARK: - Done 标记扫描 (P3.10, 事件归并在 ChatStore, 状态在这里)
-
-    /// 回复命中 done 标记且该会话有在途 fire → 点亮 fireDoneHit (ChatStore 剥离时回调)。
-    func noteDoneMarkerHit(sid: UUID) {
-        if fireTurnTask[sid] != nil { fireDoneHit.insert(sid) }
-    }
-
-    /// 会话逐出: 清在途 fire 追踪 (ChatStore.evictTransport 回调)。
-    func clearFireTracking(sid: UUID) {
-        fireTurnTask[sid] = nil
-        fireDoneHit.remove(sid)
-    }
-
-    /// P3.10/P4.0.2: 等待型 fire 收尾——done 命中则自动停用任务。
-    /// 审批策略无需恢复: 池化后策略按回合下发 (unattended fire 只影响自己的实例配置)。
-    func finishWaitingFireIfNeeded(sid: UUID) {
-        guard let tid = fireTurnTask.removeValue(forKey: sid) else { return }
-        let hit = fireDoneHit.contains(sid)
-        fireDoneHit.remove(sid)
-        guard hit,
-              let idx = scheduledTasks.firstIndex(where: { $0.id == tid }) else { return }
-        scheduledTasks[idx].enabled = false
-        scheduledTasks[idx].completedAt = Date()
-        try? store?.persistence?.upsertScheduled(scheduledTasks[idx])
-    }
-
     // MARK: - P15.3 dream 收口（spool → note_proposals）
 
     /// 一次 dream fire 结束时调 —— 把 spool 收进 `note_proposals`, 然后删掉 spool。
-    ///
-    /// ⚠️ 与 `finishWaitingFireIfNeeded` **分开**而不是并进去: 那个管的是"等待型任务命中 done
-    /// ⇒ 自动停用", 判据是 `fireTurnTask`; 这个管的是"一批提案的收口", 判据是 `dreamFires`。
-    /// 合成一个函数会让两条互不相干的判据共用一次 `return`（谁先命中就把另一条吞掉）。
     ///
     /// 两条路都要收: **落定**（`agentSettled`）与**手动停**（`stopTurn`）——「跑不完不算失败」。
     func finishDreamFireIfNeeded(sid: UUID) {
@@ -1192,11 +1129,11 @@ final class SchedulerService: ObservableObject {
 
     // MARK: - 侧栏徽标 (P3.10)
 
-    /// 侧栏任务日志会话标志 (定时任务 clock / 哨兵任务雷达)
+    /// 侧栏任务日志会话标志 (定时任务 clock / 助理 sparkles)
     func scheduledBadge(for sessionId: UUID) -> String? {
         for t in scheduledTasks where t.logSessionId == sessionId {
-            return (t.condition?.isEmpty == false)
-                ? "dot.radiowaves.left.and.right"
+            return t.kind == .assistant
+                ? "sparkles"
                 : "clock.badge"
         }
         return nil

@@ -13,7 +13,6 @@ extension SmokeMain {
         let drDir = fixtureDir("p158")
         let dr = ChatStore(transport: MockTransport(), dbPath: drDir + "/p158.db",
                            managedExtensionsDir: drDir + "/ext")
-        dr.mailbox.stopScheduler()
         // ⚠️ **实例级**重定向（优先级高于 `:184` 那个进程级）: 后面几节会往进程级的
         //    `<noteTmp>/global` 里写笔记, 不隔离的话"两个根都空"就随**节的执行顺序**飘。
         dr.knowledge.noteRootOverride = drDir + "/notes"

@@ -14,7 +14,6 @@ extension SmokeMain {
         let dsDB = dsDir + "/stale.db"
         let dsSeed = ChatStore(transport: MockTransport(), dbPath: dsDB,
                                managedExtensionsDir: dsDir + "/ext-seed")
-        dsSeed.mailbox.stopScheduler()
         dsSeed.scheduler.seedDreamTaskIfNeeded()
         let dsSeeded = dsSeed.scheduledTasks.first { SchedulerService.isDreamTask($0) }
         check(dsSeeded?.prompt == SchedulerService.dreamPrompt,
@@ -33,7 +32,6 @@ extension SmokeMain {
         // —— 关键夹具: 新 store 打开同一个库（= 老库 + 新版本启动）——
         let ds = ChatStore(transport: MockTransport(), dbPath: dsDB,
                            managedExtensionsDir: dsDir + "/ext")
-        ds.mailbox.stopScheduler()
         let dsRow = ds.scheduledTasks.first { SchedulerService.isDreamTask($0) }
         check(dsRow?.prompt == dsFake,
               "P15.6b 夹具: 新版本打开老库, 读到的**确实是那份旧副本**"

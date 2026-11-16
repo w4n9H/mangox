@@ -14,7 +14,6 @@ extension SmokeMain {
         let dir = fixtureDir("p18")
         let store = ChatStore(transport: MockTransport(), dbPath: dir + "/p18.db",
                               managedExtensionsDir: dir + "/ext")
-        store.mailbox.stopScheduler()
         // 进程级重定向之外再加一层实例级: 本用例与别的用例同跑时, 笔记根必须只落在自己的目录。
         store.knowledge.noteRootOverride = dir + "/notes"
         let projPath = dir + "/proj"

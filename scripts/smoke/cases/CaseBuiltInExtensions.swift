@@ -78,7 +78,6 @@ extension SmokeMain {
         let store = ChatStore(transport: mock, dbPath: dir + "/a.db",
                               managedExtensionsDir: dir + "/ext",
                               modelKeyStore: InMemoryModelKeyStore())
-        store.mailbox.stopScheduler()
         let computerPath = PiRpcTransport.ensureComputerExtensionFile(dir: dir + "/ext")
         store.scanExtensions()
 

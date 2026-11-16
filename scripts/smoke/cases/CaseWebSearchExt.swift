@@ -76,7 +76,6 @@ extension SmokeMain {
         let wsA = ChatStore(transport: wsBlockedMock, dbPath: wsDir + "/a.db",
                             managedExtensionsDir: wsDir + "/ext-a",
                             modelKeyStore: InMemoryModelKeyStore())
-        wsA.mailbox.stopScheduler()
         wsA.scanExtensions()
         let blockedRow = wsA.extensions.first { $0.name == "mangox-web-search" }
         check(blockedRow != nil,
@@ -105,7 +104,6 @@ extension SmokeMain {
         let wsB = ChatStore(transport: wsLiveMock, dbPath: wsDir + "/b.db",
                             managedExtensionsDir: wsDir + "/ext-b",
                             modelKeyStore: InMemoryModelKeyStore())
-        wsB.mailbox.stopScheduler()
         check(wsB.bochaKey == nil, "P10.1b 初始: 没配 key ⇒ bochaKey 为 nil（空串也算没配）")
         wsB.setBochaKey("sk-test-1")
         let liveRow = wsB.extensions.first { $0.name == "mangox-web-search" }

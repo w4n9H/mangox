@@ -14,7 +14,6 @@ extension SmokeMain {
         let napDir = fixtureDir("p17nap")
         let napStore = ChatStore(transport: MockTransport(), dbPath: napDir + "/p17nap.db",
                                  managedExtensionsDir: napDir + "/ext")
-        napStore.mailbox.stopScheduler()
         // `ChatStore` 初始化里就调了 `startScheduler`(589 行) ⇒ 此刻本来就该持有一条。
         check(napStore.scheduler.napAssertion != nil,
               "P17 nap: ChatStore 一起来就持有防降频断言（startScheduler 那条路）")
@@ -155,7 +154,6 @@ extension SmokeMain {
 
         let napStore2 = ChatStore(transport: MockTransport(), dbPath: napDir + "/p17nap.db",
                                   managedExtensionsDir: napDir + "/ext")
-        napStore2.mailbox.stopScheduler()
         napStore2.scheduler.refreshMissedFires(now: mfNow)
         check(napStore2.missedFires.isEmpty,
               "P17 漏跑: 忽略**落了库** —— 重建 store 后它不再提示（只在内存里清 ⇒ 这里立刻红）")

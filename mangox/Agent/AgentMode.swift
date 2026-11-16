@@ -119,6 +119,20 @@ enum AgentMode: String, Codable, CaseIterable, Identifiable {
         self = .standard
     }
 
+    /// P19: **巡检/分析段的只读工具面** —— 与上面四档不是一回事, 所以不复用 `toolListArguments`。
+    ///
+    /// 为什么是 allowlist 而不是 `+x` 增补: allowlist 的语义是"**只留**这些"(见 `toolListArguments`
+    /// 的实测注), 而这一档要的正是"只留"; `+grep` 那种写法会把 pi 默认的 `bash / write / edit`
+    /// 一起带进来 —— 那一档是"巡检", 不是"写代码", 差一个 `bash` 就等于把只读约束取消了。
+    ///
+    /// 为什么 `bocha_web_search` 硬写进 allowlist: allowlist 会**连扩展注册的工具一起裁掉**
+    /// (2026-10-16 实测, 见 `toolListArguments`), 而分析段必须能联网查资料(老板定) ——
+    /// 于是"裁扩展"与"要联网"只能靠**显式点名**同时成立: 名字写进 allowlist, 扩展照常挂那一个。
+    ///
+    /// ⚠️ 四个内置 + 一个扩展, **五个名字**。多一个都算越面, 少一个就等于少一条命。
+    /// 判据在 `CaseWatchFace`(逐字对拍本数组, 改成 `+grep` 或加 `bash` 必须红)。
+    static let readOnlyToolNames: [String] = ["read", "grep", "find", "ls", "bocha_web_search"]
+
     /// spawn 参数矩阵 (纯函数, 冒烟直接断言): 档位 → --tools / --extension 组装。
     /// 系统扩展不在此列 (PiRpcTransport 固定首挂内置 llama.cpp + 托管审批桥)。
     static func spawnArguments(for mode: AgentMode, businessExtensions: [String]) -> [String] {

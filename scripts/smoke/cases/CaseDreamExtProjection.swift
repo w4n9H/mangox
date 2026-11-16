@@ -54,7 +54,6 @@ extension SmokeMain {
         let peDir = fixtureDir("ext-proj")
         let pe = ChatStore(transport: MockTransport(), dbPath: peDir + "/p.db",
                            managedExtensionsDir: peDir + "/ext")
-        pe.mailbox.stopScheduler()
         pe.scanExtensions()
         let peDreams = pe.extensions.filter { $0.name == "mangox-dream" }
         check(peDreams.count == 1,
@@ -88,7 +87,6 @@ extension SmokeMain {
                             atomically: true, encoding: .utf8)
         let pr = ChatStore(transport: MockTransport(), dbPath: prDir + "/r.db",
                            managedExtensionsDir: prExt)
-        pr.mailbox.stopScheduler()
         pr.scanExtensions()
         let prDreams = pr.extensions.filter { $0.name == "mangox-dream" }
         check(prDreams.count == 1,

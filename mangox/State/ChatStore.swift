@@ -421,48 +421,10 @@ final class ChatStore: ObservableObject {
     private var modelCancellable: AnyCancellable?
     private var captureCancellable: AnyCancellable?
     private var backupCancellable: AnyCancellable?
-    private var mailboxCancellable: AnyCancellable?
 
-    // MARK: - P10.2a 邮箱哨兵 (域逻辑在 MailboxSentinelService, 此处 facade 转发)
-
-    let mailbox = MailboxSentinelService()
-    var mailboxAccounts: [MailboxAccount] { mailbox.accounts }
-    var mailboxSentinels: [MailboxSentinel] { mailbox.sentinels }
-    var mailboxTasks: [MailboxTask] { mailbox.tasks }
-    var mailboxNotice: String? { mailbox.mailboxNotice }
-    /// 冒烟注入: 收件/发件实例工厂 (缺省 = 生产 `CurlMailTransport`, 见 P10.2c)
-    var mailboxTransportFactory: ((MailboxAccount) -> (any MailTransport)?)? {
-        get { mailbox.makeTransport }
-        set { mailbox.makeTransport = newValue }
-    }
-    /// 冒烟注入: 凭据缝 (默认 Keychain)
-    var mailboxCredentials: MailboxCredentialStore {
-        get { mailbox.credentials }
-        set { mailbox.credentials = newValue }
-    }
-    @discardableResult func upsertMailboxSentinel(_ s: MailboxSentinel) -> Bool { mailbox.upsertSentinel(s) }
-    func addMailboxAccount(_ a: MailboxAccount) { mailbox.addAccount(a) }
-    func updateMailboxAccount(_ a: MailboxAccount) { mailbox.updateAccount(a) }
-    @discardableResult func removeMailboxAccount(_ id: UUID) -> Bool { mailbox.removeAccount(id) }
-    func removeMailboxSentinel(id: UUID) { mailbox.removeSentinel(id: id) }
-    func toggleMailboxSentinel(id: UUID) { mailbox.toggleSentinel(id: id) }
-    func availableMailboxAccounts(forSentinel id: UUID?) -> [MailboxAccount] { mailbox.availableAccounts(forSentinel: id) }
-    func pollMailboxOnce() async { await mailbox.pollOnce() }
-
-    // P10.2d: Settings 面板读写的 facade (域逻辑在 service)
-    var mailboxRejections: [MailboxRejection] { mailbox.allRecentRejections() }
-    /// P10.2e: 单个 sparse agent 的拒收 (编辑器内嵌排查段用; 时间倒序)。
-    func mailboxRejections(sentinelId: UUID) -> [MailboxRejection] { mailbox.recentRejections(sentinelId: sentinelId) }
-    var mailboxQueuedTaskCount: Int { mailbox.queuedTaskCount }
-    var mailboxRunningTask: MailboxTask? { mailbox.runningTask }
-    var mailboxLastPollAt: Date? { mailbox.lastPollAt }
-    func sentinelBoundToken(accountId: UUID) -> MailboxSentinel? { mailbox.sentinel(for: accountId) }
-    func testMailboxConnection(accountId: UUID) async -> String? { await mailbox.testConnection(accountId: accountId) }
-    func hasMailboxAccountAuth(accountId: UUID) -> Bool { mailbox.hasAccountAuth(accountId: accountId) }
-    func setMailboxAccountAuth(_ v: String?, accountId: UUID) { mailbox.setAccountAuth(v, accountId: accountId) }
-    func hasMailboxSentinelSecret(sentinelId: UUID) -> Bool { mailbox.hasSentinelSecret(sentinelId: sentinelId) }
-    func setMailboxSentinelSecret(_ v: String?, sentinelId: UUID) { mailbox.setSentinelSecret(v, sentinelId: sentinelId) }
-    func addMailboxWhitelist(sentinelId: UUID, address: String) { mailbox.addToWhitelist(sentinelId: sentinelId, address: address) }
+    // P19: 收件档（邮箱哨兵）整套删除 —— 域逻辑与门面一起走。
+    // 留下的只有底层邮件通道（`MailTransport` / `CurlMailTransport` / `MailboxCredentialStore`）,
+    // 它服务 P19 的邮件 sink 与 P19.1 的邮件通道, 与"来信驱动 agent"无关。
 
     // MARK: - P3.11 扩展管理
     @Published var extensions: [ExtensionItem] = []
@@ -790,13 +752,11 @@ final class ChatStore: ObservableObject {
         model.attach(self)
         capture.attach(self)
         backup.attach(self)
-        mailbox.attach(self)   // P10.2a: 载入账号/哨兵/线程 + 起 tick
         schedulerCancellable = scheduler.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }
         knowledgeCancellable = knowledge.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }
         modelCancellable = model.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }
         captureCancellable = capture.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }
         backupCancellable = backup.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }
-        mailboxCancellable = mailbox.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }
         // P15.3: 预置那条 dream 任务 (**默认关**)。放在 attach 之后是因为它要读 `scheduledTasks`
         // (上一行 492 已经载完) 与 settings KV; 摆在 attach 外面是**刻意的** ——
         // `attach` 是纯接线, 种数据不该藏在接线里（同"一件事只有一个地方做"那条）。
@@ -1470,8 +1430,6 @@ final class ChatStore: ObservableObject {
         transports[sid] = nil
         runningTurns.remove(sid)
         liveTurns[sid] = nil
-        scheduler.clearFireTracking(sid: sid)   // P9.1b: 在途 fire 追踪随会话逐出清理
-        mailbox.noteSessionEvicted(sid: sid)    // P10.2a: 绑定该会话的远程线程失去落点 → 判失败
         turnStartAt[sid] = nil
         approvalBlocked.remove(sid)   // P8-T26: 会话删除即清
     }
@@ -2045,15 +2003,13 @@ final class ChatStore: ObservableObject {
         turnStartAt[sid] = nil
         approvalBlocked.remove(sid)   // P8-T26: 手动停 → 在途审批一并死掉
         if injectedTurnSid == sid { injectedTurnSid = nil }
-        finishWaitingFireIfNeeded(sid: sid)
-        // P15.3: dream 的收口挂在**与等待型同一个位置** —— 两者都是"这次 fire 到此为止"的落点。
+        // P15.3: dream 的收口 —— "这次 fire 到此为止"的落点之一。
         // 手动停（本处）也要收: 「跑不完不算失败」, 已经产出的提案照样进表。
         scheduler.finishDreamFireIfNeeded(sid: sid)
         // 这一轮到此为止 ⇒ 把这场会话在**今天**的流水刷新一次。
         // 放在 dream 收口之后（那之后 spool 已变成提案，流水里那一行才说得出"几轮"）。
         // 节流在 `TimelineJournal` 里（3 秒），所以同一轮漏出的多个落定事件不会重写三遍。
         TimelineJournal.recordSession(store: self, sessionId: sid)
-        mailbox.noteTurnFinished(sid: sid, blocks: transportFor(sid).autoJudgeBlocks)
     }
 
     /// 重新生成: 截断最后一条 user 消息之后的内容并重放流式回复。
@@ -2599,15 +2555,11 @@ extension ChatStore: AgentTransportDelegate {
             }
             liveTurns[sid] = nil   // 产出已落库, 镜像即弃 (库为准)
             if injectedTurnSid == sid { injectedTurnSid = nil }
-            finishWaitingFireIfNeeded(sid: sid)
             scheduler.finishDreamFireIfNeeded(sid: sid)   // P15.3: 正常落定的那条路
             // 同上（`stopTurn` 那处也有一份）—— 两个落定点记的是同一件事。
             // 分两处而不是抽一个"回合结束"统一入口: 现在没有这样一个入口, 而造一个
             // 要动整条事件分发的形状（那远超"记一行流水"该动的范围）。
             TimelineJournal.recordSession(store: self, sessionId: sid)
-            // P10.2a/b: 释放远程回合串行位 + 结算回执 (blocks = 本回合 autoJudge 拦下的命令;
-            // 事件归并没有 transport 参数, 用 sid 反查池实例 —— 与 stopTurn 同一写法)
-            mailbox.noteTurnFinished(sid: sid, blocks: transportFor(sid).autoJudgeBlocks)
         }
     }
 
@@ -2717,30 +2669,14 @@ extension ChatStore: AgentTransportDelegate {
         }
     }
 
-    /// 流式块收尾: 摘光标 + done 标记剥离 (fire 回合扫描) + 落库 (+ usage 挂载 P5.0.1)。
+    /// 流式块收尾: 摘光标 + 落库 (+ usage 挂载 P5.0.1)。
     /// 仅在 streaming→false 的翻转沿落库 (防 stopStreaming 兜底与事件收尾双写)。
     private func finalizeBlock(in list: inout [ChatMessage], id: UUID, sid: UUID, usage: MessageUsage? = nil) {
         guard let idx = list.lastIndex(where: { $0.id == id }) else { return }
         let wasStreaming = list[idx].isStreaming
         list[idx].isStreaming = false
         if let usage { list[idx].usage = usage }
-        if case .text(let s) = list[idx].content, s.contains(SchedulerService.doneMarker) {
-            list[idx].content = .text(stripDoneMarker(s, sid: sid))
-        }
         if wasStreaming { persistMessage(list[idx], sid: sid) }
-    }
-
-    /// 剥离任务状态标记 (doneMarker); 命中且该会话有在途 fire → 通知 SchedulerService (P9.1b)。
-    private func stripDoneMarker(_ s: String, sid: UUID) -> String {
-        guard s.contains(SchedulerService.doneMarker) else { return s }
-        scheduler.noteDoneMarkerHit(sid: sid)
-        return s.replacingOccurrences(of: SchedulerService.doneMarker, with: "")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-    }
-
-    /// P3.10/P4.0.2: 等待型 fire 收尾——done 命中则自动停用任务 (P9.1b: 状态在 SchedulerService)。
-    private func finishWaitingFireIfNeeded(sid: UUID) {
-        scheduler.finishWaitingFireIfNeeded(sid: sid)
     }
 
     // MARK: - P3.5: 能力上报归并

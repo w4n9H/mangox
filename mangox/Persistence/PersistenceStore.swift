@@ -232,61 +232,9 @@ final class PersistenceStore {
             created_at REAL NOT NULL
         )
         """)
-        try db.run("""
-        CREATE TABLE IF NOT EXISTS mailbox_sentinels (
-            id             TEXT PRIMARY KEY,
-            name           TEXT NOT NULL,
-            account_id     TEXT NOT NULL UNIQUE,
-            project_id     TEXT,
-            whitelist      TEXT NOT NULL DEFAULT '[]',
-            require_secret INTEGER NOT NULL DEFAULT 1,
-            poll_interval  INTEGER NOT NULL DEFAULT 30,
-            agent_mode     TEXT NOT NULL DEFAULT 'full',
-            approval       TEXT NOT NULL DEFAULT 'autoJudge',
-            probe_url      TEXT NOT NULL DEFAULT '',
-            enabled        INTEGER NOT NULL DEFAULT 0,
-            last_poll_at   REAL,
-            last_error     TEXT,
-            created_at     REAL NOT NULL
-        )
-        """)
-        try db.run("""
-        CREATE TABLE IF NOT EXISTS mailbox_tasks (
-            id              TEXT PRIMARY KEY,
-            sentinel_id     TEXT NOT NULL,
-            thread_key      TEXT NOT NULL,
-            session_id      TEXT,
-            project_id      TEXT,
-            status          TEXT NOT NULL,
-            title           TEXT NOT NULL,
-            blocked_reason  TEXT,
-            last_message_id TEXT,
-            created_at      REAL NOT NULL,
-            updated_at      REAL NOT NULL,
-            UNIQUE (sentinel_id, thread_key)
-        )
-        """)
-        try db.run("""
-        CREATE TABLE IF NOT EXISTS mailbox_rejections (
-            id          TEXT PRIMARY KEY,
-            sentinel_id TEXT NOT NULL,
-            sender      TEXT NOT NULL,
-            subject     TEXT NOT NULL,
-            reason      TEXT NOT NULL,
-            message_id  TEXT,
-            at          REAL NOT NULL
-        )
-        """)
-        try db.run("CREATE INDEX IF NOT EXISTS idx_mailbox_rejections ON mailbox_rejections(sentinel_id, at)")
-        // 旧库补列: 先查 PRAGMA table_info, 列已存在就不发 ALTER
-        // (无条件 ALTER 会被 try? 吞掉异常, 但 SQLite 自己仍往 stderr 吐 duplicate column 日志)
-        addColumnIfMissing("mailbox_sentinels", "require_secret", "INTEGER NOT NULL DEFAULT 1")
-        // 2026-09-24: 哨兵的任务级模型 (P10.4 的 `scheduled_tasks.config` 同语义, 但**不用 JSON blob**:
-        // 本表的 agent_mode/approval 已是独立列, 再塞一份 SessionConfig 会造出第二个真源)。
-        // 空串 = 尚未 pin ⇒ 跟随当前会话; thinking_level 可空 = 未手动选过 (不钉死)。
-        addColumnIfMissing("mailbox_sentinels", "provider", "TEXT NOT NULL DEFAULT ''")
-        addColumnIfMissing("mailbox_sentinels", "model_id", "TEXT NOT NULL DEFAULT ''")
-        addColumnIfMissing("mailbox_sentinels", "thinking_level", "TEXT")
+        // P19: 收件档整体删除 ⇒ mailbox_sentinels / mailbox_tasks / mailbox_rejections **不再创建**。
+        // 旧库里的这三张表与数据原样留着（列只增不删的同一条纪律: 降级回旧版仍能打开）。
+        // 账号池表保留 —— P19.1 的邮件通道要接着用它。
         addColumnIfMissing("projects", "path", "TEXT")
         // P7-M3: models 表补 reasoning 显式列 (M2 首版靠 map 有无推导, MiniMax 系 map=null 误判)
         addColumnIfMissing("models", "reasoning", "INTEGER NOT NULL DEFAULT 0")
@@ -300,6 +248,8 @@ final class PersistenceStore {
         try? db.run("UPDATE scheduled_tasks SET log_session_id = last_session_id WHERE log_session_id IS NULL AND last_session_id IS NOT NULL")
         // P3.10: 等待型任务 (condition/unattended/completed_at 等)
         addColumnIfMissing("scheduled_tasks", "condition", "TEXT")
+        // P19: 任务类型 (execute / assistant); 旧条件值守不落此列, 由 condition 派生为只读归档
+        addColumnIfMissing("scheduled_tasks", "kind", "TEXT")
         // P10.4: 任务级执行配置 (JSON blob; 复用 SessionConfig)
         addColumnIfMissing("scheduled_tasks", "config", "TEXT")
         // P10.3: 会话级配置快照 (JSON blob; SessionConfig)
@@ -1134,11 +1084,18 @@ final class PersistenceStore {
 
     func loadScheduled() throws -> [ScheduledTask] {
         let rows = try db.query("""
-            SELECT id, name, prompt, cron, project_id, enabled, last_run_at, log_session_id, continuous, condition, unattended, completed_at, run_count, created_at, config
+            SELECT id, name, prompt, cron, project_id, enabled, last_run_at, log_session_id, continuous, condition, unattended, completed_at, run_count, created_at, config, kind
             FROM scheduled_tasks ORDER BY created_at DESC
             """)
         return rows.map { row in
-            ScheduledTask(
+            // P19 解码顺序: **先看 condition**, 再看 kind 缺省。
+            // 反过来会让旧条件值守任务的「触发后动作」被当成普通 prompt 每轮无条件执行
+            // （它当年靠 condition 判断要不要跑, 现在会每轮都跑）⇒ 静默变意。
+            let cond = optionalText(row, "condition")
+            let kind: TaskKind = (cond?.isEmpty == false)
+                ? .legacyWaiting
+                : (TaskKind(rawValue: optionalText(row, "kind") ?? "") ?? .execute)
+            return ScheduledTask(
                 id: UUID(uuidString: text(row, "id")) ?? UUID(),
                 name: text(row, "name"),
                 prompt: text(row, "prompt"),
@@ -1155,7 +1112,8 @@ final class PersistenceStore {
                 createdAt: optionalDate(row, "created_at") ?? .distantPast,
                 config: optionalText(row, "config")
                     .flatMap { $0.data(using: .utf8) }
-                    .flatMap { try? decoder.decode(SessionConfig.self, from: $0) })
+                    .flatMap { try? decoder.decode(SessionConfig.self, from: $0) },
+                kind: kind)
         }
     }
 
@@ -1164,8 +1122,8 @@ final class PersistenceStore {
             .flatMap { String(data: $0, encoding: .utf8) }
         try db.run("""
             INSERT OR REPLACE INTO scheduled_tasks
-            (id, name, prompt, cron, project_id, enabled, last_run_at, log_session_id, continuous, condition, unattended, completed_at, run_count, created_at, config)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            (id, name, prompt, cron, project_id, enabled, last_run_at, log_session_id, continuous, condition, unattended, completed_at, run_count, created_at, config, kind)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             """, [.text(t.id.uuidString),
                   .text(t.name),
                   .text(t.prompt),
@@ -1180,19 +1138,18 @@ final class PersistenceStore {
                   t.completedAt.map { .real($0.timeIntervalSince1970) } ?? .null,
                   .int(Int64(t.runCount)),
                   .real(t.createdAt.timeIntervalSince1970),
-                  configJSON.map { .text($0) } ?? .null])
+                  configJSON.map { .text($0) } ?? .null,
+                  // P19: legacy 不落值 —— 它是 condition 派生出来的归档态, 写 NULL 让它下次照样派生。
+                  t.isLegacyWaiting ? .null : .text(t.kind.rawValue)])
     }
 
     func deleteScheduled(id: UUID) throws {
         try db.run("DELETE FROM scheduled_tasks WHERE id = ?", [.text(id.uuidString)])
     }
 
-    // MARK: - P10.2a 邮箱哨兵 (账号池 / 哨兵 / 任务线程 / 拒收日志)
-    // 四表只存配置与状态投影; 授权码 / 共享密钥在 Keychain (MailboxCredentialStore)。
-
-    /// 拒收日志每哨兵保留条数 (设计稿 §3.1; 首配时用来发现漏加白名单的发件人, 不是审计流水)。
-    /// nonisolated: 作默认参数值时在调用方 (非 MainActor) 上下文求值。
-    nonisolated static let mailboxRejectionLimit = 200
+    // MARK: - 邮箱账号池 (P19: 只剩账号; 哨兵 / 线程 / 拒收三表已随收件档删除)
+    // 本表只存连接参数; 授权码在 Keychain (MailboxCredentialStore)。
+    // P19 现状: 这一层暂无消费者 —— 留给 S7 的邮件 sink 与 P19.1 的邮件通道, 别当死代码删掉。
 
     // MARK: 账号 (连接参数)
 
@@ -1230,195 +1187,6 @@ final class PersistenceStore {
     /// 原始删除 — 引用保护在 `MailboxAccountStore.removeAccount` (被哨兵引用即拒绝, 决定 10)。
     func deleteMailboxAccount(id: UUID) throws {
         try db.run("DELETE FROM mailbox_accounts WHERE id = ?", [.text(id.uuidString)])
-    }
-
-    // MARK: 哨兵 (策略主体)
-
-    func loadMailboxSentinels() throws -> [MailboxSentinel] {
-        let rows = try db.query("""
-            SELECT id, name, account_id, project_id, whitelist, require_secret, poll_interval,
-                   agent_mode, approval, probe_url, enabled, last_poll_at, last_error,
-                   provider, model_id, thinking_level
-            FROM mailbox_sentinels ORDER BY created_at ASC
-            """)
-        return rows.map { row in
-            MailboxSentinel(
-                id: UUID(uuidString: text(row, "id")) ?? UUID(),
-                name: text(row, "name"),
-                accountId: UUID(uuidString: text(row, "account_id")) ?? UUID(),
-                projectId: UUID(uuidString: text(row, "project_id")),
-                whitelist: decodeJSON([String].self, text(row, "whitelist")) ?? [],
-                requireSecret: int(row["require_secret"] ?? .null) == 1,
-                pollInterval: Int(int(row["poll_interval"] ?? .null)),
-                agentMode: AgentMode(rawValue: text(row, "agent_mode")) ?? .full,
-                approval: ApprovalMode(rawValue: text(row, "approval")) ?? .autoJudge,
-                intranetProbeURL: text(row, "probe_url"),
-                provider: text(row, "provider"),
-                modelId: text(row, "model_id"),
-                thinkingLevel: optionalText(row, "thinking_level"),
-                enabled: int(row["enabled"] ?? .null) == 1,
-                lastPollAt: optionalDate(row, "last_poll_at"),
-                lastError: optionalText(row, "last_error"))
-        }
-    }
-
-    /// 1:1 占用的唯一性由 `account_id UNIQUE` 把住 (决定 10) — 这里只做占用查询。
-    func upsertMailboxSentinel(_ s: MailboxSentinel) throws {
-        // created_at 不在模型里 (UI 用不到), 但列 NOT NULL: 取表内既有值, 首次插入才落 now,
-        // 否则每次保存都把创建时刻刷成修改时刻, 列表排序会跟着跳。
-        let prior = (try? db.query("SELECT created_at FROM mailbox_sentinels WHERE id = ?",
-                                   [.text(s.id.uuidString)])) ?? []
-        let createdAt = prior.first.flatMap { optionalDate($0, "created_at") } ?? Date.now
-        let whitelistJSON = encodeJSON(s.whitelist) ?? "[]"
-        try db.run("""
-            INSERT OR REPLACE INTO mailbox_sentinels
-            (id, name, account_id, project_id, whitelist, require_secret, poll_interval,
-             agent_mode, approval, probe_url, enabled, last_poll_at, last_error, created_at,
-             provider, model_id, thinking_level)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-            """, [.text(s.id.uuidString),
-                  .text(s.name),
-                  .text(s.accountId.uuidString),
-                  s.projectId.map { .text($0.uuidString) } ?? .null,
-                  .text(whitelistJSON),
-                  .int(s.requireSecret ? 1 : 0),
-                  .int(Int64(s.pollInterval)),
-                  .text(s.agentMode.rawValue),
-                  .text(s.approval.rawValue),
-                  .text(s.intranetProbeURL),
-                  .int(s.enabled ? 1 : 0),
-                  s.lastPollAt.map { .real($0.timeIntervalSince1970) } ?? .null,
-                  s.lastError.map { .text($0) } ?? .null,
-                  .real(createdAt.timeIntervalSince1970),
-                  .text(s.provider),
-                  .text(s.modelId),
-                  s.thinkingLevel.map { .text($0) } ?? .null])
-    }
-
-    /// 删哨兵连带清掉它的线程映射与拒收日志 (两者都以 sentinel_id 归属, 留悬空行只会在 UI 里变孤儿)。
-    /// Keychain 密钥由 `MailboxSentinelStore` 负责一并删除。
-    func deleteMailboxSentinel(id: UUID) throws {
-        let sid = id.uuidString
-        try db.transaction {
-            try db.run("DELETE FROM mailbox_tasks WHERE sentinel_id = ?", [.text(sid)])
-            try db.run("DELETE FROM mailbox_rejections WHERE sentinel_id = ?", [.text(sid)])
-            try db.run("DELETE FROM mailbox_sentinels WHERE id = ?", [.text(sid)])
-        }
-    }
-
-    /// 绑定该账号的哨兵 (设计稿 `sentinel(for: accountId)` 的表侧实现; nil = 账号空闲可选)。
-    func mailboxSentinelId(usingAccount accountId: UUID) -> UUID? {
-        let rows = (try? db.query("SELECT id FROM mailbox_sentinels WHERE account_id = ?",
-                                  [.text(accountId.uuidString)])) ?? []
-        return rows.first.flatMap { UUID(uuidString: text($0, "id")) }
-    }
-
-    // MARK: 任务线程
-
-    func loadMailboxTasks() throws -> [MailboxTask] {
-        let rows = try db.query("""
-            SELECT id, sentinel_id, thread_key, session_id, project_id, status, title,
-                   blocked_reason, last_message_id, created_at, updated_at
-            FROM mailbox_tasks ORDER BY created_at DESC
-            """)
-        return rows.map(mailboxTaskFromRow)
-    }
-
-    /// 线程定位 (决定 12) — **先按 sentinel_id 过滤再匹配 thread_key**, 不同邮箱天然隔离。
-    func mailboxTask(sentinelId: UUID, threadKey: String) -> MailboxTask? {
-        let rows = (try? db.query("""
-            SELECT id, sentinel_id, thread_key, session_id, project_id, status, title,
-                   blocked_reason, last_message_id, created_at, updated_at
-            FROM mailbox_tasks WHERE sentinel_id = ? AND thread_key = ?
-            """, [.text(sentinelId.uuidString), .text(threadKey)])) ?? []
-        return rows.first.map(mailboxTaskFromRow)
-    }
-
-    /// 调用方应先 `mailboxTask(sentinelId:threadKey:)` 取回既有行再改 —— 直接拿新 UUID 落库
-    /// 会撞 UNIQUE(sentinel_id, thread_key) 被 REPLACE 打掉旧行, 线程 id 每轮漂移。
-    func upsertMailboxTask(_ t: MailboxTask) throws {
-        try db.run("""
-            INSERT OR REPLACE INTO mailbox_tasks
-            (id, sentinel_id, thread_key, session_id, project_id, status, title,
-             blocked_reason, last_message_id, created_at, updated_at)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?)
-            """, [.text(t.id.uuidString),
-                  .text(t.sentinelId.uuidString),
-                  .text(t.threadKey),
-                  t.sessionId.map { .text($0.uuidString) } ?? .null,
-                  t.projectId.map { .text($0.uuidString) } ?? .null,
-                  .text(t.status.rawValue),
-                  .text(t.title),
-                  t.blockedReason.map { .text($0) } ?? .null,
-                  t.lastMessageId.map { .text($0) } ?? .null,
-                  .real(t.createdAt.timeIntervalSince1970),
-                  .real(t.updatedAt.timeIntervalSince1970)])
-    }
-
-    func deleteMailboxTask(id: UUID) throws {
-        try db.run("DELETE FROM mailbox_tasks WHERE id = ?", [.text(id.uuidString)])
-    }
-
-    private func mailboxTaskFromRow(_ row: [String: DBValue]) -> MailboxTask {
-        MailboxTask(
-            id: UUID(uuidString: text(row, "id")) ?? UUID(),
-            sentinelId: UUID(uuidString: text(row, "sentinel_id")) ?? UUID(),
-            threadKey: text(row, "thread_key"),
-            sessionId: UUID(uuidString: text(row, "session_id")),
-            projectId: UUID(uuidString: text(row, "project_id")),
-            status: MailboxTaskStatus(rawValue: text(row, "status")) ?? .received,
-            title: text(row, "title"),
-            blockedReason: optionalText(row, "blocked_reason"),
-            lastMessageId: optionalText(row, "last_message_id"),
-            createdAt: optionalDate(row, "created_at") ?? .distantPast,
-            updatedAt: optionalDate(row, "updated_at") ?? .distantPast)
-    }
-
-    // MARK: 拒收日志
-
-    func loadMailboxRejections(sentinelId: UUID, limit: Int = PersistenceStore.mailboxRejectionLimit) -> [MailboxRejection] {
-        let rows = (try? db.query("""
-            SELECT id, sentinel_id, sender, subject, reason, message_id, at
-            FROM mailbox_rejections WHERE sentinel_id = ?
-            ORDER BY at DESC, rowid DESC LIMIT ?
-            """, [.text(sentinelId.uuidString), .int(Int64(limit))])) ?? []
-        return rows.map { row in
-            MailboxRejection(
-                id: UUID(uuidString: text(row, "id")) ?? UUID(),
-                sentinelId: UUID(uuidString: text(row, "sentinel_id")) ?? UUID(),
-                sender: text(row, "sender"),
-                subject: text(row, "subject"),
-                reason: MailboxRejectionReason(rawValue: text(row, "reason")) ?? .notWhitelisted,
-                messageId: optionalText(row, "message_id"),
-                at: optionalDate(row, "at") ?? .distantPast)
-        }
-    }
-
-    /// 追加 + 裁剪: 超出的按 at 最旧滚出 (每哨兵 200 条, 是线索不是流水, 不无限膨胀)。
-    func appendMailboxRejection(_ r: MailboxRejection) throws {
-        let sid = r.sentinelId.uuidString
-        try db.transaction {
-            try db.run("""
-                INSERT INTO mailbox_rejections (id, sentinel_id, sender, subject, reason, message_id, at)
-                VALUES (?,?,?,?,?,?,?)
-                """, [.text(r.id.uuidString),
-                      .text(sid),
-                      .text(r.sender),
-                      .text(r.subject),
-                      .text(r.reason.rawValue),
-                      r.messageId.map { .text($0) } ?? .null,
-                      .real(r.at.timeIntervalSince1970)])
-            try db.run("""
-                DELETE FROM mailbox_rejections WHERE sentinel_id = ? AND id NOT IN (
-                    SELECT id FROM mailbox_rejections WHERE sentinel_id = ?
-                    ORDER BY at DESC, rowid DESC LIMIT ?
-                )
-                """, [.text(sid), .text(sid), .int(Int64(PersistenceStore.mailboxRejectionLimit))])
-        }
-    }
-
-    func deleteMailboxRejections(sentinelId: UUID) throws {
-        try db.run("DELETE FROM mailbox_rejections WHERE sentinel_id = ?", [.text(sentinelId.uuidString)])
     }
 
     // MARK: - Checkpoint (退出前落盘)

@@ -73,7 +73,7 @@ struct SettingsView: View {
         // 分组口径按**用户要干什么**分, 不按代码里 section 的先后:
         //   通用 = 长啥样 + 一次任务怎么跑（外观 / 语言 / 锁屏运行 / 并发 / 通知 / 捕获热键）
         //   模型 = 唯一一件会影响每次请求的东西
-        //   集成 = 需要第三方账号/Key 才能用的（联网搜索 / 邮箱）
+        //   集成 = 需要第三方账号/Key 才能用的（联网搜索 / 屏幕操控）
         //   数据 = 落到磁盘、会被拷走的东西（备份）
         // ⚠️ 2026-10-27 把「运行」并进了「通用」(boss: "不然看上去太空旷了") ——
         //    两类各自只有 2~3 段, 单独立一页右栏大半是空白。
@@ -91,7 +91,6 @@ struct SettingsView: View {
                     modelSection
                 case .integration:
                     webSearchSection
-                    MailboxAccountsSection(store: store)
                     computerSection
                 case .data:
                     backupSection

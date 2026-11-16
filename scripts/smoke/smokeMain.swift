@@ -147,7 +147,6 @@ struct SmokeMain {
             try? shared.setKey("sk-guard-not-real", account: ChatStore.bochaKeyAccount)
             let ksStore = ChatStore(transport: MockTransport(), dbPath: ksDir + "/ks.db",
                                     managedExtensionsDir: ksDir + "/ext")
-            ksStore.mailbox.stopScheduler()
             check(ksStore.bochaKey == "sk-guard-not-real",
                   "守卫 28d: 不带 modelKeyStore 的 ChatStore 经 current 读 key (实测 \(ksStore.bochaKey ?? "nil"))")
             try? shared.deleteKey(account: ChatStore.bochaKeyAccount)   // 自清理: 别影响后面的面板闸门断言
@@ -287,24 +286,11 @@ struct SmokeMain {
         check(await waitUntil { hasText(store.messages, "运行") }, "T5 日志会话含运行分隔")
         check(hasText(store.messages, "执行巡检动作") && hasText(store.messages, "巡检完成"), "T5 prompt+回复落库日志会话")
 
-        // ---- T6 等待型 fire: done 标记自动停用 ----
-        store.addScheduled(name: "哨兵", prompt: "执行触发动作", cron: "0 0 1 1 *", projectId: nil)
-        guard let t6i = store.scheduledTasks.firstIndex(where: { $0.name == "哨兵" }) else { report() }
-        var wt = store.scheduledTasks[t6i]
-        wt.condition = "磁盘占用超 90%"
-        store.updateScheduled(wt)
-        mock.scriptedReply = { _ in "观察到条件成立。\n<!--task: done-->" }
-        store.runScheduledFire(store.scheduledTasks[t6i])
-        guard let logId2 = store.scheduledTasks[t6i].logSessionId else { check(false, "T6 日志会话建立"); report() }
-        check(await waitUntil { store.runningTurns.isEmpty }, "T6 fire 结束")
-        check(store.scheduledTasks[t6i].enabled == false, "T6 done 命中自动停用")
-        check(store.scheduledTasks[t6i].completedAt != nil, "T6 completedAt 记录")
-        store.selectConversation(logId2)
-        let assistantClean = store.messages.allSatisfy { msg in
-            guard msg.role == .assistant, case .text(let s) = msg.content else { return true }
-            return !s.contains("<!--task: done-->")   // 剥离只作用于回复 (prompt 注入模板合法含标记)
-        }
-        check(assistantClean, "T6 done 标记已从回复剥离不落库")
+        // ---- T6 已随 P19 移除 ----
+        // 原用例断言「等待型 fire 命中 done 标记 ⇒ 自动停用任务 + 剥离标记」。
+        // 条件值守档在 P19 整体删除（它是全系统唯一一条无人授权自动执行的路），
+        // 连带删掉 `doneMarker` / `fireTurnTask` / `buildWaitingPrompt` ⇒ 这条断言没有被测物了。
+        // 替代判据在 `CaseTaskKind`（旧条件任务解成 legacy、不进 fire）。
 
         // ---- T7 二次实例 (同库): 落库完整性 + 池化 init 干净拉起 ----
         let store2 = ChatStore(transport: MockTransport(),
@@ -2308,373 +2294,10 @@ struct SmokeMain {
             check(false, "T-JUDGE 建会话")
         }
 
-        // ===== T-MAILBOX (P10.2a): 四道闸 / 清洗 / 线程定位 / 项目 cwd / 全局串行 =====
-        // 同上: 本段自建 amock (agent) + mstore, 不复用顶层 store (delegate 劫持)。
-        let mdir = fixtureDir("mailbox")
-        let p1dir = mdir + "/proj-one", p2dir = mdir + "/proj-two"
-        try? FileManager.default.createDirectory(atPath: p1dir, withIntermediateDirectories: true)
-        try? FileManager.default.createDirectory(atPath: p2dir, withIntermediateDirectories: true)
-
-        let amock = MockTransport()
-        let mstore = ChatStore(transport: amock, dbPath: mdir + "/mailbox.db",
-                               managedExtensionsDir: mdir + "/ext")
-        let creds = InMemoryMailboxCredentialStore()
-        let acctA = MailboxAccount(label: "A", address: "alice@x.com", imapHost: "imap.a", smtpHost: "smtp.a")
-        let acctB = MailboxAccount(label: "B", address: "bob@x.com")
-        let acctC = MailboxAccount(label: "C", address: "carol@x.com")
-        let mBoxA = MockMailTransport(accountId: acctA.id)
-        let mBoxB = MockMailTransport(accountId: acctB.id)
-        let mBoxC = MockMailTransport(accountId: acctC.id)
-        mstore.mailboxCredentials = creds
-        mstore.mailboxTransportFactory = { acct in
-            switch acct.id {
-            case acctA.id: return mBoxA
-            case acctB.id: return mBoxB
-            case acctC.id: return mBoxC
-            default:       return nil
-            }
-        }
-        mstore.addMailboxAccount(acctA)
-        mstore.addMailboxAccount(acctB)
-        mstore.addMailboxAccount(acctC)
-        let p1 = ProjectGroup(title: "P1", path: p1dir, items: [])
-        let p2 = ProjectGroup(title: "P2", path: p2dir, items: [])
-        mstore.projects.append(p1)
-        mstore.projects.append(p2)
-
-        let secretA = "S3CR3T-777"
-        let s1 = MailboxSentinel(name: "S1", accountId: acctA.id, projectId: p1.id,
-                                 whitelist: ["alice@x.com", "dave@x.com", "erin@x.com",
-                                             "frank@x.com", "grace@x.com"],
-                                 requireSecret: true, pollInterval: 30,
-                                 agentMode: .full, approval: .autoJudge, enabled: true)
-        try? creds.setSentinelSecret(secretA, sentinelId: s1.id)
-        check(mstore.upsertMailboxSentinel(s1), "T-MAILBOX 哨兵 S1 建成功 (绑账号 A + 项目 P1)")
-        mstore.mailbox.stopScheduler()   // 手动 pollOnce 驱动, 不受 1s tick 干扰
-
-        // ⑪ 1:1 占用: 同一账号再建哨兵 → 拒绝
-        let dup = MailboxSentinel(name: "dup", accountId: acctA.id, whitelist: ["z@x.com"])
-        check(mstore.upsertMailboxSentinel(dup) == false && mstore.mailbox.sentinel(for: acctA.id)?.id == s1.id,
-              "T-MAILBOX ⑪1:1 约束: 给已占用账号再建哨兵 → 拒绝")
-        // ⑭ 选择器数据源: 只给空闲账号; 编辑自己时把自己占的账号留着
-        let freeAccounts = mstore.availableMailboxAccounts(forSentinel: nil)
-        check(freeAccounts.count == 2 && !freeAccounts.contains { $0.id == acctA.id },
-              "T-MAILBOX ⑭availableAccounts 只返回空闲账号")
-        check(mstore.availableMailboxAccounts(forSentinel: s1.id).count == 3,
-              "T-MAILBOX ⑭编辑既有哨兵时自己占的账号仍可选")
-
-        // ① 主线: 首封 → 四道闸 → 清洗 → 入队 → fire
-        func firstMail(_ id: String, _ from: String, _ subject: String, _ body: String,
-                       date: Date = Date()) -> RawMail {
-            RawMail(messageId: id, from: from, subject: subject, body: body, date: date)
-        }
-        // P10.2b: 回合落定会**异步**发回执 (Task), 断言前必须等它落地 —— 否则后面的 send 计数全在赛跑。
-        func settleRound(_ box: MockMailTransport, replies: Int = 1) async -> Bool {
-            let base = box.sentMails.count
-            let settled = await waitUntil { mstore.runningTurns.isEmpty }
-            let replied = await waitUntil { box.sentMails.count >= base + replies }
-            return settled && replied
-        }
-        mBoxA.deliver(firstMail("root-1@x.com", "Alice <alice@x.com>",
-                                "Re: [MGOX] \(secretA) 查一下磁盘",
-                                "统计一下磁盘占用\n\nOn Mon, Jan 1 2024 at 10:00 Alice <alice@x.com> wrote:\n> 旧内容\n> 更多旧内容\n"))
-        await mstore.mailbox.pollOnce(force: true)
-        check(amock.lastSentPrompt == "统计一下磁盘占用",
-              "T-MAILBOX ①清洗后的正文作为 prompt 交付 (引用行截断)")
-        check(amock.lastWorkingDirectory == p1dir, "T-MAILBOX ①⑧哨兵绑定项目的 cwd 下发正确")
-        check(amock.lastMode == .full, "T-MAILBOX ③modeOverride .full 透传")
-        check(amock.lastApprovalMode == .autoJudge, "T-MAILBOX ③approvalOverride .autoJudge 透传 (压过全局)"
-              + " | 实际 \(String(describing: amock.lastApprovalMode))")
-        let t1 = mstore.mailboxTasks.first { $0.sentinelId == s1.id }
-        check(t1?.threadKey == "root-1@x.com" && t1?.projectId == p1.id,
-              "T-MAILBOX ①线程键 = 首封 Message-ID + 首封项目快照")
-        check(t1?.title == "查一下磁盘", "T-MAILBOX ①⑮主题清洗 (剥前缀 + 标记 + 密钥) → title")
-        check(t1?.status == .running && mstore.mailbox.runningTaskId == t1?.id,
-              "T-MAILBOX ①入队即 running (全局串行位占用)")
-        check(await settleRound(mBoxA), "T-MAILBOX ①该回合收尾 + 回执已发")
-        check(mstore.mailboxTasks.first { $0.id == t1?.id }?.status == .done
-              && mstore.mailbox.runningTaskId == nil,
-              "T-MAILBOX 回合落定 → 线程 done + 释放串行位")
-
-        // ===== P10.2b: 回执链路 (主题状态机 / In-Reply-To / 短 id / 正文结算) =====
-        let r1 = mBoxA.sentMails.last
-        let shortA = MailboxSentinelService.shortId(t1!.id)
-        check(r1?.subject == "[MGOX][DONE] [MGOX-\(shortA)] 查一下磁盘",
-              "T-MAILBOX-B 回执主题 = 状态机 + 短 id + 清洗后的 title"
-              + " | 实际 \(r1?.subject ?? "nil")")
-        check(r1?.to == "alice@x.com" && r1?.inReplyTo == "root-1@x.com",
-              "T-MAILBOX-B 回执回给触发邮件的发件人 + In-Reply-To 指向它")
-        check(r1?.references == ["root-1@x.com"],
-              "T-MAILBOX-B References 含线程根 (客户端据此归线程)")
-        check(r1?.messageId == "task-\(shortA)@mangox.local",
-              "T-MAILBOX-B 自铸 Message-ID = <task-<id8>@mangox.local>")
-        check(r1?.body.contains("状态: 已完成") == true && r1?.body.contains("统计一下磁盘占用") == true,
-              "T-MAILBOX-B 正文含产出 + 状态行")
-        check(r1?.body.contains("耗时:") == true && r1?.body.contains("tokens:") == true,
-              "T-MAILBOX-B 正文含耗时/轮次/tokens 结算行")
-
-        // ② 幂等: 同 Message-ID 重投 (正文不同 → 一旦重复 fire 必被 prompt 断言抓到)
-        let sentAfterFirst = mBoxA.sentMails.count
-        mBoxA.deliver(firstMail("root-1@x.com", "Alice <alice@x.com>",
-                                "Re: [MGOX] \(secretA) 查一下磁盘", "重复投递不该被再次执行"))
-        await mstore.mailbox.pollOnce(force: true)
-        check(amock.lastSentPrompt == "统计一下磁盘占用" && mstore.mailboxTasks.count == 1,
-              "T-MAILBOX ②重复投递幂等 (游标命中, 不重复 fire)")
-        check(mBoxA.sentMails.count == sentAfterFirst, "T-MAILBOX-B 幂等重投不产生第二封回执")
-
-        // ⑥ 后续轮: 主题已剥密钥, 靠 References 命中 thread_key 通过
-        // ⑫ 决定 12: 先把哨兵改绑到"无项目" —— 后续轮应仍吃首封快照 (t1.projectId = P1)
-        var s1Moved = s1
-        s1Moved.projectId = nil
-        _ = mstore.upsertMailboxSentinel(s1Moved)
-        mstore.mailbox.stopScheduler()
-        mBoxA.deliver(RawMail(messageId: "reply-2@x.com", inReplyTo: "root-1@x.com",
-                              references: ["root-1@x.com"], from: "Alice <alice@x.com>",
-                              subject: "[MGOX][DONE] [MGOX-\(shortA)] 查一下磁盘",
-                              body: "再查一下内存"))
-        await mstore.mailbox.pollOnce(force: true)
-        check(amock.lastSentPrompt == "再查一下内存",
-              "T-MAILBOX ⑥后续轮不带密钥仍通过 (References 命中 thread_key)")
-        check(mstore.mailboxTasks.count == 1
-              && mstore.mailboxTasks.first?.sessionId == t1?.sessionId,
-              "T-MAILBOX ⑥后续轮沿用同一线程与会话")
-        check(amock.lastWorkingDirectory == p1dir,
-              "T-MAILBOX ⑫哨兵改绑项目后, 后续轮仍吃首封 cwd 快照 (读列不读配置)")
-        check(await settleRound(mBoxA), "T-MAILBOX ⑥该回合收尾 + 回执已发")
-        // 多轮: 回执 In-Reply-To 指向**本轮**触发邮件, References 链含线程根
-        check(mBoxA.sentMails.last?.inReplyTo == "reply-2@x.com"
-              && mBoxA.sentMails.last?.references == ["root-1@x.com", "reply-2@x.com"],
-              "T-MAILBOX-B 多轮回执锚定本轮触发邮件 (References = 根 + 本轮)")
-
-        // ===== P10.2b: blocked 回执 (autoJudge 拦下命令 → 状态机 BLOCKED + 卡点写进正文) =====
-        amock.autoJudgeBlocks = [AutoJudgeBlock(callId: "c1", command: "rm -rf /tmp/x",
-                                                reason: "删除类命令")]
-        mBoxA.deliver(RawMail(messageId: "reply-3@x.com", inReplyTo: "reply-2@x.com",
-                              references: ["root-1@x.com", "reply-2@x.com"],
-                              from: "Alice <alice@x.com>",
-                              subject: "[MGOX][DONE] [MGOX-\(shortA)] 查一下磁盘",
-                              body: "顺手清一下临时目录"))
-        await mstore.mailbox.pollOnce(force: true)
-        check(await settleRound(mBoxA), "T-MAILBOX-B blocked 回执已发")
-        let rBlocked = mBoxA.sentMails.last
-        check(rBlocked?.subject.hasPrefix("[MGOX][BLOCKED]") == true,
-              "T-MAILBOX-B 有拦截 → 主题状态机转 [MGOX][BLOCKED]"
-              + " | 实际 \(rBlocked?.subject ?? "nil")")
-        check(rBlocked?.body.contains("rm -rf /tmp/x") == true
-              && rBlocked?.body.contains("删除类命令") == true,
-              "T-MAILBOX-B 拦截清单 (命令 + 原因) 写进回执正文")
-        check(mstore.mailboxTasks.first { $0.id == t1?.id }?.status == .blocked
-              && mstore.mailboxTasks.first { $0.id == t1?.id }?.blockedReason?.contains("rm -rf") == true,
-              "T-MAILBOX-B 线程状态转 blocked + blocked_reason 落库")
-        amock.autoJudgeBlocks = []
-
-        // ⑧⑬ 第二哨兵 (另一项目 + requireSecret=false 免密钥)
-        let s2 = MailboxSentinel(name: "S2", accountId: acctB.id, projectId: p2.id,
-                                 whitelist: ["bob@x.com"], requireSecret: false, enabled: true)
-        check(mstore.upsertMailboxSentinel(s2), "T-MAILBOX ⑧哨兵 S2 建成功 (绑账号 B + 项目 P2)")
-        mstore.mailbox.stopScheduler()
-        mBoxB.deliver(firstMail("b-root@x.com", "Bob <bob@x.com>", "[MGOX] 项目二任务", "在项目二里跑"))
-        await mstore.mailbox.pollOnce(force: true)
-        check(amock.lastWorkingDirectory == p2dir,
-              "T-MAILBOX ⑧两哨兵各绑项目 → cwd 分别正确")
-        check(amock.lastSentPrompt == "在项目二里跑",
-              "T-MAILBOX ⑬requireSecret=false 时首封无需密钥即通过")
-        check(await settleRound(mBoxB), "T-MAILBOX ⑧该回合收尾 + 回执已发 (走 B 账号的 transport)")
-        check(mBoxB.sentMails.last?.subject.hasPrefix("[MGOX][DONE] [MGOX-") == true,
-              "T-MAILBOX-B 回执经该哨兵账号自己的 transport 发出")
-
-        // ⑨ 无项目哨兵 → cwd = nil (回落 home)
-        let s3 = MailboxSentinel(name: "S3", accountId: acctC.id, projectId: nil,
-                                 whitelist: ["carol@x.com"], requireSecret: false, enabled: true)
-        check(mstore.upsertMailboxSentinel(s3), "T-MAILBOX ⑨哨兵 S3 建成功 (无项目)")
-        mstore.mailbox.stopScheduler()
-        mBoxC.deliver(firstMail("c-root@x.com", "carol@x.com", "[MGOX] 无项目任务", "回 home 目录干活"))
-        await mstore.mailbox.pollOnce(force: true)
-        check(amock.lastWorkingDirectory == nil, "T-MAILBOX ⑨无项目哨兵 → cwd = nil (回落 NSHomeDirectory)")
-        check(await settleRound(mBoxC), "T-MAILBOX ⑨该回合收尾 + 回执已发")
-
-        // ⑩ 项目目录被删 → FAILED + 不 fire
-        try? FileManager.default.removeItem(atPath: p2dir)
-        let promptBefore = amock.lastSentPrompt
-        mBoxB.deliver(firstMail("b-root2@x.com", "Bob <bob@x.com>", "[MGOX] 项目二第二封", "这次目录没了"))
-        await mstore.mailbox.pollOnce(force: true)
-        check(mstore.mailboxTasks.first { $0.threadKey == "b-root2@x.com" }?.status == .failed
-              && amock.lastSentPrompt == promptBefore,
-              "T-MAILBOX ⑩项目目录被删 → 任务 FAILED 且不 fire")
-
-        // ⑤ 白名单外 → 无回执 + 移 Trash + 记拒收
-        let sentBefore = mBoxA.sentMails.count
-        mBoxA.deliver(firstMail("evil-1@evil.com", "Stranger <no-reply@evil.com>",
-                                "[MGOX] 入侵", "rm -rf /"))
-        await mstore.mailbox.pollOnce(force: true)
-        check(mBoxA.sentMails.count == sentBefore, "T-MAILBOX ⑤白名单外不回执")
-        check(mBoxA.trashedMails.contains { $0.messageId == "evil-1@evil.com" },
-              "T-MAILBOX ⑤白名单外移 Trash (不用 EXPUNGE 硬删)")
-        check(mstore.mailbox.recentRejections(sentinelId: s1.id).contains { $0.reason == .notWhitelisted },
-              "T-MAILBOX ⑤白名单外记拒收日志 (not_whitelisted)")
-
-        // ④ 缺密钥 → 回执一次 + 拒收; 同地址 24h 内第 2 封不再回执
-        try? creds.setSentinelSecret(nil, sentinelId: s1.id)
-        let sentBefore2 = mBoxA.sentMails.count
-        mBoxA.deliver(firstMail("dave-1@x.com", "Dave <dave@x.com>", "[MGOX] 查日志", "看日志"))
-        await mstore.mailbox.pollOnce(force: true)
-        check(mBoxA.sentMails.count == sentBefore2 + 1, "T-MAILBOX ④白名单内缺密钥 → 回执一次")
-        mBoxA.deliver(firstMail("dave-2@x.com", "Dave <dave@x.com>", "[MGOX] 再查", "再看"))
-        await mstore.mailbox.pollOnce(force: true)
-        check(mBoxA.sentMails.count == sentBefore2 + 1, "T-MAILBOX ④同地址 24h 内第 2 封不再回执")
-        check(mstore.mailbox.recentRejections(sentinelId: s1.id)
-                .filter { $0.reason == .secretMissing }.count == 2,
-              "T-MAILBOX ④缺密钥两封都记拒收 (回执限流但日志不丢)")
-        check(mBoxA.sentMails.last?.subject.contains("查日志") == true,
-              "T-MAILBOX ④回执主题 = 清洗后的 title")
-
-        // ④ 密钥不匹配 → secret_mismatch
-        try? creds.setSentinelSecret(secretA, sentinelId: s1.id)
-        mBoxA.deliver(firstMail("frank-1@x.com", "Frank <frank@x.com>",
-                                "[MGOX] NOT-THE-KEY 查内存", "查内存"))
-        await mstore.mailbox.pollOnce(force: true)
-        check(mstore.mailbox.recentRejections(sentinelId: s1.id).contains { $0.reason == .secretMismatch },
-              "T-MAILBOX ④密钥写错 → 拒收 (secret_mismatch) + 回执")
-
-        // 意图标记缺失 (新增闸, 与密钥闸正交) → 拒收 + 回执
-        mBoxA.deliver(firstMail("grace-1@x.com", "Grace <grace@x.com>", "这是普通邮件", "悄悄话"))
-        await mstore.mailbox.pollOnce(force: true)
-        check(mstore.mailbox.recentRejections(sentinelId: s1.id).contains { $0.reason == .missingIntent },
-              "T-MAILBOX 主题缺 [MGOX] → 拒收 (missing_intent)")
-
-        // ⑦ 回执主题剥 secret (硬要求): 正文为空的回执用带密钥的原主题做 title
-        mBoxA.deliver(RawMail(messageId: "erin-1@x.com", from: "Erin <erin@x.com>",
-                              subject: "[MGOX] \(secretA) 空正文任务", body: "   \n\n   "))
-        await mstore.mailbox.pollOnce(force: true)
-        let lastReply = mBoxA.sentMails.last
-        check(lastReply?.subject.contains(secretA) == false
-              && lastReply?.subject.contains("空正文任务") == true,
-              "T-MAILBOX ⑦回执主题已剥 secret 且保留标题其余部分")
-
-        // ⑮ 纯函数: 主题清洗 / 正文清洗 / 四道闸边界
-                check(MailboxSentinelService.cleanSubject("Re: [MGOX] SECRET 查一下", secret: "SECRET", sender: "a@x.com") == "查一下",
-              "T-MAILBOX ⑮主题清洗: 剥前缀 + [MGOX] + secret")
-        check(MailboxSentinelService.cleanSubject("Re[2]: Fwd: 回复: 转发: 任务", secret: nil, sender: "a@x.com") == "任务",
-              "T-MAILBOX ⑮主题清洗: 重复前缀循环剥")
-        check(MailboxSentinelService.cleanSubject("[MGOX] SECRET", secret: "SECRET", sender: "a@x.com") == "来自 a@x.com",
-              "T-MAILBOX ⑮主题清洗: 结果为空回落占位")
-        check(MailboxSentinelService.cleanSubject("  A \n B ", secret: nil, sender: "a@x.com") == "A B", "T-MAILBOX ⑮主题清洗: 折叠空白")
-                check(MailboxSentinelService.cleanBody("统计\n\nOn Mon, Jan 1 2024 Alice <a@x.com> wrote:\n> 旧的") == "统计",
-              "T-MAILBOX 正文清洗: Gmail/Apple Mail 'On … wrote:' 截断")
-        check(MailboxSentinelService.cleanBody("任务\n\n-----Original Message-----\n旧正文") == "任务",
-              "T-MAILBOX 正文清洗: '-----Original Message-----' 截断")
-        check(MailboxSentinelService.cleanBody("任务\n\n在 2024年1月1日 10:00, a@x.com 写道：\n旧正文") == "任务",
-              "T-MAILBOX 正文清洗: 163 webmail '写道：' 截断")
-        check(MailboxSentinelService.cleanBody("> 引用块本身就是任务\n> 第二行") == "> 引用块本身就是任务\n> 第二行",
-              "T-MAILBOX 正文清洗: 第 1 行即引用 → 不截断 (边界)")
-        check(MailboxSentinelService.cleanBody("再查一下内存\n\n------------------ 原始邮件 ------------------\n发件人: a@x.com\n统计一下磁盘") == "再查一下内存",
-              "T-MAILBOX 正文清洗: QQ webmail '原始邮件' 分隔行截断 (多轮最常见格式)")
-        check(MailboxSentinelService.cleanBody("任务\n\n----------\n旧正文") == "任务",
-              "T-MAILBOX 正文清洗: 纯分隔线 (≥10 个 `-`) 截断")
-        check(MailboxSentinelService.cleanBody("任务\n\n---\n小标题之后的正文") == "任务\n\n---\n小标题之后的正文",
-              "T-MAILBOX 正文清洗: markdown 的 `---` (3 个) 不算分隔线 (不误伤任务正文)")
-
-        // ⑯ 多轮主题: 回执主题带状态 tag, 用户对它点「回复」→ `[MGOX]` 被剥只剩 `[DONE]`, 必须一并剥掉,
-        // 否则 title 逐轮累积 (`[DONE] [DONE] … 任务`) 且回执主题越滚越长。
-        let tagged = "[MGOX][DONE] [MGOX-\(shortA)] 查一下磁盘"
-        check(MailboxSentinelService.cleanSubject("Re: \(tagged)", secret: nil, sender: "a@x.com") == "查一下磁盘",
-              "T-MAILBOX ⑯多轮主题清洗: 剥 Re: + [MGOX] + [MGOX-<id8>] + [DONE] → 与原 title 一致")
-        check(MailboxSentinelService.cleanSubject("Re: [MGOX][BLOCKED] [MGOX-\(shortA)] [BLOCKED] 查一下磁盘",
-                                                  secret: nil, sender: "a@x.com") == "查一下磁盘",
-              "T-MAILBOX ⑯多轮主题清洗: 逐轮累积的状态 tag 全剥 (BLOCKED 也剥)")
-        check(MailboxSentinelService.cleanSubject("[MGOX] 分析 done 状态", secret: nil, sender: "a@x.com") == "分析 done 状态",
-              "T-MAILBOX ⑯多轮主题清洗: 只吃方括号形态, 不动正文里的裸词 done")
-
-        func gateOf(_ subject: String, secret: String?, require: Bool, follow: Bool = false,
-                    seen: Bool = false, date: Date? = Date(),
-                    from: String = "A <a@x.com>") -> MailboxGate {
-            MailboxSentinelService.gate(mail: RawMail(messageId: "x", from: from, subject: subject,
-                                                      body: "b", date: date),
-                                        whitelist: ["a@x.com"], requireSecret: require,
-                                        secret: secret, isFollowUp: follow, alreadySeen: seen)
-        }
-        check(gateOf("[MGOX] K 任务", secret: "K", require: true) == .pass, "T-MAILBOX 闸: 密钥正确 → pass")
-        check(gateOf("[MGOX] 任务", secret: nil, require: true) == .secretMissing,
-              "T-MAILBOX 闸: 哨兵无密钥 → secretMissing")
-        check(gateOf("[MGOX] 任务", secret: "K", require: true) == .secretMismatch,
-              "T-MAILBOX 闸: 密钥对不上 → secretMismatch")
-        check(gateOf("任务", secret: nil, require: false) == .missingIntent,
-              "T-MAILBOX 闸: 意图标记与密钥闸正交 (关掉密钥闸仍要 [MGOX])")
-        check(gateOf("[MGOX] 任务", secret: nil, require: false) == .pass,
-              "T-MAILBOX 闸: requireSecret=false → 免密钥")
-        check(gateOf("[MGOX] K 任务", secret: "K", require: true,
-                     date: Date(timeIntervalSinceNow: -8 * 24 * 3600)) == .stale,
-              "T-MAILBOX 闸: 首封超 7 天 → stale")
-        check(gateOf("[MGOX] K 任务", secret: "K", require: true, follow: true,
-                     date: Date(timeIntervalSinceNow: -8 * 24 * 3600)) == .pass,
-              "T-MAILBOX 闸: 时效窗只对首封 (后续轮不吃)")
-        check(gateOf("[MGOX] K 任务", secret: "K", require: true, seen: true) == .duplicate,
-              "T-MAILBOX 闸: Message-ID 已处理 → duplicate")
-        check(MailboxSentinelService.gate(mail: RawMail(messageId: "x", from: "other@y.com",
-                                                        subject: "[MGOX] x", body: "b"),
-                                          whitelist: ["A@X.COM"], requireSecret: false, secret: nil,
-                                          isFollowUp: false, alreadySeen: false) == .notWhitelisted,
-              "T-MAILBOX 闸: 白名单大小写不敏感精确匹配 (名单外)")
-        check(MailboxSentinelService.gate(mail: RawMail(messageId: "x", from: "Name <a@x.com>",
-                                                        subject: "[MGOX] x", body: "b"),
-                                          whitelist: ["a@x.com"], requireSecret: false, secret: nil,
-                                          isFollowUp: false, alreadySeen: false) == .pass,
-              "T-MAILBOX 闸: From 头剥显示名后匹配")
-        check(MailboxGate.notWhitelisted.rejectionReason == .notWhitelisted
-              && MailboxGate.stale.rejectionReason == nil && MailboxGate.duplicate.rejectionReason == nil,
-              "T-MAILBOX 静默分支 (时效/幂等) 不进拒收日志")
-        check(MailboxGate.notWhitelisted.replies == false && MailboxGate.secretMismatch.replies,
-              "T-MAILBOX 白名单外不回执 / 名单内身份闸不过回执一次")
-        check(MailboxRejectionReason.allCases.allSatisfy { !$0.label.isEmpty },
-              "T-MAILBOX 每个拒收原因都有文案 (\(MailboxRejectionReason.allCases.count) 类)")
-        check(MailboxSentinelService.shortIdMarker(t1!.id).hasPrefix("[MGOX-")
-              && MailboxSentinelService.replyMessageId(taskId: t1!.id) == "task-\(shortA)@mangox.local",
-              "T-MAILBOX 短 id 标记与回执自铸 Message-ID 同源")
-        check(MailboxSentinelService.taskShortId(fromReplyMessageId: "task-\(shortA)@mangox.local") == shortA
-              && MailboxSentinelService.shortId(fromSubject: "[MGOX][DONE] [MGOX-\(shortA)] x") == shortA,
-              "T-MAILBOX 链路闸锚点两种形态可解析 (自铸 id / 主题短 id)")
-
-        // ㊶ 多轮并发: 后续轮在**同线程回合还在跑**的时候抵达。
-        // 在途任务的状态一旦被降级成 queued, 落定钩子 (按 `status == .running` 找任务) 就找不到它 →
-        // 串行位 `runningTaskId` 永不释放 → **整个邮箱域死锁**, 且这一轮的回执也发不出去 (2026-09-20 审出)。
-        // 触发场景很日常: agent 还在干活, 用户在同一个线程里再回一封; 或一次 poll 取回同线程的两封。
-        let sentBeforeConcurrent = mBoxA.sentMails.count
-        mBoxA.deliver(RawMail(messageId: "reply-9@x.com", inReplyTo: "reply-3@x.com",
-                              references: ["root-1@x.com", "reply-3@x.com"],
-                              from: "Alice <alice@x.com>",
-                              subject: "[MGOX][BLOCKED] [MGOX-\(shortA)] 查一下磁盘",
-                              body: "第一句: 接着说"))
-        await mstore.mailbox.pollOnce(force: true)
-        check(mstore.mailbox.runningTaskId == t1?.id,
-              "T-MAILBOX ㊶后续轮 fire → 串行位占用 (在同一 poll 周期内制造'在途'窗口)")
-        // 在途期间同线程再来两封 (都靠 References 命中同一 thread_key)
-        mBoxA.deliver(RawMail(messageId: "reply-10@x.com", inReplyTo: "reply-9@x.com",
-                              references: ["root-1@x.com", "reply-9@x.com"],
-                              from: "Alice <alice@x.com>",
-                              subject: "Re: [MGOX][DONE] [MGOX-\(shortA)] 查一下磁盘",
-                              body: "第二句: 补充甲"))
-        mBoxA.deliver(RawMail(messageId: "reply-11@x.com", inReplyTo: "reply-9@x.com",
-                              references: ["root-1@x.com", "reply-9@x.com"],
-                              from: "Alice <alice@x.com>",
-                              subject: "Re: [MGOX][DONE] [MGOX-\(shortA)] 查一下磁盘",
-                              body: "第三句: 补充乙"))
-        await mstore.mailbox.pollOnce(force: true)
-        check(mstore.mailboxTasks.first { $0.id == t1?.id }?.status == .running,
-              "T-MAILBOX ㊶在途任务的追加指令不把 running 降级成 queued (降级 = 串行位永不释放的死锁)"
-              + " | 实际 \(String(describing: mstore.mailboxTasks.first { $0.id == t1?.id }?.status))")
-        let bothRounds = await waitUntil { mBoxA.sentMails.count >= sentBeforeConcurrent + 2 }
-        check(bothRounds && mstore.mailbox.runningTaskId == nil && mstore.runningTurns.isEmpty,
-              "T-MAILBOX ㊶在途追加 → 两轮依次落定 + 串行位释放 (无死锁)"
-              + " | 回执 \(mBoxA.sentMails.count - sentBeforeConcurrent) 封")
-        check(amock.lastSentPrompt == "第二句: 补充甲\n\n第三句: 补充乙",
-              "T-MAILBOX ㊶同线程连发两封 → 合并成一轮 (后一封覆盖前一封 = 静默丢指令)"
-              + " | 实际 \(amock.lastSentPrompt ?? "nil")")
-        check(mBoxA.sentMails.last?.inReplyTo == "reply-11@x.com",
-              "T-MAILBOX ㊶合并轮的回执锚定最新那封触发邮件")
-        check(mBoxA.sentMails.last?.subject == "[MGOX][DONE] [MGOX-\(shortA)] 查一下磁盘",
-              "T-MAILBOX ㊶多轮回执主题不累积垃圾 (title 跨轮稳定)"
-              + " | 实际 \(mBoxA.sentMails.last?.subject ?? "nil")")
-        mstore.mailbox.stopScheduler()
+        // ===== T-MAILBOX / T-MAILBOX-B（P10.2a/b）已随 P19 删除 =====
+        // 原用例断言「四道闸 / 线程定位 / 项目 cwd / 全局串行 / 回执状态机」—— 收件档整套拆除
+        // （boss：邮件驱动早就不用，改用 cron）。留着这些断言只会让被删的服务看起来还被验着。
+        // 邮件通道本身（MimeParser / CurlMailCommand / CurlMailTransport）仍有 T-MIME 守着。
 
         // ===== T-MIME (P10.2c): 来信解析 / 出站拼装 / curl 命令与输出解析 / transport 全链 =====
         // 语料一律按 **Latin1 无损** 形态喂进 (parse(data:) 内部即此路径); 只测纯函数, 不连真网。
@@ -2995,224 +2618,28 @@ struct SmokeMain {
                   "T-MIME ㉟缺 UID → notConfigured (不回落到猜)")
         }
 
-        // ===== T-MAILBOX-S (P10.2d): Settings 域层契约 (预设表 / 账号池 / 哨兵 / 拒收 / Keychain 缝) =====
-        // 独立 store + 独立 mock (项目约定: 新段不复用顶层 store 的 delegate 归属)
-        let sdir = fixtureDir("mboxs")
-        let sstore = ChatStore(transport: MockTransport(), dbPath: sdir + "/mbxs.db",
-                               managedExtensionsDir: sdir + "/ext")
-        sstore.mailboxCredentials = InMemoryMailboxCredentialStore()
-        sstore.mailboxTransportFactory = { _ in nil }   // 纯域层断言不需要连接实例
-        sstore.mailbox.stopScheduler()
-
-        // —— 预设表 (决定 15) ——
+        // ===== T-MAIL-PRESET（P10.2d 余留）: 预设表仍被保留的邮件通道层使用 =====
+        // 账号池 / 哨兵 / 拒收 / 测试连接的那部分随收件档删除；这里只剩纯函数契约。
         check(MailProviderPreset.all.count == 4 && MailProviderPreset.allWithCustom.count == 5,
-              "T-MAILBOX-S 预设表 = 4 项 + 自定义 (企业邮 / Outlook / Gmail 均不列)")
+              "T-MAIL-PRESET 预设表 = 4 项 + 自定义 (企业邮 / Outlook / Gmail 均不列)")
         check(MailProviderPreset.all.allSatisfy { $0.imapHost.contains(":993") && $0.smtpHost.contains(":465") },
-              "T-MAILBOX-S 预设 host 均含端口 (curl 拼 URL 的前提)")
+              "T-MAIL-PRESET 预设 host 均含端口 (curl 拼 URL 的前提)")
         check(MailProviderPreset.all.allSatisfy { $0.authNote.contains("不是登录密码") },
-              "T-MAILBOX-S 每项 authNote 都点明「用它当密码, 不是登录密码」(最高频踩坑点)")
+              "T-MAIL-PRESET 每项 authNote 都点明「用它当密码, 不是登录密码」(最高频踩坑点)")
         check(MailProviderPreset.all.allSatisfy { ($0.helpURL ?? "").hasPrefix("https://") },
-              "T-MAILBOX-S 每项预设都带 https 帮助页")
+              "T-MAIL-PRESET 每项预设都带 https 帮助页")
         check(MailProviderPreset.custom.imapHost.isEmpty && MailProviderPreset.custom.smtpHost.isEmpty
               && MailProviderPreset.custom.isCustom,
-              "T-MAILBOX-S 自定义预设不带填充值 (host 全手填)")
-
-        var draftAcc = MailboxAccount(label: "x", address: "me@163.com")
-        draftAcc.imapHost = "手填:993"
-        draftAcc = MailProviderPreset.apply(MailProviderPreset.netease163, to: draftAcc)
-        check(draftAcc.imapHost == "imap.163.com:993" && draftAcc.smtpHost == "smtp.163.com:465"
-              && draftAcc.presetId == "163" && draftAcc.label == "x",
-              "T-MAILBOX-S applyPreset 只改来源与两个 host (其余字段不动)")
-        draftAcc.imapHost = "手填:993"
-        draftAcc = MailProviderPreset.apply(MailProviderPreset.custom, to: draftAcc)
-        check(draftAcc.imapHost == "手填:993" && draftAcc.presetId == "custom",
-              "T-MAILBOX-S 选自定义不覆盖手填值 (只把来源标成 custom)")
+              "T-MAIL-PRESET 自定义预设不带填充值 (host 全手填)")
         check(MailProviderPreset.matching(address: "a@163.com")?.id == "163"
               && MailProviderPreset.matching(address: "A@QQ.COM")?.id == "qq"
               && MailProviderPreset.matching(address: "a@foxmail.com")?.id == "qq"
               && MailProviderPreset.matching(address: "a@unknown.com") == nil
               && MailProviderPreset.matching(address: "no-at-sign") == nil,
-              "T-MAILBOX-S 按域名猜预设 (大小写不敏感; 猜不到 = nil, 尊重手选)")
+              "T-MAIL-PRESET 按域名猜预设 (大小写不敏感; 猜不到 = nil, 尊重手选)")
         check(MailProviderPreset.label(forPresetId: "163") == "网易 163 邮箱"
               && MailProviderPreset.label(forPresetId: nil) == "自定义",
-              "T-MAILBOX-S 来源徽章文案 (未知/nil 回落自定义)")
-
-        // —— 账号池 roundtrip + 凭据缝 ——
-        let sAcc = MailboxAccount(label: "测试账号", address: "m@163.com", presetId: "163",
-                                  imapHost: "imap.163.com:993", smtpHost: "smtp.163.com:465")
-        sstore.addMailboxAccount(sAcc)
-        sstore.setMailboxAccountAuth("AUTH-1", accountId: sAcc.id)
-        check(sstore.mailboxAccounts.count == 1 && sstore.hasMailboxAccountAuth(accountId: sAcc.id),
-              "T-MAILBOX-S 账号入池 + 授权码写凭据缝 (不回显真实值, 只问得到「已设置」)")
-        check(sstore.sentinelBoundToken(accountId: sAcc.id) == nil,
-              "T-MAILBOX-S 未绑定账号的占用状态 = 空闲")
-
-        // —— 哨兵 roundtrip + 1:1 占用 + 删除保护 ——
-        let spDir = sdir + "/proj"
-        try? FileManager.default.createDirectory(atPath: spDir, withIntermediateDirectories: true)
-        let sProj = ProjectGroup(title: "P1", path: spDir, items: [])
-        sstore.projects.append(sProj)
-        var sS1 = MailboxSentinel(name: "S1", accountId: sAcc.id, projectId: sProj.id, whitelist: ["a@x.com"])
-        check(sstore.upsertMailboxSentinel(sS1) && sstore.mailboxSentinels.count == 1,
-              "T-MAILBOX-S 哨兵创建成功 (项目绑定生效)")
-        check(sstore.availableMailboxAccounts(forSentinel: sS1.id).contains { $0.id == sAcc.id },
-              "T-MAILBOX-S availableAccounts 编辑自己时保留自占账号")
-        check(sstore.availableMailboxAccounts(forSentinel: nil).isEmpty
-              && sstore.sentinelBoundToken(accountId: sAcc.id)?.name == "S1",
-              "T-MAILBOX-S 新哨兵视角无空闲账号 + 占用状态可查到绑定者")
-        check(!sstore.upsertMailboxSentinel(MailboxSentinel(name: "S2", accountId: sAcc.id, whitelist: ["b@x.com"]))
-              && sstore.mailboxSentinels.count == 1,
-              "T-MAILBOX-S 1:1 占用: 第二个哨兵抢同一邮箱被拒")
-        check(!sstore.removeMailboxAccount(sAcc.id) && sstore.mailboxAccounts.count == 1,
-              "T-MAILBOX-S 被哨兵引用的账号不可删 (删除按钮置灰的域层依据)")
-
-        // —— 任务级模型 (2026-09-24, 与 Cron/Watch 的 taskModelPicker 同一契约) ——
-        check(MailboxSentinel(name: "x", accountId: sAcc.id).modelOverride == nil,
-              "T-MAILBOX-S 未 pin 模型 ⇒ modelOverride 整体为 nil (跟随当前会话, 不下发指令)")
-        var pinned = MailboxSentinel(name: "x", accountId: sAcc.id,
-                                     provider: "pi", modelId: "deepseek/v4", thinkingLevel: "high")
-        check(pinned.modelOverride?.provider == "pi" && pinned.modelOverride?.modelId == "deepseek/v4"
-              && pinned.modelOverride?.thinking == "high",
-              "T-MAILBOX-S 已 pin ⇒ 三件套原样透传 (provider/modelId/thinking)")
-        pinned.thinkingLevel = nil
-        check(pinned.modelOverride?.modelId == "deepseek/v4" && pinned.modelOverride?.thinking == nil,
-              "T-MAILBOX-S 级别未选过 (nil) 只丢级别、不丢模型 —— 与 SessionConfig.thinkingLevel 同口径")
-        // 只设级别不设模型 ⇒ 整体失效。这条正是 UI 侧"落档必须把模型一并具体化"的依据:
-        // 否则用户只拖了滑轨, 级别会被 modelOverride 静默丢掉 (看起来像生效, 实际没下发)。
-        check(MailboxSentinel(name: "x", accountId: sAcc.id, thinkingLevel: "xhigh").modelOverride == nil,
-              "T-MAILBOX-S 只设级别不设模型 ⇒ 整体 nil (UI 不许出现这种半截状态)")
-
-        sS1.provider = "pi"
-        sS1.modelId = "deepseek/v4"
-        sS1.thinkingLevel = "medium"
-        check(sstore.upsertMailboxSentinel(sS1), "T-MAILBOX-S 带任务级模型的哨兵保存成功")
-        let modelReload = ChatStore(transport: MockTransport(), dbPath: sdir + "/mbxs.db",
-                                    managedExtensionsDir: sdir + "/ext")
-        modelReload.mailbox.stopScheduler()
-        check(modelReload.mailboxSentinels.first?.provider == "pi"
-              && modelReload.mailboxSentinels.first?.modelId == "deepseek/v4"
-              && modelReload.mailboxSentinels.first?.thinkingLevel == "medium",
-              "T-MAILBOX-S 新 store 读回任务级模型 (三列确实落库, 非内存幻觉)")
-        check(modelReload.mailboxSentinels.first?.modelOverride?.modelId == "deepseek/v4",
-              "T-MAILBOX-S 读回后 modelOverride 可用 (fire 路径拿到的就是它)")
-
-        // —— 密钥闸开关 + Keychain 缝 ——
-        sstore.setMailboxSentinelSecret("SEC-1", sentinelId: sS1.id)
-        check(sstore.hasMailboxSentinelSecret(sentinelId: sS1.id), "T-MAILBOX-S 哨兵密钥写凭据缝")
-        sS1.requireSecret = false
-        check(sstore.upsertMailboxSentinel(sS1) && sstore.hasMailboxSentinelSecret(sentinelId: sS1.id),
-              "T-MAILBOX-S 关掉密钥闸不清密钥 (再打开不必重录)")
-
-        // —— 拒收行「加入白名单」快捷动作 ——
-        sstore.addMailboxWhitelist(sentinelId: sS1.id, address: "No-Reply@Monitor.com")
-        sstore.addMailboxWhitelist(sentinelId: sS1.id, address: "no-reply@monitor.com")
-        let afterWhitelist = sstore.mailboxSentinels.first { $0.id == sS1.id }?.whitelist ?? []
-        check(afterWhitelist.count == 2 && afterWhitelist.contains("No-Reply@Monitor.com"),
-              "T-MAILBOX-S 快捷加白去重 (地址大小写不敏感) 且存发件人原样")
-        sstore.addMailboxWhitelist(sentinelId: UUID(), address: "x@x.com")
-        check((sstore.mailboxSentinels.first { $0.id == sS1.id }?.whitelist.count ?? 0) == 2,
-              "T-MAILBOX-S 对已删哨兵加白名单是安全的空操作")
-        check(MailboxSentinelService.gate(mail: RawMail(messageId: "m1", from: "no-reply@monitor.com",
-                                                        subject: "[MGOX] x", body: "b"),
-                                          whitelist: afterWhitelist, requireSecret: false, secret: nil,
-                                          isFollowUp: false, alreadySeen: false) == .pass,
-              "T-MAILBOX-S 快捷加白后该地址确实能过闸 (列表与判定同源)")
-
-        // —— 拒收列表读写 + 200 条裁剪 (内存缓存与库同规则) ——
-        for i in 0..<205 {
-            sstore.mailbox.recordRejection(
-                MailboxRejection(sentinelId: sS1.id, sender: "f\(i)@x.com", subject: "s\(i)",
-                                 reason: .notWhitelisted,
-                                 at: Date(timeIntervalSince1970: 1_787_000_000 + Double(i))))
-        }
-        let keptRejections = sstore.mailbox.recentRejections(sentinelId: sS1.id)
-        check(keptRejections.count == 200 && keptRejections.first?.subject == "s204"
-              && !keptRejections.contains { $0.subject == "s0" },
-              "T-MAILBOX-S 拒收内存缓存裁到 200 条 (最新在前, 最旧滚出)")
-        check((sstore.persistence?.loadMailboxRejections(sentinelId: sS1.id).count ?? 0) == 200,
-              "T-MAILBOX-S 拒收库侧同样只留 200 条 (缓存不改变落库纪律)")
-        let rejectionReloadStore = ChatStore(transport: MockTransport(), dbPath: sdir + "/mbxs.db",
-                                             managedExtensionsDir: sdir + "/ext")
-        rejectionReloadStore.mailbox.stopScheduler()
-        check(rejectionReloadStore.mailbox.recentRejections(sentinelId: sS1.id).count == 200
-              && rejectionReloadStore.mailboxRejections.first?.subject == "s204",
-              "T-MAILBOX-S 拒收缓存可从库重建 (重启后 Settings 块不空)")
-        check(sstore.mailboxRejections.count == 50 && sstore.mailboxRejections.first?.subject == "s204",
-              "T-MAILBOX-S Settings 拒收块跨哨兵聚合 (时间倒序, 默认 50 条)")
-        check(sstore.mailboxRejections.allSatisfy { $0.sentinelId == sS1.id && !$0.reason.label.isEmpty },
-              "T-MAILBOX-S 拒收行带来源哨兵 + 原因文案")
-
-        // —— 状态行 ——
-        check(sstore.mailboxQueuedTaskCount == 0 && sstore.mailboxRunningTask == nil
-              && sstore.mailboxLastPollAt == nil,
-              "T-MAILBOX-S 状态行: 空闲时排队 0 / 无在途 / 无收信记录")
-
-        // —— 测试连接 (注入假 transport, 只验域层把结果带回) ——
-        let sAcc2 = MailboxAccount(label: "测试2", address: "t@163.com", presetId: "163",
-                                   imapHost: "imap.163.com:993", smtpHost: "smtp.163.com:465")
-        let sBox = MockMailTransport(accountId: sAcc2.id)
-        sBox.testConnectionResult = "连接失败: 认证失败 (检查授权码)"
-        sstore.mailboxTransportFactory = { acct in acct.id == sAcc2.id ? sBox : nil }
-        sstore.addMailboxAccount(sAcc2)
-        check(await sstore.testMailboxConnection(accountId: sAcc2.id) == "连接失败: 认证失败 (检查授权码)",
-              "T-MAILBOX-S 测试连接把 transport 的错误文案带回 UI")
-        sBox.testConnectionResult = nil
-        check(await sstore.testMailboxConnection(accountId: sAcc2.id) == nil,
-              "T-MAILBOX-S 测试连接成功 → nil (UI 显示连接正常)")
-        check(await sstore.testMailboxConnection(accountId: UUID()) == "账号不存在",
-              "T-MAILBOX-S 测试连接对未知账号给明确文案 (不静默)")
-
-        // —— 删哨兵 / 删账号的连带清理 ——
-        sstore.removeMailboxSentinel(id: sS1.id)
-        check(sstore.mailboxSentinels.isEmpty
-              && sstore.mailbox.recentRejections(sentinelId: sS1.id).isEmpty
-              && sstore.mailboxRejections.isEmpty,
-              "T-MAILBOX-S 删哨兵连带清拒收日志 (Settings 块随之空)")
-        check(!sstore.hasMailboxSentinelSecret(sentinelId: sS1.id), "T-MAILBOX-S 删哨兵清 Keychain 密钥")
-        check(sstore.availableMailboxAccounts(forSentinel: nil).count == 2,
-              "T-MAILBOX-S 删哨兵后账号回到空闲池")
-        check(sstore.removeMailboxAccount(sAcc.id) && !sstore.hasMailboxAccountAuth(accountId: sAcc.id),
-              "T-MAILBOX-S 无引用账号可删且清 Keychain 授权码")
-
-        // —— 改配置 / 改授权码必须丢弃缓存连接实例 ——
-        // (2026-09-18 联调实测 bug: 163 改 QQ 后点测试连接, 测的仍是 163 —— 实例被缓存且未失效,
-        //  而 CurlMailTransport 在 init 就吃下 host 与授权码快照, 于是 UI 上的错永远是旧配置的错)
-        final class TransportMade { var n = 0 }
-        let transportMade = TransportMade()
-        let sAcc3 = MailboxAccount(label: "测试3", address: "t3@163.com", presetId: "163",
-                                   imapHost: "imap.163.com:993", smtpHost: "smtp.163.com:465")
-        sstore.mailboxTransportFactory = { acct in
-            transportMade.n += 1
-            let t = MockMailTransport(accountId: acct.id)
-            t.testConnectionResult = acct.imapHost   // 把 host 当文案回显 → 断言"这次到底连的哪个 host"
-            return t
-        }
-        sstore.addMailboxAccount(sAcc3)
-        check((await sstore.testMailboxConnection(accountId: sAcc3.id))?.contains("imap.163.com:993") == true
-              && transportMade.n == 1,
-              "T-MAILBOX-S 测试连接用账号当前的 IMAP 主机 (实例按账号缓存, 只建一次)")
-        var editedAcc = sAcc3
-        editedAcc.imapHost = "imap.qq.com:993"
-        sstore.updateMailboxAccount(editedAcc)
-        check((await sstore.testMailboxConnection(accountId: sAcc3.id))?.contains("imap.qq.com:993") == true
-              && transportMade.n == 2,
-              "T-MAILBOX-S 改账号配置后丢弃旧连接实例 (改完立即生效, 不必重启)")
-        sstore.setMailboxAccountAuth("brand-new-secret", accountId: sAcc3.id)
-        _ = await sstore.testMailboxConnection(accountId: sAcc3.id)
-        check(transportMade.n == 3,
-              "T-MAILBOX-S 改授权码后丢弃旧连接实例 (凭据同样是 init 快照)")
-        _ = sstore.removeMailboxAccount(sAcc3.id)
-
-        // —— 落库往返 (重启仍在) + 凭据不入库 ——
-        let reloadedStore = ChatStore(transport: MockTransport(), dbPath: sdir + "/mbxs.db",
-                                      managedExtensionsDir: sdir + "/ext")
-        reloadedStore.mailboxCredentials = InMemoryMailboxCredentialStore()
-        reloadedStore.mailbox.stopScheduler()
-        check(reloadedStore.mailboxAccounts.count == 1
-              && reloadedStore.mailboxAccounts.first?.address == "t@163.com",
-              "T-MAILBOX-S 账号落库 (重启仍在, 预设来源一并还原)")
-        check(!reloadedStore.hasMailboxAccountAuth(accountId: sAcc2.id),
-              "T-MAILBOX-S 授权码不入库 (只活在 Keychain / 凭据缝)")
+              "T-MAIL-PRESET 来源徽章文案 (未知/nil 回落自定义)")
 
         // ===== T-UI (P10.7): 外观三态 / 侧栏层级几何 =====
         check(AppAppearance.allCases.count == 3, "T-UI 外观: 三态 (跟随系统 / 浅色 / 深色)")
@@ -3405,7 +2832,6 @@ struct SmokeMain {
         try? FileManager.default.createDirectory(atPath: packDir, withIntermediateDirectories: true)
         let kstore = ChatStore(transport: MockTransport(), dbPath: kdir + "/know.db",
                                managedExtensionsDir: kdir + "/ext")
-        kstore.mailbox.stopScheduler()
         kstore.knowledge.personaPackDirOverride = packDir
         // L1 落盘同样重定向 —— **冒烟绝不写用户家目录 / 用户项目目录**
         // (不重定向的话 "按需" 条目的 L1 文件会被写进真实的 ~/.mangox/agent/memory/)。
@@ -3446,7 +2872,6 @@ struct SmokeMain {
             let dir = fixtureDir("know-\(tag)")
             let s = ChatStore(transport: MockTransport(), dbPath: dir + "/k.db",
                               managedExtensionsDir: dir + "/ext")
-            s.mailbox.stopScheduler()
             return s
         }
 
@@ -3707,7 +3132,6 @@ struct SmokeMain {
         if let upsertPath = upsertStore.persistenceDebug?.path {
             let again = ChatStore(transport: MockTransport(), dbPath: upsertPath,
                                   managedExtensionsDir: fixtureDir("know-none"))
-            again.mailbox.stopScheduler()
             check(again.knowledgeItems.contains { $0.title == "乙" && $0.key == "k.two" }
                   && again.knowledgeItems.contains { $0.title == "甲" && $0.priority == 7 },
                   "T-KNOW 更新一条不影响另一条 (含 key 邻居; 走 ON CONFLICT 是纵深防御)")
@@ -3749,7 +3173,6 @@ struct SmokeMain {
             }
             let s = ChatStore(transport: MockTransport(), dbPath: path,
                               managedExtensionsDir: dir + "/ext")
-            s.mailbox.stopScheduler()
             return s
         }
         if let legacy = legacyStore("plain", extraColumns: "", extraCols: [], extraVals: []) {
@@ -3787,7 +3210,6 @@ struct SmokeMain {
         let tdir = fixtureDir("know-off")
         let offStore = ChatStore(transport: MockTransport(), dbPath: tdir + "/off.db",
                                  managedExtensionsDir: tdir + "/ext")
-        offStore.mailbox.stopScheduler()
         offStore.knowledge.l1RootOverride = tdir + "/l1"     // 同 kstore: 冒烟绝不写用户家目录
         offStore.knowledge.refreshSnapshot()
         let offL1 = tdir + "/l1/global"                      // `resolvedL1Dir(projectPath: nil)`
@@ -3888,7 +3310,6 @@ struct SmokeMain {
         let pendDir = fixtureDir("know-pending")
         let pendSeed = ChatStore(transport: MockTransport(), dbPath: pendDir + "/p.db",
                                  managedExtensionsDir: pendDir + "/ext")
-        pendSeed.mailbox.stopScheduler()
         let pendStamp = Date().timeIntervalSince1970
         if let ppath = pendSeed.persistenceDebug?.path {
             do {
@@ -3904,7 +3325,6 @@ struct SmokeMain {
         }
         let pendStore = ChatStore(transport: MockTransport(), dbPath: pendDir + "/p.db",
                                   managedExtensionsDir: pendDir + "/ext")
-        pendStore.mailbox.stopScheduler()
         check(pendStore.pendingKnowledge.count == 1 && pendStore.customKnowledge.isEmpty,
               "T-KNOW 待审核候选**不进自定义区**的正式条目部分 (status != active)")
         check(Set(pendStore.pendingKnowledge.map(\.id))
@@ -3921,7 +3341,6 @@ struct SmokeMain {
         try? FileManager.default.createDirectory(atPath: pPack, withIntermediateDirectories: true)
         let pstore = ChatStore(transport: MockTransport(), dbPath: pdir + "/p.db",
                                managedExtensionsDir: pdir + "/ext")
-        pstore.mailbox.stopScheduler()
         pstore.knowledge.personaPackDirOverride = pPack
         pstore.knowledge.l1RootOverride = pdir + "/l1"
 
@@ -4071,7 +3490,6 @@ struct SmokeMain {
         let epackDir = emptyDir + "/agent"          // **故意不建** —— 目录不存在
         let estore = ChatStore(transport: MockTransport(), dbPath: emptyDir + "/e.db",
                                managedExtensionsDir: emptyDir + "/ext")
-        estore.mailbox.stopScheduler()
         estore.knowledge.personaPackDirOverride = epackDir
         estore.knowledge.l1RootOverride = emptyDir + "/l1"
         estore.reloadPersonaPackAndRefresh()
@@ -4128,7 +3546,6 @@ struct SmokeMain {
         try? FileManager.default.createDirectory(atPath: ttPack, withIntermediateDirectories: true)
         let ttStore = ChatStore(transport: MockTransport(), dbPath: ttDir + "/t.db",
                                 managedExtensionsDir: ttDir + "/ext")
-        ttStore.mailbox.stopScheduler()
         ttStore.knowledge.personaPackDirOverride = ttPack
         ttStore.knowledge.l1RootOverride = ttDir + "/l1"
         func writeTitleFile(_ name: String, _ body: String) {
@@ -4163,7 +3580,6 @@ struct SmokeMain {
             .write(toFile: fatPack + "/SOUL.md", atomically: true, encoding: .utf8)
         let fatStore = ChatStore(transport: MockTransport(), dbPath: fatDir + "/f.db",
                                  managedExtensionsDir: fatDir + "/ext")
-        fatStore.mailbox.stopScheduler()
         fatStore.knowledge.personaPackDirOverride = fatPack
         fatStore.knowledge.l1RootOverride = fatDir + "/l1"
         _ = fatStore.addKnowledge(title: "小易变", content: "会被挤掉。", scope: .global, projectId: nil,
@@ -4179,7 +3595,6 @@ struct SmokeMain {
         let ldir = fixtureDir("l1")
         let lstore = ChatStore(transport: MockTransport(), dbPath: ldir + "/l.db",
                                managedExtensionsDir: ldir + "/ext")
-        lstore.mailbox.stopScheduler()
         lstore.knowledge.personaPackDirOverride = ldir + "/agent"     // 空目录
         lstore.knowledge.l1RootOverride = ldir + "/l1"
         let l1Global = ldir + "/l1/global"
@@ -4285,7 +3700,6 @@ struct SmokeMain {
 
         let kbs = ChatStore(transport: MockTransport(), dbPath: kbDir + "/kb.db",
                             managedExtensionsDir: kbDir + "/ext")
-        kbs.mailbox.stopScheduler()
         kbs.knowledge.l1RootOverride = kbDir + "/l1"
         kbs.knowledge.personaPackDirOverride = kbPack
 
@@ -4604,7 +4018,6 @@ struct SmokeMain {
         }
         let kbs2 = ChatStore(transport: MockTransport(), dbPath: kb2Dir + "/kb2.db",
                              managedExtensionsDir: kb2Dir + "/ext")
-        kbs2.mailbox.stopScheduler()
         kbs2.knowledge.l1RootOverride = kb2Dir + "/l1"
         kbs2.knowledge.personaPackDirOverride = kb2Dir + "/pack"   // 空 pack ⇒ persona 0 字, 算式干净
         _ = kbs2.knowledge.addKnowledgeBase(path: kb2Lib, description: "预算夹具")
@@ -4651,7 +4064,6 @@ struct SmokeMain {
         do {
             let noteStore = ChatStore(transport: MockTransport(), dbPath: kbDir + "/note.db",
                                       managedExtensionsDir: kbDir + "/ext")
-            noteStore.mailbox.stopScheduler()
 
             // —— T1: 两个固定根 ——
             let nb = noteStore.knowledge.noteKnowledgeBases
@@ -4787,7 +4199,6 @@ struct SmokeMain {
         do {
             let noteStore2 = ChatStore(transport: MockTransport(), dbPath: kbDir + "/note2.db",
                                        managedExtensionsDir: kbDir + "/ext2")
-            noteStore2.mailbox.stopScheduler()
             let kn = noteStore2.knowledge
             let rootId = KnowledgeBase.noteGlobalID
             let nroot = kn.noteKnowledgeBases.first { $0.id == rootId }?.path ?? ""
@@ -5360,7 +4771,6 @@ struct SmokeMain {
             // —— ② 表层: 落库 → 读回往返 ——
             let dmTable = ChatStore(transport: MockTransport(), dbPath: kbDir + "/dream-tbl.db",
                                     managedExtensionsDir: kbDir + "/ext-dm")
-            dmTable.mailbox.stopScheduler()
             let dmProposal = NoteProposal(
                 id: UUID(), rootId: KnowledgeBase.noteGlobalID, kind: .merge, targetPath: "sub/a.md",
                 baseHash: "hash1", title: "标题", content: "整篇新内容", reason: "为什么",
@@ -5409,7 +4819,6 @@ struct SmokeMain {
             }
             let legacyStore2 = ChatStore(transport: MockTransport(), dbPath: legacyProposalPath,
                                          managedExtensionsDir: kbDir + "/ext-legacy")
-            legacyStore2.mailbox.stopScheduler()
             let legacyLeft = (try? legacyStore2.persistence?.loadNoteProposals()) ?? []
             check(legacyLeft.count == 1 && legacyLeft.first?.id == legacyKeepP.id,
                   "P15.8/5f 存量移除: 老库的终态行**在读出之前就被删掉**, 同库的待审行原样保留"
@@ -5419,7 +4828,6 @@ struct SmokeMain {
             // —— ③ 收口层: 端到端跑一次真 fire ——
             let dmRun = ChatStore(transport: MockTransport(), dbPath: kbDir + "/dream-run.db",
                                   managedExtensionsDir: kbDir + "/ext-run")
-            dmRun.mailbox.stopScheduler()
             check(PiRpcTransport.productionDreamSpoolDir() == NSHomeDirectory() + "/.mangox/dream-spool",
                   "守卫 26 政策: 生产 spool 根在 ~/.mangox/dream-spool (断言的是**政策**, 不是冒烟期的临时值)")
             check(!PiRpcTransport.dreamSpoolDir().hasPrefix(NSHomeDirectory() + "/.mangox"),
@@ -6295,6 +5703,13 @@ struct SmokeMain {
         //   ⓔ `missedWindowStart` 拿掉 `floor` ⇒ **1 红**(出生 30 天前那格从 7 变成 31 —— 是 31
         //      不是 30: `createdAt` 在那天 00:00, 窗口里那天 03:00 也算一个)。
         await caseScheduleCron()
+
+        // ---- T-TASK-KIND: P19 任务类型 (两档 + 旧条件值守只读归档) ----
+        // 反例: 解码顺序写反 ⇒ "condition 非空 ⇒ legacy" 红; 删 fire 的 guard ⇒ "不 fire" 红。
+        await caseTaskKind()
+
+        // ---- T-WATCHFACE: P19 只读巡检/分析段的工具面（只给该给的，一个都不多） ----
+        await caseWatchFace()
 
         // ---- T-CTX: 上下文压缩可见性 —— 常驻标记 (A) / 即时百分比 (B) / 压缩线 (D) ----
         // 立项依据 (2026-10-17 boss): "现在只有低栏那个状态才有压缩显示, 对话区域…没有吧" ——

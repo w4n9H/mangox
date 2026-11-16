@@ -11,44 +11,18 @@ import SwiftUI
 struct ScheduledView: View {
     @ObservedObject var store: ChatStore
 
-    // 编辑目标 (P10.2e: Inbox 与 Cron/Watch 共用本双栏页)
+    // 编辑目标 (P19: 收件档已删, 只剩计划任务一侧)
     @State private var target: EditorTarget = .newTask
-    /// 两侧各自"上次在哪" —— 类型段选来回切时不至于每次都被踢回新建态。
-    @State private var lastTaskTarget: EditorTarget = .newTask
-    @State private var lastSparseTarget: EditorTarget = .newSparse
 
-    /// 切换编辑目标的**唯一写入口**: 顺带记住该侧的上次目标 (供段选回切)。
-    private func setTarget(_ t: EditorTarget) {
-        switch t {
-        case .newTask, .task:     lastTaskTarget = t
-        case .newSparse, .sparse: lastSparseTarget = t
-        }
-        target = t
-    }
-
-    /// 切回任务侧时校验旧目标还在 (被删则回落新建)。
-    private func validTaskTarget(_ t: EditorTarget) -> EditorTarget {
-        if case .task(let id) = t, store.scheduledTasks.contains(where: { $0.id == id }) { return t }
-        return .newTask
-    }
-
-    /// 切回 Inbox 侧: 旧目标还在就用它, 否则落到列表第一个, 一个都没有才新建。
-    private func validSparseTarget(_ t: EditorTarget) -> EditorTarget {
-        if case .sparse(let id) = t, store.mailboxSentinels.contains(where: { $0.id == id }) { return t }
-        if let first = store.mailboxSentinels.first { return .sparse(first.id) }
-        return .newSparse
-    }
+    /// 切换编辑目标的**唯一写入口** (保留函数而非直接写 `target`: 语义仍是"换编辑对象")。
+    private func setTarget(_ t: EditorTarget) { target = t }
     @State private var draftName: String = ""
     @State private var draftPrompt: String = ""
     @State private var draftCron: String = "0 9 * * *"
     @State private var draftProjectId: UUID?
     @State private var draftContinuous: Bool = false
     @State private var hoveringId: UUID?
-    // P3.10 Watch 任务 (原"哨兵任务"): 类型段选 / 触发条件 / 检查频率三档
     // P9-#17: 无人值守恒开 (fire 不再读 task.unattended), 开关与确认弹窗已移除
-    @State private var draftIsWaiting: Bool = false
-    @State private var draftCondition: String = ""
-    @State private var draftFrequency: FrequencyKind = .low
     // cron 四档录入器: 控件态 → 生成 cron; 编辑时 classifyCron 反解析回填 (解析不出落高级档)
     @State private var cronMode: CronMode = .daily
     @State private var cronHour: Int = 9
@@ -75,8 +49,6 @@ struct ScheduledView: View {
     private enum EditorTarget: Equatable {
         case newTask
         case task(UUID)
-        case newSparse
-        case sparse(UUID)
     }
 
     private var editingId: UUID? {
@@ -84,36 +56,6 @@ struct ScheduledView: View {
         return nil
     }
 
-    private var editingSparseId: UUID? {
-        if case .sparse(let id) = target { return id }
-        return nil
-    }
-
-    /// 编辑器当前渲染 sparse agent 侧 (新建或编辑)。
-    private var isSparseTarget: Bool {
-        switch target {
-        case .newSparse, .sparse: return true
-        case .newTask, .task:     return false
-        }
-    }
-
-    /// 左侧列表条目 (P10.2e 单列表混排两类任务, 靠行首图标区分)。
-    private enum ListEntry: Identifiable {
-        case task(ScheduledTask)
-        case sparse(MailboxSentinel)
-
-        var id: String {
-            switch self {
-            case .task(let t):   return "task-\(t.id.uuidString)"
-            case .sparse(let s): return "sparse-\(s.id.uuidString)"
-            }
-        }
-    }
-
-    /// 计划任务保持原有顺序; sparse agent 追加在其后 (两侧新建都落在各自末尾, 行为一致)。
-    private var listEntries: [ListEntry] {
-        store.scheduledTasks.map(ListEntry.task) + store.mailboxSentinels.map(ListEntry.sparse)
-    }
 
     var body: some View {
         HStack(spacing: 0) {
@@ -147,21 +89,18 @@ struct ScheduledView: View {
                     .tracking(0.5)
                     .foregroundStyle(CodexTheme.textMuted)
                 Spacer()
-                Menu {
-                    Button("新建 Cron 任务") { startNew(waiting: false) }
-                    Button("新建 Watch 任务") { startNew(waiting: true) }
-                    Button("新建 Inbox") { startNewSparse() }
-                } label: {
+                // P19: 只剩一档 ⇒ 不再画单选项菜单（一个只有一项的菜单只是多一次点击）。
+                // S3 加「助理」时这里回到 Menu，两个入口。
+                Button(action: { startNew() }) {
                     Image(systemName: "plus")
                         .font(.system(size: 11))
                         .foregroundStyle(CodexTheme.textSecondary)
                         .frame(width: 18, height: 18)
                         .contentShape(Rectangle())
                 }
-                .menuStyle(.borderlessButton)
-                .menuIndicator(.hidden)
+                .buttonStyle(.plain)
                 .fixedSize()
-                .help("新建 (Cron 定时 · Watch 条件值守 · Inbox 来信驱动)")
+                .help("新建定时任务")
             }
             .padding(.horizontal, 10)
             .padding(.top, 14)
@@ -170,13 +109,8 @@ struct ScheduledView: View {
             ScrollView {
                 VStack(spacing: 1) {
                     if !store.missedFires.isEmpty { missedSection }
-                    ForEach(listEntries) { entry in
-                        switch entry {
-                        case .task(let task):     row(task)
-                        case .sparse(let agent):  sparseRow(agent)
-                        }
-                    }
-                    if listEntries.isEmpty {
+                    ForEach(store.scheduledTasks) { task in row(task) }
+                    if store.scheduledTasks.isEmpty {
                         Text("暂无任务\n点右上角 + 新建")
                             .font(CodexTheme.fontTiny)
                             .foregroundStyle(CodexTheme.textMuted)
@@ -294,10 +228,13 @@ struct ScheduledView: View {
                     .foregroundStyle(CodexTheme.textMuted)
             }
             Spacer(minLength: 2)
-            // P15.3: 「立即运行」**常显**（不做 hover-only）—— 藏起来的入口 = 没有入口,
-            // 同常驻区那个 folder 按钮。它不抢眼靠的是颜色（未 hover 时与正文同级）。
-            runNowButton(task, hovered: hovered)
-            if task.completedAt == nil {   // 已触发的等待任务不显示开关 (重开 = 重新等待)
+            // P19: 旧条件值守 = 只读归档 —— 不给「立即运行」、不给开关。
+            // 两者都必须在**入口处**就不出现: `runScheduledFire` 里那道 guard 是**最后一道**,
+            // 让按钮在、点了没反应, 比没有按钮更坏（用户会以为调度器坏了）。
+            if !task.isLegacyWaiting {
+                // P15.3: 「立即运行」**常显**（不做 hover-only）—— 藏起来的入口 = 没有入口,
+                // 同常驻区那个 folder 按钮。它不抢眼靠的是颜色（未 hover 时与正文同级）。
+                runNowButton(task, hovered: hovered)
                 CodexMiniToggle(isOn: Binding(
                     get: { task.enabled },
                     set: { _ in store.toggleScheduled(id: task.id) }
@@ -334,14 +271,14 @@ struct ScheduledView: View {
         .help("立即运行 (不等定时; 关掉开关也能跑)")
     }
 
-    /// P3.10 行首图标: 定时型 clock / 等待型雷达 / 已触发对勾
+    /// 行首图标: 定时型 clock / 助理 sparkles / 旧条件值守（只读归档）警告三角
+    /// P19: 等待型雷达图标随条件值守档一起退出 —— legacy 用三角明示「它已经不跑了」。
     private func rowIcon(_ task: ScheduledTask) -> (name: String, color: Color) {
-        let isWaiting = task.condition?.isEmpty == false
-        if isWaiting {
-            if task.completedAt != nil { return ("checkmark.seal.fill", CodexTheme.toolDone) }
-            return task.enabled
-                ? ("dot.radiowaves.left.and.right", CodexTheme.info)
-                : ("dot.radiowaves.left.and.right", CodexTheme.textMuted)
+        if task.isLegacyWaiting {
+            return ("exclamationmark.triangle", CodexTheme.textMuted)
+        }
+        if task.kind == .assistant {
+            return task.enabled ? ("sparkles", CodexTheme.accent) : ("sparkles", CodexTheme.textMuted)
         }
         return task.enabled ? ("clock.badge.fill", CodexTheme.toolDone) : ("clock.badge", CodexTheme.textMuted)
     }
@@ -370,94 +307,23 @@ struct ScheduledView: View {
         }
     }
 
-    // MARK: - sparse agent 行 (P10.2e: 第三种触发源, 与上面两类同版式)
-
-    private func sparseRow(_ agent: MailboxSentinel) -> some View {
-        let selected = editingSparseId == agent.id
-        let hovered = hoveringId == agent.id
-        return HStack(spacing: 7) {
-            Image(systemName: agent.enabled ? "envelope.badge.fill" : "envelope")
-                .font(.system(size: 12))
-                .foregroundStyle(agent.enabled ? CodexTheme.accent : CodexTheme.textMuted)
-                .frame(width: 16)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(agent.name)
-                    .font(.system(size: 13))
-                    .lineLimit(1)
-                    .foregroundStyle(selected ? CodexTheme.textPrimary : CodexTheme.textSecondary)
-                Text(sparseStatusLine(agent))
-                    .font(.system(size: 10))
-                    .lineLimit(1)
-                    .foregroundStyle((agent.lastError?.isEmpty == false) ? CodexTheme.toolError : CodexTheme.textSecondary)
-                Text(sparseContextLine(agent))
-                    .font(CodexFonts.monoFont(9))
-                    .lineLimit(1)
-                    .foregroundStyle(CodexTheme.textMuted)
-            }
-            Spacer(minLength: 2)
-            CodexMiniToggle(isOn: Binding(
-                get: { agent.enabled },
-                set: { _ in store.toggleMailboxSentinel(id: agent.id) }
-            ))
-        }
-        .padding(.leading, 8)
-        .padding(.trailing, 8)
-        .padding(.vertical, 5)
-        .background(selected ? CodexTheme.selected : (hovered ? CodexTheme.hover : Color.clear))
-        .clipShape(RoundedRectangle(cornerRadius: CodexTheme.radiusSm))
-        .contentShape(Rectangle())
-        .onHover { hoveringId = $0 ? agent.id : nil }
-        .onTapGesture { loadSparseDraft(agent) }
-    }
-
-    /// L2 状态行: 收信情况 + 最近错误 (与计划任务的 statusLine 同位同义)。
-    private func sparseStatusLine(_ agent: MailboxSentinel) -> String {
-        var parts: [String] = []
-        if let error = agent.lastError, !error.isEmpty {
-            parts.append("✗ \(error)")
-        } else if agent.enabled {
-            parts.append(String(format: L("收信中 · 每 %llds"), agent.pollInterval))
-        } else {
-            parts.append(String(format: L("已停用 · 每 %llds"), agent.pollInterval))
-        }
-        parts.append(agent.lastPollAt.map { String(format: L("上次收信 %@"), relativeTime($0)) } ?? L("尚未收信"))
-        return parts.joined(separator: " · ")
-    }
-
-    /// L3 上下文行: 绑定的邮箱与工作目录 (对应计划任务的 cron 行位置)。
-    private func sparseContextLine(_ agent: MailboxSentinel) -> String {
-        let account = store.mailboxAccounts.first { $0.id == agent.accountId }
-        let project = store.projects.first { $0.id == agent.projectId }
-        let address = account?.address ?? L("账号已删除")
-        return "\(address)  →  \(project.map(\.title) ?? "home")"
-    }
-
     /// 三行版式 · L2 状态行 (扫一眼的高频信息; cron 无效红字提示)
     private func statusLine(_ task: ScheduledTask) -> String {
+        if task.isLegacyWaiting { return L("旧类型 · 已停用（不再值守）") }
         if !cronValid(task) { return L("cron 无效") }
         var parts: [String] = []
-        if task.condition?.isEmpty == false {
-            if let done = task.completedAt {
-                parts.append(String(format: L("已触发 · %@"), done.relativeTag))
-            } else if task.enabled {
-                parts.append(String(format: L("值守中 · %@"), FrequencyKind.from(cron: task.cron).shortLabel))
-            } else {
-                parts.append(L("已暂停"))
-            }
-        } else {
-            parts.append(CronExpr.describe(task.cron))   // "每天 09:00" 等人话描述 (识别不出=cron 原文)
-            if !task.enabled {
-                parts.append(L("已暂停"))
-            } else if task.continuous {
-                parts.append(L("留痕"))
-            }
-            if task.runCount > 0 {
-                parts.append(String(format: L("已跑 %lld 次"), task.runCount))
-            } else if let last = task.lastRunAt {
-                parts.append(String(format: L("上次 %@"), last.relativeTag))
-            } else if parts.isEmpty {
-                parts.append(L("待运行"))
-            }
+        parts.append(CronExpr.describe(task.cron))   // "每天 09:00" 等人话描述 (识别不出=cron 原文)
+        if !task.enabled {
+            parts.append(L("已暂停"))
+        } else if task.continuous {
+            parts.append(L("留痕"))
+        }
+        if task.runCount > 0 {
+            parts.append(String(format: L("已跑 %lld 次"), task.runCount))
+        } else if let last = task.lastRunAt {
+            parts.append(String(format: L("上次 %@"), last.relativeTag))
+        } else if parts.isEmpty {
+            parts.append(L("待运行"))
         }
         return parts.joined(separator: " · ")
     }
@@ -470,7 +336,7 @@ struct ScheduledView: View {
         } else {
             parts.append(L("无项目"))
         }
-        parts.append(task.condition?.isEmpty == false ? FrequencyKind.from(cron: task.cron).cron : task.cron)
+        parts.append(task.cron)
         parts.append(L("无人值守"))   
         return parts.joined(separator: " · ")
     }
@@ -480,22 +346,11 @@ struct ScheduledView: View {
 
     // MARK: - 编辑器
 
-    /// P10.2e: 类型段选置顶 (跨两侧共用), 下面才是该类型的编辑器本体。
     private var editorPane: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 14) {
-                kindSelector
-                Group {
-                    if isSparseTarget {
-                        SparseAgentEditor(store: store,
-                                          sentinelId: editingSparseId,
-                                          onSaved: { id in setTarget(.sparse(id)) },
-                                          onDeleted: { setTarget(validSparseTarget(lastSparseTarget)) })
-                    } else {
-                        taskEditor
-                    }
-                }
-                .id(editorIdentity)   // 换编辑对象 = 换实例 (草稿状态随之重建, 不串台)
+                taskEditor
+                    .id(editorIdentity)   // 换编辑对象 = 换实例 (草稿状态随之重建, 不串台)
             }
             .padding(.horizontal, 32)
             .padding(.vertical, 24)
@@ -504,13 +359,11 @@ struct ScheduledView: View {
         }
     }
 
-    /// 编辑器身份 (P10.2e): sparse agent 侧的状态活在 SparseAgentEditor 内, 靠 id 变化触发重建。
+    /// 编辑器身份: 换编辑对象 ⇒ 换实例 (草稿状态随之重建, 不串台)。
     private var editorIdentity: String {
         switch target {
-        case .newTask:        return "new-task"
-        case .task(let id):   return "task-\(id.uuidString)"
-        case .newSparse:      return "new-sparse"
-        case .sparse(let id): return "sparse-\(id.uuidString)"
+        case .newTask:      return "new-task"
+        case .task(let id): return "task-\(id.uuidString)"
         }
     }
 
@@ -519,10 +372,10 @@ struct ScheduledView: View {
             controlsRow
             nameField
             cronRow
-            if draftIsWaiting { conditionCard }
+            if isLegacyEditing, let t = editingTask() { legacyConditionCard(t) }
             promptCard
             configCard   // P10.4: 任务级模型/级别/模式
-            if editingId != nil && (draftContinuous || draftIsWaiting) {
+            if editingId != nil && draftContinuous {
                 workLogCard
             }
         }
@@ -532,7 +385,7 @@ struct ScheduledView: View {
         HStack(spacing: 8) {
             projectMenu
             unattendedPill
-            if !draftIsWaiting { continuousToggle }
+            continuousToggle
             Spacer()
             if let last = editingTask()?.logSessionId {
                 Button("任务日志") {
@@ -565,98 +418,7 @@ struct ScheduledView: View {
                     kind: savedFlash ? .success : .primary,
                     disabled: !draftReady))
                 .disabled(!draftReady || savedFlash)
-                .help(LK(draftReady ? "保存" : (draftIsWaiting ? "触发条件与动作为必填" : "prompt 与 cron 为必填")))
-        }
-    }
-
-    /// 三种触发源 (P10.2e 命名): Cron=时间 / Watch=本地条件 / Inbox=外部来信。
-    /// 段选跨两侧共用 —— 它同时是"当前在看哪一类任务"的指示器。
-    enum EditorKind: Int, CaseIterable, Identifiable {
-        case cron, watch, inbox
-        var id: Int { rawValue }
-        var label: String { switch self {
-        case .cron: L("定时")
-        case .watch: L("值守")
-        case .inbox: L("收件")
-        } }
-        var help: String { switch self {
-        case .cron: L("到点投递 prompt (cron 驱动)")
-        case .watch: L("按频率轻检查触发条件, 条件成立才执行动作 (条件驱动)")
-        case .inbox: L("来信驱动的无人值守 agent: 按间隔收信, 过鉴权四道闸后起会话执行")
-        } }
-    }
-
-    private var activeKind: EditorKind {
-        switch target {
-        case .newSparse, .sparse: return .inbox
-        case .newTask, .task:     return draftIsWaiting ? .watch : .cron
-        }
-    }
-
-    /// 类型段选 (P10.2e): 三档并列, 点哪档进哪类任务的编辑器。
-    private var kindSelector: some View {
-        HStack(spacing: 4) {
-            ForEach(EditorKind.allCases) { kind in kindPill(kind) }
-        }
-        .padding(2)
-        .background(CodexTheme.bgElevated)
-        .clipShape(Capsule())
-    }
-
-    private func kindPill(_ kind: EditorKind) -> some View {
-        let active = activeKind == kind
-        return Button(action: { selectKind(kind) }) {
-            Text(kind.label)
-                .font(CodexTheme.fontSmall)
-                .foregroundStyle(active ? CodexTheme.textPrimary : CodexTheme.textTertiary)
-                .padding(.horizontal, 10)
-                .padding(.vertical, 2)
-                .frame(height: 22)
-                .background(active ? CodexTheme.bgBase : Color.clear)
-                .clipShape(Capsule())
-                .shadow(color: active ? CodexTheme.border.opacity(0.5) : .clear, radius: 1.5, y: 0.5)
-        }
-        .buttonStyle(.plain)
-        .help(kind.help)
-    }
-
-    /// 段选落点: 任务侧两档只翻模式 (草稿内容不动), Inbox 档才换编辑器。
-    private func selectKind(_ kind: EditorKind) {
-        switch kind {
-        case .cron, .watch:
-            if isSparseTarget {
-                restoreTaskTarget(waiting: kind == .watch)
-            } else {
-                switchTaskMode(waiting: kind == .watch)
-            }
-        case .inbox:
-            setTarget(validSparseTarget(lastSparseTarget))
-        }
-    }
-
-    /// 任务侧 Cron ↔ Watch: 只翻档并同步对应控件 (草稿的 prompt/名称等原样保留)。
-    private func switchTaskMode(waiting: Bool) {
-        guard draftIsWaiting != waiting else { return }
-        let currentCron = effectiveCron   // 依赖当前 draftIsWaiting, 必须在翻转前取
-        if waiting {
-            // Cron→Watch: 检查频率从当前生效的 cron 反推 (匹配不上落 low 档)
-            draftFrequency = FrequencyKind.from(cron: currentCron)
-            draftIsWaiting = true
-        } else {
-            // Watch→Cron: 控件态从检查频率 cron 反解析
-            draftIsWaiting = false
-            syncCronControls(draftFrequency.cron)
-        }
-    }
-
-    /// 从 Inbox 侧切回任务侧: 恢复上次任务目标 (被删则回落新建并清空草稿)。
-    private func restoreTaskTarget(waiting: Bool) {
-        let restored = validTaskTarget(lastTaskTarget)
-        if restored == lastTaskTarget {
-            setTarget(restored)
-            switchTaskMode(waiting: waiting)
-        } else {
-            startNew(waiting: waiting)
+                .help(LK(draftReady ? "保存" : (isLegacyEditing ? "旧类型已停用，不能保存" : "prompt 与 cron 为必填")))
         }
     }
 
@@ -679,36 +441,31 @@ struct ScheduledView: View {
         .help("fire 回合恒不经确认执行工具调用 (含 bash)——后台任务无审批入口, 关闭会卡死任务; 执行过程见任务日志")
     }
 
-    /// P3.10 触发条件卡 (等待型): 条件=看什么 / 动作=干什么, 两卡分开
-    private var conditionCard: some View {
+    /// P19: 旧条件值守任务的触发条件 —— **只读展示**。
+    /// 该档整体停用（无人授权自动执行那条路已拆），所以这里只负责让人看清它当年在等什么；
+    /// 想继续用同一件事，请重建为助理（目标式任务）。
+    private func legacyConditionCard(_ task: ScheduledTask) -> some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text("触发条件 (每轮轻检查)")
+            Text("原触发条件（旧类型 · 已停用，不再值守）")
                 .font(CodexTheme.fontTiny)
                 .foregroundStyle(CodexTheme.textMuted)
-            ZStack(alignment: .topLeading) {
-                TextEditor(text: $draftCondition)
-                    .font(CodexTheme.fontBody)
-                    .scrollContentBackground(.hidden)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 10)
-                    .frame(minHeight: 88)
-                if draftCondition.isEmpty {
-                    Text("写可判定的标准, 如: 官网发布 X 的正式公告页 (相关新闻不算)…")
-                        .font(CodexTheme.fontBody)
-                        .foregroundStyle(CodexTheme.textMuted)
-                        .padding(.leading, 12)
-                        .padding(.top, 10)
-                        .allowsHitTesting(false)
-                }
-            }
-            .background(CodexTheme.bgComposer)
-            .clipShape(RoundedRectangle(cornerRadius: CodexTheme.radiusLg))
-            .overlay(
-                RoundedRectangle(cornerRadius: CodexTheme.radiusLg)
-                    .stroke(CodexTheme.info.opacity(0.45), lineWidth: 1)
-            )
+            Text(task.condition ?? "")
+                .font(CodexTheme.fontBody)
+                .foregroundStyle(CodexTheme.textSecondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 10)
+                .background(CodexTheme.bgElevated)
+                .clipShape(RoundedRectangle(cornerRadius: CodexTheme.radiusLg))
+                .overlay(
+                    RoundedRectangle(cornerRadius: CodexTheme.radiusLg)
+                        .stroke(CodexTheme.border.opacity(0.45), lineWidth: 1)
+                )
         }
     }
+
+    /// 正在编辑的是旧条件值守任务 —— 只读归档，不许保存。
+    private var isLegacyEditing: Bool { editingTask()?.isLegacyWaiting == true }
 
     private func editingTask() -> ScheduledTask? {
         editingId.flatMap { id in store.scheduledTasks.first { $0.id == id } }
@@ -742,7 +499,7 @@ struct ScheduledView: View {
                     // ⚠️ `CodexPillMenu` 里是 `Menu(.borderlessButton)` —— **宽度是弹性的**。
                     // HStack 里没有任何东西吸收余量时它会一路撑到卡片最右, 于是"模式"看着比"模型"
                     // 宽出一大截 (2026-09-24 boss 截图实锤)。收窄靠 `fixedSize`, `Spacer` 兜住剩余量 ——
-                    // 与 `SparseAgentEditor` 里那两个 Picker 同款手法。
+                    // 与设置页里同款手法。
                     configModePicker   // 模式**独立**保留 —— 它不是"模型链路"的一环
                         .fixedSize()
                     Spacer(minLength: 0)
@@ -868,31 +625,6 @@ struct ScheduledView: View {
             .foregroundStyle(CodexTheme.textPrimary)
     }
 
-    /// P3.10 Watch 任务检查频率三档 (内部映射 cron, 调度器零改动)
-    enum FrequencyKind: String, CaseIterable, Identifiable {
-        case high, medium, low
-        var id: String { rawValue }
-        var cron: String { switch self {
-        case .high: "*/5 * * * *"
-        case .medium: "*/15 * * * *"
-        case .low: "*/30 * * * *"
-        } }
-        var label: String { switch self {
-        case .high: L("高 · 每 5 分钟")
-        case .medium: L("中 · 每 15 分钟")
-        case .low: L("低 · 每 30 分钟")
-        } }
-        /// 状态行简短版 (不带档位词)
-        var shortLabel: String { switch self {
-        case .high: L("每 5 分钟")
-        case .medium: L("每 15 分钟")
-        case .low: L("每 30 分钟")
-        } }
-        static func from(cron: String) -> FrequencyKind {
-            allCases.first { $0.cron == cron } ?? .low
-        }
-    }
-
     /// cron 录入四档: 前三档控件生成 cron, 高级档直写表达式 (手写复杂表达式反解析不出时落这里)
     enum CronMode: String, CaseIterable, Identifiable {
         case daily, weekly, interval, advanced
@@ -914,29 +646,7 @@ struct ScheduledView: View {
 
     private var cronRow: some View {
         HStack(spacing: 8) {
-            if draftIsWaiting {
-                Menu {
-                    ForEach(FrequencyKind.allCases) { f in
-                        Button(f.label) { draftFrequency = f }
-                    }
-                } label: {
-                    Text(draftFrequency.label)
-                        .font(CodexTheme.fontSmall)
-                        .foregroundStyle(CodexTheme.textSecondary)
-                        .contentShape(Rectangle())
-                }
-                .menuStyle(.borderlessButton)
-                .menuIndicator(.hidden)
-                .padding(.horizontal, 10)
-                .padding(.vertical, 4)
-                .background(CodexTheme.bgElevated)
-                .clipShape(RoundedRectangle(cornerRadius: CodexTheme.radius))
-                Text("= 检查频率 (条件可能成立后按此间隔值守)")
-                    .font(CodexTheme.fontTiny)
-                    .foregroundStyle(CodexTheme.textMuted)
-            } else {
-                cronEditor
-            }
+            cronEditor
             Spacer()
         }
     }
@@ -1123,7 +833,7 @@ struct ScheduledView: View {
                 .padding(.vertical, 10)
                 .frame(minHeight: 220)
             if draftPrompt.isEmpty {
-                Text(LK(draftIsWaiting ? "条件触发后要执行的动作…" : "到点投递给 Agent 的 prompt…"))
+                Text(LK("到点投递给 Agent 的 prompt…"))
                     .font(CodexTheme.fontBody)
                     .foregroundStyle(CodexTheme.textMuted)
                     .padding(.leading, 12)
@@ -1139,9 +849,8 @@ struct ScheduledView: View {
         )
     }
 
-    /// 实际生效的 cron: Watch=频率档; Cron=控件生成 (高级档直取 draftCron 原文)
+    /// 实际生效的 cron: 控件生成 (高级档直取 draftCron 原文)
     private var effectiveCron: String {
-        if draftIsWaiting { return draftFrequency.cron }
         switch cronMode {
         case .daily:
             return "\(cronMinute) \(cronHour) * * *"
@@ -1156,9 +865,9 @@ struct ScheduledView: View {
     }
 
     private var draftReady: Bool {
-        !draftPrompt.trimmingCharacters(in: .whitespaces).isEmpty
+        !isLegacyEditing   // P19: 旧条件值守任务只读归档，不许保存
+        && !draftPrompt.trimmingCharacters(in: .whitespaces).isEmpty
         && CronExpr.parse(effectiveCron) != nil
-        && (!draftIsWaiting || !draftCondition.trimmingCharacters(in: .whitespaces).isEmpty)
         // 名称可空: 留空自动取 prompt 首行; 项目可空: 落平铺 Chats (纯对话场景)
     }
 
@@ -1215,15 +924,13 @@ struct ScheduledView: View {
 
     // MARK: - 草稿动作
 
-    private func startNew(waiting: Bool = false) {
+    private func startNew() {
         setTarget(.newTask)
         draftName = ""
         draftPrompt = ""
         draftCron = "0 9 * * *"
         draftProjectId = store.activeProject?.id
         draftContinuous = false
-        draftIsWaiting = waiting
-        draftCondition = ""
         draftLog = ""
         handoffUpdatedAt = nil
         showWorkLog = false
@@ -1233,16 +940,6 @@ struct ScheduledView: View {
         cronWeekdays = [1, 2, 3, 4, 5]
         cronInterval = 30
         cronIntervalUnit = .minutes
-    }
-
-    /// 新建 sparse agent (草稿状态活在 SparseAgentEditor 内, 这里只切编辑目标)。
-    private func startNewSparse() {
-        setTarget(.newSparse)
-    }
-
-    /// 点列表行切到某个 sparse agent。
-    private func loadSparseDraft(_ agent: MailboxSentinel) {
-        setTarget(.sparse(agent.id))
     }
 
     /// 工作日志区块 (P3.9 交接文件): agent 运行期写、用户可改, 磁盘为准; 保存即写回。
@@ -1356,10 +1053,7 @@ struct ScheduledView: View {
         draftCron = task.cron
         draftProjectId = task.projectId
         draftContinuous = task.continuous
-        draftIsWaiting = task.condition?.isEmpty == false
-        draftCondition = task.condition ?? ""
-        draftFrequency = FrequencyKind.from(cron: task.cron)
-        if !draftIsWaiting { syncCronControls(task.cron) }
+        syncCronControls(task.cron)
         // P10.4: 任务级配置回填 (nil = 跟随全局, 预填当前全局值供开启即用)
         if let cfg = task.config {
             draftUseCustomConfig = true
@@ -1401,8 +1095,7 @@ struct ScheduledView: View {
             existing.cron = effectiveCron
             existing.projectId = draftProjectId
             existing.continuous = draftContinuous
-            existing.condition = draftIsWaiting && !draftCondition.trimmingCharacters(in: .whitespaces).isEmpty
-                ? draftCondition : nil
+            // P19: `condition` 不再由编辑器写入 —— 条件值守档已移除，旧值原样留在行上供查看。
             existing.unattended = true   // P9-#17: 恒无人值守, 字段仅作记录
             existing.config = buildDraftConfig()   // P10.4: 任务级执行配置
             store.updateScheduled(existing)
@@ -1411,10 +1104,8 @@ struct ScheduledView: View {
             store.addScheduled(name: draftName, prompt: draftPrompt,
                                cron: cron, projectId: draftProjectId,
                                continuous: draftContinuous)
-            // 等待型/无人值守附加字段 (addScheduled 无全参入口, 保存后回填)
+            // 无人值守附加字段 (addScheduled 无全参入口, 保存后回填)
             if let idx = store.scheduledTasks.indices.last {
-                store.scheduledTasks[idx].condition = draftIsWaiting && !draftCondition.trimmingCharacters(in: .whitespaces).isEmpty
-                    ? draftCondition : nil
                 store.scheduledTasks[idx].unattended = true   // P9-#17: 恒无人值守
                 store.scheduledTasks[idx].config = buildDraftConfig()   // P10.4
                 store.updateScheduled(store.scheduledTasks[idx])
@@ -1441,8 +1132,6 @@ struct ScheduledView: View {
         setTarget(.newTask)
         draftName = ""
         draftPrompt = ""
-        draftIsWaiting = false
-        draftCondition = ""
         draftLog = ""
         handoffUpdatedAt = nil
         showWorkLog = false

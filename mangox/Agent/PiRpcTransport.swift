@@ -141,6 +141,25 @@ final class PiRpcTransport: AgentTransport {
     /// 免得又冒出一个"从别处顺手改一下"的调用点 —— 双闸门靠的就是"只有这里能改"。
     func updateDreamSpool(_ spool: String?) { dreamSpool = spool }
 
+    /// P19: 这一份实例的回合是不是**只读巡检/分析段**（per-turn 下发, 与 `dreamSpool` 同一层）。
+    ///
+    /// ⚠️ 它改的是 **spawn 面**（工具面、挂哪些扩展、起不起 computer），所以和 `desiredMode`
+    /// 一样是"下回合生效"; 进程复用期间由 `spawnedAnalysisReadOnly` 判断要不要重启。
+    private var analysisReadOnly = false
+    private var spawnedAnalysisReadOnly = false
+    func updateAnalysisReadOnly(_ on: Bool) { analysisReadOnly = on }
+
+    /// P19: 巡检轮 / 执行轮的**系统级注入**（交接文件 + 输出契约 + Observation 快照）。
+    ///
+    /// ⚠️ 走 `--append-system-prompt` 而不是塞进 user prompt, 理由是**转录污染**:
+    /// 塞进 user prompt 的话, 这段模板会作为"用户说过的话"落进 transcript —— 下一轮注入时
+    /// 模型看到自己上一轮被喂过一份几乎相同的长文, 会当成"用户重复了一遍", 而写回交接文件的
+    /// 指令也会被当成用户要求（`ChatStore.swift:1875` 当初要求 fire ephemeral 就是怕这个）。
+    /// 代价: spawn 期定格 ⇒ 每轮注入内容变了必须重启进程（`spawnedExtraSystem`）。
+    private var extraSystemPrompt: String?
+    private var spawnedExtraSystem: String?
+    func updateExtraSystemPrompt(_ text: String?) { extraSystemPrompt = text }
+
     /// P10.1b: 博查 API Key (nil/空 = 未配置)。**只在这里定格, 只经 env 下发**, 不落盘。
     ///
     /// ⚠️ 与 `dreamSpool` 同一层（实例级、spawn 期定格），但**不是任务语义** —— 它是
@@ -260,6 +279,53 @@ final class PiRpcTransport: AgentTransport {
     ///
     /// - Note: 后两个可选段**都有默认值**, 所以既有调用点逐字节不变 —— 这不是方便,
     ///   是 P13 那条"传 nil 时整段不变"的判据能继续成立的形式化（三老档零影响）。
+    /// P19: **巡检/分析段的 spawn 面** —— 纯函数, 冒烟逐字对拍。
+    ///
+    /// 为什么把它提成结构体而不是散在 `spawnProcess` 里: 判据必须能"对拍数组", 而
+    /// `spawnProcess` 一进门就 `guard let spec = launchSpec()` —— 没有 pi 的机器上整条路
+    /// 直接返回, 断言就永远绿（假门）。把"该挂什么、该给哪些工具"提出来之后, 判据落在
+    /// 这个纯结构上, 与机器上装没装 pi 无关。
+    ///
+    /// 四个恒假项**故意写成固定值而不是 `false` 常量字段**: 它们在语义上是"这一档不许有",
+    /// 谁把它们改成可配置的, `CaseWatchFace` 立刻红。
+    struct AnalysisFace: Equatable {
+        /// `--tools` 的取值（逐字来自 `AgentMode.readOnlyToolNames`）。
+        let toolNames: [String]
+        /// 要挂的**托管扩展**。只有联网搜索那一个; 空 = 用户没配搜索（分析段仍可读盘, 只是查不了网）。
+        let mountedExtensionPaths: [String]
+        /// 起不起 computer helper。恒 false —— 这是"分析"与"动手"的分界线。
+        let startsComputer: Bool
+        /// 注不注知识块。恒 false —— 巡检轮是 ephemeral 的, 塞一份"我是谁"只会挤掉任务本身。
+        let injectsKnowledge: Bool
+        /// 注不注 SOP。恒 false —— 手册教的是"怎么操作 App", 而这一档一个操作都不许做。
+        let injectsSOP: Bool
+    }
+
+    /// 组装分析段的面。`webSearchPath` = 启用列表里那个联网搜索扩展的路径（没有就传 nil）。
+    /// ⚠️ 判据是"启用列表里有没有它", 不是"配没配 key" —— 与 `spawnProcess` 里那条
+    /// `desiredExtensions.contains(...)` 同源, 不要另立一份判据。
+    ///
+    /// ⚠️ 后三个 `false` 是**这个类型存在的理由**（不是默认值）: 它们被 `spawnProcess` 直接消费
+    /// （`analysisFace?.startsComputer ?? true` 这类写法），所以谁把这里改成 `true`,
+    /// 进程面立刻多出 helper / 知识段 / 手册 —— 而 `CaseWatchFace` 会在同一次门禁里红。
+    static func analysisFace(webSearchPath: String?) -> AnalysisFace {
+        AnalysisFace(toolNames: AgentMode.readOnlyToolNames,
+                     mountedExtensionPaths: webSearchPath.map { [$0] } ?? [],
+                     startsComputer: false,
+                     injectsKnowledge: false,
+                     injectsSOP: false)
+    }
+
+    /// 这一轮要不要起 computer helper。**唯一决策点**（生产与判据共用）：
+    /// `nil` = 普通回合（照旧看作用域）· `face.startsComputer = false` = 分析段（连 start 都不调）。
+    static func shouldStartComputer(_ face: AnalysisFace?) -> Bool { face?.startsComputer ?? true }
+
+    /// 只读段的 `--tools` 段。**生产与冒烟共用这一处** —— 冒烟若自己拼一遍串再断言,
+    /// 那它验的是"我拼得对不对", 不是"生产发出去的是什么"(同 P12 那条"判据不自证")。
+    static func toolArguments(for face: AnalysisFace) -> [String] {
+        ["--tools", face.toolNames.joined(separator: ",")]
+    }
+
     static func extensionArguments(hostedExtensionPath: String,
                                    codemodeExtensionPath: String?,
                                    dreamExtensionPath: String? = nil,
@@ -1854,11 +1920,15 @@ final class PiRpcTransport: AgentTransport {
         // 所以"这次要不要 dream"变了也必须重启, 否则会沿用上一次的扩展与 env。
         // 这个分支不是为了第一次 fire（那次 process 本来就是 nil）—— 是为了
         // 用户点开任务日志会话说了句话（普通回合, `dreamSpool` 被置回 nil）之后再点「立即运行」。
-        if process != nil, spawnedCwd != target || spawnedDreamSpool != dreamSpool {
+        if process != nil, spawnedCwd != target || spawnedDreamSpool != dreamSpool
+            || spawnedAnalysisReadOnly != analysisReadOnly
+            || spawnedExtraSystem != extraSystemPrompt {
             // 诊断日志: 进程**复用**是常态, 重启是例外 —— 后者会丢进程内对话记忆,
             // 排查时"这一轮为什么没记忆"要能一眼看出是这里拆的。
             Log.process("teardown", ["cwdChanged": spawnedCwd != target ? "1" : "0",
-                                     "dreamChanged": spawnedDreamSpool != dreamSpool ? "1" : "0"])
+                                     "dreamChanged": spawnedDreamSpool != dreamSpool ? "1" : "0",
+                                     "readOnlyChanged": spawnedAnalysisReadOnly != analysisReadOnly ? "1" : "0",
+                                     "injectChanged": spawnedExtraSystem != extraSystemPrompt ? "1" : "0"])
             teardownProcess()
         }
         guard process == nil else {
@@ -1883,13 +1953,24 @@ final class PiRpcTransport: AgentTransport {
     private func spawnProcess(cwd: String) {
         guard let spec = Self.launchSpec() else { return }
         let extPath = Self.ensureExtensionFile()
+        // P19: 只读巡检/分析段的**面**（工具面 / 挂哪些扩展 / 起不起 computer）。
+        // ⚠️ 这个 `nil` 是**所有**只读分支的唯一开关: 下面 codemode / dream / computer / 知识 / SOP
+        //    全部用 `analysisFace == nil` 这个条件收口, 它们不各自判一次 —— 四处各判一次,
+        //    迟早有一处漏, 而漏掉的那一处不会红, 只会让"只读段"悄悄多出一个工具。
+        let analysisFace: AnalysisFace? = analysisReadOnly
+            ? Self.analysisFace(webSearchPath: desiredExtensions.first {
+                  $0.hasSuffix(Self.webSearchExtensionFileName)
+              })
+            : nil
         // P13: 自建 codemode 扩展**只在这一档落地** —— 三老档连"挂载"这一步都没有,
         // 所以它们的扩展段逐字节不变 (是"不存在", 不是"挂了但没生效")。
-        let codemodeExtPath = desiredMode.mountsCodemodeExtension ? Self.ensureCodemodeExtensionFile() : nil
+        let codemodeExtPath = (analysisFace == nil && desiredMode.mountsCodemodeExtension)
+            ? Self.ensureCodemodeExtensionFile() : nil
         // P15.3: dream 扩展**只在这一份实例是 dream fire 时挂** —— `dreamSpool` 由
         // `SchedulerService` 在 fire 前设、fire 收尾时清。三老档与普通会话上它是 nil
         // ⇒ 扩展段逐字节不变（同 codemode 那条"是'不存在', 不是'挂了但没生效'"）。
-        let dreamExtPath = dreamSpool != nil ? Self.ensureDreamExtensionFile() : nil
+        let dreamExtPath = (analysisFace == nil && dreamSpool != nil)
+            ? Self.ensureDreamExtensionFile() : nil
         // P10.1b: 搜索扩展**保底落地**（文件本来由 `ChatStore.scanExtensions` 写好了, 这里只防
         // "列表里有它、文件却不在"——删过 / 换过托管目录 / 首次 spawn 抢在扫掠之前）。
         // 判据 = 它在**启用列表**里（那已经是"用户开着 + 有 key"的交集, 见 `ChatStore.scanExtensions`）
@@ -1920,13 +2001,17 @@ final class PiRpcTransport: AgentTransport {
         // 接管检测(2026-11-02): 原来是"档位对了就装", 而 `interactive` 是默认档 ⇒ 用户什么都
         // 还没要, 系统先弹「MangoX 想监听你的键盘输入」。现在是三段与门(档位 ∧ 显式开关 ∧ 已有
         // 权限), 判据与 `granted` 的取法全在 `ComputerSettings.shouldInstallTakeover` 里。
-        let computerSock = computerHost.start(allowedBundles: computerBundles,
-                                             actBundles: computerActBundles,
-                                             imageBundles: ComputerSettings.shared.activeImageBundles,
-                                             takeover: ComputerSettings.shared.shouldInstallTakeover(
-                                                 expectsHuman: approvalMode.expectsHumanAtKeyboard),
-                                             tap: ComputerSettings.shared.tapEnabled,
-                                             type: ComputerSettings.shared.typeEnabled)
+        // P19: 只读段**连 start 都不调**（不是"起了但不挂"）。判据在 `AnalysisFace.startsComputer`,
+        // 这里只是消费它 —— 消费点只有这一个，所以"分析段起了 helper"这件事在代码里没有第二条路。
+        let computerSock: String? = Self.shouldStartComputer(analysisFace)
+            ? computerHost.start(allowedBundles: computerBundles,
+                                 actBundles: computerActBundles,
+                                 imageBundles: ComputerSettings.shared.activeImageBundles,
+                                 takeover: ComputerSettings.shared.shouldInstallTakeover(
+                                             expectsHuman: approvalMode.expectsHumanAtKeyboard),
+                                 tap: ComputerSettings.shared.tapEnabled,
+                                 type: ComputerSettings.shared.typeEnabled)
+            : nil
         let computerExtPath = computerSock != nil ? Self.ensureComputerExtensionFile() : nil
         var args = spec.scriptArgs + ["--mode", "rpc"]
         // P12.1b + P13: 扩展参数 (关自动发现 + 补回内置 provider + 挂托管扩展 + codemode 层)。
@@ -1941,7 +2026,11 @@ final class PiRpcTransport: AgentTransport {
             codemodeExtensionPath: codemodeExtPath,
             dreamExtensionPath: dreamExtPath,
             computerExtensionPath: computerExtPath,
-            enabled: desiredMode.mountsBusinessExtensions ? desiredExtensions : [])
+            // P19: 只读段**只挂分析面自己点名的扩展**（联网搜索那一个）——
+            // 业务扩展 / 其它一律不挂。allowlist 写法会裁掉扩展注册的工具（实测），
+            // 所以"挂谁"必须与 `readOnlyToolNames` 里点名的名字**同源**。
+            enabled: analysisFace.map(\.mountedExtensionPaths)
+                ?? (desiredMode.mountsBusinessExtensions ? desiredExtensions : []))
         if let fork = desiredForkSource {
             // P6.3.1: 侧问首回合 — fork 源快照 (互斥分支: 不带 --session/--no-session)。
             // --session-dir 把产物收进托管目录 (否则落 pi 默认 ~/.pi/agent/sessions);
@@ -1975,10 +2064,23 @@ final class PiRpcTransport: AgentTransport {
         // P7-M4 + P13: 档位对 --tools 的取值 (极简裁内置 / 常规·完整在其上增补只读三件套 / codemode 加自己的 modifier)。
         // ⚠️ 与上面那段 extensionArguments **必须同进同退**: codemode 档要"挂上"与"激活"两件事都做
         //    (扩展是 defaultActive: false —— 只 `--extension` 挂载不会生效, 已实测)。
-        args += AgentMode.spawnArguments(for: desiredMode, businessExtensions: [])
+        // P19: 只读段不走档位 —— 它的面来自 `AnalysisFace`, 与用户选的档位无关
+        //    （用户把全局档位设成 full，巡检轮也仍然是只读的：那是任务语义，不是用户偏好）。
+        if let face = analysisFace {
+            args += Self.toolArguments(for: face)
+        } else {
+            args += AgentMode.spawnArguments(for: desiredMode, businessExtensions: [])
+        }
         // P3.7: 知识注入块挂在 spawn 参数上 (--append-system-prompt 可重复传; 会话内不可改)
-        if let knowledge = desiredKnowledge, !knowledge.isEmpty {
+        if analysisFace?.injectsKnowledge ?? true, let knowledge = desiredKnowledge, !knowledge.isEmpty {
             args += ["--append-system-prompt", knowledge]
+        }
+        // P19: 巡检/执行轮的系统级注入（交接文件 + 输出契约 + Observation）。
+        // 位置在知识块之后、SOP 之前: 三者的段序与 `SopInjection` 那条"结构性首位"无关 ——
+        // 它们都是 `--append-system-prompt`, pi 按出现顺序拼, 任务自己的注入必须**晚于**
+        // 人格/知识（否则人格段会被挤到后面, 破 `persona 段结构性首位`）。
+        if let extra = extraSystemPrompt, !extra.isEmpty {
+            args += ["--append-system-prompt", extra]
         }
         // P18: **第二条**注入通道 = 应用操作手册 (SOP)。刻意不并进上面那一块:
         //   知识块的语义是"我是谁/我知道什么", 有 persona 首位与段序两条结构性不变量;
@@ -1987,7 +2089,7 @@ final class PiRpcTransport: AgentTransport {
         //   扩展没挂上就没有那套工具, 却把手册教给模型 = 教它用手边不存在的东西。
         // ⚠️ 手册正文是**代码常量**（`SopManual.text`）, 不读盘; 现算的只有名单与档位 ——
         //   两样都在这一处定格 ⇒ 不存在"改了设置但提示词还是旧的"的窗口。
-        if computerSock != nil {
+        if analysisFace?.injectsSOP ?? true, computerSock != nil {
             let sop = SopInjection.block(bundles: computerBundles,
                                          actBundles: computerActBundles,
                                          codemode: desiredMode == .codemode)
@@ -2088,6 +2190,8 @@ final class PiRpcTransport: AgentTransport {
                                 "gen": "\(spawnGeneration + 1)"])
         spawnedCwd = cwd
         spawnedDreamSpool = dreamSpool
+        spawnedAnalysisReadOnly = analysisReadOnly
+        spawnedExtraSystem = extraSystemPrompt
         self.outPipe = outPipe
         self.errPipe = errPipe
         stdinHandle = inPipe.fileHandleForWriting

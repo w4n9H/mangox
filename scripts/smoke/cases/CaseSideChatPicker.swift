@@ -85,7 +85,6 @@ extension SmokeMain {
         let scDir = fixtureDir("p632")
         let sc = ChatStore(transport: MockTransport(), dbPath: scDir + "/p632.db",
                            managedExtensionsDir: scDir + "/ext")
-        sc.mailbox.stopScheduler()
         sc.addProject(title: "p632", path: scDir)
         guard let scPid = sc.projects.last?.id else {
             check(false, "P6.3.3 夹具: 建不出项目 (不是通过)")
@@ -125,7 +124,6 @@ extension SmokeMain {
 
         let sc2 = ChatStore(transport: MockTransport(), dbPath: p634 + "/p634.db",
                             managedExtensionsDir: p634 + "/ext")
-        sc2.mailbox.stopScheduler()
         sc2.addProject(title: "p634", path: p634)
         guard let sc2Pid = sc2.projects.last?.id else {
             check(false, "P6.3.4 夹具: 建不出项目 (不是通过)")
@@ -175,9 +173,9 @@ extension SmokeMain {
         // 否则纯函数全绿、孤儿永远躺着 —— 这正是修这个问题之前的现场。
         let scLeftover = snapDir + "/side-snapshot-" + UUID().uuidString + ".jsonl"
         try? "{}\n".write(toFile: scLeftover, atomically: true, encoding: .utf8)
-        let scBoot = ChatStore(transport: MockTransport(), dbPath: p634 + "/p634.db",
-                               managedExtensionsDir: p634 + "/ext")
-        scBoot.mailbox.stopScheduler()
+        // 只借 `init` 的开机回收, 建完即弃 (收盘时这行还挂着 `mailbox.stopScheduler()`, 已随 P19 删掉)
+        _ = ChatStore(transport: MockTransport(), dbPath: p634 + "/p634.db",
+                      managedExtensionsDir: p634 + "/ext")
         check(!FileManager.default.fileExists(atPath: scLeftover),
               "P6.3.4 接线: `init` 开机时就回收了 —— 只写纯函数没人调, 这条红（孤儿永远不回收到）")
         check(FileManager.default.fileExists(atPath: scOwn),

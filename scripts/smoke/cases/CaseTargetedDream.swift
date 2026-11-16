@@ -27,7 +27,6 @@ extension SmokeMain {
         let tdDir = fixtureDir("p159")
         let td = ChatStore(transport: MockTransport(), dbPath: tdDir + "/p159.db",
                            managedExtensionsDir: tdDir + "/ext")
-        td.mailbox.stopScheduler()
         // 实例级重定向（与 P15.8 同法）: 归属根与后面写笔记都落在夹具里, 不碰用户真实目录。
         td.knowledge.noteRootOverride = tdDir + "/notes"
         td.addProject(title: "p159", path: tdDir)

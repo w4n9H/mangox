@@ -93,7 +93,6 @@ extension SmokeMain {
         let dir = fixtureDir("chatperf")
         let store = ChatStore(transport: MockTransport(), dbPath: dir + "/p.db",
                               managedExtensionsDir: dir + "/ext")
-        store.mailbox.stopScheduler()
         store.messages = []
 
         let probe = SmokeChatProjection(store: store)
