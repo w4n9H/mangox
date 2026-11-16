@@ -7,7 +7,7 @@
    **本文件由 scripts/l10n/gen_strings.py --write 生成, 别手改** ——
    译文改 scripts/l10n/en_values.py 的 VALUES, 再跑 --write。
 
-   条数: 924
+   条数: 945
 */
 
 " (值:\"%@\")" = " (value: %@)";
@@ -93,6 +93,9 @@
 "App 在后台时, 回合结束弹出系统通知; 前台使用时不弹, 点击通知跳回对应会话" = "Posts a system notification when a turn finishes while the app is in the background; no notification while you are using it. Click it to jump back to that session.";
 "Chat: 对话 · Trace: 结构化事件回放" = "Chat: conversation · Trace: structured event replay";
 "Codemode" = "Codemode";
+"Cron 定时" = "Cron schedule";
+"Cron 定时任务" = "Cron scheduled task";
+"Cron 定时：到点执行 `prompt` 里写好的动作" = "Cron schedule: runs the actions written in `prompt` when due";
 "HTML 已导出 · 已在 Finder 显示" = "HTML exported · revealed in Finder";
 "IMAP 正常, 但 SMTP 未通过: %@" = "IMAP works, but SMTP failed: %@";
 "IMAP 正常, 但 SMTP 连接失败" = "IMAP works, but the SMTP connection failed";
@@ -194,6 +197,7 @@
 "不可截图" = "No image";
 "不可操作" = "Read-only";
 "不弹卡, 全部放行 — 定时任务用 (无人点击, 弹卡即死锁)。" = "No prompts, everything allowed — for scheduled tasks (nobody is there to click; a prompt would deadlock).";
+"不支持的类型" = "Unsupported type";
 "不是能写字的地方 ⇒ 我不往里写。" = " is not a field you can type into ⇒ I will not write there.";
 "不用单独给。辅助功能一给，键盘监听就有了 —— 所以系统设置那一页里看不到 MangoX，那是正常的，不是漏装。" = "Nothing to grant separately. Accessibility already covers keyboard listening, so MangoX will not show up on that page of System Settings — that is normal, not a missing install.";
 "不采纳该候选, 直接删除" = "Dismiss this candidate and delete it";
@@ -225,6 +229,7 @@
 "今天" = "Today";
 "今天做点什么？" = "What should we do today?";
 "仍然覆盖" = "Overwrite anyway";
+"从待处理里移除（不是解决 —— 结论本身留着）" = "Remove from the pending list (this does not resolve it — the finding stays)";
 "从托管区删除" = "Remove from managed area";
 "付款" = "Payment";
 "代价：写错地方撤不回；写完之后按一次回车，在不少应用里就等于「发送」—— 那一下也不会再问你。" = "Cost: text that lands in the wrong place cannot be taken back, and pressing Return afterwards means \"send\" in many apps — that step will not ask you again.";
@@ -326,6 +331,7 @@
 "删除项目「%@」？" = "Delete the project “%@”?";
 "删除项目及其全部 AI 记忆文件" = "Delete the project and all its AI memory files";
 "到点投递给 Agent 的 prompt…" = "The prompt delivered to the agent when the time comes…";
+"到点要达成的目标（不是动作）——例：保证 CI 是绿的；红了就查清原因给我方案…" = "The goal to reach when due (not the actions) — e.g. keep CI green; if it goes red, find the cause and give me a plan…";
 "刷新" = "Refresh";
 "刷新中…" = "Refreshing…";
 "刷新工作区" = "Refresh workspace";
@@ -335,6 +341,12 @@
 "功能完整的编码 Agent, 内置 7 个工具 (读/写/Shell + grep/find/ls 检索三件套), 不挂业务扩展 — 日常默认档。" = "A full-featured coding agent with seven built-in tools (read / write / shell plus the grep/find/ls search trio) and no business extensions — the everyday default.";
 "加载中…" = "Loading…";
 "助手" = "Assistant";
+"助理" = "Assistant";
+"助理 · %lld 个来源" = "Assistant · %lld sources";
+"助理至少要有项目这一条来源；外部来源（邮件）本版未接入 —— 它的只读采集要等「不置已读」验证通过。" = "An assistant needs at least the project source. External sources (mail) are not wired up yet — read-only collection waits for a proven \"never marks as read\" path.";
+"助理要绑定一个项目 —— 它是本版唯一可用的来源" = "An assistant needs a project — it is the only usable source in this version";
+"助理（目标式）" = "Assistant (goal-based)";
+"助理：到点只读巡检，产出结论等你批准（`prompt` 写目标，不是动作）" = "Assistant: read-only check when due, conclusions wait for your approval (`prompt` states the goal, not the actions)";
 "单条消息最多 %lld 张图片, 超出请拆条发送" = "Up to %lld images per message — split into several messages if you need more";
 "博查 API Key" = "Bocha API key";
 "占用 %lld 个保留 key" = "holds %lld reserved key(s)";
@@ -358,9 +370,11 @@
 "只收 .md (大小写敏感); 若你刚要删或改名, 这条就是唯一的线索" = "Only .md is picked up (case-sensitive); if you just deleted or renamed something, this line is the only trace of it";
 "只是不再挂载, 目录与里面的文件一个都不动。" = "It is only unmounted — the directory and every file inside stay untouched.";
 "只有勾了「视觉」的 App 才会截窗口。给完要重启 MangoX 才生效 —— 灯不会当场变, 别以为没给成。" = "Only apps with \"Vision\" ticked get a window screenshot. Granting it takes effect only after you restart MangoX - the lamp will not flip right away, so do not read that as a failure.";
+"只有结论" = "conclusion only";
 "只有菜单里才有的功能, 在这一格上这条路走不通, 那就如实告诉用户。" = "Anything that exists only in a menu cannot be reached through this cell -- say so honestly.";
 "只给了回车、没给要写的字 ⇒ 没按。回车在不少 App 里就是「发出去 / 确定」," = "Only a Return and no text ⇒ nothing was pressed. In many apps Return means \"send\" or \"confirm\",";
 "只能看图" = "Picture only";
+"只读" = "read-only";
 "只读命令静默放行, 其余弹审批卡等待点击。" = "Read-only commands pass silently; anything else raises an approval card and waits for a click.";
 "只读命令静默放行, 危险命令自动拒绝并记下原因 (回执告知) — 远程驱动用。" = "Read-only commands pass silently; dangerous ones are refused automatically with the reason recorded (and sent back in the receipt) — for remote-driven work.";
 "只读显示本轮真正发出去的注入块 —— 门禁绿 ≠ 改对了" = "Read-only view of the injection block actually sent this turn — a green gate does not mean it is right";
@@ -402,6 +416,7 @@
 "复制全文" = "Copy all";
 "复制全部输出" = "Copy all output";
 "外观" = "Appearance";
+"外部来源" = "External source";
 "外链图片不在应用内加载" = "Remote images are not loaded in the app";
 "大小" = "Size";
 "太长 · 改用复制" = "Too long · copy text";
@@ -494,6 +509,7 @@
 "当前模型不支持图片输入, 请在设置中改用多模态模型后再发" = "The current model does not accept images — switch to a multimodal model in settings and send again";
 "彻底删除" = "Delete permanently";
 "往列表 / 表格里敲字符会变成「按键跳转」, 那是动作, 不是打字。" = "Typing into a list or a table turns into type-select, which is an action, not text entry.";
+"待处理" = "Pending";
 "待审批" = "Needs approval";
 "待审核 · 提炼候选" = "To review · distilled candidates";
 "待运行" = "Pending";
@@ -587,10 +603,11 @@
 "新增:" = "Added:";
 "新对话" = "New chat";
 "新建会话" = "New session";
-"新建定时任务" = "New scheduled task";
 "新建条目" = "New entry";
 "新建笔记" = "New note";
 "新建项目（选择目录）…" = "New project (choose a directory)…";
+"新建：Cron 定时（动作写死）或 助理（目标式，只读巡检）" = "New: Cron schedule (fixed actions) or Assistant (goal-based, read-only checks)";
+"方案 %lld 步" = "plan · %lld steps";
 "无人值守" = "Unattended";
 "无人值守 · 恒开" = "Unattended · always on";
 "无匹配文件" = "No matching files";
@@ -638,6 +655,7 @@
 "未找到可执行的 pi。已按顺序查找:" = "No executable pi found. Looked in this order:";
 "未测量" = "Not measured";
 "未知" = "Unknown";
+"未知任务" = "Unknown task";
 "未知失败" = "Unknown failure";
 "未知错误" = "Unknown error";
 "未知项目" = "Unknown project";
@@ -753,6 +771,7 @@
 "立即运行 (不等定时; 关掉开关也能跑)" = "Run now (ignores the schedule; works even when the toggle is off)";
 "笔记" = "Notes";
 "笔记目录" = "Notes folder";
+"第 %lld 版" = "rev %lld";
 "第 %lld 轮" = "Turn %lld";
 "等待" = "Waiting";
 "等待审批" = "Awaiting approval";
@@ -882,6 +901,7 @@
 "连接超时" = "Connection timed out";
 "追加-" = "Append-";
 "追加-%@" = "Append-%@";
+"追问" = "Ask follow-up";
 "送入 %@ 字" = "%@ chars in";
 "选一轮：那一轮及之前的对话都会带进侧问。" = "Pick a turn: it and everything before it is carried into the side chat.";
 "选择" = "Choose";
@@ -925,6 +945,7 @@
 "需要时才查 %lld 条 · 不占预算" = "%lld on demand · off budget";
 "非只读命令" = "non-read-only command";
 "项目" = "Project";
+"项目 · 只读查看" = "Project · read-only";
 "项目操作" = "Project actions";
 "预算 %@ 字" = "budget %@ chars";
 "预览" = "Preview";

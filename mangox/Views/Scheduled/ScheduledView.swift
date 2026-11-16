@@ -21,6 +21,11 @@ struct ScheduledView: View {
     @State private var draftCron: String = "0 9 * * *"
     @State private var draftProjectId: UUID?
     @State private var draftContinuous: Bool = false
+    /// P19: 任务类型（Cron 定时 / 助理）。legacy 行不从草稿来 —— 它是 condition 派生的归档态。
+    @State private var draftKind: TaskKind = .execute
+    /// P19: 来源列表。**本版没有添加入口**（外部来源未接入，见 `sourcesCard` 的说明）——
+    /// 留着它是因为老库/手改配置里可能有行, 界面对它们要**显示**而不是假装不存在。
+    @State private var draftSources: [WatchSourceSpec] = []
     @State private var hoveringId: UUID?
     // P9-#17: 无人值守恒开 (fire 不再读 task.unattended), 开关与确认弹窗已移除
     // cron 四档录入器: 控件态 → 生成 cron; 编辑时 classifyCron 反解析回填 (解析不出落高级档)
@@ -42,6 +47,8 @@ struct ScheduledView: View {
     @State private var draftMode: String = AgentMode.standard.rawValue
     // 操作反馈: 删除二次确认 / 保存成功闪现
     @State private var showDeleteConfirm: Bool = false
+    /// P19 收件箱: 展开中的那条结论（一次只展开一条 —— 多条同时展开会把列表顶没）。
+    @State private var expandedFinding: UUID?
     @State private var savedFlash: Bool = false
 
     /// 编辑器当前对象。计划任务侧原代码全按 `editingId` 读写, 这里由 target 派生 →
@@ -89,18 +96,23 @@ struct ScheduledView: View {
                     .tracking(0.5)
                     .foregroundStyle(CodexTheme.textMuted)
                 Spacer()
-                // P19: 只剩一档 ⇒ 不再画单选项菜单（一个只有一项的菜单只是多一次点击）。
-                // S3 加「助理」时这里回到 Menu，两个入口。
-                Button(action: { startNew() }) {
+                // P19: 两档（Cron 定时 / 助理）。段选不再画在编辑器里而是**落在新建入口**:
+                // 类型是"这条任务是什么", 在点 + 的那一刻就该定; 之后想改类型等于换一种东西,
+                // 不该是一个随手可切的开关（切换会静默丢掉另一半字段的语义）。
+                Menu {
+                    Button("Cron 定时任务") { startNew(kind: .execute) }
+                    Button("助理（目标式）") { startNew(kind: .assistant) }
+                } label: {
                     Image(systemName: "plus")
                         .font(.system(size: 11))
                         .foregroundStyle(CodexTheme.textSecondary)
                         .frame(width: 18, height: 18)
                         .contentShape(Rectangle())
                 }
-                .buttonStyle(.plain)
+                .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
                 .fixedSize()
-                .help("新建定时任务")
+                .help("新建：Cron 定时（动作写死）或 助理（目标式，只读巡检）")
             }
             .padding(.horizontal, 10)
             .padding(.top, 14)
@@ -108,6 +120,7 @@ struct ScheduledView: View {
 
             ScrollView {
                 VStack(spacing: 1) {
+                    if !openFindings.isEmpty { inboxSection }
                     if !store.missedFires.isEmpty { missedSection }
                     ForEach(store.scheduledTasks) { task in row(task) }
                     if store.scheduledTasks.isEmpty {
@@ -125,6 +138,144 @@ struct ScheduledView: View {
                 .padding(.bottom, 12)
             }
         }
+    }
+
+    // MARK: - P19 findings 收件箱
+
+    /// 只显 `open` 的结论（其余折叠）。**判据在 `FindingStatus.isInboxVisible`**，
+    /// 视图不自己比字符串 —— 加一个状态时改一处就够。
+    private var openFindings: [AgentFinding] {
+        store.findings.filter { $0.status.isInboxVisible }
+    }
+
+    private func findingTaskName(_ f: AgentFinding) -> String {
+        store.scheduledTasks.first { $0.id == f.taskId }?.name ?? L("未知任务")
+    }
+
+    /// 住定时任务列表**上方**、不新开主区面板（§03 拍板）: 它是低频、待处理的东西，
+    /// 做成主面板就得天天空着，还得为它设计一套空态。没有待处理结论时**一个像素都不占**。
+    private var inboxSection: some View {
+        VStack(alignment: .leading, spacing: 1) {
+            HStack(spacing: 5) {
+                Image(systemName: "tray.full")
+                    .font(.system(size: 9))
+                    .foregroundStyle(CodexTheme.accent)
+                Text("待处理")
+                    .textCase(.uppercase)
+                    .font(.system(size: 10, weight: .semibold))
+                    .tracking(0.4)
+                    .foregroundStyle(CodexTheme.textMuted)
+                Text("\(openFindings.count)")
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(CodexTheme.accent)
+                Spacer()
+            }
+            .padding(.horizontal, 6)
+            .padding(.top, 10)
+            .padding(.bottom, 3)
+            ForEach(openFindings) { f in findingRow(f) }
+            Divider().overlay(CodexTheme.divider).padding(.vertical, 6)
+        }
+    }
+
+    private func findingRow(_ f: AgentFinding) -> some View {
+        let expanded = expandedFinding == f.id
+        return VStack(alignment: .leading, spacing: 5) {
+            Button {
+                withAnimation(CodexTheme.animFast) {
+                    expandedFinding = expanded ? nil : f.id
+                }
+            } label: {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(f.title)
+                        .font(CodexTheme.fontSmall)
+                        .foregroundStyle(CodexTheme.textPrimary)
+                        .lineLimit(expanded ? nil : 2)
+                        .multilineTextAlignment(.leading)
+                    HStack(spacing: 4) {
+                        Text(findingTaskName(f))
+                        Text("·")
+                        // 方案步数比"严重度"有用: 人一看就知道点进去要不要做决定
+                        Text(f.plan.isEmpty ? L("只有结论") : String(format: L("方案 %lld 步"), f.plan.count))
+                        if f.planRev > 1 {
+                            Text("·")
+                            Text(String(format: L("第 %lld 版"), f.planRev))
+                        }
+                        Text("·")
+                        Text(f.createdAt.relativeTag)
+                    }
+                    .font(CodexTheme.fontTiny)
+                    .foregroundStyle(CodexTheme.textMuted)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 6)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+
+            if expanded {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(f.body)
+                        .font(CodexTheme.fontSmall)
+                        .foregroundStyle(CodexTheme.textSecondary)
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    if let ev = f.evidence, !ev.isEmpty {
+                        Text(ev)
+                            .font(CodexTheme.fontTiny)
+                            .foregroundStyle(CodexTheme.textMuted)
+                            .textSelection(.enabled)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    ForEach(f.plan, id: \.n) { step in
+                        HStack(alignment: .top, spacing: 6) {
+                            Text("\(step.n).")
+                                .font(CodexTheme.fontTiny)
+                                .foregroundStyle(CodexTheme.textMuted)
+                                .frame(width: 16, alignment: .trailing)
+                            Text(step.text)
+                                .font(CodexTheme.fontSmall)
+                                .foregroundStyle(CodexTheme.textPrimary)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                    }
+                    HStack(spacing: 6) {
+                        // ⚠️ 本版**没有**「执行」按钮: 执行段还没写（S6）。摆一个点了不动的
+                        // 按钮比不摆更坏 —— 人会以为点过了。
+                        Button(LK("忽略")) {
+                            store.setFindingStatus(f.id, status: .dismissed)
+                        }
+                        .buttonStyle(.plain)
+                        .font(CodexTheme.fontTiny)
+                        .foregroundStyle(CodexTheme.textSecondary)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 3)
+                        .contentShape(Rectangle())
+                        .help("从待处理里移除（不是解决 —— 结论本身留着）")
+                        Spacer()
+                        // 「追问」= 打开那个任务会话（它就是对话轮）。**不新开一个"问答框"**:
+                        // 人的追问与巡检记录必须落在同一场会话里，否则「那个」指代的是什么
+                        // 就成了猜 —— 而 `ephemeral: false` 正是为这件事存在的。
+                        Button(LK("追问")) {
+                            if let sid = store.scheduledTasks.first(where: { $0.id == f.taskId })?.logSessionId {
+                                store.selectConversation(sid)
+                            }
+                        }
+                        .buttonStyle(.plain)
+                        .font(CodexTheme.fontTiny)
+                        .foregroundStyle(CodexTheme.info)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 3)
+                        .contentShape(Rectangle())
+                    }
+                }
+                .padding(.horizontal, 8)
+                .padding(.bottom, 8)
+            }
+        }
+        .background(expanded ? CodexTheme.bgElevated : Color.clear)
+        .clipShape(RoundedRectangle(cornerRadius: CodexTheme.radiusSm))
     }
 
     /// P17 · 运行可靠性: 睡眠 / 长挂起期间的漏跑清单。**只在有漏跑时出现** —— 没有它时一个像素都不占。
@@ -313,9 +464,13 @@ struct ScheduledView: View {
         if !cronValid(task) { return L("cron 无效") }
         var parts: [String] = []
         parts.append(CronExpr.describe(task.cron))   // "每天 09:00" 等人话描述 (识别不出=cron 原文)
+        if task.isAssistant {
+            // 助理的"跑了几次"不如"看了几条来源"有用 —— 它每轮都可能什么都不说
+            parts.append(String(format: L("助理 · %lld 个来源"), task.activeSourceCount))
+        }
         if !task.enabled {
             parts.append(L("已暂停"))
-        } else if task.continuous {
+        } else if task.continuous && !task.isAssistant {
             parts.append(L("留痕"))
         }
         if task.runCount > 0 {
@@ -374,8 +529,9 @@ struct ScheduledView: View {
             cronRow
             if isLegacyEditing, let t = editingTask() { legacyConditionCard(t) }
             promptCard
+            if draftKind == .assistant { sourcesCard }
             configCard   // P10.4: 任务级模型/级别/模式
-            if editingId != nil && draftContinuous {
+            if editingId != nil && draftContinuous && draftKind == .execute {
                 workLogCard
             }
         }
@@ -383,9 +539,12 @@ struct ScheduledView: View {
 
     private var controlsRow: some View {
         HStack(spacing: 8) {
+            kindPill
             projectMenu
             unattendedPill
-            continuousToggle
+            // 工作日志开关只对 Cron 持续模式有意义: 助理档**恒**注入交接文件（它没有写权限，
+            // 这一栏对它是只读的东西），把开关摆出来会让人以为能关掉它。
+            if draftKind == .execute { continuousToggle }
             Spacer()
             if let last = editingTask()?.logSessionId {
                 Button("任务日志") {
@@ -418,10 +577,128 @@ struct ScheduledView: View {
                     kind: savedFlash ? .success : .primary,
                     disabled: !draftReady))
                 .disabled(!draftReady || savedFlash)
-                .help(LK(draftReady ? "保存" : (isLegacyEditing ? "旧类型已停用，不能保存" : "prompt 与 cron 为必填")))
+                .help(LK(draftReady ? "保存" : draftBlockReason))
         }
     }
 
+    /// P19 类型徽章。**已保存的任务不可改类型**: 换类型等于换一种东西（`prompt` 的语义从
+    /// 「动作」变成「目标」），允许随手切就会让一条跑了三个月的任务在某次编辑后语义反转。
+    /// 新建草稿可以切（那时还没有任何历史可言），切换**保留**已填的名称与正文。
+    private var kindPill: some View {
+        Group {
+            if editingId == nil {
+                Menu {
+                    Button("Cron 定时") { draftKind = .execute }
+                    Button("助理（目标式）") { draftKind = .assistant }
+                } label: { kindPillBody }
+                .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
+                .fixedSize()
+            } else {
+                kindPillBody
+            }
+        }
+        .help(draftKind == .assistant
+              ? "助理：到点只读巡检，产出结论等你批准（`prompt` 写目标，不是动作）"
+              : "Cron 定时：到点执行 `prompt` 里写好的动作")
+    }
+
+    private var kindPillBody: some View {
+        HStack(spacing: 4) {
+            Image(systemName: draftKind == .assistant ? "sparkles" : "clock.arrow.circlepath")
+                .font(.system(size: 10))
+            Text(draftKind == .assistant ? LK("助理") : LK("Cron 定时"))
+                .font(CodexTheme.fontSmall)
+            if draftKind == .assistant {
+                Text(LK("只读"))
+                    .font(.system(size: 9, weight: .semibold))
+                    .padding(.horizontal, 4)
+                    .padding(.vertical, 1)
+                    .background(CodexTheme.info.opacity(0.16))
+                    .foregroundStyle(CodexTheme.info)
+                    .clipShape(RoundedRectangle(cornerRadius: 3))
+            }
+            if editingId == nil {
+                Image(systemName: "chevron.down").font(.system(size: 8))
+                    .foregroundStyle(CodexTheme.textMuted)
+            }
+        }
+        .foregroundStyle(CodexTheme.textPrimary)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 3)
+        .frame(height: 24)
+        .background(CodexTheme.bgElevated)
+        .clipShape(Capsule())
+        .overlay(Capsule().stroke(CodexTheme.border.opacity(0.5), lineWidth: 1))
+    }
+
+    /// 来源卡（仅助理档）。
+    ///
+    /// ⚠️ **本版刻意没有「添加来源」入口**：外部来源只剩邮件一条，而它要等 PEEK 实测
+    /// （现有 poll 会置已读）—— 现在摆一个能加、加了却永远采不到的入口，就是
+    /// 「看着像支持、配了不生效」。所以这一栏只做两件事：说清当前唯一的可用来源是**绑定项目**，
+    /// 以及把库里已有的来源行**如实显示**（老库 / 手改配置里可能有 `kind` 不认识的行）。
+    private var sourcesCard: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 6) {
+                Image(systemName: "eye")
+                    .font(.system(size: 10))
+                    .foregroundStyle(CodexTheme.textMuted)
+                Text("来源")
+                    .font(CodexTheme.fontTiny)
+                    .foregroundStyle(CodexTheme.textMuted)
+                Spacer()
+            }
+            // 隐式来源: 项目
+            HStack(spacing: 6) {
+                Image(systemName: draftProjectId == nil ? "circle.dashed" : "folder")
+                    .font(.system(size: 10))
+                    .foregroundStyle(draftProjectId == nil ? CodexTheme.textMuted : CodexTheme.accent)
+                Text(projectLabel)
+                    .font(CodexTheme.fontSmall)
+                    .foregroundStyle(draftProjectId == nil ? CodexTheme.textMuted : CodexTheme.textPrimary)
+                Text("项目 · 只读查看")
+                    .font(CodexTheme.fontTiny)
+                    .foregroundStyle(CodexTheme.textMuted)
+                Spacer()
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .background(CodexTheme.bgElevated)
+            .clipShape(RoundedRectangle(cornerRadius: CodexTheme.radiusSm))
+
+            ForEach(draftSources) { s in
+                HStack(spacing: 6) {
+                    Image(systemName: s.isActive ? "tray.full" : "exclamationmark.triangle")
+                        .font(.system(size: 10))
+                        .foregroundStyle(s.isActive ? CodexTheme.accent : CodexTheme.blocked)
+                    Text(s.name)
+                        .font(CodexTheme.fontSmall)
+                        .foregroundStyle(CodexTheme.textPrimary)
+                    Text(s.isSupported ? LK("外部来源") : LK("不支持的类型"))
+                        .font(CodexTheme.fontTiny)
+                        .foregroundStyle(s.isSupported ? CodexTheme.textMuted : CodexTheme.blocked)
+                    Spacer()
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .background(CodexTheme.bgElevated)
+                .clipShape(RoundedRectangle(cornerRadius: CodexTheme.radiusSm))
+            }
+
+            Text("助理至少要有项目这一条来源；外部来源（邮件）本版未接入 —— 它的只读采集要等「不置已读」验证通过。")
+                .font(CodexTheme.fontTiny)
+                .foregroundStyle(CodexTheme.textMuted)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        .background(CodexTheme.bgComposer)
+        .clipShape(RoundedRectangle(cornerRadius: CodexTheme.radiusLg))
+        .overlay(
+            RoundedRectangle(cornerRadius: CodexTheme.radiusLg)
+                .stroke(CodexTheme.border.opacity(0.45), lineWidth: 1)
+        )
+    }
     /// P9-#17: 无人值守恒开徽章 (原开关 + 风险确认弹窗已移除——
     /// fire 恒 unattended, 开关已无语义; 后台日志会话无审批 UI 入口, 弹卡会卡死到超时)。
     private var unattendedPill: some View {
@@ -833,7 +1110,9 @@ struct ScheduledView: View {
                 .padding(.vertical, 10)
                 .frame(minHeight: 220)
             if draftPrompt.isEmpty {
-                Text(LK("到点投递给 Agent 的 prompt…"))
+                Text(LK(draftKind == .assistant
+                        ? "到点要达成的目标（不是动作）——例：保证 CI 是绿的；红了就查清原因给我方案…"
+                        : "到点投递给 Agent 的 prompt…"))
                     .font(CodexTheme.fontBody)
                     .foregroundStyle(CodexTheme.textMuted)
                     .padding(.leading, 12)
@@ -868,7 +1147,22 @@ struct ScheduledView: View {
         !isLegacyEditing   // P19: 旧条件值守任务只读归档，不许保存
         && !draftPrompt.trimmingCharacters(in: .whitespaces).isEmpty
         && CronExpr.parse(effectiveCron) != nil
+        // P19 助理: 至少一条可用来源。本版的"可用"就是**绑定项目**（外部来源未接入），
+        // 没有项目的助理到点会"采集全失败 ⇒ 不 spawn"，那是个到点就静默的配置错误 ——
+        // 在保存这一刻拦住, 比让人三天后才发现任务从没跑过要好。
+        && (draftKind != .assistant || draftProjectId != nil)
         // 名称可空: 留空自动取 prompt 首行; 项目可空: 落平铺 Chats (纯对话场景)
+    }
+
+    /// 保存不了时说明**是哪一条**不满足 —— 一句话兜全部的话, 人得自己猜。
+    private var draftBlockReason: String {
+        if isLegacyEditing { return "旧类型已停用，不能保存" }
+        if draftPrompt.trimmingCharacters(in: .whitespaces).isEmpty { return "prompt 与 cron 为必填" }
+        if CronExpr.parse(effectiveCron) == nil { return "cron 无效" }
+        if draftKind == .assistant && draftProjectId == nil {
+            return "助理要绑定一个项目 —— 它是本版唯一可用的来源"
+        }
+        return "保存"
     }
 
     /// 反解析: cron → 录入控件态 (识别不出 → 高级档显示原文, 不丢不猜)
@@ -924,13 +1218,15 @@ struct ScheduledView: View {
 
     // MARK: - 草稿动作
 
-    private func startNew() {
+    private func startNew(kind: TaskKind = .execute) {
         setTarget(.newTask)
         draftName = ""
         draftPrompt = ""
         draftCron = "0 9 * * *"
         draftProjectId = store.activeProject?.id
         draftContinuous = false
+        draftKind = kind
+        draftSources = []
         draftLog = ""
         handoffUpdatedAt = nil
         showWorkLog = false
@@ -1053,6 +1349,9 @@ struct ScheduledView: View {
         draftCron = task.cron
         draftProjectId = task.projectId
         draftContinuous = task.continuous
+        // P19: legacy 不是可编辑的类型（归档态）⇒ 编辑器按 Cron 呈现，但整页只读
+        draftKind = task.isLegacyWaiting ? .execute : task.kind
+        draftSources = task.sources
         syncCronControls(task.cron)
         // P10.4: 任务级配置回填 (nil = 跟随全局, 预填当前全局值供开启即用)
         if let cfg = task.config {
@@ -1098,12 +1397,16 @@ struct ScheduledView: View {
             // P19: `condition` 不再由编辑器写入 —— 条件值守档已移除，旧值原样留在行上供查看。
             existing.unattended = true   // P9-#17: 恒无人值守, 字段仅作记录
             existing.config = buildDraftConfig()   // P10.4: 任务级执行配置
+            // P19: `kind` **不回写** —— 已保存任务的类型不可改（见 `kindPill` 的注释）。
+            // 来源照写: 本版界面不能改来源, 但库里已有的行必须原样留住, 否则一次编辑就静默清空。
+            existing.sources = draftSources
             store.updateScheduled(existing)
         } else {
             let cron = effectiveCron
             store.addScheduled(name: draftName, prompt: draftPrompt,
                                cron: cron, projectId: draftProjectId,
-                               continuous: draftContinuous)
+                               continuous: draftContinuous,
+                               kind: draftKind, sources: draftSources)
             // 无人值守附加字段 (addScheduled 无全参入口, 保存后回填)
             if let idx = store.scheduledTasks.indices.last {
                 store.scheduledTasks[idx].unattended = true   // P9-#17: 恒无人值守

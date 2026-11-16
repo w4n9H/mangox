@@ -126,6 +126,17 @@ protocol AgentTransport: AnyObject {
     /// 档位菜单里 ⇒ 主会话也能挂上 dream 扩展）也不做成全局（那会污染别的会话）。
     /// 它同时是 dream 的**第二道闸门**: 只有这一份 transport 知道 spool 在哪。
     func updateDreamSpool(_ spool: String?)
+    /// P19: 这一回合是不是「只读分析段」（助理巡检轮）。**per-turn 实例级**。
+    ///
+    /// 与 `updateDreamSpool` 同一层、同一条纪律（`beginTurn` 里无条件赋值）——
+    /// 它决定 `--tools` 用 allowlist 还是档位面、要不要起 computer、挂不挂知识块 / SOP。
+    /// ⚠️ 不做成第五个 `AgentMode` 档位: 档位是人对人机的偏好（切 minimal 仍带 bash），
+    /// 只读是机器对机器的一次性约束，混在一处会让人以为"我把档位调低它就安全了"。
+    func updateAnalysisReadOnly(_ on: Bool)
+    /// P19: 这一回合的 system 注入段（nil = 不注入）。走 `--append-system-prompt`，
+    /// **不进 user prompt**（实测: 落成 `role=system` 的 addendum 段，下次 spawn 被替换、
+    /// 不累积 —— 见 docs/P19 §02）。spawn 期定格 ⇒ `spawnedExtraSystem` 变了要重启进程。
+    func updateExtraSystemPrompt(_ text: String?)
     /// P10.1b: 下发博查 API Key (nil = 未配置; spawn 期注入 `MANGOX_BOCHA_KEY` env)。
     ///
     /// **实例级**, 与 `updateDreamSpool` 同一层 —— 但语义不同: 那个是**任务**语义（只有 dream

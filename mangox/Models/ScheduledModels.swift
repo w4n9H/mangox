@@ -46,9 +46,27 @@ struct ScheduledTask: Identifiable {
     /// 再看这里缺省 ⇒ `.execute`。顺序反了会把旧条件值守任务的「触发后动作」
     /// 当成普通 prompt 每轮无条件执行 —— 静默变意, 比崩溃更坏。
     var kind: TaskKind = .execute
+    /// P19 助理的来源列表（落库 JSON）。`project` 不是一行来源 —— 见 `WatchSourceModels.swift`。
+    var sources: [WatchSourceSpec] = []
 
     /// 旧条件值守任务 = 只读归档: 不 fire、不保存、列表置灰。
     var isLegacyWaiting: Bool { kind == .legacyWaiting }
+
+    var isAssistant: Bool { kind == .assistant }
+
+    /// 助理「至少一个来源」的门槛 —— **视图与域层共用这一处**。
+    ///
+    /// 绑了项目就算有项目来源（分析段自己看），否则要有至少一条**可采集**的来源。
+    /// ⚠️ 用 `isActive` 而不是 `enabled`: 类型不认识的旧行也算"没有"，否则一条
+    /// `kind: "imap-v2"` 的残留配置就能让一个什么都不看的助理通过校验。
+    var hasAnyWatchSource: Bool {
+        projectId != nil || sources.contains { $0.isActive }
+    }
+
+    /// 来源实际行数（不含隐式的 project）—— 列表状态行与日志用。
+    var activeSourceCount: Int {
+        sources.filter { $0.isActive }.count + (projectId != nil ? 1 : 0)
+    }
 
     /// 解析失败 = cron 非法 (UI 上标记, 调度器跳过)。
     var cronExpr: CronExpr? { CronExpr.parse(cron) }

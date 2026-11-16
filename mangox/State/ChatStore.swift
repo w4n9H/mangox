@@ -407,6 +407,9 @@ final class ChatStore: ObservableObject {
 
     // P9.1b: 定时任务域抽离至 SchedulerService, 同名 facade 转发 (冒烟/视图零改动)
     let scheduler = SchedulerService()
+    /// P19 助理结论（收件箱数据源）。收件箱**默认只显 `open`**，其余折叠 —— 判据在 `FindingStatus`。
+    /// 它留在 ChatStore 而不是 SchedulerService: 观察者是视图, 而视图看的是 ChatStore。
+    @Published var findings: [AgentFinding] = []
     var scheduledTasks: [ScheduledTask] {
         get { scheduler.scheduledTasks }
         set { scheduler.scheduledTasks = newValue }
@@ -670,6 +673,8 @@ final class ChatStore: ObservableObject {
             // P11.4: 知识库挂载记录 (用户挂的那批)。固定根(两个笔记根)不落库、由笔记目录现算。
             knowledge.knowledgeBases = (try? store.loadKnowledgeBases()) ?? []
             scheduledTasks = (try? store.loadScheduled()) ?? []
+            // P19: 助理结论。启动即读 —— 收件箱是"待处理事项", 不能等打开定时页才加载。
+            findings = (try? store.loadFindings()) ?? []
             // P7-M3: custom_models 一次性迁入 models 表 (幂等), 再加载自管真源
             // (P5.1 的自定义模型内存层已于 2026-09-23 删除; 表保留以兼容旧版本库)
             _ = (try? store.migrateLegacyCustomModels()) ?? 0
@@ -1883,7 +1888,9 @@ final class ChatStore: ObservableObject {
                    modeOverride: AgentMode? = nil,
                    approvalOverride: ApprovalMode? = nil,   // P10.2a-0: 邮箱哨兵 = .autoJudge
                    modelOverride: (provider: String, modelId: String, thinking: String?)? = nil,
-                   dreamSpool: String? = nil) {   // P15.3: 仅 dream fire 非 nil
+                   dreamSpool: String? = nil,   // P15.3: 仅 dream fire 非 nil
+                   analysisReadOnly: Bool = false,   // P19: 仅助理巡检轮 true
+                   extraSystemPrompt: String? = nil) {   // P19: 巡检轮的观察 / 契约 / 交接文件
         let t = transportFor(sid)
         Log.send("turn-begin", ["sid": String(sid.uuidString.prefix(8)),
                                 "eph": ephemeral ? "1" : "0",
@@ -1905,6 +1912,22 @@ final class ChatStore: ObservableObject {
         // **不是**档位也不是全局。⚠️ 这是**无条件赋值**（不是 `if let`）: 普通回合要把它清回 nil,
         // 否则任务日志会话里手动说一句话之后, 那份 transport 会一直挂着 dream 扩展与 env。
         t.updateDreamSpool(dreamSpool)
+        // P19: 分析段与注入段同属 per-turn，**同一条纪律 —— 无条件赋值**。
+        // 助理巡检轮之后, 同一个 transport 上还会跑人的手动回合; 只用 `if let` 赋值的话,
+        // 那次手动回合会**继承只读面与非空注入段**: 表现是"我在会话里问一句, 它却按巡检契约
+        // 答 NO_FINDING, 而且连写工具都没有" —— 与 dream spool 泄漏是同一类事故。
+        // P19 对话轮: 在**助理任务的日志会话**里手动说话 ⇒ 带助理上下文 + 只读面。
+        // 判据是 `ephemeral == false`（真加载历史 ⇒「那个再查查」才指代得上）加上
+        // "这个会话是某助理的 logSessionId"。巡检轮不走这里（它显式传了注入段）。
+        var turnReadOnly = analysisReadOnly
+        var turnExtra = extraSystemPrompt
+        if !ephemeral, turnExtra == nil,
+           let ctx = scheduler.assistantChatContext(for: sid) {
+            turnReadOnly = true
+            turnExtra = ctx
+        }
+        t.updateAnalysisReadOnly(turnReadOnly)
+        t.updateExtraSystemPrompt(turnExtra)
         // 无人值守 fire 关审批 (弹卡 = 任务死锁); 其余跟随全局开关。
         // P10.2a-0: approvalOverride 优先 —— 邮箱哨兵走 .autoJudge (白名单放行 + 危险命令拒且不阻塞),
         // 它是 per-turn 下发, 会被全局 askApproval 开关覆盖, 故每回合 send 前重设。
@@ -2006,6 +2029,8 @@ final class ChatStore: ObservableObject {
         // P15.3: dream 的收口 —— "这次 fire 到此为止"的落点之一。
         // 手动停（本处）也要收: 「跑不完不算失败」, 已经产出的提案照样进表。
         scheduler.finishDreamFireIfNeeded(sid: sid)
+        // P19: 助理巡检的收口同一条路 —— 手动停也要收（已经说出来的结论照样落库）。
+        scheduler.finishWatchFireIfNeeded(sid: sid)
         // 这一轮到此为止 ⇒ 把这场会话在**今天**的流水刷新一次。
         // 放在 dream 收口之后（那之后 spool 已变成提案，流水里那一行才说得出"几轮"）。
         // 节流在 `TimelineJournal` 里（3 秒），所以同一轮漏出的多个落定事件不会重写三遍。
@@ -2246,13 +2271,27 @@ final class ChatStore: ObservableObject {
     // MARK: - Scheduled (P3.6 本地定时任务; P9.1b 起由 SchedulerService 承载, 此处仅转发)
 
     func addScheduled(name: String, prompt: String, cron: String,
-                      projectId: UUID?, continuous: Bool = false) {
+                      projectId: UUID?, continuous: Bool = false,
+                      kind: TaskKind = .execute,
+                      sources: [WatchSourceSpec] = []) {
         scheduler.addScheduled(name: name, prompt: prompt, cron: cron,
-                               projectId: projectId, continuous: continuous)
+                               projectId: projectId, continuous: continuous,
+                               kind: kind, sources: sources)
     }
 
     func updateScheduled(_ t: ScheduledTask) {
         scheduler.updateScheduled(t)
+    }
+
+    /// P19: 重读 findings（收尾落库 / 忽略 / 执行回写之后都走它）。
+    func reloadFindings() {
+        findings = (try? persistence?.loadFindings()) ?? []
+    }
+
+    /// P19: 人拍板（忽略 / 采纳）。`decided_at` 只在**人**这一侧写 —— 模型自己改状态不算决定。
+    func setFindingStatus(_ id: UUID, status: FindingStatus) {
+        try? persistence?.setFindingStatus(id: id, status: status, at: Date())
+        reloadFindings()
     }
 
     /// 删除任务; deleteSessions = 连带删除日志会话 (开放问题 12: 默认保留, 用户可选删)。
@@ -2556,6 +2595,7 @@ extension ChatStore: AgentTransportDelegate {
             liveTurns[sid] = nil   // 产出已落库, 镜像即弃 (库为准)
             if injectedTurnSid == sid { injectedTurnSid = nil }
             scheduler.finishDreamFireIfNeeded(sid: sid)   // P15.3: 正常落定的那条路
+            scheduler.finishWatchFireIfNeeded(sid: sid)   // P19: 助理结论的落定点
             // 同上（`stopTurn` 那处也有一份）—— 两个落定点记的是同一件事。
             // 分两处而不是抽一个"回合结束"统一入口: 现在没有这样一个入口, 而造一个
             // 要动整条事件分发的形状（那远超"记一行流水"该动的范围）。
@@ -2584,6 +2624,19 @@ extension ChatStore: AgentTransportDelegate {
             ? String(format: L("回合完成 · 耗时 %02d:%02d"), mins, secs)
             : String(format: L("回合完成 · 耗时 %02d:%02d\n%@"), mins, secs, preview)
         Task { await CompletionNotifier.shared.post(sessionId: sid, title: title, body: body) }
+    }
+
+    /// P19: 助理结论的系统通知。
+    ///
+    /// ⚠️ **只带标题 + 任务名**（§04 脱敏）: 正文与证据留在 App 内，通知栏是锁屏也看得见的地方。
+    /// 频控（同指纹不重发 / 同任务 30 分钟）**不在这里判** —— 判据在 `WatchFindingService.plan`，
+    /// 到这里就是"决定已经是要发"。
+    func notifyWatchFinding(_ f: AgentFinding, taskName: String) {
+        guard completionNotificationsEnabled else { return }
+        let tail = f.plan.isEmpty ? L("只有结论") : String(format: L("方案 %lld 步"), f.plan.count)
+        Task { await CompletionNotifier.shared.postFinding(
+            findingId: f.id, sessionId: f.sessionId,
+            title: f.title, body: taskName + " · " + tail) }
     }
 
     /// 投影里最后一条 assistant 文本的首行前 60 字 (P4.1 通知与 P6.3.2 摘要共用)。

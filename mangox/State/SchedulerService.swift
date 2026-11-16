@@ -26,6 +26,10 @@ final class SchedulerService: ObservableObject {
     // 只服务 dream 自己: 它管的是"一批提案的收口", 判据是这一条字典 + `dreamTargets`,
     // 与任何"任务类型"的判据无关。
     private var dreamFires: [UUID: String] = [:]
+    /// P19: 在途的助理巡检（logId → 收尾时要用的上下文）。
+    /// 为什么要存: 收尾发生在**回合落定之后**，那时采集快照早就出了作用域；而"证据里的编号
+    /// 是不是本轮真采到过"这条校验只能在收尾时做（结论才刚生成）。
+    private var watchFires: [UUID: WatchFireContext] = [:]
     /// 定向 dream（`由此 Dream`）在途的日志会话 -> 目标会话 id。**只服务两件事**:
     /// ① 收口时发一句「dream 完成: N 条待审」到会话横幅（否则用户在侧栏看着自己那场会话，
     ///    永远不知道后台已经跑完）；② 完成后从字典里清掉，免得下次定时那轮被当成定向。
@@ -42,9 +46,13 @@ final class SchedulerService: ObservableObject {
     // MARK: - CRUD (P3.6)
 
     func addScheduled(name: String, prompt: String, cron: String,
-                      projectId: UUID?, continuous: Bool = false) {
-        let t = ScheduledTask(id: UUID(), name: name, prompt: prompt, cron: cron,
+                      projectId: UUID?, continuous: Bool = false,
+                      kind: TaskKind = .execute,
+                      sources: [WatchSourceSpec] = []) {
+        var t = ScheduledTask(id: UUID(), name: name, prompt: prompt, cron: cron,
                               projectId: projectId, continuous: continuous)
+        t.kind = kind
+        t.sources = sources
         scheduledTasks.append(t)
         try? store?.persistence?.upsertScheduled(t)
     }
@@ -665,11 +673,7 @@ final class SchedulerService: ObservableObject {
             // 日志会话要**当场绑给任务**: 这条路径 return 在下面那段"推进 lastRunAt / 绑日志会话"
             // 之前, 不绑的话每个 cron 点都会新建一场会话再往里写同一行 —— 那条记录会被撒进
             // 一堆互不相干的会话里, 而任务自己永远指向 nil（下次照样新建）。
-            if let i = scheduledTasks.firstIndex(where: { $0.id == task.id }),
-               scheduledTasks[i].logSessionId != logId {
-                scheduledTasks[i].logSessionId = logId
-                try? store.persistence?.upsertScheduled(scheduledTasks[i])
-            }
+            bindLogSession(taskId: task.id, logId: logId)
             return
         }
         modelBlockNoted.removeValue(forKey: task.id)   // 跑得起来了: 下次再断要重新留痕
@@ -692,7 +696,51 @@ final class SchedulerService: ObservableObject {
         let sep = ChatMessage(role: .user, content: .text("── \(fmt.string(from: now)) \(sepLabel) ──"))
         store.persistMessage(sep, sid: logId)
         if viewing { store.messages.append(sep) }
-        let prompt = buildScheduledPrompt(task, targeted: targeted)
+        // ── P19 助理（巡检轮）: 先采集, 再看 ────────────────────────────────────
+        // 采集在 spawn **之前**（Swift 侧只读完成）⇒ pi 的 allowlist 不随来源数量膨胀，
+        // 也不给来源任何"挂个扩展去读"的机会。写在这一段是因为它要用 logId 留痕：
+        // 没有可用来源时**不 spawn**（不烧一轮 token 去看空数据），但必须留一行 ——
+        // 静默不发会让人以为"任务根本没跑"，而实际是配置坏了。
+        var watchExtra: String?
+        if task.isAssistant {
+            let snapshot = WatchSourceService(collectors: Self.watchCollectors)
+                .collect(sources: task.sources)
+            let proj = task.projectId.flatMap { pid in
+                store.projects.first { $0.id == pid }.map {
+                    WatchProjectContext(name: $0.title, path: $0.path ?? "")
+                }
+            }
+            // 项目就是一条隐式来源（它不需要采集器）⇒ 有项目就不算"没有可用来源"
+            if proj == nil && snapshot.allFailed {
+                // ⚠️ 建会话之后 return 的路径**必须**先把会话绑给任务 —— 不绑的话每个 cron 点
+                // 都会新建一场会话再往里写同一行，那条记录被撒进一堆互不相干的会话里，
+                // 而任务自己永远指向 nil（下次照样新建）。与下面模型 pin 那条同一个坑。
+                bindLogSession(taskId: task.id, logId: logId)
+                appendTimeline("── \(fmt.string(from: now)) 本轮未运行（没有可用来源: "
+                               + "启用 \(task.sources.filter { $0.isActive }.count) 条, "
+                               + "出错 \(snapshot.errorCount) 条）──", to: logId)
+                return
+            }
+            if snapshot.errorCount > 0 {
+                appendTimeline("── \(fmt.string(from: now)) 部分来源没采到（\(snapshot.errorCount) 条）, 本轮按其余来源判断 ──", to: logId)
+            }
+            watchExtra = Self.watchSystemPrompt(project: proj,
+                                                handoff: readHandoff(for: task)?.content,
+                                                snapshot: snapshot)
+            // 收尾要用: 归属哪个任务、这条 finding 算哪个来源、证据允许引用哪些编号。
+            // source_id **由 App 决定**（项目来源 / 唯一启用的来源）—— 不接受模型给的 id,
+            // 伪造面因此从"编造来源"缩小成"编造观察编号"，后者由 allowedExternalIds 拦。
+            watchFires[logId] = WatchFireContext(
+                taskId: task.id,
+                sourceId: task.projectId ?? snapshot.outcomes.first?.spec.id,
+                allowedExternalIds: Set(snapshot.outcomes.flatMap { o in
+                    o.observations.map(\.externalId)
+                }))
+        }
+        // 助理的用户消息 = 人写的**目标**（观察与契约在 system 段）; Cron 一字不动
+        let prompt = task.isAssistant
+            ? Self.watchUserPrompt(goal: task.prompt)
+            : buildScheduledPrompt(task, targeted: targeted)
         let promptMsg = ChatMessage(role: .user, content: .text(prompt))
         store.persistMessage(promptMsg, sid: logId)
         if viewing { store.messages.append(promptMsg) }
@@ -730,7 +778,11 @@ final class SchedulerService: ObservableObject {
                         modelOverride: cfg.map {
                             (provider: $0.provider, modelId: $0.modelId, thinking: $0.thinkingLevel)
                         },
-                        dreamSpool: fireSpool)
+                        dreamSpool: fireSpool,
+                        // P19: 助理 = 只读分析面 + system 注入段。两个都是 per-turn，
+                        // `beginTurn` 里**无条件**下发（见那里的注释: 不清就会漏进下一回合）。
+                        analysisReadOnly: task.isAssistant,
+                        extraSystemPrompt: watchExtra)
         // P10.3 联动: 日志会话行带上任务配置 (点开会话即恢复其执行配置)
         if let cfg { store.persistence?.saveSessionConfig(id: logId, config: cfg) }
         // P15.9: 定向 fire **不推进 `lastRunAt` / `runCount`** —— 它不是"这个定时任务的一次运行"。
@@ -746,6 +798,112 @@ final class SchedulerService: ObservableObject {
             scheduledTasks[idx].logSessionId = logId
             try? store.persistence?.upsertScheduled(scheduledTasks[idx])
         }
+    }
+
+    // MARK: - P19 助理 · 巡检轮
+
+    /// 巡检轮的输出契约 = **出厂常量**。
+    ///
+    /// 为什么是常量而不是 `task.prompt`: 那一段是**人写的目标**（「保证 CI 是绿的」），
+    /// 契约是**机器的接口**（三段式 / NO_FINDING）。混进同一个字段，人一改目标就把契约删了，
+    /// 而下游解析只会在某一天发现"结论没解析出来"，零红灯。
+    static let watchOutputContract = """
+    【输出契约】只输出下面四段，不要寒暄、不要复述我给你的数据。
+    结论：一句话 —— 目标达成了 / 没达成 / 没达成但有变化。
+    证据：支撑结论的具体观察，带上来源与编号（形如 [3]）；文件位置写 file.swift:42。
+    方案：没达成时给编号步骤，每步写清「动哪个目标 · 怎么做 · 能不能撤销」；不需要动手就写「无」。
+    工作日志：把「当前阶段 / 已完成 / 下一步 / 卡在哪」压到四行以内 —— 这是**整篇**，
+              会覆盖旧文件（不是 diff）。没有进展就写「同上一轮」。
+    这一轮没有任何变化、也不值得找人 ⇒ 只输出一行：NO_FINDING
+    """
+
+    /// 采集器表。**`project` 不在里面**（它由分析段的只读工具现场看，不是采集器）；
+    /// `mail` 本版**故意不接** —— 现有 curl poll 会置已读，PEEK 未实测前上线就是偷偷
+    /// 改动用户的邮箱状态（§02 前置门 4）。
+    ///
+    /// 空表不是"空壳": `WatchSourceService` 对没有采集器的来源记 `unavailable`，
+    /// 这正是要它在日志与 UI 里说出来的那句话 —— 静默跳过才是空壳。
+    static var watchCollectors: [WatchSourceKind: WatchSourceCollecting] { [:] }
+
+    /// 巡检轮的用户消息 = **目标**（唯一稳定、由人写的东西）。
+    ///
+    /// 每轮变的观察 / 交接文件 / 契约走 system 注入（`watchSystemPrompt`）。
+    /// 这条分工不是美学: 目标是**人写的那一句**，它该留在人看得见的消息流里；
+    /// 观察是每轮现采的，滚进日志会话只会让三个月后的那场会话全是重复数据。
+    static func watchUserPrompt(goal: String) -> String {
+        """
+        本轮巡检目标：\(goal)
+
+        这一轮采集到的观察数据与输出规则已随本轮注入（不在下面的会话历史里）。
+        按它判断这个目标达成没有；没达成且值得找人，就把方案写清楚。
+        """
+    }
+
+    /// 巡检轮的 system 注入段（走 `--append-system-prompt`）。**纯函数**: 参数即全部输入。
+    static func watchSystemPrompt(project: WatchProjectContext?,
+                                  handoff: String?,
+                                  snapshot: WatchSnapshot) -> String {
+        var parts: [String] = []
+        parts.append("""
+        【助理任务 · 巡检轮】
+        你是在替一个人看守一个**长程目标**（可能持续几周甚至几个月），不是执行一条命令。
+        这一轮你**没有写权限**: 只能读文件、看注入的观察数据、必要时联网查资料。
+        不要声称你改过任何东西 —— 真想动手，就把方案写出来等人批准。
+        """)
+        if let p = project, !p.path.isEmpty {
+            parts.append("【项目】\n\(p.name) · \(p.path)\n这一轮的工作目录就是它，read / grep / find / ls 可以直接看。")
+        } else if let p = project {
+            parts.append("【项目】\n\(p.name)\n（这个项目没有绑定目录，只能用注入的观察数据判断。）")
+        }
+        let h = (handoff ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        parts.append(h.isEmpty
+            ? "【上一轮留下的工作日志】\n（空 —— 这是第一轮，或者此前还没记过什么）"
+            : "【上一轮留下的工作日志】\n\(h)")
+        parts.append("【这一轮的观察】\n" + snapshot.rendered())
+        parts.append(Self.watchOutputContract)
+        // 交接文件对巡检轮**永久只读**（它没有写工具）⇒ 必须说清，否则模型会以为自己写了而其实没写
+        parts.append("""
+        【关于工作日志】
+        这一轮你写不了工作日志（没有写权限）。判断结果写在输出里就行，
+        需要留下来的事实由执行轮记录。
+        """)
+        return parts.joined(separator: "\n\n")
+    }
+
+    // MARK: - P19 助理 · 对话轮
+
+    /// 这场会话是不是某个**助理任务的对话轮**？是则给出这一轮要注入的 system 段。
+    ///
+    /// 为什么靠 `logSessionId` 反查、而不是给会话打一个"我是助理会话"的标记:
+    /// 标记要落库、要在两处维护一致性；而"这个会话是某个助理的日志"本来就能从任务表推出来
+    /// —— `logSessionId` 是唯一真源，反查不会漂。
+    ///
+    /// ⚠️ 与巡检轮**不是同一段**：巡检轮是"到点了，看看"，对话轮是"人在跟你说话"。
+    /// 两段都写「只读」，但对话轮要额外带上**还开着的结论**（否则人问「那个再查查」，
+    /// 它不知道"那个"是哪条）。
+    func assistantChatContext(for sid: UUID) -> String? {
+        guard let task = scheduledTasks.first(where: { $0.isAssistant && $0.logSessionId == sid })
+        else { return nil }
+        var parts = ["""
+        【助理任务 · 对话轮】
+        这一轮是人在跟你说话，不是定时巡检。
+        你的长期目标：\(task.prompt)
+        这一轮你**没有写权限**：要动手就把步骤说清楚，让人在收件箱里批准 ——
+        不要声称你已经改了什么，也不要自己编造执行结果。
+        """]
+        let open = (store?.findings ?? []).filter { $0.taskId == task.id && $0.status.isInboxVisible }
+        if !open.isEmpty {
+            let lines = open.map { f -> String in
+                let tail = f.plan.isEmpty
+                    ? "只有结论"
+                    : "方案 \(f.plan.count) 步 · 第 \(f.planRev) 版"
+                return "- \(f.title)（\(tail)）"
+            }
+            parts.append("【还开着的结论】\n" + lines.joined(separator: "\n"))
+        }
+        let h = (readHandoff(for: task)?.content ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        if !h.isEmpty { parts.append("【最近的工作日志】\n\(h)") }
+        return parts.joined(separator: "\n\n")
     }
 
     // MARK: - P15.9 定向 dream（`由此 Dream`）
@@ -802,6 +960,19 @@ final class SchedulerService: ObservableObject {
         if store.runningTurns.count >= store.maxConcurrentTurns { return .busy }
         runScheduledFire(task, targeted: target)
         return .started
+    }
+
+    /// 把刚建好的日志会话**当场绑给任务**。
+    ///
+    /// 铁律: 任何"已经建了会话、但要走一条提前 return"的路径都必须先调它一次。
+    /// 不绑的后果不是红灯, 而是**会话增殖**: 每个 cron 点新建一场、往里写一行、然后丢弃,
+    /// 任务自己 `logSessionId` 永远是 nil ⇒ 用户点「任务日志」什么也看不到, 而磁盘上堆着
+    /// 一堆只有一行的孤儿会话。（2026-10-21 模型 pin 那条路径踩过一次, 这里补成公共入口。）
+    private func bindLogSession(taskId: UUID, logId: UUID) {
+        guard let store, let i = scheduledTasks.firstIndex(where: { $0.id == taskId }),
+              scheduledTasks[i].logSessionId != logId else { return }
+        scheduledTasks[i].logSessionId = logId
+        try? store.persistence?.upsertScheduled(scheduledTasks[i])
     }
 
     /// fire 被跳过时往日志会话追加一条时间线记录 (只落库, 不动 UI 状态——
@@ -1017,8 +1188,7 @@ final class SchedulerService: ObservableObject {
 
     /// run-log 兜底: 从日志会话的 text 消息重建交接文件内容 (过滤分隔标记, 截取上限)。
     /// 指令侧只取【本次指令】段 (历史注入模板不入档, 防层级滚雪球)。
-    private func rebuildHandoff(from logId: UUID?) -> String? {
-        guard let logId, let store else { return nil }
+    private func rebuildHandoff(from logId: UUID?) -> String? {        guard let logId, let store else { return nil }
         let lines = store.replayMessages(for: logId).compactMap { msg -> String? in
             guard case .text(let s) = msg.content, !s.isEmpty,
                   !s.hasPrefix("──") else { return nil }   // 过滤运行分隔
@@ -1084,6 +1254,44 @@ final class SchedulerService: ObservableObject {
             store.notifyTargetedDreamFinished(targetId: target, kept: kept)
         }
         try? FileManager.default.removeItem(atPath: spool)
+    }
+
+    // MARK: - P19 助理收尾（结论落库 / 工作日志写盘 / 触达）
+
+    /// 一轮巡检落定后的收口。由 `ChatStore` 在**两个落定点**调（正常结束 / 手动停）。
+    ///
+    /// 顺序 = 读回复 → 解析 → 校验 → 决定 → 写。**写在最后**: 判据（`WatchFindingService.plan`）
+    /// 是纯函数，落库与通知只是它的执行者 —— 这样"同指纹不重发 / 冷却"这类判断能在冒烟里对拍。
+    func finishWatchFireIfNeeded(sid: UUID) {
+        guard let ctx = watchFires.removeValue(forKey: sid) else { return }
+        guard let store, let p = store.persistence,
+              let task = scheduledTasks.first(where: { $0.id == ctx.taskId }) else { return }
+        let text = store.replayMessages(for: sid).compactMap { msg -> String? in
+            guard msg.role == .assistant, case .text(let s) = msg.content, !s.isEmpty else { return nil }
+            return s
+        }.last ?? ""
+        let report = WatchFindingService.parse(text)
+        let existing = (try? p.loadFindings()) ?? []
+        // "上次提给人是多久前" 用这个任务最近一条结论的时间近似。**够用且无状态** ——
+        // 真正的通知时刻要多存一列, 而它只在这条冷却判据里用得上（§04 冷却按任务）。
+        let lastNotifyAt = existing.filter { $0.taskId == task.id }.map(\.createdAt).max()
+        let plan = WatchFindingService.plan(report: report, task: task, sessionId: sid,
+                                           sourceId: ctx.sourceId,
+                                           allowedExternalIds: ctx.allowedExternalIds,
+                                           existing: existing, lastNotifyAt: lastNotifyAt,
+                                           now: Date())
+        if let f = plan.finding { try? p.upsertFinding(f) }
+        // 工作日志由 **App** 写盘（2026-11-16 boss 拍板）: 巡检轮没有写工具，让它自己写是
+        // 做不到的事；而"模型答已更新、磁盘没变"是零红灯的谎。所以内容进输出契约，落盘归我们。
+        // 上限判定在上面的纯函数里（超长 ⇒ handoff 已是 nil，且 summary 里说了原因）
+        if let h = plan.handoff, !saveHandoff(for: task, content: h) {
+            appendTimeline("── 工作日志写盘失败（磁盘？），结论照常落库 ──", to: sid)
+        }
+        if !plan.summary.isEmpty { appendTimeline(plan.summary, to: sid) }
+        if plan.shouldNotify, let f = plan.finding {
+            store.notifyWatchFinding(f, taskName: task.name)
+        }
+        store.reloadFindings()
     }
 
     /// 提案的身份 = **根 + 目标路径 + 标题**（去重用；三样都是 dream 自己在提案里写的，

@@ -250,6 +250,8 @@ final class PersistenceStore {
         addColumnIfMissing("scheduled_tasks", "condition", "TEXT")
         // P19: 任务类型 (execute / assistant); 旧条件值守不落此列, 由 condition 派生为只读归档
         addColumnIfMissing("scheduled_tasks", "kind", "TEXT")
+        // P19 助理: 来源列表 (JSON 数组; 空 / NULL 都解成 [] —— 老库升上来没有来源是正常的)
+        addColumnIfMissing("scheduled_tasks", "sources", "TEXT")
         // P10.4: 任务级执行配置 (JSON blob; 复用 SessionConfig)
         addColumnIfMissing("scheduled_tasks", "config", "TEXT")
         // P10.3: 会话级配置快照 (JSON blob; SessionConfig)
@@ -276,6 +278,47 @@ final class PersistenceStore {
             """)
             try? db.run("INSERT OR REPLACE INTO settings (key, value) VALUES ('sched_created_backfill','1')")
         }
+        // P19: 助理的结论（findings）+ 它的执行痕迹。**两张表一次建**，因为 `_actions`
+        // 是 findings 的从表、由执行段（S6）写；先有表比事后 ALTER 稳（老库升上来是空表）。
+        //
+        // ⚠️ `status` **不做 CHECK 约束**: 值域是产品语义（`FindingStatus`），将来加一个状态
+        // 若碰上 CHECK，老的 App 版本打开新库会**写不进去**（DB 列只增不删的同一条理由，
+        // 见 P11 判据 ②）。越界的值由解码侧兜成"不进收件箱、不放行执行"。
+        try db.run("""
+        CREATE TABLE IF NOT EXISTS agent_findings (
+            id          TEXT PRIMARY KEY,
+            task_id     TEXT NOT NULL,
+            source_id   TEXT NOT NULL,
+            session_id  TEXT NOT NULL,
+            title       TEXT NOT NULL,
+            body        TEXT NOT NULL,
+            evidence    TEXT,
+            plan        TEXT,                       -- WatchPlanStep 的 JSON 数组; 空 = 只会看不会修
+            plan_rev    INTEGER NOT NULL DEFAULT 1,
+            severity    TEXT NOT NULL,
+            fingerprint TEXT NOT NULL,
+            status      TEXT NOT NULL,
+            undo_path   TEXT,
+            tokens      INTEGER,
+            cost_usd    REAL,
+            created_at  REAL NOT NULL,
+            decided_at  REAL
+        )
+        """)
+        try db.run("CREATE INDEX IF NOT EXISTS idx_findings_task ON agent_findings(task_id, created_at)")
+        try db.run("CREATE INDEX IF NOT EXISTS idx_findings_fp ON agent_findings(fingerprint)")
+        try db.run("""
+        CREATE TABLE IF NOT EXISTS agent_finding_actions (
+            finding_id  TEXT NOT NULL,
+            step        INTEGER NOT NULL,
+            kind        TEXT NOT NULL,
+            target      TEXT,
+            result      TEXT NOT NULL,
+            output      TEXT,
+            at          REAL NOT NULL,
+            PRIMARY KEY (finding_id, step)
+        )
+        """)
     }
 
     /// 旧库补列: 列已存在则跳过 ALTER (发一条也会成功, 但 SQLite 会往 stderr 吐 duplicate column)。
@@ -1084,7 +1127,7 @@ final class PersistenceStore {
 
     func loadScheduled() throws -> [ScheduledTask] {
         let rows = try db.query("""
-            SELECT id, name, prompt, cron, project_id, enabled, last_run_at, log_session_id, continuous, condition, unattended, completed_at, run_count, created_at, config, kind
+            SELECT id, name, prompt, cron, project_id, enabled, last_run_at, log_session_id, continuous, condition, unattended, completed_at, run_count, created_at, config, kind, sources
             FROM scheduled_tasks ORDER BY created_at DESC
             """)
         return rows.map { row in
@@ -1113,17 +1156,25 @@ final class PersistenceStore {
                 config: optionalText(row, "config")
                     .flatMap { $0.data(using: .utf8) }
                     .flatMap { try? decoder.decode(SessionConfig.self, from: $0) },
-                kind: kind)
+                kind: kind,
+                // 来源列表: 坏 JSON / NULL / 空串一律 → []。**不抛** —— 一条来源配置损坏
+                // 不该让整个任务列表读不出来（那会连带 dream 任务一起消失）。
+                sources: optionalText(row, "sources")
+                    .flatMap { $0.data(using: .utf8) }
+                    .flatMap { try? decoder.decode([WatchSourceSpec].self, from: $0) } ?? [])
         }
     }
 
     func upsertScheduled(_ t: ScheduledTask) throws {
         let configJSON = t.config.flatMap { try? encoder.encode($0) }
             .flatMap { String(data: $0, encoding: .utf8) }
+        let sourcesJSON = t.sources.isEmpty
+            ? nil
+            : (try? encoder.encode(t.sources)).flatMap { String(data: $0, encoding: .utf8) }
         try db.run("""
             INSERT OR REPLACE INTO scheduled_tasks
-            (id, name, prompt, cron, project_id, enabled, last_run_at, log_session_id, continuous, condition, unattended, completed_at, run_count, created_at, config, kind)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            (id, name, prompt, cron, project_id, enabled, last_run_at, log_session_id, continuous, condition, unattended, completed_at, run_count, created_at, config, kind, sources)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             """, [.text(t.id.uuidString),
                   .text(t.name),
                   .text(t.prompt),
@@ -1140,11 +1191,84 @@ final class PersistenceStore {
                   .real(t.createdAt.timeIntervalSince1970),
                   configJSON.map { .text($0) } ?? .null,
                   // P19: legacy 不落值 —— 它是 condition 派生出来的归档态, 写 NULL 让它下次照样派生。
-                  t.isLegacyWaiting ? .null : .text(t.kind.rawValue)])
+                  t.isLegacyWaiting ? .null : .text(t.kind.rawValue),
+                  sourcesJSON.map { .text($0) } ?? .null])
     }
 
     func deleteScheduled(id: UUID) throws {
         try db.run("DELETE FROM scheduled_tasks WHERE id = ?", [.text(id.uuidString)])
+    }
+
+    // MARK: - 助理结论 (P19 findings)
+
+    func loadFindings() throws -> [AgentFinding] {
+        let rows = try db.query("""
+            SELECT id, task_id, source_id, session_id, title, body, evidence, plan, plan_rev,
+                   severity, fingerprint, status, undo_path, tokens, cost_usd, created_at, decided_at
+            FROM agent_findings ORDER BY created_at DESC
+            """)
+        return rows.compactMap { row in
+            // 坏行**跳过而不是抛**: 一行 JSON 坏了不该让整个收件箱读不出来
+            // （同 `scheduled_tasks.sources` 那条）。
+            guard let id = UUID(uuidString: text(row, "id")),
+                  let taskId = UUID(uuidString: text(row, "task_id")),
+                  let sourceId = UUID(uuidString: text(row, "source_id")),
+                  // 未知 status ⇒ 解成 nil ⇒ 整行丢掉: 它既不该进收件箱也不该放行执行,
+                  // 而"猜一个 open"会让一条本该被忽略的旧结论重新冒出来叫人。
+                  let status = FindingStatus.decode(optionalText(row, "status") ?? "") else { return nil }
+            let plan = optionalText(row, "plan")
+                .flatMap { $0.data(using: .utf8) }
+                .flatMap { try? decoder.decode([WatchPlanStep].self, from: $0) } ?? []
+            return AgentFinding(
+                id: id, taskId: taskId, sourceId: sourceId,
+                sessionId: UUID(uuidString: text(row, "session_id")) ?? UUID(),
+                title: text(row, "title"), body: text(row, "body"),
+                evidence: optionalText(row, "evidence"), plan: plan,
+                planRev: Int(int(row["plan_rev"] ?? .null)),
+                severity: text(row, "severity"),
+                fingerprint: text(row, "fingerprint"), status: status,
+                undoPath: optionalText(row, "undo_path"),
+                tokens: optionalText(row, "tokens").flatMap { Int($0) },
+                costUSD: optionalText(row, "cost_usd").flatMap { Double($0) },
+                createdAt: optionalDate(row, "created_at") ?? .distantPast,
+                decidedAt: optionalDate(row, "decided_at"))
+        }
+    }
+
+    func upsertFinding(_ f: AgentFinding) throws {
+        let planJSON = f.plan.isEmpty
+            ? nil
+            : (try? encoder.encode(f.plan)).flatMap { String(data: $0, encoding: .utf8) }
+        try db.run("""
+            INSERT OR REPLACE INTO agent_findings
+            (id, task_id, source_id, session_id, title, body, evidence, plan, plan_rev,
+             severity, fingerprint, status, undo_path, tokens, cost_usd, created_at, decided_at)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            """, [.text(f.id.uuidString),
+                  .text(f.taskId.uuidString),
+                  .text(f.sourceId.uuidString),
+                  .text(f.sessionId.uuidString),
+                  .text(f.title),
+                  .text(f.body),
+                  f.evidence.map { .text($0) } ?? .null,
+                  planJSON.map { .text($0) } ?? .null,
+                  .int(Int64(f.planRev)),
+                  .text(f.severity),
+                  .text(f.fingerprint),
+                  .text(f.status.rawValue),
+                  f.undoPath.map { .text($0) } ?? .null,
+                  f.tokens.map { .int(Int64($0)) } ?? .null,
+                  f.costUSD.map { .real($0) } ?? .null,
+                  .real(f.createdAt.timeIntervalSince1970),
+                  f.decidedAt.map { .real($0.timeIntervalSince1970) } ?? .null])
+    }
+
+    /// 只改状态（忽略 / 采纳 / 执行回写都走这里）。`decided_at` 只在**人拍板**时给值。
+    func setFindingStatus(id: UUID, status: FindingStatus, at: Date?) throws {
+        try db.run("UPDATE agent_findings SET status = ?, decided_at = ? WHERE id = ?",
+                   [.text(status.rawValue),
+                    at.map { .real($0.timeIntervalSince1970) } ?? .null,
+                    .text(id.uuidString)])
     }
 
     // MARK: - 邮箱账号池 (P19: 只剩账号; 哨兵 / 线程 / 拒收三表已随收件档删除)

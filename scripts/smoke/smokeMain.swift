@@ -5711,6 +5711,21 @@ struct SmokeMain {
         // ---- T-WATCHFACE: P19 只读巡检/分析段的工具面（只给该给的，一个都不多） ----
         await caseWatchFace()
 
+        // ---- T-WATCHSRC: P19 来源 fan-out / 上限 / 错误隔离 / 巡检轮注入 ----
+        // 反例: 拿掉 `capped` 的条数截断 ⇒ ④ 红; 字节上限改回按字符 ⇒ ⑤ 红（12000 汉字
+        // 会整段放过）; `beginTurn` 里把两个 per-turn 赋值改成 `if let` ⇒ ⑨ 红。
+        await caseWatchSources()
+
+        // ---- T-WATCHFIND: P19 结论解析 / 拒收 / 指纹去重 / 落库 ----
+        // 反例: 指纹里揉进方案 ⇒ ⑥「方案变了更新同一行」红（会变成新行）;
+        //       去掉伪造引用校验 ⇒ ④ 红。
+        await caseWatchFindings()
+
+        // ---- T-WATCHCHAT: P19 对话轮（同一条会话里的两套上下文） ----
+        // 反例: 把 `!ephemeral` 那半个条件去掉 ⇒ 巡检轮也会绑 session（①红）；
+        //       把 `turnExtra == nil` 去掉 ⇒ 巡检轮的注入段被对话段顶掉。
+        await caseWatchChat()
+
         // ---- T-CTX: 上下文压缩可见性 —— 常驻标记 (A) / 即时百分比 (B) / 压缩线 (D) ----
         // 立项依据 (2026-10-17 boss): "现在只有低栏那个状态才有压缩显示, 对话区域…没有吧" ——
         // 确认属实后钉死三条不变量:

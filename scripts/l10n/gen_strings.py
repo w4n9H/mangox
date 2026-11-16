@@ -148,6 +148,19 @@ EXCLUDE_FILES = {
     #         换一个 key ⇒ 流水里堆出十几行同一个标题, 而且**零红灯**。
     #    代价同上面几行: 在此文件里写 `L()` 的 key 永远进不了词表。**UI 文案请写在 View 侧**。
     'mangox/Models/TimelineDoc.swift',             # 时间线落盘字节 + 注入段头 (无 UI 文案)
+    # ⚠️ P19 (2026-11-16): 本文件产出的是**巡检轮 system 注入段的字节**（段头「【来源：X】」、
+    #    条数/截断标记、外部数据免责句）与**日志时间线的落库字节**。三条理由排除:
+    #      ① 逐字进 `--append-system-prompt` ⇒ 本地化 = 界面语言改掉注入字节（同 `TimelineDoc`）；
+    #      ② 「【来源：X】」是模型回指证据的凭据（finding 的 source 引用靠它），随语言漂 =
+    #         同一份观察在两轮里长得不一样，而下游**零红灯**；
+    #      ③ 错误文案（`不可用:` / `采集失败:`，在 Models 那个文件里）进日志会话，是用户数据。
+    #    代价同上面几行: 在此文件里写 `L()` 的 key 永远进不了词表。**UI 文案请写在 View 侧**。
+    'mangox/State/WatchSourceService.swift',       # 注入段字节 + 来源归一 (无 UI 文案)
+    'mangox/Models/WatchSourceModels.swift',       # 采集错误的落库/注入前缀 (无 UI 文案)
+    # ⚠️ P19 S4: 同理 —— 本文件出的是**日志时间线文案**（"本轮无新结论""结论被拒收…"）
+    #    与**注入段里的输出契约**，两者都落库/进 prompt, 一律恒中文。
+    'mangox/State/WatchFindingService.swift',      # 结论解析与时间线文案 (无 UI 文案)
+    'mangox/Models/WatchFindingModels.swift',      # 结论字段与状态值域 (无 UI 文案)
     # ⚠️ P18 (2026-11-02): SOP 是**第二条注入通道** —— 段头 `[SOP]`、节头(`可操作`/`只读`)、
     #    "这次没带上"的点名句全部逐字进 `--append-system-prompt`。本地化它们 = 让用户的
     #    界面语言改掉注入给模型的字节(`KnowledgeBaseScan.token` 同一条理由), 而且
