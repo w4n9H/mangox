@@ -1980,7 +1980,7 @@ final class PiRpcTransport: AgentTransport {
         if let knowledge = desiredKnowledge, !knowledge.isEmpty {
             args += ["--append-system-prompt", knowledge]
         }
-        // P19: **第二条**注入通道 = 应用操作手册 (SOP)。刻意不并进上面那一块:
+        // P18: **第二条**注入通道 = 应用操作手册 (SOP)。刻意不并进上面那一块:
         //   知识块的语义是"我是谁/我知道什么", 有 persona 首位与段序两条结构性不变量;
         //   SOP 是"在这个 App 里怎么下手", 生命周期跟着**开关与名单**走。
         // ⚠️ 判据必须是 `computerSock`（不是"名单非空"）—— 与挂载走**同一个 nil**:

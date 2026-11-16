@@ -1,6 +1,6 @@
 //
 //  SopManual.swift
-//  P19: macOS **内置应用操作手册**的正文 —— 它住在代码里, 不是磁盘上的文件。
+//  P18: macOS **内置应用操作手册**的正文 —— 它住在代码里, 不是磁盘上的文件。
 //
 //  ⚠️ 为什么是代码常量而不是 `~/.mangox/note/sop/macos-builtins.md`（2026-11-02 boss 定）:
 //     这份手册是**产品自带的知识**, 不是用户数据 —— 换一台机器、换一个 `~/.mangox/`,
@@ -70,7 +70,7 @@
 //  数据来源:
 //    · 结构（节点数/耗时/role/title 长什么样）→ `scripts/diag/ax_coverage_probe.sh`
 //    · 每条场景能不能真做到 + 怎么算成了 → `scripts/diag/scenario_probe.sh`（14 条，真机跑）
-//    两份读数都记在 `MEMORY-details` 的 P19 表与「场景回归」一节。
+//    两份读数都记在 `MEMORY-details` 的 P18 表与「场景回归」一节。
 //
 
 import Foundation

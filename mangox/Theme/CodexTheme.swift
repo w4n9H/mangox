@@ -555,7 +555,7 @@ enum Tune {
     // 知识库 (P3.7, 阈值留人工调整; 2026-09-10 用户拍板上调)
     static let knowledgeItemCharLimit: Int   = 16000   // 单条内容截断
     static let knowledgeTotalCharLimit: Int  = 64000   // 注入块总量预算
-    /// P19: **SOP 段**的预算 —— 与知识块**完全分账**（两条 `--append-system-prompt`）。
+    /// P18: **SOP 段**的预算 —— 与知识块**完全分账**（两条 `--append-system-prompt`）。
     ///
     /// 为什么单开一本账: 知识块的 64000 是"我是谁 + 我知道什么"的额度, 把它让给工具手册
     /// 等于用"人格"的预算去装"操作步骤"; 而且 SOP 的份数跟着 computer use 的名单变,

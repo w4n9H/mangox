@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-scenario_probe.py —— P19 **场景回归**执行器（2026-11-04，boss 定）
+scenario_probe.py —— P18 **场景回归**执行器（2026-11-04，boss 定）
 
 为什么要有它：最近几个版本一直在给 computer use 加 op（`open` / `confirm` …），
 根因是**我们拿 op 当测试单位**，于是每撞一次墙就多一个动作。真正该当测试单位的是
