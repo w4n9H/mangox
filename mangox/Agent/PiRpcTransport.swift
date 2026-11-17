@@ -178,9 +178,18 @@ final class PiRpcTransport: AgentTransport {
         executionGuard = guardValue
     }
 
+    /// P19.2 S10: 本回合的账本落点（nil = 这一轮没有账本）。
+    ///
+    /// 它只影响**扩展侧的免检判断**（`MANGOX_LEDGER_PATH`）—— 能不能写由客户端 `LedgerFence`
+    /// 判（S11 接审批桥）。spawn 期定格 ⇒ 与 `executionGuard` 一样进重启判据:
+    /// 漏了它，同一个日志会话里「巡检轮（有账本）→ 手动问一句（没有账本）」会**沿用**
+    /// 上一轮的 env —— 表现是"我说的那句话它还是只肯写那个文件"，而进程根本没重启过。
+    private var ledgerFencePath: String?
+    private var spawnedLedgerFence: String?
+    func updateLedgerFencePath(_ path: String?) { ledgerFencePath = path }
+
     /// 模型正文里**最新**声明到的步骤号（「第 N 步」）。审批桥拿它比已授权步骤。
-    private var execDeclaredStep: Int?
-    /// 流式文本的尾部缓冲。只需尾部：判据要的是"最新的那个声明"。
+    private var execDeclaredStep: Int?    /// 流式文本的尾部缓冲。只需尾部：判据要的是"最新的那个声明"。
     private var execStepBuffer = ""
     private static let execStepBufferMax = 2000
 
@@ -415,8 +424,26 @@ final class PiRpcTransport: AgentTransport {
         return env
     }
 
-    /// 审批扩展的源码 —— **纯函数, 不落盘**(冒烟直测)。
+    /// P19.2 S10: 账本围栏的 env（`MANGOX_LEDGER_PATH`）。**只有巡检轮的 spawn 会设它**。
     ///
+    /// 与 `execFenceEnvironment` 是**同一套双闸门写法**，理由也一样：
+    ///   ① 返回 nil = "什么都不用改"（这一轮没有账本，父进程里也没有残留）；
+    ///   ② 父进程有残留时返回的是**删掉了那个键**的完整环境 —— 不删的话一个普通会话会莫名
+    ///      带上账本围栏（表现是"新建文件忽然都要审批了"，而界面上没有任何地方写着为什么）。
+    ///
+    /// ⚠️ 契约 token：逐字进子进程 env，`mangox-approval.ts` 那侧读的就是它。不得本地化 / 改写。
+    static let ledgerFenceEnvKey = "MANGOX_LEDGER_PATH"
+    static func ledgerFenceEnvironment(existing: [String: String]?,
+                                       ledgerPath: String?,
+                                       inherited: [String: String]) -> [String: String]? {
+        let desired = (ledgerPath?.isEmpty == false) ? ledgerPath : nil
+        if desired == nil, inherited[ledgerFenceEnvKey] == nil { return nil }
+        var env = existing ?? inherited
+        env[ledgerFenceEnvKey] = desired    // nil = 移除该键（同 `execFenceEnvironment`）
+        return env
+    }
+
+    /// 审批扩展的源码 —— **纯函数, 不落盘**(冒烟直测)。
     /// P18 批 2a: 两个工具集合从 `ApprovalGate` **插值**进来, 不在 JS 里另抄一份。
     /// 理由: 抄一份就是两个真源, 改一边不会有任何编译错误, 而现象是"某个工具又自带豁免了"
     /// —— 与 `MANGOX_COMPUTE_*` 那条契约 token 纪律同族。
@@ -432,6 +459,8 @@ final class PiRpcTransport: AgentTransport {
         // P19 S6: **执行轮**多给一个 env (MANGOX_EXEC_PROJECT) —— 它开两道口子:
         //   ① 新建文件**落到围栏外**时必须照样请求审批 (否则 `write ~/x` 一次卡都不弹);
         //   ② 不给「Allow always」(记住它 = 之后这个工具彻底不走审批桥 = 红线一起放行)。
+        // P19.2 S10: **巡检轮**多给一个 env (MANGOX_LEDGER_PATH) —— 免检口径再收紧一层:
+        //   设了它 ⇒ 只有**账本那一份**能免检, 其余新建文件一律进审批 (客户端再判 Deny)。
         //   env 不存在的进程这两种行为**逐字节等于从前**（定时任务不许被顺带改掉）。
         // diff 预览: edit/write 审批时把 -/+ 行对照拼进 title (客户端 @@MANGOX_DIFF@@ 分段解析)。
         import * as fs from "fs";
@@ -453,6 +482,22 @@ final class PiRpcTransport: AgentTransport {
             if (raw.charAt(0) === "~") return true;
             const abs = nodePath.resolve(PROJECT_ROOT, raw);
             return !(abs === PROJECT_ROOT || abs.indexOf(PROJECT_ROOT + nodePath.sep) === 0);
+          };
+          // P19.2 S10: 账本落点。**只有巡检轮的 spawn 会设它**（同 EXEC_PROJECT 那套）。
+          // 它把「新建文件免检」从"项目内"收紧成"仅账本这一份"。
+          // ⚠️ 这个扩展只回答**能不能免检**；能不能做由客户端 `LedgerFence` 判（S11 接审批桥）。
+          //    巡检轮无人值守 ⇒ 卡上去等于死锁，所以那一路必须走客户端 Deny，不能指望这里。
+          const LEDGER_PATH = process.env.MANGOX_LEDGER_PATH || "";
+          const LEDGER_RESOLVED = LEDGER_PATH ? nodePath.resolve(LEDGER_PATH) : "";
+          // 落在账本上? 只认**同一个绝对路径**:
+          //   · 前导 `~` ⇒ 否（Node 不展开 `~`，判不清写到哪）
+          //   · 相对路径 ⇒ 否（基准目录不一定是以为的那个）
+          //   · 其余比**标准化之后是否相等**，不做前缀比较 —— `<账本>/../x` 前缀一样却不在账本上。
+          const insideLedger = (p) => {
+            if (!LEDGER_RESOLVED || !p) return false;
+            const raw = String(p);
+            if (raw.charAt(0) === "~" || !nodePath.isAbsolute(raw)) return false;
+            return nodePath.resolve(raw) === LEDGER_RESOLVED;
           };
           const MAX_DIFF_LINES = 120;
           const MAX_LINE_CHARS = 200;
@@ -535,7 +580,7 @@ final class PiRpcTransport: AgentTransport {
             if (!ctx.hasUI) return undefined;
             const input = event.input || {};
             if (event.toolName === "write" && input.path && !fs.existsSync(input.path)
-                && !outsideExecFence(input.path)) {
+                && (LEDGER_PATH ? insideLedger(input.path) : !outsideExecFence(input.path))) {
               return undefined;   // 新建文件: 无覆盖风险, 放行
             }
             // computer 工具没有 command / path / url —— 不看这一支的话卡片上那一行是空的,
@@ -2036,14 +2081,16 @@ final class PiRpcTransport: AgentTransport {
         if process != nil, spawnedCwd != target || spawnedDreamSpool != dreamSpool
             || spawnedAnalysisReadOnly != analysisReadOnly
             || spawnedExtraSystem != extraSystemPrompt
-            || spawnedExecProject != executionGuard?.projectPath {
+            || spawnedExecProject != executionGuard?.projectPath
+            || spawnedLedgerFence != ledgerFencePath {
             // 诊断日志: 进程**复用**是常态, 重启是例外 —— 后者会丢进程内对话记忆,
             // 排查时"这一轮为什么没记忆"要能一眼看出是这里拆的。
             Log.process("teardown", ["cwdChanged": spawnedCwd != target ? "1" : "0",
                                      "dreamChanged": spawnedDreamSpool != dreamSpool ? "1" : "0",
                                      "readOnlyChanged": spawnedAnalysisReadOnly != analysisReadOnly ? "1" : "0",
                                      "injectChanged": spawnedExtraSystem != extraSystemPrompt ? "1" : "0",
-                                     "fenceChanged": spawnedExecProject != executionGuard?.projectPath ? "1" : "0"])
+                                     "fenceChanged": spawnedExecProject != executionGuard?.projectPath ? "1" : "0",
+                                     "ledgerChanged": spawnedLedgerFence != ledgerFencePath ? "1" : "0"])
             teardownProcess()
         }
         guard process == nil else {
@@ -2262,6 +2309,14 @@ final class PiRpcTransport: AgentTransport {
                                                inherited: ProcessInfo.processInfo.environment) {
             p.environment = env
         }
+        // P19.2 S10: 账本落点 env（扩展侧那一半，见 `approvalExtensionSource` 的 `insideLedger`）。
+        // 与执行围栏同款: 必须**整体赋值**（`p.environment` 可能是 nil = 继承父环境，
+        // `p.environment?[k] = v` 那时是静默空操作），且必须**显式删掉**父进程里的残留。
+        if let env = Self.ledgerFenceEnvironment(existing: p.environment,
+                                                 ledgerPath: ledgerFencePath,
+                                                 inherited: ProcessInfo.processInfo.environment) {
+            p.environment = env
+        }
         // P10.1b: 博查 key 只走 env（Keychain → 子进程环境），**不落盘**。
         // ⚠️ 守卫 26 同款: 上面那段只在"有自管模型"时才给 `p.environment` 赋值, 其余情况它是
         //    **nil**（= 子进程自己继承父环境）。那时 `p.environment?[k] = v` 是**静默空操作** ——
@@ -2319,6 +2374,7 @@ final class PiRpcTransport: AgentTransport {
         spawnedAnalysisReadOnly = analysisReadOnly
         spawnedExtraSystem = extraSystemPrompt
         spawnedExecProject = executionGuard?.projectPath
+        spawnedLedgerFence = ledgerFencePath
         self.outPipe = outPipe
         self.errPipe = errPipe
         stdinHandle = inPipe.fileHandleForWriting

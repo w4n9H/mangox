@@ -140,6 +140,14 @@ protocol AgentTransport: AnyObject {
     /// P19: 执行回合的守卫（nil = 这一回合不是执行轮）。审批桥据此在**弹卡之前**过红线 ——
     /// 红线恒拒，任何授权都不放行，所以它必须发生在"问人"之前。
     func updateExecutionGuard(_ guardValue: ExecutionGuard?)
+    /// P19.2 S10: 本回合的**账本落点**（`nil` = 这一轮没有账本）—— spawn 期注入
+    /// `MANGOX_LEDGER_PATH` env，扩展据此把「新建文件免检」从"项目内"收紧成"仅账本这一份"。
+    ///
+    /// 与 `updateExecutionGuard` 同一层、同一条纪律（`beginTurn` 里**无条件**赋值）——
+    /// 漏清的后果与执行守卫同款：`write` 在下一个普通回合里仍然只认那个早已过期的账本，
+    /// 表现是"新建文件忽然都要审批了"，而人想不到是上一轮留下的路径。
+    /// ⚠️ 它**只影响免检**，不构成权限：能不能做由客户端 `LedgerFence` 判（S11 接审批桥）。
+    func updateLedgerFencePath(_ path: String?)
     /// P10.1b: 下发博查 API Key (nil = 未配置; spawn 期注入 `MANGOX_BOCHA_KEY` env)。
     ///
     /// **实例级**, 与 `updateDreamSpool` 同一层 —— 但语义不同: 那个是**任务**语义（只有 dream

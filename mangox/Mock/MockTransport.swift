@@ -96,6 +96,14 @@ final class MockTransport: AgentTransport {
     /// P19 S6 smoke 注入: 本回合的过闸落痕 (mock 无审批桥, 默认空)
     var execActions: [Int: ExecAction] = [:]
 
+    /// P19.2 S10: 账本落点（冒烟断言"巡检回合挂上了、普通回合清掉了"）。
+    private(set) var lastLedgerFencePath: String?
+    private(set) var ledgerFencePathUpdates: Int = 0
+    func updateLedgerFencePath(_ path: String?) {
+        lastLedgerFencePath = path
+        ledgerFencePathUpdates += 1
+    }
+
     func updateSessionBinding(_ sessionId: UUID?) {
         guard boundSessionId != sessionId else { return }
         boundSessionId = sessionId

@@ -801,15 +801,30 @@ final class SchedulerService: ObservableObject {
     /// 巡检轮的输出契约 = **出厂常量**。
     ///
     /// 为什么是常量而不是 `task.prompt`: 那一段是**人写的目标**（「保证 CI 是绿的」），
-    /// 契约是**机器的接口**（三段式 / NO_FINDING）。混进同一个字段，人一改目标就把契约删了，
-    /// 而下游解析只会在某一天发现"结论没解析出来"，零红灯。
+    /// 契约是**机器的接口**（四段 + 五节账本 / NO_FINDING）。混进同一个字段，人一改目标就把
+    /// 契约删了，而下游解析只会在某一天发现"结论没解析出来"，零红灯。
+    ///
+    /// P19.2 S8: 工作日志从「四行自由文本」改成**固定五节**。第五节「已完成（归档）」是
+    /// 给人回看的记忆（不参与任何判定），也是账本唯一的**出口** —— 没有它，做完的事会
+    /// 永久占着验收项，而 16k 满了以后就是「每轮账本都不更新」（与 D1 同一种静默断）。
     static let watchOutputContract = """
     【输出契约】只输出下面四段，不要寒暄、不要复述我给你的数据。
     结论：一句话 —— 目标达成了 / 没达成 / 没达成但有变化。
     证据：支撑结论的具体观察，带上来源与编号（形如 [3]）；文件位置写 file.swift:42。
     方案：没达成时给编号步骤，每步写清「动哪个目标 · 怎么做 · 能不能撤销」；不需要动手就写「无」。
-    工作日志：把「当前阶段 / 已完成 / 下一步 / 卡在哪」压到四行以内 —— 这是**整篇**，
-              会覆盖旧文件（不是 diff）。没有进展就写「同上一轮」。
+    工作日志：**整篇重写**（会覆盖旧文件，不是 diff）。下面五节一节都不许省，节名照抄：
+    ## 目标
+    一句话复述你在看守的目标。目标被人改过，就写「原目标 → 现目标」。
+    ## 完成状态
+    验收标准逐条，一行一条，行首打标：[x] 已达成 / [ ] 未达成 / [!] 卡住（后面写卡在什么上）。
+    第一轮先把验收标准列出来（三到五条），之后每轮更新**同一批**，不要每轮换一批。
+    ## 在跟踪
+    当前正在推进的事，一行一件；没有就写「无」。
+    ## 待你决定
+    需要人授权 / 给材料 / 做选择的事，一行一件；没有就写「无」。
+    ## 已完成（归档）
+    已经收尾的事，一行一件，写成「日期 + 一句话」（如 2026-11-17 修好 CI：根因是时区写死）。
+    这件事做完就把它的验收项从「完成状态」撤下来、在这里记一条；没有就写「无」。
     这一轮没有任何变化、也不值得找人 ⇒ 只输出一行：NO_FINDING
     """
 
@@ -855,6 +870,16 @@ final class SchedulerService: ObservableObject {
         parts.append(h.isEmpty
             ? "【上一轮留下的工作日志】\n（空 —— 这是第一轮，或者此前还没记过什么）"
             : "【上一轮留下的工作日志】\n\(h)")
+        // P19.2 S8: 报字数。**模型看不见自己那份账本多大** —— 只在契约里写「允许压缩」是一句
+        // 空话，它永远不知道自己已经 13k 了。这一行是「压缩归档」那条路唯一的触发条件。
+        // 空账本不说（没有可压缩的东西，多一句只是噪音）。
+        if !h.isEmpty {
+            let cap = WatchFindingService.handoffMaxChars
+            let compact = WatchFindingService.handoffCompactThreshold
+            parts.append(h.count > compact
+                ? "【账本容量】当前 \(h.count) 字 / 上限 \(cap) —— **已超过 \(compact) 字**。这一轮请把「## 已完成（归档）」压缩到最近 \(WatchFindingService.archivedKeep) 条：只删最旧的那几行，其余四节一个字都不要删。"
+                : "【账本容量】当前 \(h.count) 字 / 上限 \(cap)。超过 \(compact) 字时才需要压缩归档，这一轮不用管。")
+        }
         parts.append("【这一轮的观察】\n" + snapshot.rendered())
         parts.append(Self.watchOutputContract)
         // 交接文件对巡检轮**永久只读**（它没有写工具）⇒ 必须说清，否则模型会以为自己写了而其实没写
@@ -1206,6 +1231,17 @@ final class SchedulerService: ObservableObject {
     /// 一行插入 —— 表现是"项目里多出一场没有归属的会话"，而功能照跑、零红灯。
     func ensureLogSession(for task: ScheduledTask) -> UUID? {   // internal — 冒烟直访（执行轮前置）
         guard let store else { return nil }
+        // ── P19.2 S9 / Q5: 助理账本目录由 **App** 预建，不交给模型 ──────────────────
+        // `write` 写不进不存在的目录；而「允许它自己建目录」等于再开一个路径口子，与
+        // 「账本落点只有一个」冲突（S11 起巡检轮就有 `write` 了，这条是它的前置）。
+        // 挂在这里是因为它是**两条轮次共同的唯一入口**（巡检轮与执行轮都先调它）；
+        // `createDirectory` 幂等 ⇒ 目录被人删掉，下一次 fire 顺手补回来。
+        // 只在助理档做：Cron 的 `tasks/` 目录一直由 `saveHandoff` 自己建，不动它。
+        if task.isAssistant {
+            try? FileManager.default.createDirectory(
+                atPath: (handoffPath(for: task) as NSString).deletingLastPathComponent,
+                withIntermediateDirectories: true)
+        }
         if let id = task.logSessionId, store.allConversations.contains(where: { $0.id == id }) {
             return id
         }
@@ -1358,24 +1394,73 @@ final class SchedulerService: ObservableObject {
         refreshMissedFires(now: now)
     }
 
-    // MARK: - 交接文件 (P3.9)
+    // MARK: - 交接文件 (P3.9 · P19.2 S9 分家)
 
-    /// 交接文件路径: 项目任务 → <项目>/.mangox/tasks/<taskId>.md (进文件树/可 @ 引用);
-    /// 无项目任务 → ~/.mangox/task-memory/<taskId>.md。
+    /// 交接文件路径。**P19.2 S9: 两档分家** ——
+    ///   · Cron（`.execute` / `.legacyWaiting`）→ `<项目>/.mangox/tasks/` · `~/.mangox/task-memory/`
+    ///   · 助理（`.assistant`）→ `<项目>/.mangox/assistant/` · `~/.mangox/assistant-memory/`
+    ///
+    /// 为什么非分不可：两者在文件树里**长得一模一样**，而语义差得远 —— 一份是「跑过一次留下的
+    /// 痕迹」，一份是「这个目标三个月的进度」。混在一个目录里，人打开文件树分不出哪份是哪份，
+    /// 而这份差别正是 P19.2 全部功能的立足点（账本可读、可催、可回「无目标」）。
+    ///
+    /// ⚠️ **Cron 的那两个字符串一个字节都不许动**（「Cron 档零改动」是硬约束）。所以这里只抽
+    /// **公式**、不合并两档：合并之后「助理路径」与「Cron 路径」会变成同一个表达式，改一处就
+    /// 动另一处 —— 而那条路径是回落 / 快照归属 / 清理全部逻辑的锚。
     func handoffPath(for task: ScheduledTask) -> String {
+        task.isAssistant ? assistantHandoffPath(for: task) : legacyHandoffPath(for: task)
+    }
+
+    /// Cron 的公式。**逐字节等于 P19.2 之前的 `handoffPath`** —— `CaseHandoffPath` 四条真值表
+    /// 按字面拼期望值钉着（不是拿它和自己比）。
+    private func legacyHandoffPath(for task: ScheduledTask) -> String {
+        resolvedHandoffPath(for: task,
+                            projectSubdir: ".mangox/tasks",
+                            homeSubdir: ".mangox/task-memory")
+    }
+
+    private func assistantHandoffPath(for task: ScheduledTask) -> String {
+        resolvedHandoffPath(for: task,
+                            projectSubdir: ".mangox/assistant",
+                            homeSubdir: ".mangox/assistant-memory")
+    }
+
+    /// 唯一那条公式：项目在 ⇒ `<项目>/<projectSubdir>`；否则 ⇒ `~/<homeSubdir>`。
+    ///
+    /// ⚠️ **「项目已删」也走 home** —— 原实现是 `if let pid, let p` **两者都成立**才用项目路径。
+    /// 改写成 `flatMap` 时很容易只剩「有没有 pid」这一半，那样「项目删了但任务还在」的任务会
+    /// 拼出一个已不存在目录下的路径（写必失败，而零红灯）。真值表 ③ 就是为了这条。
+    private func resolvedHandoffPath(for task: ScheduledTask,
+                                     projectSubdir: String, homeSubdir: String) -> String {
         let dir: String
         if let pid = task.projectId,
            let p = store?.projects.first(where: { $0.id == pid })?.path {
-            dir = p + "/.mangox/tasks"
+            dir = p + "/" + projectSubdir
         } else {
-            dir = NSHomeDirectory() + "/.mangox/task-memory"
+            dir = NSHomeDirectory() + "/" + homeSubdir
         }
         return dir + "/\(task.id.uuidString).md"
     }
 
     /// 读交接文件 (磁盘为准, 零缓存)。返回 nil = 文件不存在。
+    ///
+    /// **S9 给的回落**: 助理刚换目录，旧的那份还躺在 `<项目>/.mangox/tasks/` 里。不回落的话，
+    /// 换版本那一刻它读到的是「空」⇒ 几个月的进度被当成「第一轮」，而这件事**零红灯**
+    /// （指令照跑、结论照出，只是它不再记得自己在追什么）。
+    ///
+    /// 三条口径：
+    ///   ① 新位置有文件 ⇒ 就用新的，**不看旧的**；
+    ///   ② 新位置没有 ⇒ 去旧位置读**一次**（不是搬、不是删 —— 回落是只读的）；
+    ///   ③ 一旦新位置有了文件，就**不再**回落 —— 否则两份真源同时活着，改了新的旧的还在顶。
+    ///      ⚠️ 遗留：旧文件我们不删。所以「新文件被手动删掉」会把旧账本复活一次 ——
+    ///      这是刻意的取舍（宁可在极端情况读到旧账，也不在正常路径上删人的文件）。
     func readHandoff(for task: ScheduledTask) -> (content: String, updatedAt: Date?)? {
-        let path = handoffPath(for: task)
+        if let current = readHandoffFile(at: handoffPath(for: task)) { return current }
+        guard task.isAssistant else { return nil }
+        return readHandoffFile(at: legacyHandoffPath(for: task))
+    }
+
+    private func readHandoffFile(at path: String) -> (content: String, updatedAt: Date?)? {
         guard let attr = try? FileManager.default.attributesOfItem(atPath: path) else { return nil }
         guard let content = try? String(contentsOfFile: path, encoding: .utf8) else { return nil }
         return (content, attr[.modificationDate] as? Date)

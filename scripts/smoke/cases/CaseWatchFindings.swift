@@ -137,13 +137,21 @@ extension SmokeMain {
               "T-WATCHFIND ⑧人拍板才写 decided_at（模型自己改状态不算决定）")
 
         // —— ⑨ 工作日志写盘（App 写，不经模型工具）——
+        // ⚠️ 必须绑一个**夹具里的**项目: 这条路径由 `handoffPath` 决定，无项目任务会落到
+        // `~/.mangox/task-memory/`（**真实 home**）—— 这个用例此前就是这么写的，实测在
+        // 2026-11-17 累计撒了 20+ 份「111 字节 / 下一步：提交修复」的孤儿文件，而它零红灯。
+        // 无项目的那条路径现在由 `CaseHandoffPath` ⑦ 只**算**不写地覆盖。
+        let logProj = UUID()
+        store.projects.append(ProjectGroup(id: logProj, title: "日志盘", path: dir, items: []))
         let logTask = ScheduledTask(id: UUID(), name: "日志盘", prompt: "x", cron: "0 9 * * *",
-                                    projectId: nil)
+                                    projectId: logProj)
         store.scheduler.scheduledTasks = [logTask]
         let wrote = store.saveHandoff(for: logTask, content: r.handoff ?? "")
         let read = store.readHandoff(for: logTask)
         check(wrote && read?.content.contains("下一步：提交修复") == true,
               "T-WATCHFIND ⑨工作日志由 App 写盘并可读回（巡检轮没有写工具，这条路是唯一落点）")
+        check(store.scheduler.handoffPath(for: logTask).hasPrefix(dir),
+              "T-WATCHFIND ⑨落盘位置在夹具目录内（这条曾经写进真实 home，零红灯）")
 
         // —— ⑩ 超长工作日志: 拒收而不是截断 ——
         // 截断会把「下一步」切掉，留下半句比没有更坏。

@@ -1916,7 +1916,8 @@ final class ChatStore: ObservableObject {
                    dreamSpool: String? = nil,   // P15.3: 仅 dream fire 非 nil
                    analysisReadOnly: Bool = false,   // P19: 仅助理巡检轮 true
                    extraSystemPrompt: String? = nil,   // P19: 巡检轮的观察 / 契约 / 交接文件
-                   executionGuard: ExecutionGuard? = nil) {   // P19 S6: 仅执行轮非 nil
+                   executionGuard: ExecutionGuard? = nil,   // P19 S6: 仅执行轮非 nil
+                   ledgerPath: String? = nil) {   // P19.2 S10: 仅巡检轮非 nil（扩展侧免检口径）
         let t = transportFor(sid)
         Log.send("turn-begin", ["sid": String(sid.uuidString.prefix(8)),
                                 "eph": ephemeral ? "1" : "0",
@@ -1958,6 +1959,10 @@ final class ChatStore: ObservableObject {
         // 只读面漏了会看得出来（"它怎么不写文件"），而守卫漏了只表现为"某些命令莫名被拒"，
         // 而人根本不会想到"上一轮执行留下的红线还在"。
         t.updateExecutionGuard(executionGuard)
+        // P19.2 S10: 账本落点 —— **同一条纪律，无条件赋值**。漏清的表现与执行守卫同款:
+        // 下一个普通回合里 `write` 仍然只把那个过期账本当免检对象，
+        // 人看到的是"新建文件忽然都要审批了"，而想不到是上一轮留下的路径。
+        t.updateLedgerFencePath(ledgerPath)
         // 无人值守 fire 关审批 (弹卡 = 任务死锁); 其余跟随全局开关。
         // P10.2a-0: approvalOverride 优先 —— 邮箱哨兵走 .autoJudge (白名单放行 + 危险命令拒且不阻塞),
         // 它是 per-turn 下发, 会被全局 askApproval 开关覆盖, 故每回合 send 前重设。

@@ -5738,6 +5738,32 @@ struct SmokeMain {
         //       载荷里带上 finding.body ⇒ ③ 红（外发脱敏唯一守得住的地方）。
         await caseWatchNotify()
 
+        // ---- T-LEDGER: P19.2 S8 工作日志五节账本（三态 / 归档不判定 / 节头严格 / 报字数） ----
+        // 反例: `stage` 删掉 `items.isEmpty` 那行 ⇒ ①a 红（空账本读成完成）;
+        //       `isPlaceholder` 去掉「无」⇒ ①a×2 + ①b + ⑥ 红（「在跟踪: 无」算成一条在跟踪，
+        //       于是三档全推不到 `.done`）;
+        //       注入改报 `utf8.count` ⇒ 注入①② 红;
+        //       `head` 放宽成前缀匹配 ⇒ ⑤a 红。
+        //       ⚠️ ⑤b **不会**因为 flatHeads 排序被删而红（实测）—— 守它的是 `head` 的
+        //       「整行等值/紧跟冒号」规则，不是那张表的顺序。别把它记到排序头上。
+        await caseAssistantLedger()
+
+        // ---- T-HANDOFF: P19.2 S9 分家（Cron 逐字节 / 助理换目录 / 回落只对助理 / 目录预建） ----
+        // 反例: `legacyHandoffPath` 的目录名也换成 `assistant/` ⇒ ①②③ 全红;
+        //       `resolvedHandoffPath` 改成「只看有没有 projectId」⇒ ③ 红;
+        //       `readHandoff` 去掉 `guard task.isAssistant` ⇒ ⑪b 红;
+        //       `ensureLogSession` 的预建去掉 `if task.isAssistant` ⇒ ⑭c 红。
+        await caseHandoffPath()
+
+        // ---- T-LEDGERFENCE: P19.2 S10 账本围栏（纯函数 / env 双闸门 / 扩展真跑 / 无条件清回） ----
+        // ⚠️ 这一步**没有任何调用点**（接审批桥是 S11）—— 判据是它唯一的存在证明。
+        // 反例: 判据换成 `raw.hasPrefix(ledger)`（前缀 + 不做标准化）⇒ ①×2 + ②`../` 一起红;
+        //       扩展 `insideLedger` 改成拿**原串**做前缀 ⇒ ④c 红;
+        //       免检条件去掉三元、一律走 `insideLedger` ⇒ ④g 红。
+        // ⚠️ 前导 `~` 那支**不是安全边界**（`非绝对即拒` 已经兜住），它只值一句更好的话 ——
+        //    所以断言打在**理由串**上; 只判「拒了」的话那支可以整段删掉而全绿。
+        await caseLedgerFence()
+
         // ---- T-CTX: 上下文压缩可见性 —— 常驻标记 (A) / 即时百分比 (B) / 压缩线 (D) ----
         // 立项依据 (2026-10-17 boss): "现在只有低栏那个状态才有压缩显示, 对话区域…没有吧" ——
         // 确认属实后钉死三条不变量:
