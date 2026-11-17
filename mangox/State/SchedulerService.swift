@@ -82,6 +82,16 @@ final class SchedulerService: ObservableObject {
     func deleteScheduled(id: UUID, deleteSessions: Bool = false) {
         guard let task = scheduledTasks.first(where: { $0.id == id }), Self.canDelete(task) else { return }
         let sessionIds = task.logSessionId.map { [$0] } ?? []
+        // P19.2 S12 / D3: 助理被删之后，它那场日志会话**会静默变成普通会话** ——
+        // 对话轮靠 `logSessionId` 反查（`assistantChatTurn`），任务一没，反查必然失配，
+        // 于是下一句话开始它就不带目标、不给写权限、也不再认得"那个再查查"指的是哪条。
+        // 这件事**只能在删除这一刻说**：之后再从会话本身看不出"我曾是谁的"，
+        // 任何补猜都是编造。所以留一行痕在会话里（只落库，用户点开就看得见）。
+        // 连带删会话时不写（那行会跟着会话一起没，没有读者）。
+        if task.isAssistant, !deleteSessions, let logId = task.logSessionId {
+            appendTimeline("── 助理「\(task.name)」已删除：这场会话从此是普通会话"
+                           + "（不再注入目标、也不再给写权限）──", to: logId)
+        }
         scheduledTasks.removeAll { $0.id == id }
         try? store?.persistence?.deleteScheduled(id: id)
         if deleteSessions {
@@ -722,7 +732,8 @@ final class SchedulerService: ObservableObject {
             }
             watchExtra = Self.watchSystemPrompt(project: proj,
                                                 handoff: readHandoff(for: task)?.content,
-                                                snapshot: snapshot)
+                                                snapshot: snapshot,
+                                                ledgerPath: handoffPath(for: task))
             // 收尾要用: 归属哪个任务、这条 finding 算哪个来源、证据允许引用哪些编号。
             // source_id **由 App 决定**（项目来源 / 唯一启用的来源）—— 不接受模型给的 id,
             // 伪造面因此从"编造来源"缩小成"编造观察编号"，后者由 allowedExternalIds 拦。
@@ -778,7 +789,14 @@ final class SchedulerService: ObservableObject {
                         // P19: 助理 = 只读分析面 + system 注入段。两个都是 per-turn，
                         // `beginTurn` 里**无条件**下发（见那里的注释: 不清就会漏进下一回合）。
                         analysisReadOnly: task.isAssistant,
-                        extraSystemPrompt: watchExtra)
+                        extraSystemPrompt: watchExtra,
+                        // P19.2 S11: 账本落点 = 巡检轮**唯一**能写的那一份。
+                        // 它同时决定三件事（都从这里出发，不各判一次）:
+                        //   ① `AnalysisFace` 给不给 `write`（`canWriteLedger`）
+                        //   ② 扩展侧 `MANGOX_LEDGER_PATH` 免检口径
+                        //   ③ 审批桥里的 `LedgerFence`
+                        // Cron 恒 nil ⇒ 三件事都退回 S10 之前的形状。
+                        ledgerPath: task.isAssistant ? handoffPath(for: task) : nil)
         // P10.3 联动: 日志会话行带上任务配置 (点开会话即恢复其执行配置)
         if let cfg { store.persistence?.saveSessionConfig(id: logId, config: cfg) }
         // P15.9: 定向 fire **不推进 `lastRunAt` / `runCount`** —— 它不是"这个定时任务的一次运行"。
@@ -798,21 +816,32 @@ final class SchedulerService: ObservableObject {
 
     // MARK: - P19 助理 · 巡检轮
 
-    /// 巡检轮的输出契约 = **出厂常量**。
+    /// 巡检轮的**回复**契约 = 出厂常量。
     ///
     /// 为什么是常量而不是 `task.prompt`: 那一段是**人写的目标**（「保证 CI 是绿的」），
-    /// 契约是**机器的接口**（四段 + 五节账本 / NO_FINDING）。混进同一个字段，人一改目标就把
-    /// 契约删了，而下游解析只会在某一天发现"结论没解析出来"，零红灯。
+    /// 契约是**机器的接口**（三段 / NO_FINDING）。混进同一个字段，人一改目标就把契约删了，
+    /// 而下游解析只会在某一天发现"结论没解析出来"，零红灯。
     ///
-    /// P19.2 S8: 工作日志从「四行自由文本」改成**固定五节**。第五节「已完成（归档）」是
-    /// 给人回看的记忆（不参与任何判定），也是账本唯一的**出口** —— 没有它，做完的事会
-    /// 永久占着验收项，而 16k 满了以后就是「每轮账本都不更新」（与 D1 同一种静默断）。
+    /// ⚠️ P19.2 S11: **「工作日志」段从这里搬走了** —— 账本不再由 App 从回复里解析后写盘，
+    /// 改由模型自己 `write` 那一份文件（落点由账本围栏限定）。所以这里的回复只剩三段，
+    /// 而五节的**文件格式**搬到 `watchLedgerContract`（见下）。两份东西分开的理由:
+    /// 回复是"这一轮判断了什么"（给人看、给解析器落 finding），账本是"目标到哪了"（给
+    /// 下一轮的自己看）。混在一个段落里时，任何一处格式改动都会同时影响两件事。
     static let watchOutputContract = """
-    【输出契约】只输出下面四段，不要寒暄、不要复述我给你的数据。
+    【输出契约】只输出下面三段，不要寒暄、不要复述我给你的数据。
     结论：一句话 —— 目标达成了 / 没达成 / 没达成但有变化。
     证据：支撑结论的具体观察，带上来源与编号（形如 [3]）；文件位置写 file.swift:42。
     方案：没达成时给编号步骤，每步写清「动哪个目标 · 怎么做 · 能不能撤销」；不需要动手就写「无」。
-    工作日志：**整篇重写**（会覆盖旧文件，不是 diff）。下面五节一节都不许省，节名照抄：
+    这一轮没有任何变化、也不值得找人 ⇒ 只输出一行：NO_FINDING
+    """
+
+    /// 账本的**文件格式**（五节）。P19.2 S8 定形状、S11 起由模型自己写盘。
+    ///
+    /// ⚠️ 这些节名与标记是**和解析器约定好的字面量**（`AssistantLedger.parse`）——
+    /// 不得本地化、不得改写、不得增删别名（`## 已完成（归档）` 是"做完就撤下验收项"的唯一出口，
+    /// 没有它，16k 满了以后就是「每轮账本都不更新」）。
+    static let watchLedgerContract = """
+    【账本格式】下面五节一节都不许省，节名照抄：
     ## 目标
     一句话复述你在看守的目标。目标被人改过，就写「原目标 → 现目标」。
     ## 完成状态
@@ -825,7 +854,6 @@ final class SchedulerService: ObservableObject {
     ## 已完成（归档）
     已经收尾的事，一行一件，写成「日期 + 一句话」（如 2026-11-17 修好 CI：根因是时区写死）。
     这件事做完就把它的验收项从「完成状态」撤下来、在这里记一条；没有就写「无」。
-    这一轮没有任何变化、也不值得找人 ⇒ 只输出一行：NO_FINDING
     """
 
     /// 采集器表。**`project` 不在里面**（它由分析段的只读工具现场看，不是采集器）；
@@ -851,15 +879,21 @@ final class SchedulerService: ObservableObject {
     }
 
     /// 巡检轮的 system 注入段（走 `--append-system-prompt`）。**纯函数**: 参数即全部输入。
+    /// `ledgerPath` **不是可选的** —— 巡检轮按构造永远有一份账本（`handoffPath` 总能算出
+    /// 一条路径）。留一个 nil 分支只会让人以为"某一轮可以没有账本"，而那种轮次的
+    /// 真实含义是"它不该有笔"，那件事由 `AnalysisFace` 决定，不是由这里的一句话决定。
     static func watchSystemPrompt(project: WatchProjectContext?,
                                   handoff: String?,
-                                  snapshot: WatchSnapshot) -> String {
+                                  snapshot: WatchSnapshot,
+                                  ledgerPath: String) -> String {
         var parts: [String] = []
         parts.append("""
         【助理任务 · 巡检轮】
         你是在替一个人看守一个**长程目标**（可能持续几周甚至几个月），不是执行一条命令。
-        这一轮你**没有写权限**: 只能读文件、看注入的观察数据、必要时联网查资料。
-        不要声称你改过任何东西 —— 真想动手，就把方案写出来等人批准。
+        这一轮你**只有一支笔**: 只许写下面这一份文件（账本），别的一律不许动 ——
+        \(ledgerPath)
+        写别处会被拒（应用层按路径逐字符比对，不做前缀放行）。想改项目里的东西，
+        就把方案写出来等人批准，不要伸手。
         """)
         if let p = project, !p.path.isEmpty {
             parts.append("【项目】\n\(p.name) · \(p.path)\n这一轮的工作目录就是它，read / grep / find / ls 可以直接看。")
@@ -881,37 +915,87 @@ final class SchedulerService: ObservableObject {
                 : "【账本容量】当前 \(h.count) 字 / 上限 \(cap)。超过 \(compact) 字时才需要压缩归档，这一轮不用管。")
         }
         parts.append("【这一轮的观察】\n" + snapshot.rendered())
-        parts.append(Self.watchOutputContract)
-        // 交接文件对巡检轮**永久只读**（它没有写工具）⇒ 必须说清，否则模型会以为自己写了而其实没写
+        // 账本: 落点规矩 + 文件格式。**必须说清"你自己写"** —— 从前这里写的是
+        // 「你写不了工作日志」，那在 S11 之后就是假的: 它现在真的有一支笔。
         parts.append("""
-        【关于工作日志】
-        这一轮你写不了工作日志（没有写权限）。判断结果写在输出里就行，
-        需要留下来的事实由执行轮记录。
+        【写账本】
+        落点只有一个，就是上面那个绝对路径。三条硬规矩：
+        1. **写绝对路径**，不要用 `~` 也不要写相对路径 —— 判不清会落到哪，一律拒。
+        2. **整篇覆盖**: 把上一轮的账本（已注入在上面）连同这一轮的更新合成一篇，一次 write 写完。
+        3. 不要为了"留证据"往别处写文件；不要声称你改了别的东西。
         """)
+        parts.append(Self.watchLedgerContract)
+        // 回复契约放最后（它是"说完就结束"的那一段，后面不该再有话）
+        parts.append(Self.watchOutputContract)
         return parts.joined(separator: "\n\n")
     }
 
     // MARK: - P19 助理 · 对话轮
 
-    /// 这场会话是不是某个**助理任务的对话轮**？是则给出这一轮要注入的 system 段。
+    /// 一场会话如果是某个**助理任务的对话轮**，这一轮要带的三样东西。
+    ///
+    /// 为什么不是只返回注入段: P19.2 S12 起对话轮有**一支笔**（只许写账本），
+    /// 而「笔往哪写」与「注入里承诺的那个路径」**必须是同一个字符串** —— 分成两次反查，
+    /// 迟早出现"prompt 里说的是 A、围栏认的是 B"，而那种偏差只表现为"它说它写了，文件没变"。
+    struct AssistantChatTurn: Equatable {
+        let taskId: UUID
+        let prompt: String
+        let ledgerPath: String
+    }
+
+    /// 收尾要用的上下文（只在 `beginDialogueTurn` 里落一张，`finish*` 里认领）。
+    private struct DialogueTurnContext: Equatable {
+        let taskId: UUID
+        let ledgerPath: String
+    }
+
+    private var dialogueTurns: [UUID: DialogueTurnContext] = [:]
+
+    /// 这场会话是不是某个**助理任务的对话轮**？（纯读，不落任何状态 —— 冒烟直接断言这个。）
     ///
     /// 为什么靠 `logSessionId` 反查、而不是给会话打一个"我是助理会话"的标记:
     /// 标记要落库、要在两处维护一致性；而"这个会话是某个助理的日志"本来就能从任务表推出来
-    /// —— `logSessionId` 是唯一真源，反查不会漂。
+    /// —— `logSessionId` 是唯一真源，反查不会漂。**代价**（D3）: 助理被删之后反查必然失配，
+    /// 于是这场会话**静默**变成普通会话。S12 的处理是**在删除那一刻留一行痕**（见 `deleteScheduled`），
+    /// 而不是在这里猜 —— 从这里看不出"这曾是谁的会话"，任何补救都只能靠猜。
     ///
     /// ⚠️ 与巡检轮**不是同一段**：巡检轮是"到点了，看看"，对话轮是"人在跟你说话"。
-    /// 两段都写「只读」，但对话轮要额外带上**还开着的结论**（否则人问「那个再查查」，
-    /// 它不知道"那个"是哪条）。
-    func assistantChatContext(for sid: UUID) -> String? {
+    /// 两段都带账本，但对话轮的账本是**人的目标**要落地的地方，巡检轮的账本是**一轮判断的结果**。
+    func assistantChatTurn(for sid: UUID) -> AssistantChatTurn? {
         guard let task = scheduledTasks.first(where: { $0.isAssistant && $0.logSessionId == sid })
         else { return nil }
-        var parts = ["""
+        let ledger = handoffPath(for: task)
+        return AssistantChatTurn(taskId: task.id,
+                                 prompt: dialoguePrompt(for: task, ledgerPath: ledger),
+                                 ledgerPath: ledger)
+    }
+
+    /// 开一个对话轮：**反查 + 记一笔**，同一个入口。`ChatStore.beginTurn` 只调这个。
+    ///
+    /// 为什么记一笔是必须的: 收尾时（`streamEnded` / 手动停）只有 `sid`，而"这一轮到底是不是
+    /// 对话轮"在那里已经查不出来了 —— 普通会话与助理会话在那一刻长得一模一样。
+    func beginDialogueTurn(sid: UUID) -> AssistantChatTurn? {
+        guard let chat = assistantChatTurn(for: sid) else { return nil }
+        dialogueTurns[sid] = DialogueTurnContext(taskId: chat.taskId, ledgerPath: chat.ledgerPath)
+        return chat
+    }
+
+    private func dialoguePrompt(for task: ScheduledTask, ledgerPath: String) -> String {
+        var parts: [String] = []
+        parts.append("""
         【助理任务 · 对话轮】
         这一轮是人在跟你说话，不是定时巡检。
         你的长期目标：\(task.prompt)
-        这一轮你**没有写权限**：要动手就把步骤说清楚，让人在收件箱里批准 ——
-        不要声称你已经改了什么，也不要自己编造执行结果。
-        """]
+        """)
+        parts.append("""
+        【写账本】
+        这一轮你**只有一支笔**：只许写下面这一份文件，写别处一律会被拦下。
+        \(ledgerPath)
+        三条硬规矩：
+        1. **写绝对路径**，不要用 `~` 也不要写相对路径 —— 判不清会落到哪，一律拒。
+        2. **整篇覆盖**: 把当前账本（在下面）连同这一轮的更新合成一篇，一次 write 写完。
+        3. 写别处会**弹卡让人按**（不会静默放行）—— 别把"人可能点同意"当成许可去试探。
+        """)
         let open = (store?.findings ?? []).filter { $0.taskId == task.id && $0.status.isInboxVisible }
         if !open.isEmpty {
             let lines = open.map { f -> String in
@@ -923,8 +1007,82 @@ final class SchedulerService: ObservableObject {
             parts.append("【还开着的结论】\n" + lines.joined(separator: "\n"))
         }
         let h = (readHandoff(for: task)?.content ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        if !h.isEmpty { parts.append("【最近的工作日志】\n\(h)") }
+        let cap = WatchFindingService.handoffMaxChars
+        if h.isEmpty {
+            parts.append("【当前账本】\n还没有账本。这一轮该写就把五节写全，不该动就别写。")
+        } else {
+            let compact = WatchFindingService.handoffCompactThreshold
+            parts.append("【当前账本】（\(h.count) 字 / 上限 \(cap)）\n\(h)"
+                         + (h.count > compact ? "\n⚠️ 已超 \(compact) 字：这一轮顺手把「已完成」压到最近 "
+                            + "\(WatchFindingService.archivedKeep) 条。" : ""))
+        }
+        parts.append(Self.watchLedgerContract)
+        // 回复契约放最后（它是"说完就结束"的那一段，后面不该再有话）
+        parts.append(Self.dialogueOutputContract)
         return parts.joined(separator: "\n\n")
+    }
+
+    /// 对话轮的**回复**契约（与巡检轮不同: 对话是聊天, 不能整篇都是段头）。
+    ///
+    /// 两段: ① 正文（给人看的，随便写）② **可选**的提议块（要人拍板时才有）。
+    /// 「可选」这一条是判据而不是客套: 每轮都写一块 = 每轮都往收件箱塞一条待办，
+    /// 而收件箱是"要人决策的事"，不是聊天记录。
+    static let dialogueOutputContract = """
+    【输出契约】两段，顺序固定。
+    ① 正文：直接回答人问的，想怎么写怎么写 —— **不要**写「结论：」这类段头。
+    ② 提议（**可选**）：只有需要人拍板时才写，放在最后，块首单独一行 `【提议】`，块内三行：
+    结论：一句话说清这是什么问题 / 要做什么。
+    证据：文件:行号或读数。**不要写 `[1]` 这种观察编号** —— 对话轮没有采集轮次，那种编号一律按编造拒收。
+    方案：编号步骤，每步写清「动哪个目标 · 怎么做 · 能不能撤销」；不需要动手就写「无」。
+    不需要人拍板就**整块不写**。
+    """
+
+    /// 对话轮的收口：回复末尾有【提议】块就落一条 finding，没有就什么都不做。
+    ///
+    /// 三条刻意的选择：
+    ///   · **不发通知、不触达**：人此刻就在看着这条回复。巡检轮那套"叫人"的机制搬过来，
+    ///     等于对着正在跟你说话的人再喊一声。
+    ///   · **不写时间线**：这条会话就是人正在看的那一屏，往库里追加一行而不进 UI，
+    ///     表现是"重开才看得见"。结论本身在回复正文里，本来就看得见。
+    ///   · **沿用 `WatchFindingService.plan`**（指纹去重 / 冷却 / 伪造引用拒收 / 落库形状）:
+    ///     两条路各写一套判据，迟早有一套先漂。冷却在这里传 `nil` —— 人就在场，
+    ///     冷却的语义（"别一天叫两次"）在这里不成立。
+    func finishDialogueTurnIfNeeded(sid: UUID) {
+        guard let ctx = dialogueTurns.removeValue(forKey: sid) else { return }
+        guard let store, let p = store.persistence,
+              let task = scheduledTasks.first(where: { $0.id == ctx.taskId }) else { return }
+        let text = lastAssistantText(in: store, sid: sid)
+        guard let block = WatchFindingService.proposalBlock(in: text) else { return }
+        let report = WatchFindingService.parse(block)
+        let existing = (try? p.loadFindings()) ?? []
+        // `allowedExternalIds = []`: 对话轮不采集观察 ⇒ 任何 `[n]` 引用都只能是编造的。
+        // `sourceId = 任务的项目`: 与巡检轮「项目隐式来源」同一条口径（`task.projectId` 就是来源 id）。
+        let plan = WatchFindingService.plan(report: report, task: task, sessionId: sid,
+                                           sourceId: task.projectId,
+                                           allowedExternalIds: [],
+                                           existing: existing, lastNotifyAt: nil, now: Date())
+        guard let f = plan.finding else {
+            // 解析失败 / 没有来源 / 编造引用 —— 三种都**不落库**，但留诊断（不然"它说提了，收件箱没有"）。
+            if !plan.summary.isEmpty {
+                Log.event("dialogue-proposal-skip", "why", String(plan.summary.prefix(120)))
+            }
+            return
+        }
+        try? p.upsertFinding(f)
+        store.reloadFindings()
+        Log.event("dialogue-proposal", ["task": String(task.id.uuidString.prefix(8)),
+                                        "new": plan.isNew ? "1" : "0"])
+    }
+
+    /// 这一轮模型的**回复正文**（最后一条 assistant 文本）。
+    ///
+    /// 提出来是因为巡检轮与对话轮各要一份，而"哪一条才算回复"本来就有两个易错点:
+    /// 只看 `role == .assistant`（工具卡不是文本）、只取**最后一条**（前面可能是上一轮的）。
+    private func lastAssistantText(in store: ChatStore, sid: UUID) -> String {
+        store.replayMessages(for: sid).compactMap { msg -> String? in
+            guard msg.role == .assistant, case .text(let s) = msg.content, !s.isEmpty else { return nil }
+            return s
+        }.last ?? ""
     }
 
     // MARK: - P19 助理 · 执行轮（人对结论点了「采纳并执行」）
@@ -1064,10 +1222,7 @@ final class SchedulerService: ObservableObject {
     func finishExecFireIfNeeded(sid: UUID) {
         guard let ctx = execFires.removeValue(forKey: sid) else { return }
         guard let store, let p = store.persistence else { return }
-        let text = store.replayMessages(for: sid).compactMap { msg -> String? in
-            guard msg.role == .assistant, case .text(let s) = msg.content, !s.isEmpty else { return nil }
-            return s
-        }.last ?? ""
+        let text = lastAssistantText(in: store, sid: sid)
         let result = WatchExecService.parseResult(text)
         let actions = store.transportFor(sid).execActions
         let blocked = actions.values
@@ -1611,10 +1766,7 @@ final class SchedulerService: ObservableObject {
         guard let ctx = watchFires.removeValue(forKey: sid) else { return }
         guard let store, let p = store.persistence,
               let task = scheduledTasks.first(where: { $0.id == ctx.taskId }) else { return }
-        let text = store.replayMessages(for: sid).compactMap { msg -> String? in
-            guard msg.role == .assistant, case .text(let s) = msg.content, !s.isEmpty else { return nil }
-            return s
-        }.last ?? ""
+        let text = lastAssistantText(in: store, sid: sid)
         let report = WatchFindingService.parse(text)
         let existing = (try? p.loadFindings()) ?? []
         // "上次提给人是多久前" 用这个任务最近一条结论的时间近似。**够用且无状态** ——
@@ -1626,12 +1778,21 @@ final class SchedulerService: ObservableObject {
                                            existing: existing, lastNotifyAt: lastNotifyAt,
                                            now: Date())
         if let f = plan.finding { try? p.upsertFinding(f) }
-        // 工作日志由 **App** 写盘（2026-11-16 boss 拍板）: 巡检轮没有写工具，让它自己写是
-        // 做不到的事；而"模型答已更新、磁盘没变"是零红灯的谎。所以内容进输出契约，落盘归我们。
-        // 上限判定在上面的纯函数里（超长 ⇒ handoff 已是 nil，且 summary 里说了原因）
-        if let h = plan.handoff, !saveHandoff(for: task, content: h) {
-            appendTimeline("── 工作日志写盘失败（磁盘？），结论照常落库 ──", to: sid)
-        }
+        // ── 账本写盘: **App 不写了**（P19.2 S11 翻面；2026-11-16 的「由 App 写」已退役）──
+        //
+        // 历史: S11 之前巡检轮没有写工具，让它自己写是做不到的事，所以内容进输出契约、
+        // 落盘归 App。S11 给了它一支笔（`patrolToolNames` + 账本围栏），于是这里只把
+        // 回复里的「工作日志」段**有意忽略**。
+        //
+        // 为什么必须退役而不是留着: 两个写者 = 两份真源。模型这一轮刚写完的账本，
+        // 会被 App 用"回复里那一段"覆盖一遍 —— 而那段是模型**凭记忆复述**的，不是它写进
+        // 文件的那一份。表现是"账本里的归档总比它说过的少一条"，且没有任何红灯。
+        //
+        // 为什么**不删**解析器与 `handoffMaxChars`: 老回复里这一段还会出现（模型习惯难改），
+        // 忽略它就够了；而 `plan` 的"超长拒收"仍是纯函数级判据（`CaseWatchFindings` ⑩），
+        // 留着当"这段文本再大也不会撑爆什么"的兜底。
+        // ⚠️ 若哪天要恢复 App 写盘，**先删掉模型那一侧的写**，别两处同时写。
+        _ = plan.handoff
         if !plan.summary.isEmpty { appendTimeline(plan.summary, to: sid) }
         if plan.shouldNotify, let f = plan.finding {
             // 系统通知仍受**全局开关**管（`notifyWatchFinding` 里判）; 任务级 `notify.system`

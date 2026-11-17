@@ -133,6 +133,18 @@ enum AgentMode: String, Codable, CaseIterable, Identifiable {
     /// 判据在 `CaseWatchFace`(逐字对拍本数组, 改成 `+grep` 或加 `bash` 必须红)。
     static let readOnlyToolNames: [String] = ["read", "grep", "find", "ls", "bocha_web_search"]
 
+    /// P19.2 S11: **巡检轮的写面** = 只读五件 + `write`。**只多一个，一个都不多。**
+    ///
+    /// 为什么必须另立一份而不是改 `readOnlyToolNames`: 那个名字在 `CaseWatchFace` 里被逐字对拍，
+    /// 而且它还守着"分析段没有笔"这条不变量（S1 的判据）。两档合并之后，谁改一处都会顺手
+    /// 动到另一处 —— 而"分析段忽然能写了"这件事，只有跑起来才看得出来。
+    ///
+    /// 为什么**不含 `edit`**（2026-11-17 定）: 账本是**整篇重写**的语义（契约就是"整篇覆盖，
+    /// 不是 diff"）。`edit` 要在已有内容上做定位替换，多给它一条"只改某几行"的路，而那条路
+    /// 没有任何判据能证明"只改对了那几行"。`write` 一份就够，省下的面就是省下的风险。
+    /// 为什么不含 `bash`: 它要写哪，围栏看不见 —— 一个 `echo >` 就绕过所有路径判据。
+    static let patrolToolNames: [String] = readOnlyToolNames + ["write"]
+
     /// spawn 参数矩阵 (纯函数, 冒烟直接断言): 档位 → --tools / --extension 组装。
     /// 系统扩展不在此列 (PiRpcTransport 固定首挂内置 llama.cpp + 托管审批桥)。
     static func spawnArguments(for mode: AgentMode, businessExtensions: [String]) -> [String] {

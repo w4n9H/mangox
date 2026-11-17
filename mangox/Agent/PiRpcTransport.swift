@@ -185,8 +185,14 @@ final class PiRpcTransport: AgentTransport {
     /// 漏了它，同一个日志会话里「巡检轮（有账本）→ 手动问一句（没有账本）」会**沿用**
     /// 上一轮的 env —— 表现是"我说的那句话它还是只肯写那个文件"，而进程根本没重启过。
     private var ledgerFencePath: String?
+    /// 围栏外怎么办（P19.2 S12）。**不进重启判据** —— 它不落进 env、不落进 spawn 参数，
+    /// 只在审批桥被问到时读一次。进了重启判据只会让"巡检轮→对话轮"多一次无谓重启。
+    private var ledgerFenceMode: LedgerFence.Mode = .deny
     private var spawnedLedgerFence: String?
-    func updateLedgerFencePath(_ path: String?) { ledgerFencePath = path }
+    func updateLedgerFence(_ path: String?, mode: LedgerFence.Mode) {
+        ledgerFencePath = path
+        ledgerFenceMode = mode
+    }
 
     /// 模型正文里**最新**声明到的步骤号（「第 N 步」）。审批桥拿它比已授权步骤。
     private var execDeclaredStep: Int?    /// 流式文本的尾部缓冲。只需尾部：判据要的是"最新的那个声明"。
@@ -338,18 +344,50 @@ final class PiRpcTransport: AgentTransport {
     }
 
     /// 组装分析段的面。`webSearchPath` = 启用列表里那个联网搜索扩展的路径（没有就传 nil）。
+    /// `canWriteLedger` = 这一轮**有账本落点**（P19.2 S11）⇒ 工具面换成 `patrolToolNames`
+    /// （只读五件 + `write`），否则仍是纯只读五件。
+    ///
+    /// ⚠️ 判据是"这一轮有没有账本"，**不是**"是不是助理任务" —— 同一个助理任务在**对话轮**
+    /// 里也可能没有账本（S12 才会给它），那时它就该是纯只读。拿任务类型当判据会让
+    /// "哪一轮能写"和"哪一轮有账本"变成两份真源。
     /// ⚠️ 判据是"启用列表里有没有它", 不是"配没配 key" —— 与 `spawnProcess` 里那条
     /// `desiredExtensions.contains(...)` 同源, 不要另立一份判据。
     ///
     /// ⚠️ 后三个 `false` 是**这个类型存在的理由**（不是默认值）: 它们被 `spawnProcess` 直接消费
     /// （`analysisFace?.startsComputer ?? true` 这类写法），所以谁把这里改成 `true`,
     /// 进程面立刻多出 helper / 知识段 / 手册 —— 而 `CaseWatchFace` 会在同一次门禁里红。
-    static func analysisFace(webSearchPath: String?) -> AnalysisFace {
-        AnalysisFace(toolNames: AgentMode.readOnlyToolNames,
+    static func analysisFace(webSearchPath: String?, canWriteLedger: Bool = false) -> AnalysisFace {
+        AnalysisFace(toolNames: canWriteLedger ? AgentMode.patrolToolNames
+                                               : AgentMode.readOnlyToolNames,
                      mountedExtensionPaths: webSearchPath.map { [$0] } ?? [],
                      startsComputer: false,
                      injectsKnowledge: false,
                      injectsSOP: false)
+    }
+
+    /// 审批桥里「账本围栏」那一支的**决策口**。`nil` = 放行给后面的档位判断。
+    ///
+    /// 提出来是为了让冒烟能直访（同 `ensureLogSession` 那条 `// internal — 冒烟直访`）:
+    /// 桥本身是 private、还要挂在真进程的 RPC 上，判据只能靠"真跑一轮让它去写 /tmp"。
+    /// 它做两件事，顺序固定：
+    ///   ① **没有账本落点 ⇒ nil**（这一轮不是账本轮，别管）；
+    ///   ② **有人在场（`mode == .ask`）⇒ nil**（P19.2 S12）—— 不判，交给下面的弹卡。
+    ///      这一支不是"放宽"：`ask` 模式下围栏**仍然**让扩展把写赶进桥（免检只对账本开），
+    ///      只是到了桥里改由人回答。判据在 `LedgerFence.Mode` 的注释里。
+    ///
+    /// ⚠️ 它**只在桥的"档位判断之前"被调用**才算数。位置纪律见 `handleExtensionUIRequest`
+    /// 里那三条理由 —— 挪到 `judgesByRisk` 之后，这个函数照样返回正确答案，而无人值守那一档
+    /// 根本走不到它（`CasePatrolWrite` 有一条源序断言专门钉这件事）。
+    static func ledgerDenyReason(tool: String, target: String,
+                                 ledgerPath: String?, cwd: String,
+                                 mode: LedgerFence.Mode = .deny) -> String? {
+        guard let ledgerPath else { return nil }
+        guard mode == .deny else { return nil }
+        if case .deny(let reason) = LedgerFence.check(tool: tool, target: target,
+                                                      ledgerPath: ledgerPath, cwd: cwd) {
+            return reason
+        }
+        return nil
     }
 
     /// 这一轮要不要起 computer helper。**唯一决策点**（生产与判据共用）：
@@ -2122,7 +2160,10 @@ final class PiRpcTransport: AgentTransport {
         let analysisFace: AnalysisFace? = analysisReadOnly
             ? Self.analysisFace(webSearchPath: desiredExtensions.first {
                   $0.hasSuffix(Self.webSearchExtensionFileName)
-              })
+              },
+              // P19.2 S11: **有账本落点才给那一支笔**。`ledgerFencePath` 由 `beginTurn` 无条件
+              // 下发（巡检轮非 nil，其余 nil）⇒ 这一行同时是"哪一轮能写"的唯一判据。
+              canWriteLedger: ledgerFencePath != nil)
             : nil
         // P13: 自建 codemode 扩展**只在这一档落地** —— 三老档连"挂载"这一步都没有,
         // 所以它们的扩展段逐字节不变 (是"不存在", 不是"挂了但没生效")。
@@ -2946,6 +2987,48 @@ final class PiRpcTransport: AgentTransport {
                                           declaredStep: execDeclaredStep) {
                 recordExecDenial(denial, step: execDeclaredStep ?? 0, tool: tool, target: target,
                                  callId: callId, card: toolCards[callId])
+                respondExtensionUI(reqId, value: "Deny", callId: callId)
+                return
+            }
+        }
+        // ── P19.2 S11: 账本围栏（巡检轮）────────────────────────────────────────
+        //
+        // 这一段是「给巡检轮加 write」这件事的**全部保险**。三条位置理由与上面 S6 那段**逐条相同**，
+        // 一条都不能挪：
+        //   ① **在 `approvalMode.judgesByRisk` 之前** —— 巡检轮恒 `unattended` ⇒ `askApproval = false`
+        //      ⇒ 下面那个 `guard` 会直接回 Allow。围栏放在它之后 = 一条能往任意路径写、
+        //      零审批、无人在场的后台回路，比不给 write 更糟。
+        //   ② **在 `toolCards` 守卫之前** —— 卡片缺失时下面直接 `Allow`（那张卡是 UI 产物，
+        //      而"没有卡"恰恰是无人值守时最常见的情况）。围栏放在守卫之后 ⇒ 一条没有卡的
+        //      write 就绕过去了。
+        //   ③ **在 `BashRiskEvaluator.judge` 之前** —— 白名单会静默放行，而白名单只管 bash；
+        //      围栏要管的是所有写文件的工具。
+        // ⚠️ 与 `executionGuard` **互斥**（执行轮 / 巡检轮不会同时成立），所以两段并列而不是嵌套:
+        //    嵌套会让人以为"巡检轮也可能带着执行守卫"，而那种组合从来不存在。
+        // ⚠️ P19.2 S12: **对话轮也走这一段**（它同样有一支笔），但 `ledgerFenceMode == .ask`
+        //    ⇒ 决策口直接返回 nil，落到下面的弹卡。所以"围栏在这一段"与"围栏在拒"是两件事:
+        //    位置管的是**扩展拦不住的那条路**（桥被问到时先看围栏），`mode` 管的才是后果。
+        if let ledger = ledgerFencePath {
+            let tool = parts[3]
+            // 目标与 S6 那边同构: bash 的命令按 `|` 拼回（围栏会拒它，但理由要说对）;
+            // write/edit 的路径是 `parts[4]`，**不含** `@@MANGOX_DIFF@@` 分段。
+            let target: String = tool == "bash"
+                ? parts.dropFirst(4).joined(separator: "|")
+                : (parts.count > 4 ? parts[4] : "")
+            if let reason = Self.ledgerDenyReason(tool: tool, target: target,
+                                                  ledgerPath: ledger,
+                                                  cwd: desiredCwd ?? NSHomeDirectory(),
+                                                  mode: ledgerFenceMode) {
+                // 落痕: 卡在就标红（人翻日志会话时能看见"它想写哪、为什么被拒"）;
+                // 卡不在就只留诊断日志 —— 无人值守时这张卡常常压根没人看，但它必须在。
+                if var denied = toolCards[callId] {
+                    denied = denied.withPhase(.error(String(reason.prefix(160))))
+                    toolCards[callId] = denied
+                    emit(.toolUpdated(denied))
+                }
+                Log.process("ledger-deny", ["tool": tool,
+                                            "path": String(target.prefix(120)),
+                                            "why": String(reason.prefix(120))])
                 respondExtensionUI(reqId, value: "Deny", callId: callId)
                 return
             }

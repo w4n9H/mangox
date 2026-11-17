@@ -111,6 +111,32 @@ enum WatchFindingService {
         return report
     }
 
+    /// 从**对话轮**的回复里取出末尾的「提议」块。`nil` = 这一轮没提（绝大多数轮次如此）。
+    ///
+    /// 对话轮的回复不能整篇塞进 `parse`: 那是聊天，正文本来就会写出「结论是……」这类句子，
+    /// 按段头切会把闲聊切成一条 finding。所以契约里给提议单独立一个块头，
+    /// **只有那个块**进解析器（P19.2 S12）。
+    ///
+    /// 认两种块头: `【提议】` 与 `提议：` / `提议:` —— 模型对全角括号的服从度没到能只用一种。
+    /// 块的作用域是**从块头到文本末尾**（契约要求提议放最后）；块头那一行若自带内容
+    /// （`【提议】结论：…`），会被当正文行保留，不丢。
+    static func proposalBlock(in text: String) -> String? {
+        let normalized = text.replacingOccurrences(of: "\r\n", with: "\n")
+        let lines = normalized.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        let heads = ["【提议】", "提议：", "提议:"]
+        guard let start = lines.firstIndex(where: { line in
+            let t = line.trimmingCharacters(in: .whitespaces)
+            return heads.contains { t.hasPrefix($0) }
+        }) else { return nil }
+        var body = Array(lines[start...])
+        let first = body[0].trimmingCharacters(in: .whitespaces)
+        if let head = heads.first(where: { first.hasPrefix($0) }) {
+            body[0] = String(first.dropFirst(head.count)).trimmingCharacters(in: .whitespaces)
+        }
+        let block = body.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+        return block.isEmpty ? nil : block
+    }
+
     /// 方案段 → 编号步骤。认 `1. / 1) / 1、/ - / *` 五种写法；编号取**原文里的数字**，
     /// 没写数字就按顺序补 —— 编号是执行段的授权凭据（"第 3 步"指的就是它），不能靠猜。
     static func parsePlan(_ lines: [String]) -> [WatchPlanStep] {

@@ -1917,7 +1917,7 @@ final class ChatStore: ObservableObject {
                    analysisReadOnly: Bool = false,   // P19: 仅助理巡检轮 true
                    extraSystemPrompt: String? = nil,   // P19: 巡检轮的观察 / 契约 / 交接文件
                    executionGuard: ExecutionGuard? = nil,   // P19 S6: 仅执行轮非 nil
-                   ledgerPath: String? = nil) {   // P19.2 S10: 仅巡检轮非 nil（扩展侧免检口径）
+                   ledgerPath: String? = nil) {   // P19.2 S10/S12: 巡检轮非 nil；对话轮在下面自己算出来
         let t = transportFor(sid)
         Log.send("turn-begin", ["sid": String(sid.uuidString.prefix(8)),
                                 "eph": ephemeral ? "1" : "0",
@@ -1948,10 +1948,17 @@ final class ChatStore: ObservableObject {
         // "这个会话是某助理的 logSessionId"。巡检轮不走这里（它显式传了注入段）。
         var turnReadOnly = analysisReadOnly
         var turnExtra = extraSystemPrompt
+        // P19.2 S12: 对话轮也有**一支笔**（只许写账本），但围栏外**弹卡**而不拒 —— 人在场。
+        // 落点不在这里算: `beginDialogueTurn` 一处给出（lookup + 记一笔），否则「哪一轮能写」
+        // 与「哪一轮有账本」又会变成两份真源。
+        var turnLedger = ledgerPath
+        var turnLedgerMode: LedgerFence.Mode = .deny
         if !ephemeral, turnExtra == nil,
-           let ctx = scheduler.assistantChatContext(for: sid) {
+           let chat = scheduler.beginDialogueTurn(sid: sid) {
             turnReadOnly = true
-            turnExtra = ctx
+            turnExtra = chat.prompt
+            turnLedger = chat.ledgerPath
+            turnLedgerMode = .ask
         }
         t.updateAnalysisReadOnly(turnReadOnly)
         t.updateExtraSystemPrompt(turnExtra)
@@ -1959,10 +1966,11 @@ final class ChatStore: ObservableObject {
         // 只读面漏了会看得出来（"它怎么不写文件"），而守卫漏了只表现为"某些命令莫名被拒"，
         // 而人根本不会想到"上一轮执行留下的红线还在"。
         t.updateExecutionGuard(executionGuard)
-        // P19.2 S10: 账本落点 —— **同一条纪律，无条件赋值**。漏清的表现与执行守卫同款:
+        // P19.2 S10/S12: 账本落点与围栏模式 —— **同一条纪律，无条件赋值**。漏清的表现与执行守卫同款:
         // 下一个普通回合里 `write` 仍然只把那个过期账本当免检对象，
         // 人看到的是"新建文件忽然都要审批了"，而想不到是上一轮留下的路径。
-        t.updateLedgerFencePath(ledgerPath)
+        // 模式与落点**一次赋值**: 分开两个 setter 会留下"新落点配旧模式"的窗口。
+        t.updateLedgerFence(turnLedger, mode: turnLedgerMode)
         // 无人值守 fire 关审批 (弹卡 = 任务死锁); 其余跟随全局开关。
         // P10.2a-0: approvalOverride 优先 —— 邮箱哨兵走 .autoJudge (白名单放行 + 危险命令拒且不阻塞),
         // 它是 per-turn 下发, 会被全局 askApproval 开关覆盖, 故每回合 send 前重设。
@@ -2069,6 +2077,9 @@ final class ChatStore: ObservableObject {
         // P19 S6: 执行轮的收口。两处 `finish*` 的顺序无关（它们按各自的上下文 map 认领，
         // 一场会话只会在其中一张表里）—— 但**必须都调**: 执行轮与巡检轮是同一场日志会话。
         scheduler.finishExecFireIfNeeded(sid: sid)
+        // P19.2 S12: 对话轮的收口 —— 只认领"这一轮真的是对话轮"的那张表。
+        // 手动停也要收: 人已经说出口的「提议」不该因为按了停止而丢掉。
+        scheduler.finishDialogueTurnIfNeeded(sid: sid)
         // 这一轮到此为止 ⇒ 把这场会话在**今天**的流水刷新一次。
         // 放在 dream 收口之后（那之后 spool 已变成提案，流水里那一行才说得出"几轮"）。
         // 节流在 `TimelineJournal` 里（3 秒），所以同一轮漏出的多个落定事件不会重写三遍。
@@ -2752,6 +2763,7 @@ extension ChatStore: AgentTransportDelegate {
             scheduler.finishDreamFireIfNeeded(sid: sid)   // P15.3: 正常落定的那条路
             scheduler.finishWatchFireIfNeeded(sid: sid)   // P19: 助理结论的落定点
             scheduler.finishExecFireIfNeeded(sid: sid)   // P19 S6: 执行结果的回写点
+            scheduler.finishDialogueTurnIfNeeded(sid: sid)   // P19.2 S12: 对话轮「提议」的落定点
             // 同上（`stopTurn` 那处也有一份）—— 两个落定点记的是同一件事。
             // 分两处而不是抽一个"回合结束"统一入口: 现在没有这样一个入口, 而造一个
             // 要动整条事件分发的形状（那远超"记一行流水"该动的范围）。

@@ -115,9 +115,10 @@ extension SmokeMain {
               "T-WATCHSRC ⑥每条带 externalId 与来源名（finding 要能回指证据）")
 
         // —— ⑦ 巡检轮的提示词: 目标在 user 消息, 观察 / 契约在 system 段 ——
+        let ledger = "/tmp/gestalt/.mangox/assistant/led.md"
         let sys = SchedulerService.watchSystemPrompt(
             project: WatchProjectContext(name: "看守盘", path: "/tmp/gestalt"),
-            handoff: "上一轮判断: CI 已恢复", snapshot: snap)
+            handoff: "上一轮判断: CI 已恢复", snapshot: snap, ledgerPath: ledger)
         let user = SchedulerService.watchUserPrompt(goal: "保证 CI 是绿的")
         check(user.contains("保证 CI 是绿的"),
               "T-WATCHSRC ⑦目标进 user 消息（人写的那一句要留在可见的会话里）")
@@ -126,8 +127,17 @@ extension SmokeMain {
               "T-WATCHSRC ⑦注入段四件齐: 观察 / 契约 / 工作日志 / 只读声明")
         check(!sys.contains("保证 CI 是绿的"),
               "T-WATCHSRC ⑦目标**不进** system 段（同一句话两处下发 ⇒ 改了一处另一处还是旧的）")
-        check(sys.contains("没有写权限"),
-              "T-WATCHSRC ⑦必须说清巡检轮不能写（否则模型会声称「我已更新工作日志」而其实没有）")
+        // P19.2 S11 起这条**翻面了**: 巡检轮真的有一支笔，只许写账本那一份。
+        // 从前的断言是「必须说清不能写」；现在是「必须说清**只能写哪一份**、以及写别处会被拒」。
+        check(sys.contains(ledger) && sys.contains("只有一支笔"),
+              "T-WATCHSRC ⑦必须说清巡检轮**只能写账本那一份**（并给出绝对路径）")
+        check(sys.contains("写别处会被拒"),
+              "T-WATCHSRC ⑦必须说清写别处会被拒（否则它会以为「围栏只是个建议」）")
+        check(sys.contains("【账本格式】") && sys.contains("## 已完成（归档）"),
+              "T-WATCHSRC ⑦账本五节的文件格式在注入里（App 不再代写，格式得它自己知道）")
+        check(!sys.contains("工作日志："),
+              "T-WATCHSRC ⑦回复契约里**没有**「工作日志」段了（否则模型还会把它塞进回复，"
+              + "而 App 已经不写 —— 那一整段话就成了白花的 token）")
 
         // —— ⑧ 端到端: 助理 fire ⇒ 只读面 + 注入段真的下发到 transport ——
         let mock = MockTransport()

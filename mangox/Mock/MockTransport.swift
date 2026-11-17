@@ -96,11 +96,14 @@ final class MockTransport: AgentTransport {
     /// P19 S6 smoke 注入: 本回合的过闸落痕 (mock 无审批桥, 默认空)
     var execActions: [Int: ExecAction] = [:]
 
-    /// P19.2 S10: 账本落点（冒烟断言"巡检回合挂上了、普通回合清掉了"）。
+    /// P19.2 S10/S12: 账本落点与围栏模式（冒烟断言"巡检/对话回合挂上了、普通回合清掉了"）。
+    /// 模式单独记一份: 「给了笔」与「围栏在拒」是两件事 —— 对话轮两者都有，但模式是 `ask`。
     private(set) var lastLedgerFencePath: String?
+    private(set) var lastLedgerFenceMode: LedgerFence.Mode = .deny
     private(set) var ledgerFencePathUpdates: Int = 0
-    func updateLedgerFencePath(_ path: String?) {
+    func updateLedgerFence(_ path: String?, mode: LedgerFence.Mode) {
         lastLedgerFencePath = path
+        lastLedgerFenceMode = mode
         ledgerFencePathUpdates += 1
     }
 

@@ -46,13 +46,20 @@ extension SmokeMain {
                                    fingerprint: "fp-chat", status: .open, createdAt: Date())
         try? store.persistence?.upsertFinding(finding)
         store.reloadFindings()
-        let ctx = store.scheduler.assistantChatContext(for: logId) ?? ""
+        let ctx = store.scheduler.assistantChatTurn(for: logId)?.prompt ?? ""
         check(ctx.contains("对话轮") && ctx.contains("保证 CI 是绿的"),
               "T-WATCHCHAT ②对话段带**目标**（不然它不知道自己在替谁看什么）")
         check(ctx.contains("CI 连续三次失败") && ctx.contains("第 2 版"),
               "T-WATCHCHAT ②还开着的结论也带（人问「那个再查查」, 它得知道「那个」是哪条）")
         check(!ctx.contains("巡检轮"),
               "T-WATCHCHAT ②两段不能混: 对话轮里出现巡检段 = 它以为自己在做定时巡检")
+        // P19.2 S12: 对话轮从「没有写权限」改成「只有一支笔」，这两格是那个翻面的证据
+        check(ctx.contains("只有一支笔") && ctx.contains("/.mangox/assistant/"),
+              "T-WATCHCHAT ②注入里写清**只许写账本**并给出那个绝对路径（笔往哪写只有一处说法）")
+        check(!ctx.contains("没有写权限"),
+              "T-WATCHCHAT ②且不再说「没有写权限」—— 那句话在 S12 之后是假的")
+        check(ctx.contains("【提议】") && ctx.contains("整块不写"),
+              "T-WATCHCHAT ②两段契约在: 正文 + **可选**的提议块（每轮都写 = 每轮往收件箱塞待办）")
 
         // —— ③ 人在会话里说话 ⇒ 真加载历史 + 只读面 ——
         store.beginTurn(sid: logId, prompt: "那个再查查", ephemeral: false,
@@ -60,13 +67,18 @@ extension SmokeMain {
         check(mock.boundSessionId == logId,
               "T-WATCHCHAT ③对话轮 `ephemeral: false` ⇒ 绑 session（指代成立的**结构**前提）")
         check(mock.lastAnalysisReadOnly,
-              "T-WATCHCHAT ③对话轮仍然只读（要动手得走收件箱批准, 不能在聊天里自己动手）")
+              "T-WATCHCHAT ③对话轮仍然走分析面（不起 computer / 不注知识 / 不注 SOP）")
+        // P19.2 S12: 分析面**不等于没有笔** —— 有账本落点就有一支笔，但模式是 ask。
+        check(mock.lastLedgerFencePath == store.scheduler.handoffPath(for: store.scheduledTasks[ai]),
+              "T-WATCHCHAT ③对话轮把账本落点下发给 transport（实际 \(mock.lastLedgerFencePath ?? "nil")）")
+        check(mock.lastLedgerFenceMode == .ask,
+              "T-WATCHCHAT ③围栏模式是 ask: 围栏外**弹卡**而不是拒 —— 有人在场, 拒会把「帮我改这行」判死")
         check(mock.lastExtraSystemPrompt?.contains("对话轮") == true,
               "T-WATCHCHAT ③且注入段换成对话那一套（不是继承巡检段）")
 
         // —— ④ 不是助理会话 ⇒ 一个字段都不动 ——
         let plainSid = UUID()
-        check(store.scheduler.assistantChatContext(for: plainSid) == nil,
+        check(store.scheduler.assistantChatTurn(for: plainSid) == nil,
               "T-WATCHCHAT ④普通会话不注入（否则每场闲聊都会被塞进一个「你的长期目标」）")
         store.beginTurn(sid: plainSid, prompt: "你好", ephemeral: false, cwd: nil, unattended: false)
         check(!mock.lastAnalysisReadOnly && mock.lastExtraSystemPrompt == nil,
@@ -78,7 +90,7 @@ extension SmokeMain {
         cronTask.kind = .execute
         cronTask.logSessionId = UUID()
         store.scheduler.scheduledTasks.append(cronTask)
-        check(store.scheduler.assistantChatContext(for: cronTask.logSessionId!) == nil,
+        check(store.scheduler.assistantChatTurn(for: cronTask.logSessionId!) == nil,
               "T-WATCHCHAT ④Cron 日志会话不算对话轮（kind 判据, 不是「有没有 logSessionId」）")
 
         store.scheduler.stopScheduler()
