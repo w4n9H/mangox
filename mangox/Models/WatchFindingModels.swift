@@ -65,6 +65,12 @@ struct AgentFinding: Identifiable, Equatable {
     /// sha256(task_id + source_id + 规范化结论)。
     var fingerprint: String
     var status: FindingStatus = .open
+    /// 已经催过几次（P19.2 S14）。**上限按这一行算** —— 同一件事最多催 K 次，
+    /// 而"同一件事"就是 `fingerprint` 定的那一行（改方案不换行，所以不会靠改版刷上限）。
+    var nagCount: Int = 0
+    /// 上次催的时刻。`nil` = 从没催过。冷却判据只认它，不认 `createdAt`：
+    /// 一条提出三天的结论与一条刚提出的，冷却起点不同。
+    var lastNaggedAt: Date?
     /// 执行前快照目录；`resolved` 也要留着，人才敢点下一次授权。
     var undoPath: String?
     var tokens: Int?

@@ -75,6 +75,11 @@ final class SchedulerService: ObservableObject {
 
     /// 删除任务; deleteSessions = 连带删除日志会话 (开放问题 12: 默认保留, 用户可选删)。
     ///
+    /// ⚠️ **助理是例外: 恒删会话、恒删账本**（P19.2 S15 前置）。会话的语义（注入目标、
+    /// 写权限、账本落点）全部由任务定义 —— 任务没了，它只是一条没有身份的普通会话，
+    /// 而"助理已死、会话还活着"正是 D3 那个静默退化的中间态。成对删除把**状态本身**消掉：
+    /// 留痕是标记异常，成对删除是让异常不存在。⇒ `deleteSessions` 对助理**失去意义**。
+    ///
     /// ⚠️ **dream 不可删**（2026-10-12 boss: "要固定死, 不能删除, 只能修改以及开关"）。守卫放在
     /// **这里**而不是视图: 视图那边"不渲染删除按钮"只是**可见性**, 这里才是**能力**。只要还剩一条
     /// 能删它的路径, 用户就永远丢了这条任务 —— 它是 App 自己种下的（`seedDreamTaskIfNeeded` 会让
@@ -82,20 +87,42 @@ final class SchedulerService: ObservableObject {
     func deleteScheduled(id: UUID, deleteSessions: Bool = false) {
         guard let task = scheduledTasks.first(where: { $0.id == id }), Self.canDelete(task) else { return }
         let sessionIds = task.logSessionId.map { [$0] } ?? []
-        // P19.2 S12 / D3: 助理被删之后，它那场日志会话**会静默变成普通会话** ——
-        // 对话轮靠 `logSessionId` 反查（`assistantChatTurn`），任务一没，反查必然失配，
-        // 于是下一句话开始它就不带目标、不给写权限、也不再认得"那个再查查"指的是哪条。
-        // 这件事**只能在删除这一刻说**：之后再从会话本身看不出"我曾是谁的"，
-        // 任何补猜都是编造。所以留一行痕在会话里（只落库，用户点开就看得见）。
-        // 连带删会话时不写（那行会跟着会话一起没，没有读者）。
-        if task.isAssistant, !deleteSessions, let logId = task.logSessionId {
-            appendTimeline("── 助理「\(task.name)」已删除：这场会话从此是普通会话"
-                           + "（不再注入目标、也不再给写权限）──", to: logId)
-        }
+        let paired = task.isAssistant
+        // S12 在这里留过一行痕（"这场会话从此是普通会话"）。成对删除之后那条路径**永不执行**
+        // ⇒ 整条删掉，不留 `if`：一个永远不会进来的分支只会给下次改回"可选"留下后门。
         scheduledTasks.removeAll { $0.id == id }
         try? store?.persistence?.deleteScheduled(id: id)
-        if deleteSessions {
+        if paired || deleteSessions {
             for sid in sessionIds { store?.deleteConversation(sid) }
+        }
+        if paired { removeAssistantLedger(for: task) }
+    }
+
+    /// 助理的账本**两份都可能存在**：新位置（`.mangox/assistant`）与 S9 之前的旧位置
+    /// （`.mangox/tasks`）—— `readHandoff` 在新位置缺失时会回落读旧的。
+    /// 所以删除也必须两边都看：只删新位置的话，回落会把旧账本"复活"，
+    /// 而用户刚被告知"账本已删除"（**回收判据必须与谁真持有该文件同源**）。
+    private func removeAssistantLedger(for task: ScheduledTask) {
+        guard task.isAssistant else { return }
+        for p in [handoffPath(for: task), legacyHandoffPath(for: task)] {
+            try? FileManager.default.removeItem(atPath: p)
+        }
+    }
+
+    /// 会话被删之后，把指向它的 `logSessionId` **清成 nil**（P19.2 S15 前置）。
+    ///
+    /// 为什么不是"什么都不做": 留一个指向已删会话的 id 就是**悬空指针** —— 而悬空指针
+    /// 与"这个助理本来就没有会话"在 `assistantChatTurn` 里长得一模一样（反查失败），
+    /// 于是"它为什么不认得我"这件事在界面上没有落点。清成 nil 之后，下一轮 fire 会
+    /// `ensureLogSession` 建一场新的：助理失忆一次（**账本是文件，还在**），但状态是显式的。
+    ///
+    /// ⚠️ **单向**: 这里只清列、不删任务。反向（删任务 ⇒ 删会话）在 `deleteScheduled` 里，
+    /// 若两边互相调用就成环 —— 成对删除必须有一侧"不回头"。
+    func detachAssistantSession(_ sid: UUID) {
+        for i in scheduledTasks.indices
+        where scheduledTasks[i].isAssistant && scheduledTasks[i].logSessionId == sid {
+            scheduledTasks[i].logSessionId = nil
+            try? store?.persistence?.upsertScheduled(scheduledTasks[i])
         }
     }
 
@@ -617,6 +644,46 @@ final class SchedulerService: ObservableObject {
         // `lastRunAt` 已经前移, 不会被自己算成"漏跑"。首次启动时 `lastSchedulerMinute` 是 0
         // ⇒ gap 巨大 ⇒ 顺带把"启动时算一次"也覆盖了。
         if gap > 1 { refreshMissedFires(now: now) }
+        // P19.2 S14: 催。**不另起定时器** —— 这一跳本来就每分钟一次，条件是"有没有该催的"
+        // （`WatchNagService.due` 是纯函数）。放在 fire 之后: 同一分钟里先跑该跑的巡检，
+        // 再催历史遗留 —— 而"催"不 spawn、不烧 token，与预算闸和并发闸都不相交。
+        nagWaitingFindings(now: now)
+    }
+
+    /// 扫一遍还开着的结论，把"该催的"催一次（判据全在 `WatchNagService.due`，这里只执行）。
+    ///
+    /// 三条执行纪律：
+    ///   · **先落库、再触达**。顺序反过来（先发后落）的话，"发成功但落库失败"会让下一跳
+    ///     再发一遍 —— 宁可少催一次，也不要同一件事连发两封（人的反应是把通道整个关掉）。
+    ///   · **不写 store.messages**（同 `appendTimeline` 的理由）: 这一跳可能正好有回合在跑。
+    ///   · `nagCount` 涨在**这一行 finding** 上（`fingerprint` 定的那一行），所以改方案
+    ///     不会刷新上限 —— 那是同一件事的第二次提法，不是新的一件事。
+    func nagWaitingFindings(now: Date = Date()) {
+        guard let store, let p = store.persistence, !store.findings.isEmpty else { return }
+        var byId: [UUID: ScheduledTask] = [:]
+        for t in scheduledTasks { byId[t.id] = t }
+        let fmt = DateFormatter()
+        fmt.dateFormat = "HH:mm"
+        var changed = false
+        for f in store.findings {
+            guard let task = byId[f.taskId],
+                  WatchNagService.due(f, task: task, now: now) else { continue }
+            var nf = f
+            nf.nagCount += 1
+            nf.lastNaggedAt = now
+            try? p.upsertFinding(nf)
+            changed = true
+            let logId = task.logSessionId ?? f.sessionId
+            appendTimeline("── \(fmt.string(from: now)) 已催第 \(nf.nagCount) 次（\(nf.title)）──",
+                           to: logId)
+            // 与首次通知**同一条路**: 系统通知受全局开关管，任务级 `notify.system` 是它上面一层；
+            // 邮件 / 飞书复用同一个载荷（不另造一种"催促"通知形状 —— 那会多一份会漂的规则）。
+            if task.notify.system { store.notifyWatchFinding(nf, taskName: task.name) }
+            deliverExternalSinks(nf, task: task, logId: logId)
+            Log.event("nag", ["finding": String(nf.id.uuidString.prefix(8)),
+                              "n": "\(nf.nagCount)"])
+        }
+        if changed { store.reloadFindings() }
     }
 
     /// 到点投递 (P3.9 单日志会话): 任务的全部运行追加进同一个日志会话 (首次 fire 建立)。
@@ -717,7 +784,13 @@ final class SchedulerService: ObservableObject {
                 }
             }
             // 项目就是一条隐式来源（它不需要采集器）⇒ 有项目就不算"没有可用来源"
-            if proj == nil && snapshot.allFailed {
+            //
+            // ⚠️ P19.2 S13: **"一条来源都没配"不再算错误**。原判据是 `proj == nil && allFailed`，
+            // 而 `allFailed` 把"没有任何可采集的来源"也当失败 ⇒ 无项目助理**永远不 spawn**
+            // （当时靠保存校验替它挡着，而那道校验 S13 放宽了）。
+            // 现在的判据: **配了来源、且一条都没采到** —— 那才是配置坏了，值得留痕不跑。
+            // 没配来源 ⇒ 照常跑: 它还能读账本、看有没有该继续追的事（Q2：不跳过，只改注入）。
+            if proj == nil && !task.sources.isEmpty && snapshot.allFailed {
                 // ⚠️ 建会话之后 return 的路径**必须**先把会话绑给任务 —— 不绑的话每个 cron 点
                 // 都会新建一场会话再往里写同一行，那条记录被撒进一堆互不相干的会话里，
                 // 而任务自己永远指向 nil（下次照样新建）。与下面模型 pin 那条同一个坑。
@@ -731,6 +804,7 @@ final class SchedulerService: ObservableObject {
                 appendTimeline("── \(fmt.string(from: now)) 部分来源没采到（\(snapshot.errorCount) 条）, 本轮按其余来源判断 ──", to: logId)
             }
             watchExtra = Self.watchSystemPrompt(project: proj,
+                                                goal: task.prompt,
                                                 handoff: readHandoff(for: task)?.content,
                                                 snapshot: snapshot,
                                                 ledgerPath: handoffPath(for: task))
@@ -835,6 +909,16 @@ final class SchedulerService: ObservableObject {
     这一轮没有任何变化、也不值得找人 ⇒ 只输出一行：NO_FINDING
     """
 
+    /// 无目标助理的**这一轮正文**（P19.2 S13）。出厂常量，不从 `prompt` 派生。
+    ///
+    /// 为什么必须替它写一句: 空 `prompt` 直接发下去 = 一条**空 user 消息**，
+    /// 而模型那一侧收到的是「看守一个长程目标」的 system 段 + 什么都没有 —— 它会开始编目标。
+    /// 这句话同时给了它退路（NO_FINDING 不算失败）。
+    static let assistantNoGoalPrompt = """
+    这一轮没有给定目标。
+    先读账本与注入的观察：有值得接手的就接着做，没有就只回一行 NO_FINDING。
+    """
+
     /// 账本的**文件格式**（五节）。P19.2 S8 定形状、S11 起由模型自己写盘。
     ///
     /// ⚠️ 这些节名与标记是**和解析器约定好的字面量**（`AssistantLedger.parse`）——
@@ -870,8 +954,12 @@ final class SchedulerService: ObservableObject {
     /// 这条分工不是美学: 目标是**人写的那一句**，它该留在人看得见的消息流里；
     /// 观察是每轮现采的，滚进日志会话只会让三个月后的那场会话全是重复数据。
     static func watchUserPrompt(goal: String) -> String {
-        """
-        本轮巡检目标：\(goal)
+        // P19.2 S13: 没有目标的助理是合法配置（"待命"档）。空目标若照旧拼进去，
+        // 模型收到的是「本轮巡检目标：」后面什么都没有 —— 一句悬空的话比没有更糟。
+        let g = goal.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !g.isEmpty else { return Self.assistantNoGoalPrompt }
+        return """
+        本轮巡检目标：\(g)
 
         这一轮采集到的观察数据与输出规则已随本轮注入（不在下面的会话历史里）。
         按它判断这个目标达成没有；没达成且值得找人，就把方案写清楚。
@@ -882,7 +970,10 @@ final class SchedulerService: ObservableObject {
     /// `ledgerPath` **不是可选的** —— 巡检轮按构造永远有一份账本（`handoffPath` 总能算出
     /// 一条路径）。留一个 nil 分支只会让人以为"某一轮可以没有账本"，而那种轮次的
     /// 真实含义是"它不该有笔"，那件事由 `AnalysisFace` 决定，不是由这里的一句话决定。
+    /// `goal` 是任务的目标（= `task.prompt`）。**只在它为空时说话**：非空时目标已经是
+    /// 这一轮的 user 消息，搬进 system 段只是把同一句话写两遍，还会让人分不清哪个算数。
     static func watchSystemPrompt(project: WatchProjectContext?,
+                                  goal: String,
                                   handoff: String?,
                                   snapshot: WatchSnapshot,
                                   ledgerPath: String) -> String {
@@ -900,9 +991,19 @@ final class SchedulerService: ObservableObject {
         } else if let p = project {
             parts.append("【项目】\n\(p.name)\n（这个项目没有绑定目录，只能用注入的观察数据判断。）")
         }
+        // P19.2 S13: **没有目标的助理**是合法配置（"待命"档），不是错误。
+        // 它这一轮能做的是: 读账本、看观察、判断有没有值得接手的活。两处都空就回 NO_FINDING ——
+        // 这句话必须在这里说清，否则模型收到的是一个"看守目标"的指令 + 一段空正文。
+        if goal.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            parts.append("""
+            【目标】
+            这一轮**没有给定目标** —— 你唯一的目标来源是账本和下面的观察。
+            两处都没有值得追的事，就只回一行 NO_FINDING（不要自己编一个目标出来）。
+            """)
+        }
         let h = (handoff ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         parts.append(h.isEmpty
-            ? "【上一轮留下的工作日志】\n（空 —— 这是第一轮，或者此前还没记过什么）"
+            ? "【上一轮留下的工作日志】\n（**账本还不存在或还是空的**。如果你判断没有可追踪的目标，只回一行 NO_FINDING；有的话就把五节写全。）"
             : "【上一轮留下的工作日志】\n\(h)")
         // P19.2 S8: 报字数。**模型看不见自己那份账本多大** —— 只在契约里写「允许压缩」是一句
         // 空话，它永远不知道自己已经 13k 了。这一行是「压缩归档」那条路唯一的触发条件。
@@ -1076,13 +1177,10 @@ final class SchedulerService: ObservableObject {
 
     /// 这一轮模型的**回复正文**（最后一条 assistant 文本）。
     ///
-    /// 提出来是因为巡检轮与对话轮各要一份，而"哪一条才算回复"本来就有两个易错点:
-    /// 只看 `role == .assistant`（工具卡不是文本）、只取**最后一条**（前面可能是上一轮的）。
+    /// 判据只有一处（`ChatStore.lastAssistantText`）—— 巡检轮、对话轮、飞书回传三个消费者
+    /// 各抄一遍的话，"哪一条才算回复"就会有三份口径，而它们的错法完全一样（把工具卡当正文）。
     private func lastAssistantText(in store: ChatStore, sid: UUID) -> String {
-        store.replayMessages(for: sid).compactMap { msg -> String? in
-            guard msg.role == .assistant, case .text(let s) = msg.content, !s.isEmpty else { return nil }
-            return s
-        }.last ?? ""
+        store.lastAssistantText(sid: sid)
     }
 
     // MARK: - P19 助理 · 执行轮（人对结论点了「采纳并执行」）
@@ -1419,7 +1517,11 @@ final class SchedulerService: ObservableObject {
     /// 不绑的后果不是红灯, 而是**会话增殖**: 每个 cron 点新建一场、往里写一行、然后丢弃,
     /// 任务自己 `logSessionId` 永远是 nil ⇒ 用户点「任务日志」什么也看不到, 而磁盘上堆着
     /// 一堆只有一行的孤儿会话。（2026-10-21 模型 pin 那条路径踩过一次, 这里补成公共入口。）
-    private func bindLogSession(taskId: UUID, logId: UUID) {
+    ///
+    /// P19.2 S15: 第二个调用者是飞书入口（`RemoteChannelService.deliver`）—— 它同样
+    /// "刚建好会话就要立刻开一轮", 且 `beginDialogueTurn` 靠 `logSessionId` 反查,
+    /// 晚一步绑定, 那一轮就会被当成普通会话跑（没目标、没账本、没只读面）。
+    func bindLogSession(taskId: UUID, logId: UUID) {
         guard let store, let i = scheduledTasks.firstIndex(where: { $0.id == taskId }),
               scheduledTasks[i].logSessionId != logId else { return }
         scheduledTasks[i].logSessionId = logId

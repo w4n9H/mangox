@@ -68,7 +68,14 @@ struct SidebarView: View {
             }
             Button("取消", role: .cancel) { confirmDeleteTarget = nil }
         } message: {
-            Text("AI 记忆文件 = 该会话的对话上下文 (<uuid>.jsonl); 误删不可恢复。")
+            // P19.2 S15 前置: 删的若是助理的工作会话，后果与删普通会话不同 ——
+            // 前者会让助理**忘掉与你的对话**（账本是文件，还在）。两句不同的话必须分开说，
+            // 共用一句"误删不可恢复"会让人以为连助理一起没了。
+            if let name = confirmDeleteTarget.flatMap({ store.assistantName(forSession: $0.id) }) {
+                Text("这是助理「\(name)」的工作会话：删掉它，助理会忘记与你的对话（账本还在，下一轮巡检照常）；助理本身不受影响。")
+            } else {
+                Text("AI 记忆文件 = 该会话的对话上下文 (<uuid>.jsonl); 误删不可恢复。")
+            }
         }
         .sheet(item: $dreamTarget) { target in
             DreamConfirmSheet(preview: target) { store.startTargetedDream(from: target.id) }

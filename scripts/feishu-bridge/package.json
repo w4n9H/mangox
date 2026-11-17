@@ -1,0 +1,16 @@
+{
+  "name": "mangox-feishu-bridge",
+  "private": true,
+  "version": "1.0.0",
+  "description": "MangoX 飞书长连接桥（只在开发机打包用；产物单文件进 App，用户机器零安装）",
+  "type": "module",
+  "scripts": {
+    "build": "./build.sh"
+  },
+  "dependencies": {
+    "@larksuiteoapi/node-sdk": "1.76.0"
+  },
+  "devDependencies": {
+    "esbuild": "0.25.10"
+  }
+}

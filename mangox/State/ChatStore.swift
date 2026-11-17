@@ -411,6 +411,9 @@ final class ChatStore: ObservableObject {
 
     // P9.1b: 定时任务域抽离至 SchedulerService, 同名 facade 转发 (冒烟/视图零改动)
     let scheduler = SchedulerService()
+    /// P19.2 S15: 飞书对话通道。**入口**（人在飞书里说话）而非触达 ——
+    /// 它收到的东西最终投进某场会话，与 S7 那个只发不收的 sink 是两件事。
+    let remote = RemoteChannelService()
     /// P19 助理结论（收件箱数据源）。收件箱**默认只显 `open`**，其余折叠 —— 判据在 `FindingStatus`。
     /// 它留在 ChatStore 而不是 SchedulerService: 观察者是视图, 而视图看的是 ChatStore。
     @Published var findings: [AgentFinding] = []
@@ -782,6 +785,7 @@ final class ChatStore: ObservableObject {
         model.attach(self)
         capture.attach(self)
         backup.attach(self)
+        remote.attach(self)
         schedulerCancellable = scheduler.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }
         knowledgeCancellable = knowledge.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }
         modelCancellable = model.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }
@@ -805,6 +809,9 @@ final class ChatStore: ObservableObject {
         refreshPIConfig()
         probe.refreshCapabilities()   // P3.5: 模型/effort 上报 (pi 拉起 + get_state/models)
         scheduler.startScheduler()   // P3.6: 每秒 tick, 分钟对齐检查到期任务
+        // P19.2 S15: 飞书通道。**排在调度器之后** —— 它收到的一句话要投进某个助理的会话，
+        // 而那场会话由 `scheduler.ensureLogSession` 建出来（调度器没就位就没有会话可投）。
+        remote.autostart()
 
         // WAL 落盘 + 杀在途 pi: 强杀/exit 不跑 deinit, 数据滞留 -wal 会在下次清库时全丢;
         // 在途回合的 pi 若不终止会变孤儿进程继续烧 LLM token
@@ -816,6 +823,7 @@ final class ChatStore: ObservableObject {
                 self?.capabilityProbe?.shutdown()
                 self?.transports.values.forEach { $0.shutdown() }
                 self?.scheduler.stopScheduler()   // P17: 停 tick + 交还防 App Nap 的断言
+                self?.remote.stop()               // P19.2 S15: 关 stdin ⇒ 桥自己退（不留孤儿 node）
             }
         }
     }
@@ -976,7 +984,18 @@ final class ChatStore: ObservableObject {
     /// 删除会话；删的是当前会话则顺延选中第一个, 全空则回到空态。
     /// deleteTranscript = 连带删除 pi 持久 transcript (<uuid>.jsonl)。
     /// 默认保留: 文件是 agent 的对话记忆, 误删不可恢复 (UI 二次确认里让用户选)。
+    /// 这场会话属于哪个助理（P19.2 S15 前置）。`nil` = 普通会话，或 Cron 的日志会话。
+    ///
+    /// 删除确认要靠它换文案：删助理的会话与删普通会话**后果不同**（前者会让助理忘掉
+    /// 与你的对话），而"后果不同的两个动作共用一句危险提示"正是让人点错的原因。
+    func assistantName(forSession sid: UUID) -> String? {
+        scheduler.scheduledTasks.first { $0.isAssistant && $0.logSessionId == sid }?.name
+    }
+
     func deleteConversation(_ id: UUID, deleteTranscript: Bool = false) {
+        // P19.2 S15 前置: 这场会话若属于某个助理 ⇒ 把那一列清成 nil（不留悬空指针）。
+        // 方向是**单向的**: 这里只清列、不删任务 —— 删任务那一侧才删会话，两边都回头就成环。
+        scheduler.detachAssistantSession(id)
         evictTransport(id)   // P4.0.2: 逐出池实例 (终止在途 pi + 清回合状态), 无论是否当前选中
         let fp = diskFootprint(of: id)                  // ① 先探 (必须在删行前)
         try? persistence?.deleteSession(id: id)         // ② 删行 (连带清 events)
@@ -1865,6 +1884,58 @@ final class ChatStore: ObservableObject {
                   cwd: activeProjectPath, unattended: false, images: outgoing)
     }
 
+    // MARK: - P19.2 S15 外部通道入口
+
+    /// 从**外部通道**（飞书）把一个回合投进**指定会话**并开跑。
+    ///
+    /// 与 `sendDraft` 的差别只有"投给谁"：这里不吃 `selectedConversationId`（人在飞书那头，
+    /// 屏幕上选中的可能是别的会话），也不碰草稿。三条守门与 UI 那条路**同款**
+    /// （引擎缺失 / 该会话在途 / 并发上限）—— 它们是"这一轮能不能开始"的同一组条件，
+    /// 抄一遍就会在两处各漂一点。
+    ///
+    /// ⚠️ **只有当前选中的会话才写 `messages`**。后台会话的正文靠 `liveTurns` 镜像，
+    /// 切回来时随迁移并入 —— 直接往 `messages` 里塞会让那句话说进另一个会话里。
+    /// 这条路与巡检轮"只落库、不动 UI"（`appendTimeline`）是同一条纪律的另一半：
+    /// 后台会话的用户消息**必须落库**（不然重放看不到这个人说过什么）。
+    @discardableResult
+    func sendExternal(sid: UUID, text: String) -> Bool {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return false }
+        guard !engineMissing else {
+            remote.reportDeliveryFailure(sid: sid, L("引擎没起来（找不到 pi CLI），这句没跑。"))
+            return false
+        }
+        // ⚠️ 这个 `false` 必须传出去: 调用方（飞书通道）在投递前刚把 `sid -> chat_id` 记下来，
+        // 这里若悄悄不退，那条记录会挂在别人的回合上 —— 等那个回合落定，它会把**别人**的回复
+        // 发到飞书去。竞态窗口很小（检查与开跑之间），但它是"说错话"而不是"不说话"。
+        guard !runningTurns.contains(sid) else { return false }
+        guard !atTurnLimit else {
+            remote.reportDeliveryFailure(
+                sid: sid,
+                String(format: L("同时在跑的回合已达上限（%lld），这句没跑。"), maxConcurrentTurns))
+            return false
+        }
+        let msg = ChatMessage(role: .user, content: .text(trimmed))
+        persistMessage(msg, sid: sid)
+        if selectedConversationId == sid { messages.append(msg) }
+        // cwd 取这场会话所属项目的路径（助理通常是项目型；无项目 = 平铺会话，用 home 之外的
+        // 默认值交给 `beginTurn` 里的 `cwd` 参数 —— 与 fire 那条路一致）。
+        let cwd = projects.first { $0.items.contains { $0.id == sid } }?.path
+        beginTurn(sid: sid, prompt: trimmed, ephemeral: false, cwd: cwd, unattended: false)
+        return true
+    }
+
+    /// 这场会话**最后一条 assistant 文本**。`nil` 空串 = 这一轮什么也没说。
+    ///
+    /// ⚠️ 判据两处易错，抄在这里一次说清: 只看 `role == .assistant`（工具卡不是文本）、
+    /// 只取**最后一条**（前面可能是上一轮的）。`SchedulerService` 的巡检收口也用它。
+    func lastAssistantText(sid: UUID) -> String {
+        replayMessages(for: sid).compactMap { msg -> String? in
+            guard msg.role == .assistant, case .text(let s) = msg.content, !s.isEmpty else { return nil }
+            return s
+        }.last ?? ""
+    }
+
     // MARK: - P7-M6b 图片附件暂存 (三入口: 附件按钮/⌘V/拖拽)
 
     func addPendingImage(_ data: Data, suggestedExtension ext: String) {
@@ -2080,6 +2151,9 @@ final class ChatStore: ObservableObject {
         // P19.2 S12: 对话轮的收口 —— 只认领"这一轮真的是对话轮"的那张表。
         // 手动停也要收: 人已经说出口的「提议」不该因为按了停止而丢掉。
         scheduler.finishDialogueTurnIfNeeded(sid: sid)
+        // P19.2 S15: 被手动停掉的飞书回合也要回一句 —— 那边的人看到的是"消息发出去了、
+        // 然后什么都没有"，而这里的"停"是他自己按的，飞书那头看不见这个动作。
+        remote.finishRemoteTurn(sid: sid)
         // 这一轮到此为止 ⇒ 把这场会话在**今天**的流水刷新一次。
         // 放在 dream 收口之后（那之后 spool 已变成提案，流水里那一行才说得出"几轮"）。
         // 节流在 `TimelineJournal` 里（3 秒），所以同一轮漏出的多个落定事件不会重写三遍。
@@ -2764,6 +2838,9 @@ extension ChatStore: AgentTransportDelegate {
             scheduler.finishWatchFireIfNeeded(sid: sid)   // P19: 助理结论的落定点
             scheduler.finishExecFireIfNeeded(sid: sid)   // P19 S6: 执行结果的回写点
             scheduler.finishDialogueTurnIfNeeded(sid: sid)   // P19.2 S12: 对话轮「提议」的落定点
+            // P19.2 S15: 从飞书发起的那一轮，把回复发回去。**认领即删**（`remoteTurns`），
+            // 所以同一场会话里你在电脑上说的下一轮不会回响到飞书。
+            remote.finishRemoteTurn(sid: sid)
             // 同上（`stopTurn` 那处也有一份）—— 两个落定点记的是同一件事。
             // 分两处而不是抽一个"回合结束"统一入口: 现在没有这样一个入口, 而造一个
             // 要动整条事件分发的形状（那远超"记一行流水"该动的范围）。

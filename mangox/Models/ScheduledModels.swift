@@ -55,6 +55,13 @@ struct ScheduledTask: Identifiable {
     /// 超预算的处理是**跳过并落痕**，不是"换个便宜模型接着跑"：降级会让人永远不知道
     /// 自己设的上限已经生效，而结论质量变了却没人知道为什么（§04）。
     var dailyTokenBudget: Int = 0
+    /// P19.2 S15: 绑定的飞书**单聊** `chat_id`（`oc_...`）。
+    ///
+    /// 一个单聊只能绑一个助理 —— 这句话的实现在 `ScheduledView.saveEditing`（绑定时把别的
+    /// 任务上同一个 id 清掉），不在类型里: 唯一性跨行，写成类型不变量需要一次全表扫描的构造器，
+    /// 而任务是从库里逐行解出来的。解出来那一刻"已经不是唯一"也是个合法状态（手改过库），
+    /// 所以读取侧必须有确定行为 —— `RemoteChannelService` 取**第一条**匹配。
+    var remoteChatId: String? = nil
 
     /// 旧条件值守任务 = 只读归档: 不 fire、不保存、列表置灰。
     var isLegacyWaiting: Bool { kind == .legacyWaiting }

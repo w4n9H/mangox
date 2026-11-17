@@ -13,6 +13,19 @@ key 的形态必须与 `gen_strings.source_keys()` 的产出**逐字节一致**:
 """
 
 VALUES = {
+    '台账': 'Ledger',
+    '在跟踪': 'Tracking',
+    '在追': 'In progress',
+    '完成状态': 'Completion',
+    '已完成 · 可收尾': 'Done · ready to wrap up',
+    '已完成（归档）': 'Done (archived)',
+    '当前无目标': 'No goal yet',
+    '待你决定': 'Waiting on you',
+    '账本 %lld 字': 'Ledger · %lld chars',
+    '还没有列出验收项': 'No acceptance items yet',
+    '还没有归档': 'Nothing archived yet',
+    '还没有账本': 'No ledger yet',
+    '这个助理还没写出账本 —— 等它跑一轮，或在会话里让它记一笔，五节就会出现在这里。': "This assistant hasn't written its ledger yet — after one patrol run, or after you ask it in the chat to note something down, the five sections will show up here.",
     '· 内层 %lld': '· Nested %lld',
     '全部丢弃': 'Discard all',
     '全部采纳': 'Accept all',
@@ -1144,7 +1157,6 @@ VALUES = {
     '助理（目标式）': 'Assistant (goal-based)',
     '助理 · %lld 个来源': 'Assistant · %lld sources',
     '助理：到点只读巡检，产出结论等你批准（`prompt` 写目标，不是动作）': 'Assistant: read-only check when due, conclusions wait for your approval (`prompt` states the goal, not the actions)',
-    '助理要绑定一个项目 —— 它是本版唯一可用的来源': 'An assistant needs a project — it is the only usable source in this version',
     '助理至少要有项目这一条来源；外部来源（邮件）本版未接入 —— 它的只读采集要等「不置已读」验证通过。': 'An assistant needs at least the project source. External sources (mail) are not wired up yet — read-only collection waits for a proven "never marks as read" path.',
     '新建：Cron 定时（动作写死）或 助理（目标式，只读巡检）': 'New: Cron schedule (fixed actions) or Assistant (goal-based, read-only checks)',
     '到点要达成的目标（不是动作）——例：保证 CI 是绿的；红了就查清原因给我方案…': 'The goal to reach when due (not the actions) — e.g. keep CI green; if it goes red, find the cause and give me a plan…',
@@ -1243,4 +1255,62 @@ VALUES = {
     '缺 SMTP 主机 —— 没有它发不了信（选了自定义就要手填）': 'Missing SMTP host — no mail can be sent without it (fill it in when using a custom provider)',
     '账号已存, 但授权码没能写进钥匙串 —— 邮件会发不出去, 请重设一次': 'The account was saved, but the auth code could not be written to the keychain — email will fail, please set it again',
     '删除该账号并清掉钥匙串里的授权码': 'Delete this account and clear its auth code from the keychain',
+    '删除助理（连同工作会话与账本）': 'Delete assistant (with its session and ledger)',
+    '助理「%@」连同它的工作会话与账本文件一起删除；巡检停止，账本无法恢复。':
+        'Assistant “%@” will be deleted together with its working session and ledger file. '
+        'Its patrols stop and the ledger cannot be restored.',
+    '这是助理「%@」的工作会话：删掉它，助理会忘记与你的对话（账本还在，下一轮巡检照常）；助理本身不受影响。':
+        'This is the working session of assistant “%@”. Deleting it makes the assistant forget '
+        'your conversation (the ledger stays, and its next patrol runs as usual); the assistant '
+        'itself is not affected.',
+
+    # ── P19.2 S15 飞书对话通道 ──────────────────────────────────────────────
+    '飞书对话': 'Feishu chat',
+    '在飞书的单聊里直接跟助理说话。用得着自建应用的 app_id / app_secret, 两个都存钥匙串。MangoX 关掉通道就断 —— 它不是服务端。':
+        'Talk to your assistant right inside a Feishu direct message. It needs the app_id / app_secret '
+        'of a self-built app; both are kept in the keychain. The channel dies with MangoX — it is not a server.',
+    '自建应用的 App Secret': 'App Secret of the self-built app',
+    '已保存 —— 要换就整条重填': 'Saved — to change it, fill in the whole thing again',
+    '换一个': 'Replace',
+    '保存凭据': 'Save credentials',
+    '两个都要填 —— 只填一个换不到 token': 'Both are required — one of them alone cannot fetch a token',
+    '存钥匙串失败：%@': 'Could not write to the keychain: %@',
+    '启用飞书对话': 'Enable Feishu chat',
+    '重连': 'Reconnect',
+    '未启用': 'Not enabled',
+    '正在连接…': 'Connecting…',
+    '通道开着（App 关掉就断）': 'Channel is up (quits with the app)',
+    '通道断了（%@），点「重连」': 'Channel dropped (%@) — hit “Reconnect”',
+    '还没填 app_id / app_secret': 'app_id / app_secret not filled in yet',
+    '最近一条': 'last at',
+    '发消息失败': 'Sending failed',
+    '来找过机器人的单聊': 'Direct messages that reached the bot',
+    '未绑定': 'Not bound',
+    '已绑：%@': 'Bound to %@',
+    '绑定在「定时/助理」里选 —— 打开那个助理，入口那一栏挑这个单聊。飞书没有「列出我的单聊」的接口，所以这个列表只会出现在这儿跟你说过话的会话。':
+        'Binding happens in “Scheduled / Assistant” — open that assistant and pick this chat under its inbound section. '
+        'Feishu has no “list my direct messages” API, so this list only ever holds chats that have talked to the bot.',
+    '入口 · 飞书单聊': 'Inbound · Feishu DM',
+    '通道没开（设置 → 集成 → 飞书对话）': 'Channel is off (Settings → Integrations → Feishu chat)',
+    '没绑 —— 只能在 MangoX 里用它': 'Not bound — this assistant only works inside MangoX',
+    '不绑定': 'Not bound',
+    '在飞书里给机器人发一句话，那个单聊就会出现在这里。它说的话会直接进这个助理的会话，回复原路发回飞书。群聊不接（S15 只做单聊）。':
+        'Send the bot one message in Feishu and that DM shows up here. What you say goes straight into this '
+        'assistant’s session, and the reply travels back the same way. Group chats are not supported (DMs only).',
+    '这个单聊还没绑定助理。在 MangoX 的助理设置里选上它，就能直接说话了。':
+        'This DM is not bound to an assistant yet. Pick it in the assistant settings inside MangoX and you can talk right away.',
+    '这个助理现在是停用状态，先在 MangoX 里把它打开。':
+        'This assistant is currently disabled — turn it on in MangoX first.',
+    '上一个回合还在跑，等它结束再发。': 'The previous turn is still running — wait for it to finish before sending another.',
+    '这一轮没有产出（可能被中断了），回 MangoX 里看现场。':
+        'This turn produced nothing (it may have been interrupted) — check MangoX for the details.',
+    '（这一轮只有一条提议，已进 MangoX 的收件箱）':
+        '(This turn only produced a proposal — it is in the MangoX inbox.)',
+    '引擎没起来（找不到 pi CLI），这句没跑。': 'The engine is not up (pi CLI not found) — this message was not run.',
+    '同时在跑的回合已达上限（%lld），这句没跑。':
+        'The concurrent-turn limit (%lld) is already reached — this message was not run.',
+    '找不到 node —— 桥要靠它跑（Homebrew 的 /opt/homebrew/bin/node）':
+        'node not found — the bridge runs on it (Homebrew’s /opt/homebrew/bin/node)',
+    'App 里缺少 feishu-bridge.cjs —— 打包时资源没进去':
+        'feishu-bridge.cjs is missing from the app — the resource was not packaged',
 }

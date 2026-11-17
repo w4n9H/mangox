@@ -205,7 +205,8 @@ extension SmokeMain {
         // 这两格钉的是「报的数 = 真实字数」：用中文夹具，`utf8.count` 会是三倍。
         let cn = String(repeating: "字", count: 7)
         let short = SchedulerService.watchSystemPrompt(
-            project: nil, handoff: cn, snapshot: WatchSnapshot(outcomes: []),
+            project: nil, goal: "保证 CI 是绿的",
+            handoff: cn, snapshot: WatchSnapshot(outcomes: []),
             ledgerPath: "/tmp/ledger-check.md")
         check(short.contains("【账本容量】当前 \(cn.count) 字 / 上限 \(WatchFindingService.handoffMaxChars)"),
               "T-LEDGER 注入① 报的是**字符数** \(cn.count)（报 utf8 会是 \(cn.utf8.count)）与真实上限")
@@ -213,7 +214,8 @@ extension SmokeMain {
               "T-LEDGER 注入① 未过水位 ⇒ 不喊压缩（天天喊 = 噪音，真到水位就不听了）")
         let fat = String(repeating: "字", count: WatchFindingService.handoffCompactThreshold + 1)
         let fatSys = SchedulerService.watchSystemPrompt(
-            project: nil, handoff: fat, snapshot: WatchSnapshot(outcomes: []),
+            project: nil, goal: "保证 CI 是绿的",
+            handoff: fat, snapshot: WatchSnapshot(outcomes: []),
             ledgerPath: "/tmp/ledger-check.md")
         check(fatSys.contains("当前 \(fat.count) 字")
               && fatSys.contains("已超过 \(WatchFindingService.handoffCompactThreshold) 字")
@@ -223,7 +225,8 @@ extension SmokeMain {
         check(fatSys.contains("其余四节一个字都不要删"),
               "T-LEDGER 注入② 压缩只许动归档节（删到「待你决定」= 把要人拍板的事删了）")
         let emptySys = SchedulerService.watchSystemPrompt(
-            project: nil, handoff: nil, snapshot: WatchSnapshot(outcomes: []),
+            project: nil, goal: "保证 CI 是绿的",
+            handoff: nil, snapshot: WatchSnapshot(outcomes: []),
             ledgerPath: "/tmp/ledger-check.md")
         check(!emptySys.contains("【账本容量】"),
               "T-LEDGER 注入③ 空账本不报字数（没有可压缩的东西，多一句只是噪音）")

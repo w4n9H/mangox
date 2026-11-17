@@ -120,21 +120,31 @@ enum WatchFindingService {
     /// 认两种块头: `【提议】` 与 `提议：` / `提议:` —— 模型对全角括号的服从度没到能只用一种。
     /// 块的作用域是**从块头到文本末尾**（契约要求提议放最后）；块头那一行若自带内容
     /// （`【提议】结论：…`），会被当正文行保留，不丢。
-    static func proposalBlock(in text: String) -> String? {
+    static func proposalBlock(in text: String) -> String? { splitProposalBlock(in: text).block }
+
+    /// **切开**这一轮：正文（块之前的部分）+ 提议块。两者**必须同源**。
+    ///
+    /// 为什么要有这个函数而不是让消费者自己 `replacingOccurrences(of: block, with: "")`:
+    /// 返回的块是**归一化后**的（块头那几个字被摘掉、首尾空白被 trim）⇒ 它**不是原文的子串**，
+    /// 拿它去原文里替换等于什么都没干，而且看不出来（P19.2 S15 的回传实测踩到:
+    /// 飞书那边收到的正文里赫然带着「【提议】结论：…」）。切一次，两边都从这里拿。
+    static func splitProposalBlock(in text: String) -> (body: String, block: String?) {
         let normalized = text.replacingOccurrences(of: "\r\n", with: "\n")
         let lines = normalized.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
         let heads = ["【提议】", "提议：", "提议:"]
         guard let start = lines.firstIndex(where: { line in
             let t = line.trimmingCharacters(in: .whitespaces)
             return heads.contains { t.hasPrefix($0) }
-        }) else { return nil }
+        }) else { return (normalized, nil) }
         var body = Array(lines[start...])
         let first = body[0].trimmingCharacters(in: .whitespaces)
         if let head = heads.first(where: { first.hasPrefix($0) }) {
             body[0] = String(first.dropFirst(head.count)).trimmingCharacters(in: .whitespaces)
         }
         let block = body.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
-        return block.isEmpty ? nil : block
+        let prose = lines[..<start].joined(separator: "\n")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return (prose, block.isEmpty ? nil : block)
     }
 
     /// 方案段 → 编号步骤。认 `1. / 1) / 1、/ - / *` 五种写法；编号取**原文里的数字**，

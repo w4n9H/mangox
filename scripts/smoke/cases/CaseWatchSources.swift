@@ -118,6 +118,7 @@ extension SmokeMain {
         let ledger = "/tmp/gestalt/.mangox/assistant/led.md"
         let sys = SchedulerService.watchSystemPrompt(
             project: WatchProjectContext(name: "看守盘", path: "/tmp/gestalt"),
+            goal: "保证 CI 是绿的",
             handoff: "上一轮判断: CI 已恢复", snapshot: snap, ledgerPath: ledger)
         let user = SchedulerService.watchUserPrompt(goal: "保证 CI 是绿的")
         check(user.contains("保证 CI 是绿的"),
@@ -165,26 +166,11 @@ extension SmokeMain {
         check(!mock.lastAnalysisReadOnly && mock.lastExtraSystemPrompt == nil,
               "T-WATCHSRC ⑨普通回合把只读面与注入段**清回去**（不清 ⇒ 手动回合按巡检契约答 NO_FINDING）")
 
-        // —— ⑩ 没有可用来源 ⇒ 不 spawn, 但日志要留一行 ——
-        store.addScheduled(name: "空手助理", prompt: "看着办", cron: "0 0 1 1 *",
-                           projectId: nil, kind: .assistant)
-        guard let empty = store.scheduledTasks.firstIndex(where: { $0.name == "空手助理" }) else {
-            check(false, "T-WATCHSRC ⑩前置: 空来源任务已建"); report()
-        }
-        let runningBefore = store.runningTurns.count
-        store.runScheduledFire(store.scheduledTasks[empty])
-        check(store.runningTurns.count == runningBefore,
-              "T-WATCHSRC ⑩没有可用来源 ⇒ **不 spawn**（拿空数据烧一轮 token 是最坏的静默浪费）")
-        let emptyLog = store.scheduledTasks[empty].logSessionId
-        let lines = (emptyLog.flatMap { store.persistence?.replayMessagesInBackground(sessionId: $0) } ?? [])
-            .compactMap { m -> String? in
-                if case .text(let s) = m.content, s.contains("没有可用来源") { return s }
-                return nil
-            }
-        check(lines.count == 1,
-              "T-WATCHSRC ⑩留一行「没有可用来源」（不留的话人以为任务从没跑过，实际是配置坏了）")
-        check(emptyLog != nil,
-              "T-WATCHSRC ⑩提前 return 也要把日志会话**绑给任务**（不绑 ⇒ 每个 cron 点堆一场一行孤儿会话）")
+        // —— ⑩ 原「空来源 ⇒ 不 spawn」已**整体迁走**（P19.2 S13）——
+        // 那个夹具是「无项目 + 一条来源都没配」，而 S13 把这一类明确改成**照常跑**（"待命"档:
+        // 它还能读账本、看有没有该接着追的事）。守这件事的新判据是 `T-NOGOAL ①②`:
+        // 无来源照常 fire（正文换出厂常量）+ 配了来源但全失败才不 spawn，且留痕、绑日志会话。
+        // 留在这里只会变成它的副本 —— 同源事实并进一条 check。
 
         store.scheduler.stopScheduler()
     }

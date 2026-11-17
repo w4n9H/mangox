@@ -33,3 +33,7 @@ zh-Hans
 Accessibility
 ListenEvent
 ScreenCapture
+
+# 输入框的**格式示例**（飞书自建应用 app_id 的前缀形式），不是文案：
+# 它示范"该往这里粘什么"，翻成中文就失去了示范作用。属于判据①（换语言时应保持不变）。
+cli_…

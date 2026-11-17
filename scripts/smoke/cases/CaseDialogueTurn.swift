@@ -8,13 +8,15 @@
 //         写成"两种模式都拒"或"两种都放"都能让工具面断言全绿。
 //      ② **提议块** —— 从聊天正文里捞一段结构化结论。捞错的表现是"每句闲聊都变成一条待办"，
 //         漏捞的表现是"它说提了，收件箱里没有"，两种都零红灯。
-//      ③ **留痕（D3）** —— 助理删了之后那场会话静默降级。这件事只有在删除那一刻说得清。
+//      ③ **成对删除（D3 的收尾）** —— 助理删了之后那场会话不该继续活着。
+//         S12 的做法是"留一行痕"（守中间态）；S15 前置改成**成对删除**（消掉中间态），
+//         于是这一格翻面成"会话必须不在"。留痕那条路径已整条删掉，判据不再测它。
 //
 //  反例口径（2026-11-17 **实测**，四条一起下 ⇒ **4 红**）:
 //    · `ledgerDenyReason` 去掉 `mode == .deny` 那半个判断（一律按拒判）⇒ ①×2 红
 //      （对话轮写项目文件直接拒，人连按的机会都没有）；
 //    · `proposalBlock` 只认 `【提议】` 一种块头 ⇒ ②红（`提议：` 那种写法漏捞）；
-//    · 删掉 `deleteScheduled` 里那句留痕 ⇒ ④红。
+//    · `deleteScheduled` 里 `paired ||` 去掉（回到跟着参数走）⇒ ④红。
 //  ⚠️ 第三条反例（"整篇喂给正文解析"）**必须另写一次**: 保留 `guard let block` 只把
 //     `parse(block)` 换成 `parse(text)` 时它**不红** —— 没有块的那一轮被 guard 提前 return 了，
 //     靶子根本没被打到。真正的写法是**去掉块抽取、直接 `parse(text)`** ⇒ 单独下 **1 红**
@@ -134,20 +136,16 @@ extension SmokeMain {
         check(store.findings.count == countAfterFirst,
               "T-DIALOGUE ③没有提议块 ⇒ **不落库**（正文里那句「结论：」不算提案）")
 
-        // ══ ④ D3：助理被删 ⇒ 会话里留一行痕，且反查真的失配 ═══════════════
-        store.scheduler.deleteScheduled(id: store.scheduledTasks[ai].id)
+        // ══ ④ D3 收尾（P19.2 S15 前置）：删助理 ⇒ 会话**跟着走**，中间态不存在 ══
+        // 这里原来守的是"留一行痕（这场会话从此是普通会话）" —— 那条判据守的正是
+        // **中间态本身**。成对删除把中间态消掉了，于是判据翻面：会话必须**不在**。
+        // 留痕那条已整条删掉（`deleteScheduled` 里连 `if` 都不留），它再也不会被执行。
+        store.scheduler.deleteScheduled(id: store.scheduledTasks[ai].id, deleteSessions: false)
         check(store.scheduler.assistantChatTurn(for: logId) == nil,
-              "T-DIALOGUE ④删掉之后反查**真的失配**（这是 D3 的前提，不是 bug）")
-        let tail = store.replayMessages(for: logId).last { msg in
-            if msg.role != .user { return false }
-            if case .text = msg.content { return true }
-            return false
-        }.flatMap { msg -> String? in
-            if case .text(let s) = msg.content { return s }
-            return nil
-        } ?? ""
-        check(tail.contains("已删除") && tail.contains("普通会话"),
-              "T-DIALOGUE ④且**在会话里留了一行痕**（不静默降级；实际「\(tail.suffix(60))」）")
+              "T-DIALOGUE ④删掉之后反查失配（这条仍是前提：反查只认 `logSessionId`）")
+        check(!store.allConversations.contains { $0.id == logId },
+              "T-DIALOGUE ④且工作会话**一起走了**（传 `deleteSessions: false` 也照样走 —— "
+              + "该参数对助理失效；中间态不存在，所以不需要留痕）")
 
         // ══ ⑤ per-turn 清回：普通会话不能继承对话轮的笔 ═══════════════════════
         store.beginTurn(sid: UUID(), prompt: "你好", ephemeral: false, cwd: nil, unattended: false)

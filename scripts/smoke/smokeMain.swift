@@ -117,6 +117,15 @@ struct SmokeMain {
         DiagnosticLog.directoryOverride = logTmp
         check(DiagnosticLog.directory.hasPrefix(NSTemporaryDirectory()),
               "守卫 29: 冒烟期诊断日志根重定向到临时目录 (实测 \(DiagnosticLog.directory))")
+        // ⚠️ 再往下数第七个"生产调用点不传参数"的落盘根: 飞书通道的「找过机器人的单聊」表。
+        //    `ChatStore.remote` 是**内联初始化**的（那个位置拿不到 dbPath），而 `ingest` 每收一条
+        //    消息就往这个文件写一次 ⇒ 不重定向的话，一次冒烟就把夹具 chat_id 写进用户真实的
+        //    `~/.mangox/remote-chats.json`，界面上会多出一条"未绑定"的陌生会话，零红灯。
+        //    编号**接在 29 后面**（这个文件里 28 那一族已经拆成 28/28b/28c/28d 了，再用 29 会撞）。
+        let chatsTmp = dir + "/remote-chats.json"
+        RemoteChannelService.chatsFileOverride = chatsTmp
+        check(RemoteChannelService.defaultChatsFile.hasPrefix(NSTemporaryDirectory()),
+              "守卫 30: 冒烟期飞书单聊表重定向到临时目录 (实测 \(RemoteChannelService.defaultChatsFile))")
         // ⚠️ 第五个"生产调用点不传参数"的注入面 —— 但这次不是落盘根, 是**钥匙串**。
         //    `ChatStore.init` 的 `modelKeyStore:` 是函数级参数, 而 init 尾部**无条件**跑
         //    `scanExtensions()`, 后者起手读 `bochaKey` ⇒ 没传参数的构造点全都会去读用户真实钥匙串。
@@ -5776,6 +5785,24 @@ struct SmokeMain {
         //       删掉 deleteScheduled 的留痕 ⇒ ④ —— 四条一起下 **4 红**。
         // ⚠️ "整篇喂给正文解析"那条要**另写一次**(去掉块抽取)才算验过, 单独下 1 红。
         await caseDialogueTurn()
+
+        // ---- T-NOGOAL: P19.2 S13 无目标 / 无来源的助理照样跑（注入与 spawn 判据） ----
+        await caseNoGoalLedger()
+
+        // ---- T-NAG: P19.2 S14 催（判据表 / 落库 / 端到端 / 上限） ----
+        await caseNag()
+
+        // ---- T-LIFE: P19.2 S15 前置 助理与它的会话 / 账本成对（删谁都不留中间态） ----
+        await caseAssistantLifecycle()
+
+        // ---- T-REMOTE: P19.2 S15 飞书通道（协议 / 切行 / 路由 / 投递 / 回传） ----
+        // 反例(2026-11-17 实测, 逐条下): 切行不保留半行 ⇒ 3 红(②半行/②补齐/②挤一起);
+        //       去掉 duplicate ⇒ 2 红(④重复 + ⑤重推); 去掉 chatType ⇒ 1 红(④群聊);
+        //       删掉收尾处的 finishRemoteTurn ⇒ 3 红(⑤回传/正文/认领即删 —— 后两格是连带的)。
+        await caseRemoteChannel()
+
+        // ---- T-REMOTELIVE: 真桥联调（默认跳过: 会 spawn node 并连真实飞书租户）----
+        await caseRemoteBridgeLive()
 
         // ---- T-CTX: 上下文压缩可见性 —— 常驻标记 (A) / 即时百分比 (B) / 压缩线 (D) ----
         // 立项依据 (2026-10-17 boss): "现在只有低栏那个状态才有压缩显示, 对话区域…没有吧" ——

@@ -97,6 +97,9 @@ struct SettingsView: View {
                 case .integration:
                     webSearchSection
                     MailboxAccountsSection(store: store)   // P19 S7: 邮件 sink 的发件账号
+                    // P19.2 S15: 飞书**入口**（人在飞书里说话）。与上面 S7 那个只发不收的
+                    // webhook 不是一件事 —— 名字里都带"飞书"，但一个往外推结论、一个往里收指令。
+                    FeishuChannelSection(remote: store.remote, store: store)
                     computerSection
                 case .data:
                     backupSection

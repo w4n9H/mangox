@@ -256,6 +256,8 @@ final class PersistenceStore {
         // ⚠️ 飞书那条 **URL 不在这里** —— 它住 Keychain, 库里这一列只有一个 Bool。
         addColumnIfMissing("scheduled_tasks", "notify", "TEXT")
         addColumnIfMissing("scheduled_tasks", "daily_token_budget", "INTEGER NOT NULL DEFAULT 0")
+        // P19.2 S15: 飞书单聊绑定的 chat_id。**列只增不删**（旧版 App 打开新库会崩那一条）。
+        addColumnIfMissing("scheduled_tasks", "remote_chat_id", "TEXT")
         // P10.4: 任务级执行配置 (JSON blob; 复用 SessionConfig)
         addColumnIfMissing("scheduled_tasks", "config", "TEXT")
         // P10.3: 会话级配置快照 (JSON blob; SessionConfig)
@@ -311,6 +313,11 @@ final class PersistenceStore {
         """)
         try db.run("CREATE INDEX IF NOT EXISTS idx_findings_task ON agent_findings(task_id, created_at)")
         try db.run("CREATE INDEX IF NOT EXISTS idx_findings_fp ON agent_findings(fingerprint)")
+        // P19.2 S14: 催促状态。**只增不删**（老库升上来是 0 / NULL = 从没催过，语义等价于"新行"，
+        // 不需要迁移脚本）。为什么不另建一张表: 催的对象就是这条 finding 本身，
+        // "同一件事最多催 K 次"这个上限必须与 finding **同一行**才不会被重建成两件事。
+        addColumnIfMissing("agent_findings", "nag_count", "INTEGER NOT NULL DEFAULT 0")
+        addColumnIfMissing("agent_findings", "last_nagged_at", "REAL")
         try db.run("""
         CREATE TABLE IF NOT EXISTS agent_finding_actions (
             finding_id  TEXT NOT NULL,
@@ -1147,7 +1154,7 @@ final class PersistenceStore {
 
     func loadScheduled() throws -> [ScheduledTask] {
         let rows = try db.query("""
-            SELECT id, name, prompt, cron, project_id, enabled, last_run_at, log_session_id, continuous, condition, unattended, completed_at, run_count, created_at, config, kind, sources, notify, daily_token_budget
+            SELECT id, name, prompt, cron, project_id, enabled, last_run_at, log_session_id, continuous, condition, unattended, completed_at, run_count, created_at, config, kind, sources, notify, daily_token_budget, remote_chat_id
             FROM scheduled_tasks ORDER BY created_at DESC
             """)
         return rows.map { row in
@@ -1187,7 +1194,9 @@ final class PersistenceStore {
                 notify: optionalText(row, "notify")
                     .flatMap { $0.data(using: .utf8) }
                     .flatMap { try? decoder.decode(NotifyOptions.self, from: $0) } ?? .default,
-                dailyTokenBudget: optionalInt(row, "daily_token_budget") ?? 0)
+                dailyTokenBudget: optionalInt(row, "daily_token_budget") ?? 0,
+                // P19.2 S15: 空串与 NULL 同义（手改库会留下空串）。
+                remoteChatId: optionalText(row, "remote_chat_id").flatMap { $0.isEmpty ? nil : $0 })
         }
     }
 
@@ -1203,8 +1212,8 @@ final class PersistenceStore {
             .flatMap { String(data: $0, encoding: .utf8) }
         try db.run("""
             INSERT OR REPLACE INTO scheduled_tasks
-            (id, name, prompt, cron, project_id, enabled, last_run_at, log_session_id, continuous, condition, unattended, completed_at, run_count, created_at, config, kind, sources, notify, daily_token_budget)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            (id, name, prompt, cron, project_id, enabled, last_run_at, log_session_id, continuous, condition, unattended, completed_at, run_count, created_at, config, kind, sources, notify, daily_token_budget, remote_chat_id)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             """, [.text(t.id.uuidString),
                   .text(t.name),
                   .text(t.prompt),
@@ -1224,7 +1233,8 @@ final class PersistenceStore {
                   t.isLegacyWaiting ? .null : .text(t.kind.rawValue),
                   sourcesJSON.map { .text($0) } ?? .null,
                   notifyJSON.map { .text($0) } ?? .null,
-                  .int(Int64(max(0, t.dailyTokenBudget)))])
+                  .int(Int64(max(0, t.dailyTokenBudget))),
+                  t.remoteChatId.map { .text($0) } ?? .null])
     }
 
     // MARK: - P19 S7 日 token 账本
@@ -1256,7 +1266,8 @@ final class PersistenceStore {
     func loadFindings() throws -> [AgentFinding] {
         let rows = try db.query("""
             SELECT id, task_id, source_id, session_id, title, body, evidence, plan, plan_rev,
-                   severity, fingerprint, status, undo_path, tokens, cost_usd, created_at, decided_at
+                   severity, fingerprint, status, undo_path, tokens, cost_usd, created_at, decided_at,
+                   nag_count, last_nagged_at
             FROM agent_findings ORDER BY created_at DESC
             """)
         return rows.compactMap { row in
@@ -1279,6 +1290,8 @@ final class PersistenceStore {
                 planRev: Int(int(row["plan_rev"] ?? .null)),
                 severity: text(row, "severity"),
                 fingerprint: text(row, "fingerprint"), status: status,
+                nagCount: Int(int(row["nag_count"] ?? .null)),
+                lastNaggedAt: optionalDate(row, "last_nagged_at"),
                 undoPath: optionalText(row, "undo_path"),
                 tokens: optionalText(row, "tokens").flatMap { Int($0) },
                 costUSD: optionalText(row, "cost_usd").flatMap { Double($0) },
@@ -1294,8 +1307,9 @@ final class PersistenceStore {
         try db.run("""
             INSERT OR REPLACE INTO agent_findings
             (id, task_id, source_id, session_id, title, body, evidence, plan, plan_rev,
-             severity, fingerprint, status, undo_path, tokens, cost_usd, created_at, decided_at)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+             severity, fingerprint, status, undo_path, tokens, cost_usd, created_at, decided_at,
+             nag_count, last_nagged_at)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             """, [.text(f.id.uuidString),
                   .text(f.taskId.uuidString),
                   .text(f.sourceId.uuidString),
@@ -1312,7 +1326,9 @@ final class PersistenceStore {
                   f.tokens.map { .int(Int64($0)) } ?? .null,
                   f.costUSD.map { .real($0) } ?? .null,
                   .real(f.createdAt.timeIntervalSince1970),
-                  f.decidedAt.map { .real($0.timeIntervalSince1970) } ?? .null])
+                  f.decidedAt.map { .real($0.timeIntervalSince1970) } ?? .null,
+                  .int(Int64(f.nagCount)),
+                  f.lastNaggedAt.map { .real($0.timeIntervalSince1970) } ?? .null])
     }
 
     /// 只改状态（忽略 / 采纳 / 执行回写都走这里）。`decided_at` 只在**人拍板**时给值。
