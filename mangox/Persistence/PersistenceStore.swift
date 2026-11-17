@@ -252,6 +252,10 @@ final class PersistenceStore {
         addColumnIfMissing("scheduled_tasks", "kind", "TEXT")
         // P19 助理: 来源列表 (JSON 数组; 空 / NULL 都解成 [] —— 老库升上来没有来源是正常的)
         addColumnIfMissing("scheduled_tasks", "sources", "TEXT")
+        // P19 S7 触达: 配置 JSON (系统通知 / 邮件收件人 / 飞书开关) 与日预算上限。
+        // ⚠️ 飞书那条 **URL 不在这里** —— 它住 Keychain, 库里这一列只有一个 Bool。
+        addColumnIfMissing("scheduled_tasks", "notify", "TEXT")
+        addColumnIfMissing("scheduled_tasks", "daily_token_budget", "INTEGER NOT NULL DEFAULT 0")
         // P10.4: 任务级执行配置 (JSON blob; 复用 SessionConfig)
         addColumnIfMissing("scheduled_tasks", "config", "TEXT")
         // P10.3: 会话级配置快照 (JSON blob; SessionConfig)
@@ -317,6 +321,22 @@ final class PersistenceStore {
             output      TEXT,
             at          REAL NOT NULL,
             PRIMARY KEY (finding_id, step)
+        )
+        """)
+        // P19 S7: 日 token 账本。判据是 (任务, 日) —— 预算闸问的正是这两个维度。
+        //
+        // 为什么不从事件流现算: 事件里的 `usage` 是**按一次 LLM 调用**记的，它不带"这次调用属于
+        // 哪一次 fire"；而一场日志会话会装下几十次 fire。想现算就得给每条事件再补一列归属，
+        // 那是改事件流的形状 —— 比多一张两列表贵得多。
+        //
+        // `day` 是**本地日**的 `yyyy-MM-dd`（Text，不是时间戳）: 预算是人对"今天"的直觉，
+        // 存 UTC 日会让 +08:00 的用户在早上 8 点前被算进昨天。
+        try db.run("""
+        CREATE TABLE IF NOT EXISTS agent_token_daily (
+            task_id TEXT NOT NULL,
+            day     TEXT NOT NULL,
+            tokens  INTEGER NOT NULL DEFAULT 0,
+            PRIMARY KEY (task_id, day)
         )
         """)
     }
@@ -1127,7 +1147,7 @@ final class PersistenceStore {
 
     func loadScheduled() throws -> [ScheduledTask] {
         let rows = try db.query("""
-            SELECT id, name, prompt, cron, project_id, enabled, last_run_at, log_session_id, continuous, condition, unattended, completed_at, run_count, created_at, config, kind, sources
+            SELECT id, name, prompt, cron, project_id, enabled, last_run_at, log_session_id, continuous, condition, unattended, completed_at, run_count, created_at, config, kind, sources, notify, daily_token_budget
             FROM scheduled_tasks ORDER BY created_at DESC
             """)
         return rows.map { row in
@@ -1161,7 +1181,13 @@ final class PersistenceStore {
                 // 不该让整个任务列表读不出来（那会连带 dream 任务一起消失）。
                 sources: optionalText(row, "sources")
                     .flatMap { $0.data(using: .utf8) }
-                    .flatMap { try? decoder.decode([WatchSourceSpec].self, from: $0) } ?? [])
+                    .flatMap { try? decoder.decode([WatchSourceSpec].self, from: $0) } ?? [],
+                // P19 S7: 坏 JSON / NULL 一律回落**默认**（只发系统通知）——
+                // 触达配置读不出来时"照旧发通知"比"整条任务读不出来"好得多。
+                notify: optionalText(row, "notify")
+                    .flatMap { $0.data(using: .utf8) }
+                    .flatMap { try? decoder.decode(NotifyOptions.self, from: $0) } ?? .default,
+                dailyTokenBudget: optionalInt(row, "daily_token_budget") ?? 0)
         }
     }
 
@@ -1171,10 +1197,14 @@ final class PersistenceStore {
         let sourcesJSON = t.sources.isEmpty
             ? nil
             : (try? encoder.encode(t.sources)).flatMap { String(data: $0, encoding: .utf8) }
+        // 触达配置**恒写一份**（含"全默认"）：写 NULL 也行，但读侧就得靠"NULL = 默认"这条
+        // 隐含规则来还原，而那是两个真源。恒写，读侧只需解码失败时兜底。
+        let notifyJSON = (try? encoder.encode(t.notify))
+            .flatMap { String(data: $0, encoding: .utf8) }
         try db.run("""
             INSERT OR REPLACE INTO scheduled_tasks
-            (id, name, prompt, cron, project_id, enabled, last_run_at, log_session_id, continuous, condition, unattended, completed_at, run_count, created_at, config, kind, sources)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            (id, name, prompt, cron, project_id, enabled, last_run_at, log_session_id, continuous, condition, unattended, completed_at, run_count, created_at, config, kind, sources, notify, daily_token_budget)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             """, [.text(t.id.uuidString),
                   .text(t.name),
                   .text(t.prompt),
@@ -1192,7 +1222,29 @@ final class PersistenceStore {
                   configJSON.map { .text($0) } ?? .null,
                   // P19: legacy 不落值 —— 它是 condition 派生出来的归档态, 写 NULL 让它下次照样派生。
                   t.isLegacyWaiting ? .null : .text(t.kind.rawValue),
-                  sourcesJSON.map { .text($0) } ?? .null])
+                  sourcesJSON.map { .text($0) } ?? .null,
+                  notifyJSON.map { .text($0) } ?? .null,
+                  .int(Int64(max(0, t.dailyTokenBudget)))])
+    }
+
+    // MARK: - P19 S7 日 token 账本
+
+    /// 某任务某天已用的 token 数。没有行 = 0。
+    func tokenUsage(taskId: UUID, day: String) throws -> Int {
+        let rows = try db.query(
+            "SELECT tokens FROM agent_token_daily WHERE task_id = ? AND day = ?",
+            [.text(taskId.uuidString), .text(day)])
+        guard let row = rows.first else { return 0 }
+        return Int(int(row["tokens"] ?? .null))
+    }
+
+    /// 累加一笔。**累加而不是覆盖** —— 一天里会有很多次 fire，覆盖等于只记得最后一次。
+    func addTokenUsage(taskId: UUID, day: String, tokens: Int) throws {
+        guard tokens > 0 else { return }
+        try db.run("""
+            INSERT INTO agent_token_daily (task_id, day, tokens) VALUES (?,?,?)
+            ON CONFLICT(task_id, day) DO UPDATE SET tokens = tokens + excluded.tokens
+            """, [.text(taskId.uuidString), .text(day), .int(Int64(tokens))])
     }
 
     func deleteScheduled(id: UUID) throws {
@@ -1271,9 +1323,43 @@ final class PersistenceStore {
                     .text(id.uuidString)])
     }
 
+    // MARK: - 执行落痕 (P19 S6)
+
+    func loadFindingActions() throws -> [FindingAction] {
+        let rows = try db.query("""
+            SELECT finding_id, step, kind, target, result, output, at
+            FROM agent_finding_actions ORDER BY finding_id ASC, step ASC
+            """)
+        return rows.compactMap { row in
+            guard let fid = UUID(uuidString: text(row, "finding_id")) else { return nil }
+            return FindingAction(findingId: fid,
+                                 step: Int(int(row["step"] ?? .null)),
+                                 kind: text(row, "kind"),
+                                 target: optionalText(row, "target"),
+                                 result: text(row, "result"),
+                                 output: optionalText(row, "output"),
+                                 at: optionalDate(row, "at") ?? .distantPast)
+        }
+    }
+
+    /// 一行 = 一个步骤号（主键 `(finding_id, step)`）⇒ 同一步再落痕就是**覆盖**。
+    func upsertFindingAction(_ a: FindingAction) throws {
+        try db.run("""
+            INSERT OR REPLACE INTO agent_finding_actions
+            (finding_id, step, kind, target, result, output, at)
+            VALUES (?,?,?,?,?,?,?)
+            """, [.text(a.findingId.uuidString),
+                  .int(Int64(a.step)),
+                  .text(a.kind),
+                  a.target.map { .text($0) } ?? .null,
+                  .text(a.result),
+                  a.output.map { .text($0) } ?? .null,
+                  .real(a.at.timeIntervalSince1970)])
+    }
+
     // MARK: - 邮箱账号池 (P19: 只剩账号; 哨兵 / 线程 / 拒收三表已随收件档删除)
     // 本表只存连接参数; 授权码在 Keychain (MailboxCredentialStore)。
-    // P19 现状: 这一层暂无消费者 —— 留给 S7 的邮件 sink 与 P19.1 的邮件通道, 别当死代码删掉。
+    // P19 现状: 消费者 = S7 的邮件 sink（设置 → 集成 → 邮箱账号）与 P19.1 的邮件通道。
 
     // MARK: 账号 (连接参数)
 

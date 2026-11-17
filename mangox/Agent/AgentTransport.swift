@@ -137,6 +137,9 @@ protocol AgentTransport: AnyObject {
     /// **不进 user prompt**（实测: 落成 `role=system` 的 addendum 段，下次 spawn 被替换、
     /// 不累积 —— 见 docs/P19 §02）。spawn 期定格 ⇒ `spawnedExtraSystem` 变了要重启进程。
     func updateExtraSystemPrompt(_ text: String?)
+    /// P19: 执行回合的守卫（nil = 这一回合不是执行轮）。审批桥据此在**弹卡之前**过红线 ——
+    /// 红线恒拒，任何授权都不放行，所以它必须发生在"问人"之前。
+    func updateExecutionGuard(_ guardValue: ExecutionGuard?)
     /// P10.1b: 下发博查 API Key (nil = 未配置; spawn 期注入 `MANGOX_BOCHA_KEY` env)。
     ///
     /// **实例级**, 与 `updateDreamSpool` 同一层 —— 但语义不同: 那个是**任务**语义（只有 dream
@@ -145,6 +148,11 @@ protocol AgentTransport: AnyObject {
     /// P10.2b: 本回合 `autoJudge` 档拦下的命令 (回执写"卡在哪"的数据来源; 空 = 无拦截)。
     /// 语义: 调用时机在回合**落定后**、下一次 `send` 前 (send 时清零)。
     var autoJudgeBlocks: [AutoJudgeBlock] { get }
+    /// P19 S6: 执行轮的过闸落痕（按步骤号归并，`send` 时清零）。空 = 这一回合没有执行守卫。
+    ///
+    /// 收尾时按它写 `agent_finding_actions` —— 与 `autoJudgeBlocks` 同一层、同一时机，
+    /// 所以"回合落定后读"这件事两边不会漂。
+    var execActions: [Int: ExecAction] { get }
 }
 
 /// P3.5: 对端上报的可用模型 (pi modelRegistry 条目的保守投影)。
@@ -269,4 +277,6 @@ extension AgentTransport {
     func updateApprovalMode(_ mode: ApprovalMode) {}
     /// P10.2b: 拦截记录 (Mock 无审批桥 → 恒空; 冒烟用 MockTransport.autoJudgeBlocks 注入)。
     var autoJudgeBlocks: [AutoJudgeBlock] { [] }
+    /// P19 S6: 执行落痕 (Mock 无审批桥 → 恒空; 冒烟用 MockTransport.execActions 注入)。
+    var execActions: [Int: ExecAction] { [:] }
 }

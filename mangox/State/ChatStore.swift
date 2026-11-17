@@ -71,6 +71,10 @@ final class ChatStore: ObservableObject {
     let persistence: PersistenceStore?   // P9.1b: internal — SchedulerService 定时域落库回调
     /// P7-M3: 模型 key 存储 (真源 Keychain; 冒烟注入内存实现)。
     let modelKeyStore: any ModelKeyStore
+    /// P19 S7: 邮箱账号的凭据缝。**库里只有连接参数, 授权码住钥匙串** ——
+    /// 走 `current` 而不是直接 `KeychainMailboxCredentialStore()`: 冒烟进程靠它整体换成内存实现,
+    /// 否则读真钥匙串会弹授权框并挂死（同 `KeychainModelKeyStore.current` 那条坑）。
+    let mailboxCredentials: any MailboxCredentialStore
 
     // Chat
     /// 消息变化版本 — 给滚动跟随用的**轻量触发值**。
@@ -410,6 +414,21 @@ final class ChatStore: ObservableObject {
     /// P19 助理结论（收件箱数据源）。收件箱**默认只显 `open`**，其余折叠 —— 判据在 `FindingStatus`。
     /// 它留在 ChatStore 而不是 SchedulerService: 观察者是视图, 而视图看的是 ChatStore。
     @Published var findings: [AgentFinding] = []
+    /// P19 S6: 执行落痕（`agent_finding_actions` 全量；行数 = 步骤数 × 结论数，很小）。
+    /// 全量读而不是"按展开的那条读"：收件箱里可以同时展开好几条，而读一次库比按行回调便宜。
+    @Published var findingActions: [FindingAction] = []
+
+    /// P19 S7: 通知点击要落到的那条结论。
+    ///
+    /// 为什么是 ChatStore 的状态而不是给通知 delegate 一个闭包让它自己找视图:
+    /// 「打开定时页 + 展开那一条」是**两件事**: 前者是 store 的状态（`showScheduledPanel`），
+    /// 后者是视图的局部 `@State`。中间必须有人拿一下 —— 视图并不存在（可能还没建），
+    /// 也不能建。所以把"要展开谁"记在 store 上，视图出现/变化时消费掉（一次性）。
+    @Published var pendingFindingFocus: UUID? = nil
+
+    /// P19 S7: 邮箱账号（连接参数）。授权码在 `mailboxCredentials`（Keychain）。
+    /// 本版只服务触达的邮件 sink —— 收信是 P19.1 的事。
+    @Published var mailboxAccounts: [MailboxAccount] = []
     var scheduledTasks: [ScheduledTask] {
         get { scheduler.scheduledTasks }
         set { scheduler.scheduledTasks = newValue }
@@ -638,7 +657,8 @@ final class ChatStore: ObservableObject {
     @Published var sidebarCollapsed: Bool = false
 
     init(transport: (any AgentTransport)? = nil, dbPath: String? = nil,
-         managedExtensionsDir: String? = nil, modelKeyStore: (any ModelKeyStore)? = nil) {
+         managedExtensionsDir: String? = nil, modelKeyStore: (any ModelKeyStore)? = nil,
+         mailboxCredentials: (any MailboxCredentialStore)? = nil) {
         // 默认参数表达式是非隔离上下文, transport 的创建放进来。
         // P3.2: 检测到 pi 二进制 → 真引擎; 缺失时 Release 下不再静默降级 Mock
         // (假数据演戏是发布事故), 置 engineMissing 由 UI 报错; DEBUG 保留 mock 回归基线。
@@ -654,6 +674,7 @@ final class ChatStore: ObservableObject {
         //    否则 `init` 尾部那次 `scanExtensions()` 会去读用户**真实**钥匙串（条目存在时弹窗 +
         //    `SecItemCopyMatching` 一直等答复 ⇒ 冒烟挂死）。见 `KeychainModelKeyStore.current`。
         self.modelKeyStore = modelKeyStore ?? KeychainModelKeyStore.current
+        self.mailboxCredentials = mailboxCredentials ?? KeychainMailboxCredentialStore.current
 
         // P3.1: 首启播种 SampleSession, 之后全部从 SQLite 加载; 打不开库则回退纯 mock
         // dbPath: smoke 注入独立库文件用 (默认 ~/.mangox/mangox.db)
@@ -675,6 +696,10 @@ final class ChatStore: ObservableObject {
             scheduledTasks = (try? store.loadScheduled()) ?? []
             // P19: 助理结论。启动即读 —— 收件箱是"待处理事项", 不能等打开定时页才加载。
             findings = (try? store.loadFindings()) ?? []
+            findingActions = (try? store.loadFindingActions()) ?? []
+            mailboxAccounts = (try? store.loadMailboxAccounts()) ?? []
+            // P19 S6: 上一进程中断的执行收回原状（`running` + 不常驻 = 永久卡死）
+            scheduler.recoverInterruptedExecutions()
             // P7-M3: custom_models 一次性迁入 models 表 (幂等), 再加载自管真源
             // (P5.1 的自定义模型内存层已于 2026-09-23 删除; 表保留以兼容旧版本库)
             _ = (try? store.migrateLegacyCustomModels()) ?? 0
@@ -1890,7 +1915,8 @@ final class ChatStore: ObservableObject {
                    modelOverride: (provider: String, modelId: String, thinking: String?)? = nil,
                    dreamSpool: String? = nil,   // P15.3: 仅 dream fire 非 nil
                    analysisReadOnly: Bool = false,   // P19: 仅助理巡检轮 true
-                   extraSystemPrompt: String? = nil) {   // P19: 巡检轮的观察 / 契约 / 交接文件
+                   extraSystemPrompt: String? = nil,   // P19: 巡检轮的观察 / 契约 / 交接文件
+                   executionGuard: ExecutionGuard? = nil) {   // P19 S6: 仅执行轮非 nil
         let t = transportFor(sid)
         Log.send("turn-begin", ["sid": String(sid.uuidString.prefix(8)),
                                 "eph": ephemeral ? "1" : "0",
@@ -1928,6 +1954,10 @@ final class ChatStore: ObservableObject {
         }
         t.updateAnalysisReadOnly(turnReadOnly)
         t.updateExtraSystemPrompt(turnExtra)
+        // P19 S6: 执行守卫 —— **同一条纪律，无条件赋值**。不清它的后果比上面两个更隐蔽:
+        // 只读面漏了会看得出来（"它怎么不写文件"），而守卫漏了只表现为"某些命令莫名被拒"，
+        // 而人根本不会想到"上一轮执行留下的红线还在"。
+        t.updateExecutionGuard(executionGuard)
         // 无人值守 fire 关审批 (弹卡 = 任务死锁); 其余跟随全局开关。
         // P10.2a-0: approvalOverride 优先 —— 邮箱哨兵走 .autoJudge (白名单放行 + 危险命令拒且不阻塞),
         // 它是 per-turn 下发, 会被全局 askApproval 开关覆盖, 故每回合 send 前重设。
@@ -2031,6 +2061,9 @@ final class ChatStore: ObservableObject {
         scheduler.finishDreamFireIfNeeded(sid: sid)
         // P19: 助理巡检的收口同一条路 —— 手动停也要收（已经说出来的结论照样落库）。
         scheduler.finishWatchFireIfNeeded(sid: sid)
+        // P19 S6: 执行轮的收口。两处 `finish*` 的顺序无关（它们按各自的上下文 map 认领，
+        // 一场会话只会在其中一张表里）—— 但**必须都调**: 执行轮与巡检轮是同一场日志会话。
+        scheduler.finishExecFireIfNeeded(sid: sid)
         // 这一轮到此为止 ⇒ 把这场会话在**今天**的流水刷新一次。
         // 放在 dream 收口之后（那之后 spool 已变成提案，流水里那一行才说得出"几轮"）。
         // 节流在 `TimelineJournal` 里（3 秒），所以同一轮漏出的多个落定事件不会重写三遍。
@@ -2286,6 +2319,119 @@ final class ChatStore: ObservableObject {
     /// P19: 重读 findings（收尾落库 / 忽略 / 执行回写之后都走它）。
     func reloadFindings() {
         findings = (try? persistence?.loadFindings()) ?? []
+    }
+
+    /// P19 S6: 重读执行落痕（执行收尾 / 回滚之后）。
+    func reloadFindingActions() {
+        findingActions = (try? persistence?.loadFindingActions()) ?? []
+    }
+
+    // MARK: - P19 S7 触达：收件箱直达 + 邮箱账号
+
+    /// 通知点击 → 打开定时页并展开那条结论（验收 ⑫「点通知落到收件箱」）。
+    ///
+    /// **面板互斥照旧**：这里和 `toggleScheduledPanel` 一样要把另外两个面板关掉 ——
+    /// 少关一个就会留下"两个胶囊同时亮"（2026-10-10 那个 bug 的形状）。
+    /// 找不到那条结论（被忽略/删了）时仍然打开收件箱: 通知是几分钟前的, 人点进来看到
+    /// "这里现在是空的"比"什么都没发生"诚实。
+    func focusFinding(_ findingId: UUID) {
+        showScheduledPanel = true
+        showKnowledgePanel = false
+        showExtensionsPanel = false
+        pendingFindingFocus = findingId
+    }
+
+    /// 视图消费掉聚焦请求（一次性 —— 不清的话每次重进定时页都会把它重新展开）。
+    ///
+    /// ⚠️ 清空必须**延到下一轮 runloop**: 调用点是 `onAppear` / `onChange`，都在视图更新里，
+    ///    在那里改 `@Published` 会报 "Publishing changes from within view updates"，
+    ///    而那个警告只在控制台里 —— 界面上什么都看不出来（同 `consumePendingCategory` 那条坑）。
+    func consumeFindingFocus() -> UUID? {
+        guard let id = pendingFindingFocus else { return nil }
+        DispatchQueue.main.async { [weak self] in self?.pendingFindingFocus = nil }
+        return id
+    }
+
+    /// 某个账号的授权码（真源在 Keychain）。
+    func mailboxAuth(_ accountId: UUID) -> String? {
+        mailboxCredentials.accountAuth(accountId: accountId)
+    }
+
+    func hasMailboxAccountAuth(_ accountId: UUID) -> Bool {
+        (mailboxAuth(accountId)?.isEmpty == false)
+    }
+
+    func addMailboxAccount(_ account: MailboxAccount) {
+        mailboxAccounts.append(account)
+        try? persistence?.upsertMailboxAccount(account)
+    }
+
+    func updateMailboxAccount(_ account: MailboxAccount) {
+        guard let idx = mailboxAccounts.firstIndex(where: { $0.id == account.id }) else { return }
+        mailboxAccounts[idx] = account
+        try? persistence?.upsertMailboxAccount(account)
+    }
+
+    /// 删账号 **连带清钥匙串**：留着那条授权码就是一份"没有主人的凭据"，
+    /// 下次同 UUID 撞上就变成静默复用别人的授权码（几乎不可能，但不是不可能）。
+    func removeMailboxAccount(_ id: UUID) {
+        mailboxAccounts.removeAll { $0.id == id }
+        try? persistence?.deleteMailboxAccount(id: id)
+        try? mailboxCredentials.setAccountAuth(nil, accountId: id)
+    }
+
+    func setMailboxAuth(_ value: String?, accountId: UUID) {
+        try? mailboxCredentials.setAccountAuth(value, accountId: accountId)
+        objectWillChange.send()   // "授权码已设置/缺授权码"那行要跟着变
+    }
+
+    /// 触达邮件用的发件账号 = **第一个能发的**（有 SMTP 主机 + 钥匙串里有授权码）。
+    /// 让人在每条任务上再选一次发件人只会多一个会错的字段。
+    func firstSendableMailboxAccount() -> MailboxAccount? {
+        mailboxAccounts.first { a in
+            !a.smtpHost.trimmingCharacters(in: .whitespaces).isEmpty && hasMailboxAccountAuth(a.id)
+        }
+    }
+
+    /// 这条任务的飞书 webhook 配过没。**只判存在、不读内容**（真源在钥匙串，界面不回显）。
+    func hasWebhookURL(taskId: UUID) -> Bool {
+        (scheduler.notifySecrets.webhookURL(taskId: taskId)?.isEmpty == false)
+    }
+
+    func setWebhookURL(_ url: String?, taskId: UUID) {
+        try? scheduler.notifySecrets.setWebhookURL(url, taskId: taskId)
+    }
+
+    /// 这条任务今天已经烧了多少 token（编辑器里显示"今日已用"）。
+    func tokenSpentToday(_ taskId: UUID) -> Int {
+        scheduler.tokenSpentToday(taskId)
+    }
+
+    /// 某条结论的执行痕迹（视图按行展开时用）。
+    func actions(for findingId: UUID) -> [FindingAction] {
+        findingActions.filter { $0.findingId == findingId }
+    }
+
+    /// P19 S6: 人在收件箱里点了「采纳并执行」。
+    /// **返回 nil = 起手了**；否则是人话的拒绝原因（横幅那一行）。
+    ///
+    /// 这里只做转发与横幅：闸门、快照、开回合全在 `SchedulerService`（任务语义归它）。
+    func startFindingExecution(_ findingId: UUID) -> String? {
+        switch scheduler.startExecution(findingId: findingId) {
+        case .started:
+            return nil
+        case .rejected(let why):
+            setTurnLimitNotice(why, isError: true)
+            return why
+        }
+    }
+
+    /// P19 S6: 整轮回滚。返回 nil = 成功。
+    func rollbackFinding(_ findingId: UUID) -> String? {
+        let why = scheduler.rollbackFinding(findingId)
+        if let why { setTurnLimitNotice(why, isError: true) }
+        else { setTurnLimitNotice(L("已回滚到执行前的快照"), isError: false) }
+        return why
     }
 
     /// P19: 人拍板（忽略 / 采纳）。`decided_at` 只在**人**这一侧写 —— 模型自己改状态不算决定。
@@ -2569,6 +2715,7 @@ extension ChatStore: AgentTransportDelegate {
             }
             // P4.1/P4.2: 回合完成 —— 前台闪显迷你条完成卡 / 非前台发系统通知。
             // elapsed 取自 turnStartAt 且只能取一次 (手动停过的回合已被清 → 不通知)。
+            let turnStart = turnStartAt[sid]   // P19 S7: 下面记 token 账要它（移除前先留一份）
             let elapsed = turnStartAt.removeValue(forKey: sid).map { Date().timeIntervalSince($0) }
             if let elapsed {
                 // 回复预览须在镜像清除前取
@@ -2576,6 +2723,9 @@ extension ChatStore: AgentTransportDelegate {
                 // 轮末账单的耗时记账 —— 必须赶在 `liveTurns[sid] = nil` 之前（下面几行就地清镜像）。
                 // 只记实测值；手动停止那条路 `elapsed` 是 nil（turnStartAt 已被清）⇒ 不记，账单少一格。
                 noteTurnElapsed(sid: sid, projection: proj, seconds: elapsed)
+                // P19 S7: 日预算的事实来源。放在这里而不另找落定点: 同一份 projection、
+                // 同一个"镜像还没清"的窗口 —— 下面几行就把 `liveTurns[sid]` 清掉了。
+                scheduler.recordScheduledUsage(sid: sid, turnStart: turnStart, projection: proj)
                 if elapsed >= 1 {
                     let title = allConversations.first { $0.id == sid }?.displayTitle ?? L("任务")
                     let mins = Int(elapsed) / 60, secs = Int(elapsed) % 60
@@ -2596,6 +2746,7 @@ extension ChatStore: AgentTransportDelegate {
             if injectedTurnSid == sid { injectedTurnSid = nil }
             scheduler.finishDreamFireIfNeeded(sid: sid)   // P15.3: 正常落定的那条路
             scheduler.finishWatchFireIfNeeded(sid: sid)   // P19: 助理结论的落定点
+            scheduler.finishExecFireIfNeeded(sid: sid)   // P19 S6: 执行结果的回写点
             // 同上（`stopTurn` 那处也有一份）—— 两个落定点记的是同一件事。
             // 分两处而不是抽一个"回合结束"统一入口: 现在没有这样一个入口, 而造一个
             // 要动整条事件分发的形状（那远超"记一行流水"该动的范围）。

@@ -52,6 +52,14 @@ struct ContentView: View {
                 if store.miniMode { store.miniMode = false }   // 通知跳转 → 还原主窗口
                 NSApp.activate(ignoringOtherApps: true)
             }
+            // P19 S7: 助理结论通知 → **那条结论**（不是那场越来越长的日志会话）。
+            // 落点由 `focusFinding` 决定: 打开定时页 + 把「要展开谁」记到 store 上,
+            // 由 `ScheduledView` 自己消费 —— 视图此刻可能还没建, 不能在这里直接戳它的 @State。
+            CompletionNotifier.shared.onOpenFinding = { fid in
+                store.focusFinding(fid)
+                if store.miniMode { store.miniMode = false }
+                NSApp.activate(ignoringOtherApps: true)
+            }
             if store.completionNotificationsEnabled {
                 Task { await CompletionNotifier.shared.ensureAuthorization() }
             }

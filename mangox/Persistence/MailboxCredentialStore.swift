@@ -20,6 +20,23 @@ protocol MailboxCredentialStore: AnyObject {
 final class KeychainMailboxCredentialStore: MailboxCredentialStore {
     let service = "com.mangox.mailbox"
 
+    /// 冒烟注入缝（与 `KeychainModelKeyStore.keyStoreOverride` 同款）。
+    /// 无签名的冒烟二进制读钥匙串会弹授权框 + `SecItemCopyMatching` 一直等答复 ⇒ 挂死。
+    nonisolated(unsafe) static var override: MailboxCredentialStore?
+
+    static var current: MailboxCredentialStore {
+        if let injected = override { return injected }
+        #if SMOKE
+        return smokeShared
+        #else
+        return KeychainMailboxCredentialStore()
+        #endif
+    }
+
+    #if SMOKE
+    nonisolated(unsafe) static var smokeShared = InMemoryMailboxCredentialStore()
+    #endif
+
     static func accountKey(_ id: UUID) -> String { "mailbox.acct.\(id.uuidString).auth" }
     static func secretKey(_ id: UUID) -> String { "mailbox.sentinel.\(id.uuidString).secret" }
 

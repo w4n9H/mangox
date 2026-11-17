@@ -97,3 +97,22 @@ struct WatchFireContext: Equatable {
     /// 本轮观察里真实出现过的 externalId。证据引用了不在这里的编号 ⇒ 拒收。
     let allowedExternalIds: Set<String>
 }
+
+/// 执行轮里一次过闸的落痕（`agent_finding_actions` 的一行）。
+///
+/// ⚠️ 一行 = **一个步骤号**，不是"一次工具调用"：同一步里连着三个命令是常态，逐个并列会
+/// 把"第 2 步"刷成三十行。`count` 是这一步真正过了几次闸。
+/// `step == 0` 是"正文里没声明步骤号"那一格 —— 红线拦截与整轮收尾都落在它上面。
+struct FindingAction: Identifiable, Equatable {
+    var findingId: UUID
+    var step: Int
+    /// bash / write / edit / computer_act …；收尾那一行是 `result`。
+    var kind: String
+    var target: String?
+    /// allowed / denied_by_redline / drifted / resolved / failed
+    var result: String
+    var output: String?
+    var at: Date
+
+    var id: String { "\(findingId.uuidString)#\(step)" }
+}

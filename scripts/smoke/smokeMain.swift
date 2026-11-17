@@ -5726,6 +5726,18 @@ struct SmokeMain {
         //       把 `turnExtra == nil` 去掉 ⇒ 巡检轮的注入段被对话段顶掉。
         await caseWatchChat()
 
+        // ---- T-WATCHEXEC: P19 S6 执行段（红线 / 写围栏 / 步骤围栏 / 快照 / 收尾判定） ----
+        // 反例: 红线挪到档位判断之后 ⇒ ④ 红（全放行档会放行 rm -rf /）;
+        //       红线挪到 toolCards 守卫之后 ⇒ ⑤ 红（无卡的调用直接 Allow）;
+        //       "没声明步骤"改成放行 ⇒ ⑦ 红; 收尾把 unclear 记成 resolved ⇒ ⑨b 红。
+        await caseWatchExec()
+
+        // ---- T-WATCHNOTIFY: P19 S7 触达常驻（预算闸 / sink 脱敏 / 通知直达 / 登录项） ----
+        // 反例: 账本改成覆盖 ⇒ ① 红; 预算闸 `return` 改成放行 ⇒ ② 红;
+        //       `redact` 原样返回 ⇒ ③④ 红; 飞书只看 HTTP 200 ⇒ ④ 红;
+        //       载荷里带上 finding.body ⇒ ③ 红（外发脱敏唯一守得住的地方）。
+        await caseWatchNotify()
+
         // ---- T-CTX: 上下文压缩可见性 —— 常驻标记 (A) / 即时百分比 (B) / 压缩线 (D) ----
         // 立项依据 (2026-10-17 boss): "现在只有低栏那个状态才有压缩显示, 对话区域…没有吧" ——
         // 确认属实后钉死三条不变量:

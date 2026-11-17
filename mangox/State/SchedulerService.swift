@@ -630,22 +630,7 @@ final class SchedulerService: ObservableObject {
         // 定位/建立日志会话 (有项目归 project, 无项目落平铺 Chats)
         let fmt = DateFormatter()
         fmt.dateFormat = "HH:mm"
-        var logId = task.logSessionId
-        let logExists = logId.map { id in store.allConversations.contains(where: { $0.id == id }) } ?? false
-        if !logExists {
-            let item = ConversationItem(title: task.name)
-            if let pid = task.projectId {
-                if let g = store.projects.firstIndex(where: { $0.id == pid }) {
-                    store.projects[g].items.insert(item, at: 0)
-                }
-                try? store.persistence?.insertChatSession(item, projectId: pid)
-            } else {
-                store.chats.insert(item, at: 0)
-                try? store.persistence?.insertChatSession(item)
-            }
-            logId = item.id
-        }
-        guard let logId else { return }
+        guard let logId = ensureLogSession(for: task) else { return }
         guard !store.runningTurns.contains(logId) else {
             recordFireSkip(task, at: now, reason: "该任务回合在途")
             return
@@ -677,6 +662,17 @@ final class SchedulerService: ObservableObject {
             return
         }
         modelBlockNoted.removeValue(forKey: task.id)   // 跑得起来了: 下次再断要重新留痕
+        // ── P19 S7 日预算闸 ────────────────────────────────────────────────────
+        // 判据（§04 / 验收 ⑩）：`dailyTokenBudget = 1` ⇒ 次日首次 fire 记「日预算已满」并跳过。
+        // 位置在**采集之前**: 采集要跑 curl、要读文件，超了预算还采一遍是白花时间，而且那份
+        // 数据立刻会被丢掉 —— 人的观感是"卡了一下, 什么都没发生"。
+        // 0 = 不设限 ⇒ 既有 Cron 任务的这一行恒不命中（"Cron 零改动"靠的是默认值, 不是分支）。
+        if let reason = budgetBlockedReason(task, at: now) {
+            // 同上面两条 return 的坑：**建了会话就必须绑给任务**，否则每个 cron 点都新建一场。
+            bindLogSession(taskId: task.id, logId: logId)
+            appendTimeline("── \(fmt.string(from: now)) 本轮未运行（\(reason)）──", to: logId)
+            return
+        }
         // 时间线锚点 + prompt 落库 (用户正看着日志会话则同步上屏)
         let viewing = store.selectedConversationId == logId
         // P15.9: 定时与定向**共用这一条**日志会话 ⇒ 分隔行必须当场分得开。两种运行长得一模一样的
@@ -906,6 +902,248 @@ final class SchedulerService: ObservableObject {
         return parts.joined(separator: "\n\n")
     }
 
+    // MARK: - P19 助理 · 执行轮（人对结论点了「采纳并执行」）
+
+    /// 一次执行轮的上下文（收尾要用）。
+    struct ExecFireContext: Equatable {
+        let taskId: UUID
+        let findingId: UUID
+        let projectPath: String
+        let authorizedSteps: [Int]
+    }
+
+    private var execFires: [UUID: ExecFireContext] = [:]
+
+    /// 「采纳并执行」的启动结果 —— **每一种都要有话说**（`ChatStore` 翻成横幅）。
+    /// 不做成 `Bool`: 拒绝的六种原因各有各的补救路径（去绑目录 / 等回合结束 / 改方案…
+    /// 把六句合成一句"现在不能执行"等于让人自己猜）。
+    enum ExecStart: Equatable {
+        case started
+        case rejected(String)
+    }
+
+    /// 起手执行一条结论。**顺序不许换**：闸门 → 状态 running → 快照 → 开回合。
+    ///
+    /// 三处刻意的选择：
+    ///   · 状态先落 `running` 再快照 —— 快照按项目根打包，大仓库要几秒；这几秒里人到收件箱
+    ///     看这条结论，它必须已经是"正在执行"，否则会连点两次（两个 tar 同时写同一个目录）。
+    ///   · 快照**失败即回退**到 `authorized`（"人批准了但没起手"）—— 没有快照就不许写（§03 L3）。
+    ///   · 执行轮走 `ephemeral: false`（真加载历史 =「刚才那一步为什么失败」指代得上），
+    ///     与巡检轮相反；两者是**同一场日志会话**，所以人能在一条时间线上看完整条链路。
+    func startExecution(findingId: UUID) -> ExecStart {
+        guard let store, let p = store.persistence else { return .rejected("本地库不可用") }
+        guard let f = store.findings.first(where: { $0.id == findingId }) else {
+            return .rejected("找不到这条结论（可能刚被删）")
+        }
+        if let reason = WatchExecService.blockReason(finding: f) { return .rejected(reason) }
+        guard let task = scheduledTasks.first(where: { $0.id == f.taskId }) else {
+            return .rejected("它归属的助理任务已经不在了")
+        }
+        if task.isLegacyWaiting { return .rejected("旧类型的任务不能执行（重建为助理）") }
+        // 写入范围 = 任务项目目录。**没有它就没有围栏、也没有可回滚的范围** ⇒ 拒。
+        // 这不是"少了一层保护"，是"这层承诺兑现不了"：快照要 `-C 项目根`，围栏要比项目根。
+        guard let projectPath = task.projectId
+                .flatMap({ pid in store.projects.first(where: { $0.id == pid })?.path }),
+              !projectPath.isEmpty else {
+            return .rejected("这个助理的项目没绑定目录 —— 执行既没有围栏，也没有可回滚的范围")
+        }
+        guard let logId = ensureLogSession(for: task) else { return .rejected("建不出任务日志会话") }
+        if store.runningTurns.contains(logId) { return .rejected("这场任务的回合还在跑，等它结束") }
+        if store.runningTurns.count >= store.maxConcurrentTurns { return .rejected("并发已满") }
+
+        let steps = f.plan.map(\.n)
+        var running = f
+        running.status = .running
+        running.decidedAt = f.decidedAt ?? Date()
+        try? p.upsertFinding(running)
+        store.reloadFindings()
+        appendTimeline("── \(stamp()) 采纳并开始执行（方案第 \(f.planRev) 版 · 第 "
+                       + steps.map(String.init).joined(separator: ",") + " 步），先做快照 ──",
+                       to: logId)
+
+        // 快照放后台: 它按项目根打包，在点击那一刻卡主线程 = "点了没反应"。
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            var failure: String?
+            var dir: String?
+            do {
+                dir = try WatchExecService.snapshot(findingId: findingId,
+                                                    projectPath: projectPath, relativePaths: [])
+            } catch {
+                failure = "\(error)"
+            }
+            DispatchQueue.main.async {
+                guard let self, let store = self.store else { return }
+                if let failure {
+                    // 回 `open` 而不是 `authorized`: 收件箱只显 `open`（`isInboxVisible`），
+                    // 落在 `authorized` 的那条会**从待处理里消失**，而它其实一步都没跑 ——
+                    // 人只会觉得"点了执行, 然后它没了"。批准这件事没兑现，就该重新等人点。
+                    try? store.persistence?.setFindingStatus(id: findingId, status: .open, at: nil)
+                    self.appendTimeline("── 快照失败，没有开始执行（\(failure)）──", to: logId)
+                    store.reloadFindings()
+                    store.setTurnLimitNotice("快照失败，没有开始执行（磁盘满了？）", isError: true)
+                    return
+                }
+                var started = f
+                started.status = .running
+                started.undoPath = dir
+                try? store.persistence?.upsertFinding(started)
+                self.execFires[logId] = ExecFireContext(taskId: task.id, findingId: findingId,
+                                                        projectPath: projectPath,
+                                                        authorizedSteps: steps)
+                self.beginExecTurn(task: task, finding: started, logId: logId,
+                                   projectPath: projectPath, steps: steps)
+            }
+        }
+        return .started
+    }
+
+    private func beginExecTurn(task: ScheduledTask, finding: AgentFinding, logId: UUID,
+                               projectPath: String, steps: [Int]) {
+        guard let store else { return }
+        let prompt = Self.watchExecPrompt(goal: task.prompt, finding: finding)
+        let msg = ChatMessage(role: .user, content: .text(prompt))
+        store.persistMessage(msg, sid: logId)
+        if store.selectedConversationId == logId { store.messages.append(msg) }
+        let extra = WatchExecService.executionSystemPrompt(finding: finding,
+                                                           authorizedSteps: steps,
+                                                           projectPath: projectPath)
+        store.beginTurn(sid: logId, prompt: prompt, ephemeral: false, cwd: projectPath,
+                        unattended: false,
+                        extraSystemPrompt: extra,
+                        executionGuard: ExecutionGuard(projectPath: projectPath,
+                                                       allowedSteps: steps,
+                                                       findingId: finding.id))
+    }
+
+    /// 执行轮的用户消息。观察与方案在 system 段（`executionSystemPrompt`），这里只写
+    /// "人在批准什么" —— 三个月后翻这条日志，第一个问题永远是"当时它被授权干了哪件事"。
+    static func watchExecPrompt(goal: String, finding: AgentFinding) -> String {
+        """
+        人已经批准了下面这条结论的方案，现在按方案执行。
+
+        长期目标：\(goal)
+        这条结论：\(finding.title)
+
+        执行规则在注入的系统段里（已授权的步骤号、写入范围、收尾格式）。
+        做不到就停下来写清楚卡在哪 —— 不要用别的方式绕过同一件事。
+        """
+    }
+
+    /// 一轮执行落定后的收口。由 `ChatStore` 在**两个落定点**调（正常结束 / 手动停）。
+    ///
+    /// 判定顺序 = **先看机器证据，再看模型自己的说法**：
+    ///   ① 过闸落痕里有 `denied_by_redline` / `drifted` ⇒ 一律 `failed`。
+    ///      模型这时往往会写 `RESULT: DONE`（它觉得自己绕过去了）—— 那是我们要盖掉的谎。
+    ///   ② 没有硬拦 ⇒ 认收尾段：`DONE` → resolved，`FAILED` → failed。
+    ///   ③ 什么都没写 ⇒ **failed**。"无法证明"不许记成成功：resolved 是下一轮巡检的事实来源。
+    func finishExecFireIfNeeded(sid: UUID) {
+        guard let ctx = execFires.removeValue(forKey: sid) else { return }
+        guard let store, let p = store.persistence else { return }
+        let text = store.replayMessages(for: sid).compactMap { msg -> String? in
+            guard msg.role == .assistant, case .text(let s) = msg.content, !s.isEmpty else { return nil }
+            return s
+        }.last ?? ""
+        let result = WatchExecService.parseResult(text)
+        let actions = store.transportFor(sid).execActions
+        let blocked = actions.values
+            .filter { $0.result == "denied_by_redline" || $0.result == "drifted" }
+            .sorted { $0.step < $1.step }
+
+        var note = result.summary
+        let status: FindingStatus
+        if !blocked.isEmpty {
+            status = .failed
+            let why = blocked.map { a -> String in
+                let what = a.result == "drifted" ? "跑偏" : "被红线拦下"
+                return a.step > 0 ? "第 \(a.step) 步\(what)" : what
+            }.joined(separator: "，")
+            note = note.isEmpty ? why : "\(why)；\(note)"
+        } else {
+            switch result.verdict {
+            case .done:
+                status = .resolved
+            case .failed:
+                status = .failed
+            case .unclear:
+                status = .failed
+                if note.isEmpty { note = "没有按收尾格式给出 RESULT，按未完成记" }
+            }
+        }
+        try? p.setFindingStatus(id: ctx.findingId, status: status, at: Date())
+        // 落痕 = 每个步骤号一行（同一步多次过闸已经在 transport 侧并过了；"几次"进 `output`）。
+        let now = Date()
+        for a in actions.values.sorted(by: { $0.step < $1.step }) {
+            try? p.upsertFindingAction(FindingAction(findingId: ctx.findingId, step: a.step,
+                                                     kind: a.kind, target: a.target,
+                                                     result: a.result,
+                                                     output: a.count > 1 ? "×\(a.count)" : nil,
+                                                     at: now))
+        }
+        let head = status == .resolved ? "执行结束：已解决" : "执行结束：未完成"
+        let tail = note.isEmpty ? "" : "（\(note)）"
+        appendTimeline("── \(stamp()) \(head)\(tail) ──", to: sid)
+        if let undo = store.findings.first(where: { $0.id == ctx.findingId })?.undoPath {
+            appendTimeline("── 快照留在 \(undo)，7 天内可从收件箱回滚 ──", to: sid)
+        }
+        store.reloadFindings()
+        store.reloadFindingActions()
+    }
+
+    /// 启动时把"上一个进程里还在跑"的执行收回原状。
+    ///
+    /// 依据是结构性的: 调度与执行都在 App 进程内（不常驻），进程没了那轮执行就不存在了。
+    /// **不收的后果是永久卡死** —— `running` 属于 `blocksExecution`（拒绝再执行），
+    /// 而收件箱只显 `open` ⇒ 那条结论从此既点不动、也不出现在待处理里，只能靠翻历史会话
+    /// 才想得起它存在。判据只看状态本身，不看时间戳: 进程刚起来不可能有真在跑的回合。
+    @discardableResult
+    func recoverInterruptedExecutions() -> Int {
+        guard let store, let p = store.persistence else { return 0 }
+        let stuck = ((try? p.loadFindings()) ?? []).filter { $0.status == .running }
+        guard !stuck.isEmpty else { return 0 }
+        for f in stuck {
+            try? p.setFindingStatus(id: f.id, status: .open, at: nil)
+            if let log = scheduledTasks.first(where: { $0.id == f.taskId })?.logSessionId {
+                appendTimeline("── \(stamp()) 上次执行被中断（App 退出），这条结论已放回待处理 ──",
+                               to: log)
+            }
+        }
+        store.reloadFindings()
+        return stuck.count
+    }
+
+    /// 整轮回滚（§03 L3）。**只还原文件，不改方案** —— 状态回 `open`：人回滚 = 承认
+    /// 这次没解决（改回 `resolved` 就等于把问题从收件箱里藏起来了）。
+    /// 返回 nil = 成功；否则是人话的失败原因。
+    func rollbackFinding(_ findingId: UUID) -> String? {
+        guard let store, let p = store.persistence,
+              let f = store.findings.first(where: { $0.id == findingId }) else {
+            return "找不到这条结论"
+        }
+        guard let undo = f.undoPath, !undo.isEmpty else { return "这条结论没有快照，回滚不了" }
+        do {
+            guard try WatchExecService.restore(findingId: findingId) else {
+                return "快照还原失败（快照目录 \(undo)）"
+            }
+        } catch {
+            return "快照还原失败：\(error)"
+        }
+        try? p.setFindingStatus(id: findingId, status: .open, at: nil)
+        try? p.upsertFindingAction(FindingAction(findingId: findingId, step: 0, kind: "rollback",
+                                                 target: undo, result: "restored",
+                                                 output: nil, at: Date()))
+        store.reloadFindings()
+        store.reloadFindingActions()
+        return nil
+    }
+
+    /// 时间线那一段的时:分。**恒中文、恒本地时区**（同 `recordFireSkip`）——
+    /// 它是日志正文，不是界面文案，不进词表。
+    private func stamp() -> String {
+        let fmt = DateFormatter()
+        fmt.dateFormat = "HH:mm"
+        return fmt.string(from: Date())
+    }
+
     // MARK: - P15.9 定向 dream（`由此 Dream`）
 
     /// 定向 dream 的启动结果 —— **每一种都要有话说**（`ChatStore` 负责翻成人话横幅）。
@@ -960,6 +1198,28 @@ final class SchedulerService: ObservableObject {
         if store.runningTurns.count >= store.maxConcurrentTurns { return .busy }
         runScheduledFire(task, targeted: target)
         return .started
+    }
+
+    /// 定位/建立任务的日志会话（有项目归 project，无项目落平铺 Chats）。
+    ///
+    /// ⚠️ 抽出来是为了**巡检轮与执行轮共用同一个会话**：两处各抄一遍这段，早晚有一处少写
+    /// 一行插入 —— 表现是"项目里多出一场没有归属的会话"，而功能照跑、零红灯。
+    func ensureLogSession(for task: ScheduledTask) -> UUID? {   // internal — 冒烟直访（执行轮前置）
+        guard let store else { return nil }
+        if let id = task.logSessionId, store.allConversations.contains(where: { $0.id == id }) {
+            return id
+        }
+        let item = ConversationItem(title: task.name)
+        if let pid = task.projectId {
+            if let g = store.projects.firstIndex(where: { $0.id == pid }) {
+                store.projects[g].items.insert(item, at: 0)
+            }
+            try? store.persistence?.insertChatSession(item, projectId: pid)
+        } else {
+            store.chats.insert(item, at: 0)
+            try? store.persistence?.insertChatSession(item)
+        }
+        return item.id
     }
 
     /// 把刚建好的日志会话**当场绑给任务**。
@@ -1289,9 +1549,137 @@ final class SchedulerService: ObservableObject {
         }
         if !plan.summary.isEmpty { appendTimeline(plan.summary, to: sid) }
         if plan.shouldNotify, let f = plan.finding {
-            store.notifyWatchFinding(f, taskName: task.name)
+            // 系统通知仍受**全局开关**管（`notifyWatchFinding` 里判）; 任务级 `notify.system`
+            // 是它上面的一层：人可以在"全都收"的前提下，把某一条吵人的任务单独静音。
+            if task.notify.system { store.notifyWatchFinding(f, taskName: task.name) }
+            deliverExternalSinks(f, task: task, logId: sid)
         }
         store.reloadFindings()
+    }
+
+    // MARK: - P19 S7 触达：邮件 / 飞书（独立 sink，只发不收）
+
+    /// webhook 投递缝。冒烟注入"只记不发"的实现 —— 真的发一条出去是**别人看得见**的动作。
+    var webhookSender: WebhookSender = URLSessionWebhookSender()
+    /// 邮件 transport 缝（P19 S7）。生产 = `CurlMailTransport`；冒烟注入 `MockMailTransport`
+    /// —— 一条测试都不许往真实 SMTP 投信。
+    var mailTransportFactory: (MailboxAccount, String?) -> any MailTransport = { account, auth in
+        CurlMailTransport(account: account, auth: auth)
+    }
+    /// webhook URL 的钥匙串缝（冒烟注入内存实现，否则读真钥匙串会弹授权框 + 挂死）。
+    var notifySecrets: NotifySecretStore = KeychainNotifySecretStore.current
+
+    /// 外发 sink 分发。**与系统通知共用同一个闸门**（`plan.shouldNotify`）——
+    /// 三个通道各自再判一次频控就有三份会漂的规则，而"同指纹不重发 / 同任务 30 分钟"
+    /// 说的本来就是"打扰人的预算"，与走哪个通道无关。
+    ///
+    /// internal — 冒烟直访：验收 ⑫「库与日志中不出现完整 URL」要打在**真路径**上。
+    func deliverExternalSinks(_ f: AgentFinding, task: ScheduledTask, logId: UUID) {
+        let opts = task.notify
+        let payload = WatchNotifyService.payload(finding: f, taskName: task.name)
+        if let to = opts.emailAddress {
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                let outcome = await self.sendEmail(payload, to: to)
+                self.appendTimeline("── 触达 · 邮件: \(outcome.text) ──", to: logId)
+            }
+        }
+        if opts.webhook {
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                let outcome = await self.sendWebhook(payload, taskId: task.id)
+                self.appendTimeline("── 触达 · 飞书: \(outcome.text) ──", to: logId)
+            }
+        }
+    }
+
+    /// 邮件 sink。**凭据只从 Keychain 取**（`store.mailboxAuth` 背后是
+    /// `MailboxCredentialStore`；库里只有连接参数）。
+    /// internal — 冒烟直访（同上）。
+    func sendEmail(_ p: NotifyPayload, to recipient: String) async -> NotifyOutcome {
+        guard let store else { return .failed("本地状态不可用") }
+        guard let account = store.firstSendableMailboxAccount() else {
+            return .failed("没有可发的邮箱账号（设置 → 集成 → 邮箱账号: 要有 SMTP 主机与授权码）")
+        }
+        let auth = store.mailboxAuth(account.id)
+        let transport = mailTransportFactory(account, auth)
+        do {
+            try await transport.send(WatchNotifyService.mail(p, to: recipient, from: account.address))
+            return .sent("已发给 \(recipient)")
+        } catch let e as MailTransportError {
+            // `MailTransportError.label` 已经把 curl 的 stderr 洗过（`secrets:` 那一层），
+            // 不会把授权码带进日志。
+            return .failed(e.label)
+        } catch {
+            return .failed("\(error)")
+        }
+    }
+
+    /// 飞书 sink。⚠️ **这条路径上的任何一句话都不许含 URL** —— 见 `WatchNotifyService.redact`。
+    /// internal — 冒烟直访（同上）。
+    func sendWebhook(_ p: NotifyPayload, taskId: UUID) async -> NotifyOutcome {
+        guard let raw = notifySecrets.webhookURL(taskId: taskId), !raw.isEmpty else {
+            return .failed("没配 webhook 地址（或钥匙串里那条没了 —— 重新填一次）")
+        }
+        guard let url = URL(string: raw), url.scheme == "https" else {
+            return .failed("webhook 地址不是合法的 https URL: \(WatchNotifyService.redact(raw))")
+        }
+        guard let body = WatchNotifyService.feishuBody(p) else { return .failed("载荷编码失败") }
+        do {
+            let r = try await webhookSender.post(url, json: body)
+            if let err = WatchNotifyService.feishuError(r.body) { return .failed(err) }
+            guard (200..<300).contains(r.status) else {
+                return .failed("HTTP \(r.status)")
+            }
+            return .sent("已发送")
+        } catch {
+            return .failed("发送失败: \(error.localizedDescription)")
+        }
+    }
+
+    // MARK: - P19 S7 日预算
+
+    /// 账本的日键 = **本地日** `yyyy-MM-dd`。
+    /// 存 UTC 日会让 +08:00 的人在早上 8 点前被算进昨天，而那正是"每天 9 点巡检"最常撞的时刻。
+    static func dayKey(_ d: Date) -> String {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.calendar = Calendar(identifier: .gregorian)
+        f.dateFormat = "yyyy-MM-dd"
+        return f.string(from: d)
+    }
+
+    /// 某任务今天已经烧了多少 token。
+    func tokenSpentToday(_ taskId: UUID, now: Date = Date()) -> Int {
+        (try? store?.persistence?.tokenUsage(taskId: taskId, day: Self.dayKey(now))) ?? 0
+    }
+
+    /// 超预算的人话原因；nil = 还没超（或这条任务没设上限）。
+    ///
+    /// ⚠️ 超预算的处理是**跳过并落痕**，不是换一个便宜模型接着跑：降级会让人永远不知道
+    /// 自己设的上限已经生效，而结论质量变了却没人知道为什么（§04）。这是本版唯一的取舍。
+    func budgetBlockedReason(_ task: ScheduledTask, at now: Date = Date()) -> String? {
+        guard task.dailyTokenBudget > 0 else { return nil }
+        let spent = tokenSpentToday(task.id, now: now)
+        guard spent >= task.dailyTokenBudget else { return nil }
+        return "日预算已满（今日已用 \(spent) / 上限 \(task.dailyTokenBudget) token），这次跳过"
+    }
+
+    /// 回合落定后记一笔 token 账 —— 预算闸的**事实来源**。
+    ///
+    /// 只记**定时任务日志会话**的回合：人自己开的会话（包括助理的对话轮）不该吃任务的预算，
+    /// 否则"我去问它两句"会把今天的巡检名额吃掉。
+    /// 按 `turnStart` 过滤而**不是**整场会话求和：日志会话装着几十次 fire，全求和等于
+    /// 第二次 fire 就爆预算。
+    func recordScheduledUsage(sid: UUID, turnStart: Date?, projection: [ChatMessage]) {
+        guard let turnStart, let p = store?.persistence,
+              let task = scheduledTasks.first(where: { $0.logSessionId == sid }) else { return }
+        let tokens = projection.reduce(0) { acc, m in
+            guard m.role == .assistant, let u = m.usage, m.timestamp >= turnStart else { return acc }
+            return acc + u.totalTokens
+        }
+        guard tokens > 0 else { return }
+        try? p.addTokenUsage(taskId: task.id, day: Self.dayKey(Date()), tokens: tokens)
     }
 
     /// 提案的身份 = **根 + 目标路径 + 标题**（去重用；三样都是 dream 自己在提案里写的，

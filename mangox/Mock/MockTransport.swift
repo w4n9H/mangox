@@ -83,6 +83,19 @@ final class MockTransport: AgentTransport {
         extraSystemPromptUpdates += 1
     }
 
+    /// P19: 执行守卫（冒烟断言"执行回合挂上了、普通回合清掉了"）。
+    private(set) var lastExecutionGuard: ExecutionGuard?
+    private(set) var executionGuardUpdates: Int = 0
+    func updateExecutionGuard(_ guardValue: ExecutionGuard?) {
+        // 计数与"清回 nil"两件事都要能观察 —— 同 `lastAnalysisReadOnly` 那条:
+        // 漏清的表现是"之后每一轮都带着红线", 只有计数能证明它真的被下发过。
+        lastExecutionGuard = guardValue
+        executionGuardUpdates += 1
+    }
+
+    /// P19 S6 smoke 注入: 本回合的过闸落痕 (mock 无审批桥, 默认空)
+    var execActions: [Int: ExecAction] = [:]
+
     func updateSessionBinding(_ sessionId: UUID?) {
         guard boundSessionId != sessionId else { return }
         boundSessionId = sessionId

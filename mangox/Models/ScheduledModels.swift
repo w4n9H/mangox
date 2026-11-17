@@ -48,6 +48,13 @@ struct ScheduledTask: Identifiable {
     var kind: TaskKind = .execute
     /// P19 助理的来源列表（落库 JSON）。`project` 不是一行来源 —— 见 `WatchSourceModels.swift`。
     var sources: [WatchSourceSpec] = []
+    /// P19 S7: 触达配置（落库 JSON）。缺省 = 只发系统通知（与 S4 的行为逐字一致）。
+    var notify: NotifyOptions = .default
+    /// P19 S7: 日 token 预算。**0 = 不设限**（默认）—— 所以 Cron 档的既有任务一个字节都不变。
+    ///
+    /// 超预算的处理是**跳过并落痕**，不是"换个便宜模型接着跑"：降级会让人永远不知道
+    /// 自己设的上限已经生效，而结论质量变了却没人知道为什么（§04）。
+    var dailyTokenBudget: Int = 0
 
     /// 旧条件值守任务 = 只读归档: 不 fire、不保存、列表置灰。
     var isLegacyWaiting: Bool { kind == .legacyWaiting }

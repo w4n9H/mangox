@@ -7,7 +7,7 @@
    **本文件由 scripts/l10n/gen_strings.py --write 生成, 别手改** ——
    译文改 scripts/l10n/en_values.py 的 VALUES, 再跑 --write。
 
-   条数: 945
+   条数: 1024
 */
 
 " (值:\"%@\")" = " (value: %@)";
@@ -44,6 +44,7 @@
 "%@ 得按编号来 —— 它要知道动的是哪一格。" = "%@ has to go by row number - it needs to know which row it is moving.";
 "%@ 拷贝失败: %@" = "Failed to copy %@: %@";
 "%@ 落在**别的 App** 的窗口上(不是「%@」) ⇒ 没点。" = "%@ lands on **another app**'s window (not \"%@\") ⇒ nothing was tapped.";
+"%@\n\n任务：%@\n处理：打开 MangoX → 定时任务 → 待处理\n\n—— 正文与证据留在 App 内，不经邮件外发。" = "%@\n\nTask: %@\nHandle: open MangoX → Scheduled → Pending\n\n— The body and evidence stay inside the app and are never sent by email.";
 "%lld 个" = "%lld";
 "%lld 个人格文件 frontmatter 破损, 未注入且已禁止新建 key: %@" = "%lld persona files have broken frontmatter — not injected, and creating keys is blocked: %@";
 "%lld 个人格文件是「按需」的, 模型不知道它们存在: %@" = "%lld persona files are “on demand” — the model does not know they exist: %@";
@@ -97,6 +98,7 @@
 "Cron 定时任务" = "Cron scheduled task";
 "Cron 定时：到点执行 `prompt` 里写好的动作" = "Cron schedule: runs the actions written in `prompt` when due";
 "HTML 已导出 · 已在 Finder 显示" = "HTML exported · revealed in Finder";
+"IMAP 主机" = "IMAP host";
 "IMAP 正常, 但 SMTP 未通过: %@" = "IMAP works, but SMTP failed: %@";
 "IMAP 正常, 但 SMTP 连接失败" = "IMAP works, but the SMTP connection failed";
 "IMAP 正常, 但账号缺 SMTP 主机" = "IMAP works, but this account has no SMTP host";
@@ -104,10 +106,12 @@
 "Key 已存" = "Key stored";
 "Key 缺失 (物化后不可用)" = "Key missing (unusable after materialization)";
 "MangoX 使用手册" = "MangoX User Guide";
+"MangoX 执行拦下: %@" = "MangoX blocked this run: %@";
 "MangoX 自动裁决拦下: %@" = "Blocked by MangoX auto-judge: %@";
 "P11 §3.2: persona 段必须是独立第一段, 不参与排序与截尾" = "P11 §3.2: the persona segment must be the first standalone segment — it takes no part in ordering or truncation";
 "PATH 里没有 pi 时, App 发现不了托管安装以外的位置 (Nix / 自定义 prefix)。" = "If pi is not on PATH, the app cannot find locations outside the hosted install (Nix / custom prefix).";
 "QQ 邮箱" = "QQ Mail";
+"SMTP 主机" = "SMTP host";
 "UID %lld 未取到邮件正文" = "No message body returned for UID %lld";
 "agent 每改一个文件, 这里就会多一行" = "Every file the agent touches adds a row here";
 "base URL 无效" = "Invalid base URL";
@@ -131,6 +135,7 @@
 "provider (自定义)" = "provider (custom)";
 "scroll 要说清往哪滚(up / down) ⇒ 没动。" = "scroll must say which way (up / down) ⇒ nothing was done.";
 "sort 写文件" = "sort writes a file";
+"token / 天" = "tokens / day";
 "tokens" = "tokens";
 "txt / html 没有 frontmatter — 标题就是文件名" = "txt / html have no frontmatter — the filename is the title";
 "· %lld 个在途" = "· %lld in flight";
@@ -148,8 +153,10 @@
 "⚠️ 这一档没有语义闸: 读不出文字时我只能凭坐标点、往焦点里写字 —— 点错当场发生, 回车发出去的消息撤不回" = "⚠️ This tier has no semantic gate: when I cannot read the text I click by coordinates and type into whatever has focus - a misclick lands immediately, and a message sent with Return cannot be recalled";
 "✓ 完成 · 耗时 %02d:%02d" = "✓ Done · took %02d:%02d";
 "✓ 已保存" = "✓ Saved";
+"✓ 连接正常" = "✓ Connection OK";
 "✓ 连通, 勾选后保存" = "✓ Reachable — tick the models and save";
 "✓ 采纳入库" = "✓ Accepted and stored";
+"✗ %@" = "✗ %@";
 "「%@」上没有含「%@」的动作 —— %@ ⇒ 没动。" = "\"%@\": no action matching \"%@\" -- %@ ⇒ nothing done.";
 "「%@」不在前台 ⇒ 没写。" = "\"%@\" is not in front ⇒ nothing was typed.";
 "「%@」不在前台 ⇒ 没点。" = "\"%@\" is not in front ⇒ nothing was tapped.";
@@ -175,6 +182,7 @@
 "「%@」附近没有可写的滚动条(它自己和上面几层都没有) ⇒ 滚不动。" = "There is no writable scroll bar around %@ (not on it, nor a few levels above it) ⇒ it cannot be scrolled.";
 "「按坐标点击」这一档关着 ⇒ 没点。" = "\"Click by position\" is off ⇒ nothing was tapped.";
 "「模拟键盘输入」这一档关着 ⇒ 没写。" = "\"Keyboard input\" is off ⇒ nothing was typed.";
+"【MangoX】%@\n打开 App 的收件箱处理 —— 正文与证据留在本地。" = "[MangoX] %@\nOpen the inbox in the app to handle it — the body and evidence stay local.";
 "一" = "Mon";
 "三" = "Wed";
 "上一场 dream 还在跑，等它结束再试" = "Another dream is still running — try again when it finishes";
@@ -201,6 +209,7 @@
 "不是能写字的地方 ⇒ 我不往里写。" = " is not a field you can type into ⇒ I will not write there.";
 "不用单独给。辅助功能一给，键盘监听就有了 —— 所以系统设置那一页里看不到 MangoX，那是正常的，不是漏装。" = "Nothing to grant separately. Accessibility already covers keyboard listening, so MangoX will not show up on that page of System Settings — that is normal, not a missing install.";
 "不采纳该候选, 直接删除" = "Dismiss this candidate and delete it";
+"不限" = "No limit";
 "丢弃" = "Discard";
 "丢弃本地修改, 重读磁盘文件" = "Discard local changes and reread the file from disk";
 "两个都说, 我不知道该按哪个。" = "Both were given; I do not know which one you mean.";
@@ -228,6 +237,7 @@
 "仅项目会话可用 (在输入框上方选择项目)" = "Available in project sessions only (pick a project above the composer)";
 "今天" = "Today";
 "今天做点什么？" = "What should we do today?";
+"今日已用 %lld" = "Used today: %lld";
 "仍然覆盖" = "Overwrite anyway";
 "从待处理里移除（不是解决 —— 结论本身留着）" = "Remove from the pending list (this does not resolve it — the finding stays)";
 "从托管区删除" = "Remove from managed area";
@@ -261,6 +271,7 @@
 "保存并启用" = "Save and enable";
 "保存日志" = "Save log";
 "保存更改" = "Save changes";
+"保存账号" = "Save account";
 "保持屏幕常亮" = "Keep screen on";
 "修好文件开头的 --- 收尾后自动恢复; 点行尾「文件」去打开目录" = "Closing the opening --- restores it automatically; click “File” at the row’s end to open the folder";
 "停止 (⌘.)" = "Stop (⌘.)";
@@ -281,6 +292,7 @@
 "全文" = "Full text";
 "全部丢弃" = "Discard all";
 "全部采纳" = "Accept all";
+"全都关着 —— 结论只落在收件箱" = "All off — findings only land in the inbox";
 "六" = "Sat";
 "关" = "Off";
 "关闭" = "Close";
@@ -326,6 +338,7 @@
 "删除条目「%@」？" = "Delete the entry “%@”?";
 "删除笔记「%@」？" = "Delete the note \"%@\"?";
 "删除该条目" = "Delete this entry";
+"删除该账号并清掉钥匙串里的授权码" = "Delete this account and clear its auth code from the keychain";
 "删除项目 (保留 AI 记忆文件)" = "Delete project (keep the AI memory files)";
 "删除项目…" = "Delete project…";
 "删除项目「%@」？" = "Delete the project “%@”?";
@@ -343,6 +356,8 @@
 "助手" = "Assistant";
 "助理" = "Assistant";
 "助理 · %lld 个来源" = "Assistant · %lld sources";
+"助理巡检住在 App 进程里, 不开 App 就不会巡检。开启后 macOS 可能要求你在「登录项」里批准一次" = "Assistant checks run inside the app process, so nothing runs while it is closed. macOS may ask you to approve it once in Login Items";
+"助理结论的邮件通知借它发出。授权码存钥匙串, 不落数据库; 第一个能发的账号就是发件人。" = "Used to send email notifications for assistant findings. The auth code lives in the keychain, not the database; the first sendable account is the sender.";
 "助理至少要有项目这一条来源；外部来源（邮件）本版未接入 —— 它的只读采集要等「不置已读」验证通过。" = "An assistant needs at least the project source. External sources (mail) are not wired up yet — read-only collection waits for a proven \"never marks as read\" path.";
 "助理要绑定一个项目 —— 它是本版唯一可用的来源" = "An assistant needs a project — it is the only usable source in this version";
 "助理（目标式）" = "Assistant (goal-based)";
@@ -358,6 +373,10 @@
 "去审核" = "Review";
 "去结算" = "Checkout";
 "去调 priority, 或把它改成「需要时才查」" = "Raise its priority, or switch it to “On demand”";
+"发件: %@" = "From: %@";
+"发件人与登录用户名都是它" = "Used as both the sender and the login name";
+"发件服务器 %@" = "Outgoing server %@";
+"发件账号" = "Sender";
 "发送 (Enter)" = "Send (Enter)";
 "发送失败: %@" = "Send failed: %@";
 "取消" = "Cancel";
@@ -367,6 +386,7 @@
 "只保证 MangoX 自己不被休眠打断。任务实际是在后台进程里跑的，系统会不会让它变慢，这条设置影响不到。" = "This only keeps MangoX itself from being interrupted by sleep. Tasks actually run in the background, and this setting cannot affect whether the system slows them down.";
 "只出提案，不改任何文件" = "Proposals only, no files touched";
 "只列真机量过的应用：内置的几个恒列，第三方的（如 Chrome）装了才会出现。大部分在手册里写了怎么读、哪些事做不到；别的应用界面差异太大，量不准，先不开。" = "Only apps measured on a real machine: the built-in ones are always listed, third-party ones (such as Chrome) appear only when installed. Most have a manual saying how to read them and what they cannot do; other apps vary too much to measure reliably, so they stay closed for now.";
+"只在这页显示" = "Shown on this page only";
 "只收 .md (大小写敏感); 若你刚要删或改名, 这条就是唯一的线索" = "Only .md is picked up (case-sensitive); if you just deleted or renamed something, this line is the only trace of it";
 "只是不再挂载, 目录与里面的文件一个都不动。" = "It is only unmounted — the directory and every file inside stay untouched.";
 "只有勾了「视觉」的 App 才会截窗口。给完要重启 MangoX 才生效 —— 灯不会当场变, 别以为没给成。" = "Only apps with \"Vision\" ticked get a window screenshot. Granting it takes effect only after you restart MangoX - the lamp will not flip right away, so do not read that as a failure.";
@@ -381,19 +401,24 @@
 "可操作" = "Act";
 "可读" = "Read";
 "右边是空的 —— 采纳后这篇进系统废纸篓, 还能在那里捞回来。" = "The right side is empty — accepting moves this note to the system Trash, where you can still recover it.";
+"合盖休眠期间仍然不跑; 唤醒后按「漏跑」清单补最近一次（列表在定时任务页顶部）。" = "Nothing runs while the lid is closed; after waking it catches up on the most recent missed run (the list sits at the top of the Scheduled page).";
 "后台点不动(实测前后两帧一模一样), 而且真点下去会把它拽到最前面。" = "a click in the background does not land (measured: the two frames are byte-identical), and a real one would drag it to the front.";
 "向上" = "Up";
 "向下" = "Down";
 "含「%@」的动作有 %lld 个(%@), 分不清你要哪个 ⇒ 没动。" = "Actions matching \"%@\": %lld of them (%@), so which one you want is ambiguous ⇒ nothing done.";
+"含端口, 如 imap.example.com:993" = "Include the port, e.g. imap.example.com:993";
+"含端口, 如 smtp.example.com:465" = "Include the port, e.g. smtp.example.com:465";
 "启停 (重启引擎生效)" = "Enable / disable (restart the engine to apply)";
 "启用" = "Enabled";
 "命中统计将在启用后生效" = "Hit stats take effect once enabled";
+"响应不是 JSON（机器人地址对吗？）" = "The response is not JSON (is the bot URL correct?)";
 "响应格式不认识" = "Unrecognized response format";
 "四" = "Thu";
 "回到最新" = "Back to latest";
 "回合完成 · 耗时 %02d:%02d" = "Turn finished · took %02d:%02d";
 "回合完成 · 耗时 %02d:%02d\n%@" = "Turn finished · took %02d:%02d\n%@";
 "回合完成通知" = "Turn completion notifications";
+"回滚" = "Roll back";
 "回车在不少 App 里等于发送, 一段带换行的字会变成好几条消息。" = "In many apps Return sends, so a paragraph with line breaks would go out as several messages.";
 "图上的位置是相对窗口的, 窗口一动就全偏 —— 重新 read 一次再算。" = "Positions in the picture are relative to the window, so moving it shifts every one of them — read again and measure again.";
 "图片: %@" = "Image: %@";
@@ -405,6 +430,7 @@
 "在工作区打开" = "Open in workspace";
 "在当前项目下开一个新会话, 它会拿到最新的工具表" = "Start a new conversation in this project — it will see the latest tool list";
 "在这里输入该做什么…" = "Type what to do…";
+"地址没能写进钥匙串 —— 飞书这一路会发不出去" = "The URL could not be written to the keychain — Feishu delivery will fail";
 "坐标只能配 press(在那个点上按一下) ⇒ 没动。" = "A point only goes with press (one click at that spot) - nothing was done.";
 "坐标是全局屏幕坐标, 左上原点, 和快照里每行末尾那个 (x,y) 同一套。" = "Coordinates are global screen coordinates with the origin at the top left - the same system as the (x,y) at the end of every outline row.";
 "坐标点击(还没做) —— 那就如实告诉用户。" = "coordinate clicks, which are not implemented yet — tell the user that plainly.";
@@ -412,9 +438,11 @@
 "备份中…" = "Backing up…";
 "备份失败" = "Backup failed";
 "备份已在进行中" = "A backup is already running";
+"备注名" = "Label";
 "复制" = "Copy";
 "复制全文" = "Copy all";
 "复制全部输出" = "Copy all output";
+"外发只带标题与任务名，正文与证据留在 App 内。飞书地址存钥匙串，库里只有「配过」。" = "Outgoing messages carry only the title and task name; the body and evidence stay inside the app. The Feishu URL lives in the keychain — the database only records that one was set.";
 "外观" = "Appearance";
 "外部来源" = "External source";
 "外链图片不在应用内加载" = "Remote images are not loaded in the app";
@@ -451,6 +479,7 @@
 "尚无日志" = "No logs yet";
 "尚未备份" = "No backup yet";
 "尚未请求通知授权, 打开开关后首次完成时会请求" = "Notification permission has not been requested yet; the first completed turn after you enable this will ask.";
+"尚未配置邮箱。要用邮件通知就在这里加一个 —— 建议专门开一个个人邮箱, 不要用企业邮箱。" = "No mailbox configured yet. Add one here to use email notifications — a dedicated personal mailbox works best; avoid a corporate one.";
 "屏幕录制" = "Screen Recording";
 "展开侧栏" = "Expand sidebar";
 "展开整段代码" = "Expand the whole code block";
@@ -461,7 +490,10 @@
 "工具执行失败" = "Tool execution failed";
 "工具相位落库" = "Persist tool phases";
 "左边是空的 —— 这是一篇**还不存在**的笔记(增)。" = "The left side is empty — this note does not exist yet (new).";
+"已从快照还原" = "restored from snapshot";
+"已保存" = "Saved";
 "已保存 (重新输入可覆盖)" = "Saved (type a new key to replace)";
+"已保存（不回显）—— 要换就整条重填" = "Saved (not shown) — paste a new one to replace it";
 "已停用 —— 索引里不出现这个库" = "Disabled — this base does not appear in the index";
 "已允许" = "Allowed";
 "已允许（始终）" = "Allowed (always)";
@@ -470,18 +502,22 @@
 "已删除会话" = "Deleted session";
 "已删除的任务" = "Deleted task";
 "已删除的会话" = "Deleted session";
+"已回滚到执行前的快照" = "Rolled back to the pre-run snapshot";
 "已复制" = "Copied";
 "已复制图片" = "Image copied";
 "已开始 dream：%@" = "Dream started: %@";
+"已执行" = "ran";
 "已拒绝" = "Denied";
 "已挂载的知识库 %lld 个没进索引: %@" = "%lld mounted knowledge bases did not make it into the index: %@";
 "已暂停" = "Paused";
 "已更新: %lld 家 / %lld 条" = "Updated: %lld providers / %lld models";
+"已注册，但系统要求你批准 —— 系统设置 → 通用 → 登录项 → 允许 MangoX" = "Registered, but macOS needs your approval — System Settings → General → Login Items → allow MangoX";
 "已清空 %lld 条提案" = "Cleared %lld proposals";
 "已经有同名笔记了" = "A note with that name already exists";
 "已跑 %lld 次" = "Ran %lld times";
 "已采纳 %lld 条" = "Accepted %lld";
 "已采纳 %lld 条，%lld 条没成，仍留在队列里" = "Accepted %lld, %lld failed and stayed in the queue";
+"已随登录启动 —— 合盖休眠期间仍然不跑，唤醒后按漏跑清单补最近一次" = "Launches at login — still does not run while the lid is closed; after waking it catches up on the most recent missed run";
 "常规与完整模式的会话都能用 (不是只对当前会话); 改完勾选, 下一次对话才生效" = "Sessions in Standard or Full mode can use this (not just the current one). Ticked changes take effect on the next turn.";
 "常规模式" = "Standard mode";
 "常驻" = "Always on";
@@ -501,6 +537,7 @@
 "引擎返回了空回合 · 引擎没有返回任何内容, 请检查模型与凭据" = "The engine returned an empty turn — nothing came back; check the model and credentials";
 "引擎返回了空回合 · 模型 %@ 可能不存在或已下线" = "The engine returned an empty turn · model %@ may not exist or is no longer available";
 "引用工作区文件" = "Reference a workspace file";
+"弹系统通知；受「设置 → 通用 → 回合完成通知」总开关约束" = "Show a system notification. The global \"turn finished\" switch in Settings → General still applies";
 "归属" = "Goes to";
 "当前" = "Current";
 "当前会话 %lld 轮" = "Current session: %lld turns";
@@ -532,6 +569,8 @@
 "打开知识面板的待审核分组" = "Open the review group in the knowledge panel";
 "打开菜单" = "Open menu";
 "托管" = "Managed";
+"执行中…" = "Running…";
+"执行痕迹" = "Run trace";
 "执行自定义动作" = "Run custom action";
 "扩展 %@ 在处理 %@ 时出错: %@" = "Extension %@ failed while handling %@: %@";
 "扩展请求了 MangoX 不处理的「%@」界面, 已按「取消」应答。" = "Extension requested a \"%@\" prompt the app does not handle; answered \"Cancel\".";
@@ -542,6 +581,7 @@
 "把名字说得更准一些。" = "Name it more precisely.";
 "把这一份整篇写进上面那条目标; 被顶掉的那一版会进变更史" = "Write this whole text into the target above; the version it replaces goes to the history";
 "把这一篇移进系统废纸篓; 旧内容会先进变更史" = "Move this note to the system Trash; its old content is recorded in the change history first";
+"把这一轮改动还原成执行前的快照（7 天内可用）" = "Restore the changes from this run using the pre-run snapshot (available for 7 days)";
 "把这批提案逐条落盘; 没成的会留在队列里" = "Write every proposal in this batch to disk; any that fail stay in the queue";
 "把这条回复存成图片放进剪贴板" = "Save this reply as an image on the clipboard";
 "拉取失败 (%@), 已回落预设清单" = "Fetch failed (%@); fell back to the built-in preset list";
@@ -552,12 +592,17 @@
 "按 (" = "Press (";
 "按下新组合键…" = "Press a new key combination…";
 "按坐标点这一档认不出控件语义, 这类词一律不替你点 —— 这一步你自己点。" = "Clicking by position cannot tell what a control means, so I never tap these words for you — this step is yours.";
+"按这份方案执行；起手先做整轮快照，红线动作恒拒" = "Run this plan. A full snapshot is taken first; redlined actions are always refused";
 "按需加载" = "Loaded on demand";
 "捕获消息落库" = "Persist captured messages";
 "捕获追加落库" = "Persist appended captures";
 "换" = "Swap";
 "换一个标题" = "pick another title";
 "换行" = "Wrap";
+"授权码" = "Auth code";
+"授权码 / 客户端专用密码" = "Auth code / app password";
+"授权码住钥匙串, 不落数据库。留空保存 = 清除。" = "The auth code lives in the keychain, not the database. Save an empty value to clear it.";
+"授权码已设置" = "Auth code set";
 "排队 %lld 条" = "%lld queued";
 "接口地址" = "Base URL";
 "接管检测" = "Takeover detection";
@@ -621,6 +666,7 @@
 "既不在 prompt 内、也不在降级清单里 — 这是 P11 要根除的那个缺陷" = "Neither in the prompt nor in the degraded list — exactly the defect P11 set out to remove";
 "既不在索引里、也不是因预算缺席 — 这是组装 bug, 请反馈" = "Neither in the index nor skipped for budget — this is an assembly bug; please report it";
 "日" = "Sun";
+"日预算" = "Daily budget";
 "旧类型 · 已停用（不再值守）" = "Legacy type · disabled (no longer watching)";
 "旧类型已停用，不能保存" = "Legacy type is disabled and cannot be saved";
 "时" = "Hour";
@@ -640,16 +686,20 @@
 "最多 %lld 张" = "Up to %lld";
 "最小化为任务台" = "Minimize to the task bar";
 "最近 %@" = "Last %@";
+"最近执行" = "Recently run";
 "最近提交" = "Recent commits";
 "最高" = "Max";
 "有些 App(尤其网页内容)不把滚动条交给系统 —— 那就趁早告诉用户这一页我一次读不完," = "Some apps — web content in particular — never hand a scroll bar to the system, so tell the user early that this page cannot be read in one go,";
 "有些应用写不进字（微信没有可用的输入框控件）。开着：我能把一段文字敲进当前的输入框。" = "Some apps cannot be typed into at all (WeChat exposes no usable text field). On: I can type a piece of text into the focused field.";
 "有些应用只看得见画面、认不出控件（比如微信）。开着：我能照着画面上的位置点下去。" = "Some apps only show a picture and expose no controls (WeChat, for one). On: I can click where the picture says to.";
 "有任务在跑时不让电脑休眠，跑完自动恢复；没任务时照常休眠" = "Keeps the computer awake while a task is running and lets it sleep again afterwards";
+"服务商" = "Provider";
+"服务商帮助" = "Provider help";
 "服务端未返回该邮件 (UID 已不存在或被移走)" = "The server returned no such message (the UID no longer exists or was moved)";
 "未上报 %lld 条 (旧会话无 responseId)" = "%lld unreported (older sessions have no responseId)";
 "未保存" = "Unsaved changes";
 "未发现任何扩展\n点右上角 + 导入" = "No extensions found\nUse + in the top right to import";
+"未开启 —— 打开 App 才会巡检" = "Off — checks only run while the app is open";
 "未找到 pi CLI, Agent 引擎不可用。请安装 pi 后重启 MangoX。" = "pi CLI not found; the agent engine is unavailable. Install pi and restart MangoX.";
 "未找到 pi CLI, 捕获未发送" = "pi CLI not found; capture not sent";
 "未找到可执行的 pi。已按顺序查找:" = "No executable pi found. Looked in this order:";
@@ -708,10 +758,13 @@
 "永久删除" = "Erase";
 "没有匹配的会话或项目" = "No matching chats or projects";
 "没有可勾的应用" = "No apps to select";
+"没有可发的账号 —— 设置 → 集成 → 邮箱账号" = "No sendable account — Settings → Integrations → Mailbox accounts";
 "没给要写的字 ⇒ 没写。" = "No text to write ⇒ nothing was typed.";
 "注入块在 spawn 期生效; 点此重启引擎立刻生效" = "The injection block takes effect at spawn; restart the engine to apply it now";
 "注入块已是最新" = "Injected block is up to date";
 "注入量" = "PAYLOAD";
+"注册失败: %@" = "Registration failed: %@";
+"注销失败: %@" = "Unregistration failed: %@";
 "浅色" = "Light";
 "测试中…" = "Testing…";
 "测试连接" = "Test connection";
@@ -719,6 +772,7 @@
 "消息" = "Messages";
 "消息落库" = "Persist messages";
 "深色" = "Dark";
+"添加邮箱" = "Add mailbox";
 "添加附件" = "Add attachment";
 "清空废纸篓" = "Empty Trash";
 "清空这批提案; 磁盘上的笔记一个字节都不会动" = "Clear this batch; no note on disk is touched";
@@ -775,7 +829,9 @@
 "第 %lld 轮" = "Turn %lld";
 "等待" = "Waiting";
 "等待审批" = "Awaiting approval";
+"粘贴自定义机器人 webhook 地址" = "Paste the custom-bot webhook URL";
 "系统权限" = "System permissions";
+"系统通知" = "System notification";
 "索引宁缺勿残 — 残缺的索引会让你以为资料只有这些; 摘掉或停用一两个库即可恢复" = "A partial index is worse than none — it would read as “these are all the materials”. Unmount or disable a base or two to restore it";
 "索引预览" = "Index preview";
 "细节" = "Details";
@@ -786,7 +842,9 @@
 "编辑内容后采纳, 转为正式条目 (需重启引擎生效)" = "Edit and accept to turn it into a proper entry (restart the engine to apply)";
 "缺 IMAP 主机" = "IMAP host missing";
 "缺 SMTP 主机" = "SMTP host missing";
+"缺 SMTP 主机 —— 没有它发不了信（选了自定义就要手填）" = "Missing SMTP host — no mail can be sent without it (fill it in when using a custom provider)";
 "缺少 Message-ID" = "Missing Message-ID";
+"缺授权码" = "Auth code missing";
 "网易 126 邮箱" = "NetEase 126 Mail";
 "网易 163 邮箱" = "NetEase 163 Mail";
 "网页版邮箱「设置 → IMAP/SMTP」开启服务, 手机验证后得到授权码 —— 用它当密码, 不是登录密码" = "In the web mailbox, open Settings → IMAP/SMTP, enable the service, verify by phone and copy the app password — use that as the password, not your login password";
@@ -810,6 +868,7 @@
 "行标题是文件名加上一句固定说明（如 SOUL.md - 我是谁）；表外的文件就只有文件名" = "A row title is the file name plus a fixed description (e.g. SOUL.md - Who I Am); files outside the list show only the file name";
 "补跑" = "Catch up";
 "补跑只跑最近一次; 忽略 = 认下这批, 不再提示" = "Catch up runs only the most recent one; Ignore accepts this batch and stops asking";
+"被红线拦下" = "blocked by redline";
 "要么窗口被挪走了, 要么这个点是照着另一张图算的。" = "Either the window moved, or that point was measured from a different picture.";
 "要保存" = "Save";
 "要写 %lld 个字, 超过这一档的上限 %@ ⇒ 没写。" = "That is %lld characters, over the %@ limit of this mode ⇒ nothing was typed.";
@@ -820,6 +879,7 @@
 "要让它能动, 请在 设置 › 集成 › 电脑操作 里给它开「可操作」。" = "To let it act, tick Act for it under Settings › Integrations › Computer use.";
 "视觉" = "Vision";
 "解析失败: %@" = "Parsing failed: %@";
+"触达" = "Delivery";
 "计划提问" = "Plan question";
 "计划确认还没接上引擎 —— 目前只作展示" = "Plan confirmation is not wired up yet — this card is display only for now";
 "认下这批漏跑, 不再提示" = "Accept these misses and stop asking";
@@ -845,11 +905,13 @@
 "读任何 App 的界面都靠它。没有它, 读界面会直接报错。" = "Reading any app's interface depends on it. Without it, a read fails outright.";
 "读到一次完整的就会自动恢复 —— 这条不是黑名单, 是实测记录" = "One complete read clears this on its own - it is an observation, not a blocklist";
 "调用" = "Calls";
+"账号已存, 但授权码没能写进钥匙串 —— 邮件会发不出去, 请重设一次" = "The account was saved, but the auth code could not be written to the keychain — email will fail, please set it again";
 "账号缺授权码" = "Account has no app password";
 "超出预算：只会做最近 %@ 字，前面的回合会被省略。" = "Over budget: only the latest %@ chars are used, earlier turns are skipped.";
 "超时" = "timed out";
 "超过上限时: 会话发送被拒绝并提示; 定时任务到点会跳过并在日志会话记录原因。" = "When over the limit: sends in sessions are refused with a message, and scheduled tasks skip that run and record the reason in the log session.";
 "超高" = "Extra High";
+"跑偏，已中止" = "out of scope, aborted";
 "跟随系统" = "Follow system";
 "跟随系统 = 由 macOS 的浅色/深色设置决定; 切换立即生效, 影响全 App (含迷你台)" = "Follow system = decided by macOS light/dark; switching applies immediately across the app (task bar included)";
 "跟随系统 = 由 macOS 的语言设置决定; 切换立即生效, 影响全 App (含迷你台与快速捕获)。系统级文案 (菜单栏 / 系统弹窗) 仍随系统语言, 重启后完全一致。" = "Follow system = decided by the macOS language setting; switching applies immediately across the app (task bar and quick capture included). System-level text (menu bar, system dialogs) still follows the system language and matches after a restart.";
@@ -882,7 +944,10 @@
 "这一轮花了什么" = "What this turn cost";
 "这两项各管一件事，缺哪个哪件事就不工作。系统只会问你一次；被拒之后还能点那一页的「+」手动加回来。" = "Each of these two covers one thing, and whatever it covers stops working without it. macOS asks only once — after a refusal you can still add MangoX with the \"+\" button on that page.";
 "这个会话还没说过话，侧问会带一个空上下文。" = "This session has no messages yet — the side chat will start empty.";
+"这个域名不像飞书 —— 确认后再保存也行（自建中转可以）" = "This domain does not look like Feishu — you can still save it (self-hosted relays are fine)";
 "这个对话建立时就钉住了工具表，看不到后来新增的 %@。新建一个会话就能用。" = "This conversation pinned its tool list when it started, so it never sees %@ added later. Start a new conversation to pick them up.";
+"这个构建不能注册登录项 —— 打开 App 才会巡检" = "This build cannot register a login item — checks only run while the app is open";
+"这个构建没有应用标识，不能注册登录项" = "This build has no application identifier, so a login item cannot be registered";
 "这个目录里没有可读的文档" = "No readable documents in this directory";
 "这个路径不在笔记目录里" = "That path is outside the notes directory";
 "这么长的东西多半是搞错了对象。" = "That much text usually means the wrong field was picked.";
@@ -897,6 +962,7 @@
 "这里有未保存的修改, 我不能替你决定保存还是丢弃 ⇒ 我点了「取消」, 等你来处理。" = "There are unsaved changes and I cannot decide for you whether to keep or discard them, so I clicked Cancel and left it to you.";
 "这里有未保存的修改, 而且这个弹窗没有「取消」键 ⇒ 我什么都不点, 等你来处理。" = "There are unsaved changes, and this prompt has no Cancel button, so I clicked nothing and left it to you.";
 "远程驱动档不允许操作界面" = "The remote-driven mode does not allow operating the UI";
+"连一次 IMAP 并做一次 SMTP 认证（不发信）" = "Connect over IMAP and authenticate SMTP once (no mail is sent)";
 "连接失败: %@" = "Connection failed: %@";
 "连接超时" = "Connection timed out";
 "追加-" = "Append-";
@@ -917,10 +983,15 @@
 "选择预设, 填 Key 后测试连接" = "Pick a preset, enter the key and test the connection";
 "通用" = "General";
 "那一页里没有 MangoX？点左下角「+」手动添加，或者点「申请」让我自己登记进去。" = "No MangoX on that page? Use the \"+\" button at the bottom left to add it, or hit \"Request\" and I will register myself.";
+"邮件收件人（留空 = 不发）" = "Email recipient (blank = do not send)";
+"邮箱地址" = "Email address";
+"邮箱地址不像一个地址" = "That does not look like an email address";
+"邮箱账号" = "Mailbox accounts";
 "配好 Key 才会挂上内置搜索扩展 (工具 bocha_web_search); Key 存 Keychain, 只在 spawn 时以环境变量注入 pi 进程, 不落盘" = "The built-in search extension (tool bocha_web_search) is mounted only once a key is set; the key lives in the Keychain and is passed to the pi process as an environment variable at spawn time, never written to disk";
 "采纳" = "Accept";
 "采纳前, 磁盘上的笔记一个字节都不会变 —— 上面那份 diff 只是「如果」。" = "Nothing on disk changes until you accept — the diff above is only a \"what if\".";
 "采纳后" = "After accepting";
+"采纳并执行" = "Approve and run";
 "重启 pi 进程以加载最新的启用列表" = "Restart the pi process to load the latest enable list";
 "重启引擎生效" = "Restart the engine to apply";
 "重启引擎生效 (知识改动将注入)" = "Restart the engine to apply (knowledge changes are injected)";
@@ -931,6 +1002,8 @@
 "重新生成" = "Regenerate";
 "重新读取" = "Reread";
 "重新载入（丢掉我的改动）" = "Reload (discard my changes)";
+"重设「%@」的授权码" = "Reset the auth code for \"%@\"";
+"重设授权码" = "Reset auth code";
 "重试 %lld/%lld · %llds 后" = "Retry %lld/%lld · in %llds";
 "错误" = "Error";
 "键盘事件会落到**此刻在前台的那个 App** 的焦点里, 不是你指定的这个。" = "Keystrokes land in whatever app is **in front right now**, not in the one you named.";
@@ -938,6 +1011,7 @@
 "间隔" = "Interval";
 "阿里云邮箱" = "Alibaba Cloud Mail";
 "附加文件…" = "Attach files…";
+"随登录启动" = "Launch at login";
 "集成" = "Integrations";
 "零拷贝" = "No copy";
 "需要审批" = "Ask for approval";
@@ -951,7 +1025,12 @@
 "预览" = "Preview";
 "预设" = "Preset";
 "额外写入你发送的原文与回复开头 80 字。发给他人前请先看一眼" = "Also write what you sent and the first 80 characters of the reply. Re-read it before sharing.";
+"飞书地址要以 https:// 开头" = "The Feishu URL must start with https://";
+"飞书开着, 但还没有地址 —— 粘贴一条自定义机器人的 webhook" = "Feishu is on but has no URL yet — paste a custom-bot webhook";
+"飞书拒绝（code %@）: %@" = "Feishu refused (code %@): %@";
+"飞书机器人" = "Feishu bot";
 "首次运行前为空; agent 运行后会把关键进展写在这里, 也可手动编辑干预任务方向…" = "Empty before the first run; the agent writes key progress here and you can edit it by hand to steer the task…";
 "高" = "High";
 "高级" = "Advanced";
+"（不是合法 URL）" = "(not a valid URL)";
 "（只有图片）" = "(images only)";

@@ -13,6 +13,8 @@ final class MockMailTransport: MailTransport {
     var inbox: [RawMail] = []
     /// 注入 poll 失败 (连接分支断言)
     var pollError: MailTransportError?
+    /// 注入 send 失败（P19 S7: 触达失败的那条分支 —— "发不出去"必须能说出来）
+    var sendError: MailTransportError?
     /// testConnection 返回 (nil = 成功)
     var testConnectionResult: String?
 
@@ -36,6 +38,9 @@ final class MockMailTransport: MailTransport {
 
     func markRead(_ mail: RawMail) async throws { readMails.append(mail) }
     func moveToTrash(_ mail: RawMail) async throws { trashedMails.append(mail) }
-    func send(_ mail: OutgoingMail) async throws { sentMails.append(mail) }
+    func send(_ mail: OutgoingMail) async throws {
+        if let sendError { throw sendError }
+        sentMails.append(mail)
+    }
     func testConnection() async -> String? { testConnectionResult }
 }

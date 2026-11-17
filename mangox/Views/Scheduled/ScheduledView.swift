@@ -26,6 +26,16 @@ struct ScheduledView: View {
     /// P19: 来源列表。**本版没有添加入口**（外部来源未接入，见 `sourcesCard` 的说明）——
     /// 留着它是因为老库/手改配置里可能有行, 界面对它们要**显示**而不是假装不存在。
     @State private var draftSources: [WatchSourceSpec] = []
+    /// P19 S7 触达草稿。飞书 URL **不进草稿的落库路径** —— 保存时单独写钥匙串。
+    @State private var draftNotifySystem: Bool = true
+    @State private var draftNotifyEmail: String = ""
+    @State private var draftNotifyWebhook: Bool = false
+    /// 新填的 webhook 地址（空 = 不改）。已经在钥匙串里的那条永不回显 —— 见 `notifyCard`。
+    @State private var draftWebhookInput: String = ""
+    /// 钥匙串里现在有没有这条任务的地址（只判是否存在，不读内容到界面）。
+    @State private var webhookStored: Bool = false
+    @State private var draftBudget: String = ""
+    @State private var notifyError: String? = nil
     @State private var hoveringId: UUID?
     // P9-#17: 无人值守恒开 (fire 不再读 task.unattended), 开关与确认弹窗已移除
     // cron 四档录入器: 控件态 → 生成 cron; 编辑时 classifyCron 反解析回填 (解析不出落高级档)
@@ -49,6 +59,9 @@ struct ScheduledView: View {
     @State private var showDeleteConfirm: Bool = false
     /// P19 收件箱: 展开中的那条结论（一次只展开一条 —— 多条同时展开会把列表顶没）。
     @State private var expandedFinding: UUID?
+    /// P19 S6: 最近执行过的那一组是否展开。**默认收起**: 它是"回滚的入口"，不是待办 ——
+    /// 天天摆在最上面就成了噪音（而收件箱的全部价值是"这里有事要你决定"）。
+    @State private var showExecuted: Bool = false
     @State private var savedFlash: Bool = false
 
     /// 编辑器当前对象。计划任务侧原代码全按 `editingId` 读写, 这里由 target 派生 →
@@ -83,6 +96,16 @@ struct ScheduledView: View {
         } message: {
             Text("任务删除后停止调度。工作日志文件始终保留; 日志会话可选删除。")
         }
+        .onAppear { consumeFindingFocus() }
+        // P19 S7: 通知点击可能发生在定时页**已经开着**的时候 ⇒ 那一次 `onAppear` 不会再触发,
+        // 要靠 `onChange` 接住（与设置页 `pendingSettingsCategory` 同款）。
+        .onChange(of: store.pendingFindingFocus) { _, _ in consumeFindingFocus() }
+    }
+
+    /// 取走"展开某条结论"的请求（通知点击放进来）。清空延到下一轮 runloop —— 见 ChatStore 那条注释。
+    private func consumeFindingFocus() {
+        guard let id = store.consumeFindingFocus() else { return }
+        withAnimation(CodexTheme.animFast) { expandedFinding = id }
     }
 
     // MARK: - 列表
@@ -121,6 +144,7 @@ struct ScheduledView: View {
             ScrollView {
                 VStack(spacing: 1) {
                     if !openFindings.isEmpty { inboxSection }
+                    if !executedFindings.isEmpty { executedSection }
                     if !store.missedFires.isEmpty { missedSection }
                     ForEach(store.scheduledTasks) { task in row(task) }
                     if store.scheduledTasks.isEmpty {
@@ -240,9 +264,56 @@ struct ScheduledView: View {
                                 .frame(maxWidth: .infinity, alignment: .leading)
                         }
                     }
+                    // P19 S6: 执行痕迹 —— 每一步过闸的结果。**只显有痕迹的那几步**:
+                    // 一条只被看过的结论不该有一张空表（"没执行过"与"执行了但什么都没记"
+                    // 在界面上必须能分开，前者不出现这一段）。
+                    let acts = store.actions(for: f.id)
+                    if !acts.isEmpty {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("执行痕迹")
+                                .font(.system(size: 9, weight: .semibold))
+                                .textCase(.uppercase)
+                                .tracking(0.3)
+                                .foregroundStyle(CodexTheme.textMuted)
+                            ForEach(acts) { a in
+                                HStack(alignment: .top, spacing: 5) {
+                                    Text(a.step > 0 ? "\(a.step)." : "—")
+                                        .font(CodexTheme.fontTiny)
+                                        .foregroundStyle(CodexTheme.textMuted)
+                                        .frame(width: 16, alignment: .trailing)
+                                    Text(Self.actionText(a))
+                                        .font(CodexTheme.fontTiny)
+                                        // 颜色只给状态（主题那条规矩）: 过闸是中性的, 被拦才是状态。
+                                        .foregroundStyle(a.result == "allowed" || a.result == "restored"
+                                                         ? CodexTheme.textSecondary : CodexTheme.toolError)
+                                        .lineLimit(2)
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                }
+                            }
+                        }
+                        .padding(.horizontal, 8)
+                    }
                     HStack(spacing: 6) {
-                        // ⚠️ 本版**没有**「执行」按钮: 执行段还没写（S6）。摆一个点了不动的
-                        // 按钮比不摆更坏 —— 人会以为点过了。
+                        // 「执行」= 人把这份方案授权给它。**不设「以后这类都自动」**（§03）:
+                        // 授权粒度恒为"这一份方案的这几步"。
+                        if f.status == .running {
+                            Text("执行中…")
+                                .font(CodexTheme.fontTiny)
+                                .foregroundStyle(CodexTheme.blocked)
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 3)
+                        } else if !f.plan.isEmpty {
+                            Button(LK("采纳并执行")) {
+                                _ = store.startFindingExecution(f.id)
+                            }
+                            .buttonStyle(.plain)
+                            .font(CodexTheme.fontTiny)
+                            .foregroundStyle(CodexTheme.accent)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 3)
+                            .contentShape(Rectangle())
+                            .help("按这份方案执行；起手先做整轮快照，红线动作恒拒")
+                        }
                         Button(LK("忽略")) {
                             store.setFindingStatus(f.id, status: .dismissed)
                         }
@@ -276,6 +347,88 @@ struct ScheduledView: View {
         }
         .background(expanded ? CodexTheme.bgElevated : Color.clear)
         .clipShape(RoundedRectangle(cornerRadius: CodexTheme.radiusSm))
+    }
+
+    /// 一行痕迹的人话。**动作名原样（bash / write）+ 结果说人话** ——
+    /// 把工具名翻译成中文反而让人对不上会话里那张卡。
+    static func actionText(_ a: FindingAction) -> String {
+        let what: String
+        switch a.result {
+        case "allowed": what = L("已执行")
+        case "denied_by_redline": what = L("被红线拦下")
+        case "drifted": what = L("跑偏，已中止")
+        case "restored": what = L("已从快照还原")
+        default: what = a.result
+        }
+        let target = (a.target ?? "").replacingOccurrences(of: "\n", with: " ")
+        let body = target.isEmpty ? what : "\(what) · \(target)"
+        // 同一步过闸多次 = 一行里带个 ×N（`output` 就是干这个的，见落痕那一侧）。
+        let times = a.output.map { " \($0)" } ?? ""
+        return body + times
+    }
+
+    /// 已经跑过的结论（`resolved` / `failed`）—— **回滚的入口**。
+    /// 只列有快照的: 没有快照的条目点了也回不去，摆出来只是给人一个点不动的按钮。
+    private var executedFindings: [AgentFinding] {
+        store.findings
+            .filter { ($0.status == .resolved || $0.status == .failed) && ($0.undoPath?.isEmpty == false) }
+            .sorted { ($0.decidedAt ?? $0.createdAt) > ($1.decidedAt ?? $1.createdAt) }
+    }
+
+    private var executedSection: some View {
+        VStack(alignment: .leading, spacing: 1) {
+            Button {
+                withAnimation(CodexTheme.animFast) { showExecuted.toggle() }
+            } label: {
+                HStack(spacing: 5) {
+                    Image(systemName: "clock.arrow.circlepath")
+                        .font(.system(size: 9))
+                        .foregroundStyle(CodexTheme.textMuted)
+                    Text("最近执行")
+                        .textCase(.uppercase)
+                        .font(.system(size: 10, weight: .semibold))
+                        .tracking(0.4)
+                        .foregroundStyle(CodexTheme.textMuted)
+                    Text("\(executedFindings.count)")
+                        .font(.system(size: 9, weight: .semibold))
+                        .foregroundStyle(CodexTheme.textMuted)
+                    Spacer()
+                }
+                .padding(.horizontal, 6)
+                .padding(.vertical, 4)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            if showExecuted {
+                ForEach(executedFindings) { f in executedRow(f) }
+            }
+        }
+    }
+
+    private func executedRow(_ f: AgentFinding) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: f.status == .resolved ? "checkmark.circle" : "exclamationmark.circle")
+                .font(.system(size: 9))
+                .foregroundStyle(f.status == .resolved ? CodexTheme.toolDone : CodexTheme.toolError)
+            Text(f.title)
+                .font(CodexTheme.fontTiny)
+                .foregroundStyle(CodexTheme.textSecondary)
+                .lineLimit(1)
+            Spacer(minLength: 2)
+            // 「回滚」= 把整轮快照解回去。**不改结论**（状态回 open）: 人回滚 = 承认这次没解决。
+            Button(LK("回滚")) {
+                _ = store.rollbackFinding(f.id)
+            }
+            .buttonStyle(.plain)
+            .font(CodexTheme.fontTiny)
+            .foregroundStyle(CodexTheme.accent)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 3)
+            .contentShape(Rectangle())
+            .help("把这一轮改动还原成执行前的快照（7 天内可用）")
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 2)
     }
 
     /// P17 · 运行可靠性: 睡眠 / 长挂起期间的漏跑清单。**只在有漏跑时出现** —— 没有它时一个像素都不占。
@@ -530,6 +683,7 @@ struct ScheduledView: View {
             if isLegacyEditing, let t = editingTask() { legacyConditionCard(t) }
             promptCard
             if draftKind == .assistant { sourcesCard }
+            if draftKind == .assistant { notifyCard }
             configCard   // P10.4: 任务级模型/级别/模式
             if editingId != nil && draftContinuous && draftKind == .execute {
                 workLogCard
@@ -699,6 +853,134 @@ struct ScheduledView: View {
                 .stroke(CodexTheme.border.opacity(0.45), lineWidth: 1)
         )
     }
+    // MARK: - P19 S7 触达与预算
+
+    /// 触达卡（仅助理档）：**怎么叫人**，与上面那张「看什么」正交。
+    ///
+    /// 三条写在这里的约束:
+    ///   · 飞书地址**永不回显** —— 它是凭据。已配置只显示"已保存"，要换就整条重填。
+    ///   · 邮件发件人是"第一个能发的账号"，不是每条任务选一次 —— 见 `firstSendableMailboxAccount`。
+    ///   · 预算 0 = 不设限；超了是**跳过并落痕**，不换便宜模型（§04）。
+    private var notifyCard: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 6) {
+                Image(systemName: "bell")
+                    .font(.system(size: 10))
+                    .foregroundStyle(CodexTheme.textMuted)
+                Text("触达")
+                    .font(CodexTheme.fontTiny)
+                    .foregroundStyle(CodexTheme.textMuted)
+                Spacer()
+                if draftNotifySystem == false && draftNotifyEmail.isEmpty && !draftNotifyWebhook {
+                    Text("全都关着 —— 结论只落在收件箱")
+                        .font(CodexTheme.fontTiny)
+                        .foregroundStyle(CodexTheme.blocked)
+                }
+            }
+
+            Toggle(isOn: $draftNotifySystem) {
+                Text("系统通知")
+                    .font(CodexTheme.fontSmall)
+                    .foregroundStyle(CodexTheme.textPrimary)
+            }
+            .toggleStyle(.switch)
+            .controlSize(.small)
+            .help("弹系统通知；受「设置 → 通用 → 回合完成通知」总开关约束")
+
+            // 邮件
+            HStack(spacing: 8) {
+                Image(systemName: "envelope")
+                    .font(.system(size: 10))
+                    .foregroundStyle(CodexTheme.textMuted)
+                TextField("邮件收件人（留空 = 不发）", text: $draftNotifyEmail)
+                    .textFieldStyle(.plain)
+                    .font(CodexTheme.fontSmall)
+                    .frame(maxWidth: 280)
+                Spacer()
+                Text(senderHint)
+                    .font(CodexTheme.fontTiny)
+                    .foregroundStyle(senderHintIsWarn ? CodexTheme.blocked : CodexTheme.textMuted)
+            }
+
+            // 飞书
+            HStack(spacing: 8) {
+                Image(systemName: "paperplane")
+                    .font(.system(size: 10))
+                    .foregroundStyle(CodexTheme.textMuted)
+                Toggle(isOn: $draftNotifyWebhook) {
+                    Text("飞书机器人")
+                        .font(CodexTheme.fontSmall)
+                        .foregroundStyle(CodexTheme.textPrimary)
+                }
+                .toggleStyle(.switch)
+                .controlSize(.small)
+                .fixedSize()
+                if draftNotifyWebhook {
+                    SecureField(webhookStored ? "已保存（不回显）—— 要换就整条重填" : "粘贴自定义机器人 webhook 地址",
+                                text: $draftWebhookInput)
+                        .textFieldStyle(.plain)
+                        .font(CodexTheme.fontSmall)
+                        .frame(maxWidth: 300)
+                }
+                Spacer()
+                if webhookStored && draftNotifyWebhook {
+                    Text("已保存")
+                        .font(CodexTheme.fontTiny)
+                        .foregroundStyle(CodexTheme.toolDone)
+                }
+            }
+
+            // 预算
+            HStack(spacing: 8) {
+                Image(systemName: "gauge.with.dots.needle.33percent")
+                    .font(.system(size: 10))
+                    .foregroundStyle(CodexTheme.textMuted)
+                Text("日预算")
+                    .font(CodexTheme.fontSmall)
+                    .foregroundStyle(CodexTheme.textPrimary)
+                TextField("不限", text: $draftBudget)
+                    .textFieldStyle(.plain)
+                    .font(CodexTheme.fontSmall)
+                    .frame(width: 90)
+                Text("token / 天")
+                    .font(CodexTheme.fontTiny)
+                    .foregroundStyle(CodexTheme.textMuted)
+                Spacer()
+                if let id = editingId {
+                    Text(String(format: L("今日已用 %lld"), store.tokenSpentToday(id)))
+                        .font(CodexTheme.fontTiny)
+                        .foregroundStyle(CodexTheme.textMuted)
+                }
+            }
+            if let e = notifyError {
+                Text(e)
+                    .font(CodexTheme.fontTiny)
+                    .foregroundStyle(CodexTheme.toolError)
+            }
+            Text("外发只带标题与任务名，正文与证据留在 App 内。飞书地址存钥匙串，库里只有「配过」。")
+                .font(CodexTheme.fontTiny)
+                .foregroundStyle(CodexTheme.textMuted)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        .background(CodexTheme.bgComposer)
+        .clipShape(RoundedRectangle(cornerRadius: CodexTheme.radiusLg))
+        .overlay(
+            RoundedRectangle(cornerRadius: CodexTheme.radiusLg)
+                .stroke(CodexTheme.border.opacity(0.45), lineWidth: 1)
+        )
+    }
+
+    /// 邮件发件人提示 —— **说清到底谁发**，否则"填了收件人但没收到"归因不了。
+    private var senderHint: String {
+        if let a = store.firstSendableMailboxAccount() {
+            return String(format: L("发件: %@"), a.address)
+        }
+        return L("没有可发的账号 —— 设置 → 集成 → 邮箱账号")
+    }
+
+    private var senderHintIsWarn: Bool { store.firstSendableMailboxAccount() == nil }
+
     /// P9-#17: 无人值守恒开徽章 (原开关 + 风险确认弹窗已移除——
     /// fire 恒 unattended, 开关已无语义; 后台日志会话无审批 UI 入口, 弹卡会卡死到超时)。
     private var unattendedPill: some View {
@@ -1227,6 +1509,13 @@ struct ScheduledView: View {
         draftContinuous = false
         draftKind = kind
         draftSources = []
+        draftNotifySystem = true
+        draftNotifyEmail = ""
+        draftNotifyWebhook = false
+        draftWebhookInput = ""
+        webhookStored = false
+        draftBudget = ""
+        notifyError = nil
         draftLog = ""
         handoffUpdatedAt = nil
         showWorkLog = false
@@ -1352,6 +1641,14 @@ struct ScheduledView: View {
         // P19: legacy 不是可编辑的类型（归档态）⇒ 编辑器按 Cron 呈现，但整页只读
         draftKind = task.isLegacyWaiting ? .execute : task.kind
         draftSources = task.sources
+        draftNotifySystem = task.notify.system
+        draftNotifyEmail = task.notify.emailTo ?? ""
+        draftNotifyWebhook = task.notify.webhook
+        // 钥匙串里那条**只判存在、不读出来** —— 读出来就等于把它摆进界面与截图的射程。
+        webhookStored = store.hasWebhookURL(taskId: task.id)
+        draftWebhookInput = ""
+        draftBudget = task.dailyTokenBudget > 0 ? String(task.dailyTokenBudget) : ""
+        notifyError = nil
         syncCronControls(task.cron)
         // P10.4: 任务级配置回填 (nil = 跟随全局, 预填当前全局值供开启即用)
         if let cfg = task.config {
@@ -1375,6 +1672,10 @@ struct ScheduledView: View {
 
     private func saveEditing() {
         guard draftReady else { return }
+        // S7: 触达与预算先校验 —— 校验不过就**整个保存都不做**（半保存会让"我以为改了"变成
+        // "改了一半"，而触达配错的全部表现都是"没收到消息"）。
+        guard let opts = validatedNotifyOptions() else { return }
+        let budget = parsedBudget()
         // 名称留空 → 自动取 prompt 首行前 24 字 (与"保存为记忆"命名规则一致)
         let name = draftName.trimmingCharacters(in: .whitespacesAndNewlines)
         if name.isEmpty {
@@ -1400,7 +1701,10 @@ struct ScheduledView: View {
             // P19: `kind` **不回写** —— 已保存任务的类型不可改（见 `kindPill` 的注释）。
             // 来源照写: 本版界面不能改来源, 但库里已有的行必须原样留住, 否则一次编辑就静默清空。
             existing.sources = draftSources
+            existing.notify = opts
+            existing.dailyTokenBudget = budget
             store.updateScheduled(existing)
+            writeWebhookSecret(taskId: id)
         } else {
             let cron = effectiveCron
             store.addScheduled(name: draftName, prompt: draftPrompt,
@@ -1411,7 +1715,10 @@ struct ScheduledView: View {
             if let idx = store.scheduledTasks.indices.last {
                 store.scheduledTasks[idx].unattended = true   // P9-#17: 恒无人值守
                 store.scheduledTasks[idx].config = buildDraftConfig()   // P10.4
+                store.scheduledTasks[idx].notify = opts
+                store.scheduledTasks[idx].dailyTokenBudget = budget
                 store.updateScheduled(store.scheduledTasks[idx])
+                writeWebhookSecret(taskId: store.scheduledTasks[idx].id)
             }
         }
         // "✓ 已保存"短闪 (与代码块"已复制"同模式)
@@ -1419,6 +1726,54 @@ struct ScheduledView: View {
         Task { @MainActor in
             try? await Task.sleep(nanoseconds: 1_200_000_000)
             savedFlash = false
+        }
+    }
+
+    /// 触达草稿 → `NotifyOptions`。nil = 校验不过（错误已写进 `notifyError`）。
+    private func validatedNotifyOptions() -> NotifyOptions? {
+        notifyError = nil
+        var opts = NotifyOptions()
+        opts.system = draftNotifySystem
+        let to = draftNotifyEmail.trimmingCharacters(in: .whitespacesAndNewlines)
+        opts.emailTo = to.isEmpty ? nil : to
+        opts.webhook = draftNotifyWebhook
+        if draftNotifyWebhook {
+            let raw = draftWebhookInput.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !raw.isEmpty {
+                guard raw.hasPrefix("https://"), URL(string: raw) != nil else {
+                    notifyError = L("飞书地址要以 https:// 开头")
+                    return nil
+                }
+                if !WatchNotifyService.looksLikeFeishuHook(raw) {
+                    // 只提示不拦: 自建中转也会是别的域名, 拦掉就把那条路堵死了。
+                    notifyError = L("这个域名不像飞书 —— 确认后再保存也行（自建中转可以）")
+                }
+            } else if !webhookStored {
+                notifyError = L("飞书开着, 但还没有地址 —— 粘贴一条自定义机器人的 webhook")
+                return nil
+            }
+        }
+        return opts
+    }
+
+    /// 预算草稿 → 整数。空 / 非数字 → 0（不设限）。不拦保存: 这个字段写歪了人一眼能看出来
+    /// （"不限"），而拦下整个保存的代价是别的改动也一起丢了。
+    private func parsedBudget() -> Int {
+        Int(draftBudget.trimmingCharacters(in: .whitespaces)) ?? 0
+    }
+
+    /// 只在**填了新地址**时写钥匙串；关掉飞书开关**不清地址** ——
+    /// 开关表达的是"要不要发"，不是"要不要存"。清掉之后人再打开就得去飞书重抄一遍，
+    /// 而那不是他的意思。
+    private func writeWebhookSecret(taskId: UUID) {
+        let raw = draftWebhookInput.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !raw.isEmpty else { return }
+        store.setWebhookURL(raw, taskId: taskId)
+        if store.hasWebhookURL(taskId: taskId) {
+            webhookStored = true
+            draftWebhookInput = ""   // 存完就不在界面上留一份
+        } else {
+            notifyError = L("地址没能写进钥匙串 —— 飞书这一路会发不出去")
         }
     }
 

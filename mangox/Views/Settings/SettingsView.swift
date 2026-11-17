@@ -40,6 +40,10 @@ struct SettingsView: View {
     // P10.1b 联网搜索 (博查)
     @State private var bochaKeyInput = ""
 
+    // P19 S7 常驻: 登录项状态**从系统现读**（`.onAppear` 刷新），不从开关的点击历史推断。
+    @State private var loginItemState: LoginItemService.State = .off
+    @State private var loginItemError: String?
+
     // P18 computer use: 开关与作用域 (单例 —— 与 `AppearanceModel.shared` 同款,
     // spawn 那一侧读的是同一份, 所以改完下一轮就生效, 不需要再往 ChatStore 上补一次)
     @ObservedObject private var computer = ComputerSettings.shared
@@ -86,11 +90,13 @@ struct SettingsView: View {
                     lockScreenSection
                     concurrencySection
                     notificationSection
+                    residentSection   // P19 S7: 登录项（助理巡检的"常驻"靠它）
                     captureSection
                 case .model:
                     modelSection
                 case .integration:
                     webSearchSection
+                    MailboxAccountsSection(store: store)   // P19 S7: 邮件 sink 的发件账号
                     computerSection
                 case .data:
                     backupSection
@@ -1365,6 +1371,53 @@ struct SettingsView: View {
                 .font(.system(size: 11))
                 .foregroundStyle(CodexTheme.textMuted)
         }
+    }
+
+    // MARK: - P19 S7 常驻（登录项）
+
+    /// 「随登录启动」。**说实话是这一段的全部内容** ——
+    /// 注册成功也不等于在自启（ad-hoc 签名下系统常要求人工批准），所以状态一律从
+    /// `SMAppService.mainApp.status` 现读，不拿"我刚点过开关"当事实。
+    private var residentSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            settingRow(title: "随登录启动",
+                       detail: "助理巡检住在 App 进程里, 不开 App 就不会巡检。开启后 macOS 可能要求你在「登录项」里批准一次") {
+                Toggle(isOn: Binding(
+                    get: { loginItemState == .on || loginItemState == .requiresApproval },
+                    set: { setLoginItem($0) }
+                )) {
+                    Text("随登录启动")
+                }
+                .toggleStyle(.switch)
+                .controlSize(.small)
+                .labelsHidden()
+                .fixedSize()
+                .disabled(loginItemState == .unavailable)
+            }
+            Divider().overlay(CodexTheme.divider)
+            Text(LoginItemService.statusText(loginItemState))
+                .font(.system(size: 11))
+                .foregroundStyle(loginItemState == .on ? CodexTheme.textMuted : CodexTheme.blocked)
+                .fixedSize(horizontal: false, vertical: true)
+            if let e = loginItemError {
+                Text(e)
+                    .font(.system(size: 11))
+                    .foregroundStyle(CodexTheme.toolError)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            // 合盖这条是**系统行为**，不该让人以为是没配对: 关了盖子进程被挂起，那就没有巡检。
+            Text("合盖休眠期间仍然不跑; 唤醒后按「漏跑」清单补最近一次（列表在定时任务页顶部）。")
+                .font(.system(size: 11))
+                .foregroundStyle(CodexTheme.textMuted)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .settingsCard()
+        .onAppear { loginItemState = LoginItemService.state() }
+    }
+
+    private func setLoginItem(_ on: Bool) {
+        loginItemError = on ? LoginItemService.enable() : LoginItemService.disable()
+        loginItemState = LoginItemService.state()
     }
 
     // MARK: - P8-T27 快速捕获热键

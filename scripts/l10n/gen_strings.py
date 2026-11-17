@@ -161,6 +161,15 @@ EXCLUDE_FILES = {
     #    与**注入段里的输出契约**，两者都落库/进 prompt, 一律恒中文。
     'mangox/State/WatchFindingService.swift',      # 结论解析与时间线文案 (无 UI 文案)
     'mangox/Models/WatchFindingModels.swift',      # 结论字段与状态值域 (无 UI 文案)
+    # ⚠️ P19 S6: 同理 —— 本文件出的是**执行轮的 system 注入段**（已授权步骤 / 写入范围 /
+    #    收尾格式）与**日志时间线文案**（"采纳并开始执行""快照失败"）。两者都进 prompt 或落库,
+    #    一律恒中文。代价同上面几行: 在此文件里写 `L()` 的 key 永远进不了词表。
+    'mangox/State/WatchExecService.swift',         # 执行轮注入段字节 (无 UI 文案)
+    # ⚠️ P19 S6: 红线/围栏的**拒绝理由**是"给人看的数据"而不是界面文案 —— 它们会落进
+    #    `agent_finding_actions`（磁盘上留 7 天）、写进日志时间线、拼在卡片副标题里。
+    #    走 `L()` 就得把 `「\(a)」` 这种插值从句子里拆出来, 而拆出来之后译文会自己猜语序
+    #    （词表里只剩半句话，译者看不见它填进哪儿）—— 正是 `说明符不许猜` 那条禁令。
+    'mangox/Agent/Redline.swift',                  # 红线/围栏的理由串 (落库数据, 恒中文)
     # ⚠️ P18 (2026-11-02): SOP 是**第二条注入通道** —— 段头 `[SOP]`、节头(`可操作`/`只读`)、
     #    "这次没带上"的点名句全部逐字进 `--append-system-prompt`。本地化它们 = 让用户的
     #    界面语言改掉注入给模型的字节(`KnowledgeBaseScan.token` 同一条理由), 而且

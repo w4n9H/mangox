@@ -160,6 +160,33 @@ final class PiRpcTransport: AgentTransport {
     private var spawnedExtraSystem: String?
     func updateExtraSystemPrompt(_ text: String?) { extraSystemPrompt = text }
 
+    /// P19 执行守卫（per-turn）。它不只影响审批裁决 —— 只要它非空，spawn 期还会多给一个
+    /// env（`MANGOX_EXEC_PROJECT`，写围栏在扩展侧的那一半），所以它也在重启判据里。
+    ///
+    /// ⚠️ 与 `analysisReadOnly` 的赋值纪律**相反**: 那两个是无条件赋值且进程复用时要重启；
+    /// 这一个同样是**无条件**赋值（不清就会漏进下一回合 —— 忘了清 = 之后每一轮都带着红线，
+    /// 表面上只是"某些命令莫名被拒"）。
+    private var executionGuard: ExecutionGuard?
+    private var spawnedExecProject: String?
+    func updateExecutionGuard(_ guardValue: ExecutionGuard?) {
+        // 每回合从头开始（**无条件**，不看"值变没变"）: 两次执行轮之间守卫可能是同一个值
+        // （同一条结论重试 / 同一份方案），按"变了才清"的写法会把上一轮的步骤号与落痕带进来 ——
+        // 表现是"这次什么都没干，落痕里却有上次那几步"，而它不红、只是把审计做成假的。
+        execDeclaredStep = nil
+        execStepBuffer = ""
+        execActions.removeAll()
+        executionGuard = guardValue
+    }
+
+    /// 模型正文里**最新**声明到的步骤号（「第 N 步」）。审批桥拿它比已授权步骤。
+    private var execDeclaredStep: Int?
+    /// 流式文本的尾部缓冲。只需尾部：判据要的是"最新的那个声明"。
+    private var execStepBuffer = ""
+    private static let execStepBufferMax = 2000
+
+    /// 本轮过闸的落痕，按步骤号归并（`agent_finding_actions` 的每步一行）。
+    private(set) var execActions: [Int: ExecAction] = [:]
+
     /// P10.1b: 博查 API Key (nil/空 = 未配置)。**只在这里定格, 只经 env 下发**, 不落盘。
     ///
     /// ⚠️ 与 `dreamSpool` 同一层（实例级、spawn 期定格），但**不是任务语义** —— 它是
@@ -371,6 +398,23 @@ final class PiRpcTransport: AgentTransport {
         return path
     }
 
+    /// P19 S6: 写围栏的 env（`MANGOX_EXEC_PROJECT`）。**只有执行轮的 spawn 会设它**，
+    /// 与 dream 的 spool 同一套双闸门写法。
+    ///
+    /// ⚠️ 返回 nil = "什么都不用改"（既没有执行围栏、父进程里也没有残留）；
+    ///    父进程有残留时返回的是**删掉了那个键**的完整环境 —— 不删的话一个普通会话会莫名
+    ///    带上围栏（表现是"新建文件也要审批"，而界面上没有任何地方写着为什么）。
+    static let execFenceEnvKey = "MANGOX_EXEC_PROJECT"
+    static func execFenceEnvironment(existing: [String: String]?,
+                                     projectPath: String?,
+                                     inherited: [String: String]) -> [String: String]? {
+        let desired = (projectPath?.isEmpty == false) ? projectPath : nil
+        if desired == nil, inherited[execFenceEnvKey] == nil { return nil }
+        var env = existing ?? inherited
+        env[execFenceEnvKey] = desired    // nil = 移除该键（同 `webSearchEnvironment`）
+        return env
+    }
+
     /// 审批扩展的源码 —— **纯函数, 不落盘**(冒烟直测)。
     ///
     /// P18 批 2a: 两个工具集合从 `ApprovalGate` **插值**进来, 不在 JS 里另抄一份。
@@ -385,12 +429,31 @@ final class PiRpcTransport: AgentTransport {
         // `SENSITIVE = new Set(["bash","write","edit"])` 会让任何新工具自带豁免(漏 = 出事)。
         // PASSTHROUGH = 容器工具(它自己不做动作, 内层每次调用会再走一遍这个钩子)。
         // P3.10: write 新建文件放行 (覆盖已存在文件才请求审批); bash/edit 全部交客户端判定。
+        // P19 S6: **执行轮**多给一个 env (MANGOX_EXEC_PROJECT) —— 它开两道口子:
+        //   ① 新建文件**落到围栏外**时必须照样请求审批 (否则 `write ~/x` 一次卡都不弹);
+        //   ② 不给「Allow always」(记住它 = 之后这个工具彻底不走审批桥 = 红线一起放行)。
+        //   env 不存在的进程这两种行为**逐字节等于从前**（定时任务不许被顺带改掉）。
         // diff 预览: edit/write 审批时把 -/+ 行对照拼进 title (客户端 @@MANGOX_DIFF@@ 分段解析)。
         import * as fs from "fs";
+        import * as nodePath from "path";
         export default function (pi) {
           const alwaysAllowed = new Set();
           const READ_ONLY = new Set(\(readOnly));
           const PASSTHROUGH = new Set(\(passthrough));
+          const EXEC_PROJECT = process.env.MANGOX_EXEC_PROJECT || "";
+          // 落在执行围栏之外?
+          // ⚠️ 必须 `path.resolve` 而不是字符串拼接 —— `../x` 拼出来仍然以项目根**开头**，
+          //    于是被判成"在围栏内"、一次审批都不弹。这条判据错了不会红：它只会静默放行。
+          // ⚠️ 前导 `~` 一律当**围栏外**（交给客户端按家目录判）: Node 侧不展开 `~`，
+          //    而"到底写到了哪"取决于工具实现 —— 判不清就问，问错了最多多一次审批卡。
+          const PROJECT_ROOT = EXEC_PROJECT ? nodePath.resolve(EXEC_PROJECT) : "";
+          const outsideExecFence = (p) => {
+            if (!EXEC_PROJECT || !p) return false;
+            const raw = String(p);
+            if (raw.charAt(0) === "~") return true;
+            const abs = nodePath.resolve(PROJECT_ROOT, raw);
+            return !(abs === PROJECT_ROOT || abs.indexOf(PROJECT_ROOT + nodePath.sep) === 0);
+          };
           const MAX_DIFF_LINES = 120;
           const MAX_LINE_CHARS = 200;
           const truncLine = (s) => {
@@ -471,7 +534,8 @@ final class PiRpcTransport: AgentTransport {
             if (alwaysAllowed.has(event.toolName)) return undefined;
             if (!ctx.hasUI) return undefined;
             const input = event.input || {};
-            if (event.toolName === "write" && input.path && !fs.existsSync(input.path)) {
+            if (event.toolName === "write" && input.path && !fs.existsSync(input.path)
+                && !outsideExecFence(input.path)) {
               return undefined;   // 新建文件: 无覆盖风险, 放行
             }
             // computer 工具没有 command / path / url —— 不看这一支的话卡片上那一行是空的,
@@ -490,7 +554,13 @@ final class PiRpcTransport: AgentTransport {
             } catch (e) {
               return { block: true, reason: "Approval UI failed" };
             }
-            if (choice === "Allow always") { alwaysAllowed.add(event.toolName); return undefined; }
+            if (choice === "Allow always") {
+              // P19 S6: 执行轮**不记**「永久批准」—— 记了之后这个工具彻底不再进审批桥,
+              // 而红线、围栏、步骤围栏全都在客户端这一侧 ⇒ 等于一次点击把它们一起放行。
+              // 这一下仍然算允许（人刚点的就是允许），只是不留到下一步。
+              if (!EXEC_PROJECT) alwaysAllowed.add(event.toolName);
+              return undefined;
+            }
             if (choice === "Deny") return { block: true, reason: "Denied by user in MangoX" };
             return undefined;
           });
@@ -1683,6 +1753,7 @@ final class PiRpcTransport: AgentTransport {
         toolCards.removeAll()
         toolStartAt.removeAll()
         autoJudgeBlocks.removeAll()   // P10.2a-0: 本回合的拦截记录从零开始
+        execActions.removeAll()       // P19 S6: 同层 —— 本回合的过闸落痕从零开始
         emit(.streamStarted)
         // P7-M6b: images:[{type,data(base64),mimeType}] — autoResize 不覆盖 RPC base64,
         // 进这里的已由 ImagePipeline.compressForSend 压过 (≤1536px JPEG)。
@@ -1696,6 +1767,48 @@ final class PiRpcTransport: AgentTransport {
         // 诊断日志: 只记长度不记正文（正文走 `diag_log_body` 那个二级开关，见 `ChatStore`）。
         Log.process("send", ["chars": "\(prompt.count)", "imgs": "\(images.count)",
                              "pid": "\(process?.processIdentifier ?? -1)"])
+    }
+
+    /// P19 S6: 把流式文本接到"模型说到第几步"上。
+    ///
+    /// 只留尾部 —— 判据要的是**最新**那个声明，而正文可能很长（一条结论的诊断就有几屏）。
+    /// 声明本身很短，落在尾部缓冲之外的唯一情况是"声明在第 1 步、之后写了两千字才动手"，
+    /// 那时尾巴里通常还有一次重复的步骤声明；没有就按"没声明"拒（安全的方向）。
+    private func trackDeclaredStep(_ delta: String) {
+        execStepBuffer += delta
+        if execStepBuffer.count > Self.execStepBufferMax {
+            execStepBuffer = String(execStepBuffer.suffix(Self.execStepBufferMax))
+        }
+        if let step = ExecGate.declaredStep(in: execStepBuffer) { execDeclaredStep = step }
+    }
+
+    /// P19 S6: 记一笔"被门拦下"。卡片上要说话（人到会话里能看见停在哪一步），
+    /// 落痕由收尾写进 `agent_finding_actions`（`execActions`）。
+    private func recordExecDenial(_ d: ExecGate.Denial, step: Int, tool: String, target: String,
+                                  callId: String, card: ToolCall?) {
+        recordExecAction(step: step, kind: tool, target: target,
+                         result: d.kind == .drift ? "drifted" : "denied_by_redline")
+        guard let card else { return }
+        let updated = card.withPhase(.error(String(format: L("MangoX 执行拦下: %@"), d.reason)))
+        toolCards[callId] = updated
+        emit(.toolUpdated(updated))
+    }
+
+    /// 落痕。按步骤号归并 —— 同一步里连着三个命令是常态，逐个并列会把"第 2 步"刷成三十行。
+    private func recordExecAction(step: Int, kind: String, target: String?, result: String) {
+        // ⚠️ 只存前 200 字：命令里可能带 token（`curl -H "Authorization: Bearer …"`），
+        // 而这张表会一直留在磁盘上（诊断日志"不含正文"的同一条理由）。
+        let clipped = target.map { String($0.prefix(200)) }
+        if var rec = execActions[step] {
+            rec.count += 1
+            rec.kind = kind
+            rec.target = clipped ?? rec.target
+            rec.result = result
+            execActions[step] = rec
+        } else {
+            execActions[step] = ExecAction(step: step, kind: kind, target: clipped,
+                                           result: result, count: 1)
+        }
     }
 
     func cancel() {
@@ -1922,13 +2035,15 @@ final class PiRpcTransport: AgentTransport {
         // 用户点开任务日志会话说了句话（普通回合, `dreamSpool` 被置回 nil）之后再点「立即运行」。
         if process != nil, spawnedCwd != target || spawnedDreamSpool != dreamSpool
             || spawnedAnalysisReadOnly != analysisReadOnly
-            || spawnedExtraSystem != extraSystemPrompt {
+            || spawnedExtraSystem != extraSystemPrompt
+            || spawnedExecProject != executionGuard?.projectPath {
             // 诊断日志: 进程**复用**是常态, 重启是例外 —— 后者会丢进程内对话记忆,
             // 排查时"这一轮为什么没记忆"要能一眼看出是这里拆的。
             Log.process("teardown", ["cwdChanged": spawnedCwd != target ? "1" : "0",
                                      "dreamChanged": spawnedDreamSpool != dreamSpool ? "1" : "0",
                                      "readOnlyChanged": spawnedAnalysisReadOnly != analysisReadOnly ? "1" : "0",
-                                     "injectChanged": spawnedExtraSystem != extraSystemPrompt ? "1" : "0"])
+                                     "injectChanged": spawnedExtraSystem != extraSystemPrompt ? "1" : "0",
+                                     "fenceChanged": spawnedExecProject != executionGuard?.projectPath ? "1" : "0"])
             teardownProcess()
         }
         guard process == nil else {
@@ -2136,6 +2251,17 @@ final class PiRpcTransport: AgentTransport {
             if p.environment == nil { p.environment = ProcessInfo.processInfo.environment }
             p.environment?[Self.dreamSpoolEnvKey] = spool
         }
+        // P19 S6: 执行轮的写围栏 env（扩展侧那一半，见 `approvalExtensionSource`）。
+        //
+        // ⚠️ 守卫 26 同款: 上面几段都可能没给 `p.environment` 赋值（nil = 继承父环境），
+        // 那时 `p.environment?[k] = v` 是**静默空操作** ⇒ 必须整体赋值。
+        // ⚠️ 也**必须显式删掉**父进程里可能残留的同名变量（用户 export 过再从那个 shell 起 App）
+        // —— 否则一个普通会话会莫名其妙带上执行围栏，表现是"新文件写不进去还要审批"。
+        if let env = Self.execFenceEnvironment(existing: p.environment,
+                                               projectPath: executionGuard?.projectPath,
+                                               inherited: ProcessInfo.processInfo.environment) {
+            p.environment = env
+        }
         // P10.1b: 博查 key 只走 env（Keychain → 子进程环境），**不落盘**。
         // ⚠️ 守卫 26 同款: 上面那段只在"有自管模型"时才给 `p.environment` 赋值, 其余情况它是
         //    **nil**（= 子进程自己继承父环境）。那时 `p.environment?[k] = v` 是**静默空操作** ——
@@ -2192,6 +2318,7 @@ final class PiRpcTransport: AgentTransport {
         spawnedDreamSpool = dreamSpool
         spawnedAnalysisReadOnly = analysisReadOnly
         spawnedExtraSystem = extraSystemPrompt
+        spawnedExecProject = executionGuard?.projectPath
         self.outPipe = outPipe
         self.errPipe = errPipe
         stdinHandle = inPipe.fileHandleForWriting
@@ -2479,11 +2606,15 @@ final class PiRpcTransport: AgentTransport {
             case "text_delta":
                 let delta = ev["delta"] as? String ?? ""
                 guard !delta.isEmpty else { return }
+                trackDeclaredStep(delta)
                 emit(.textChunk(messageID: lazyID(&textMessageID), delta: delta))
 
             case "thinking_delta":
                 let delta = ev["delta"] as? String ?? ""
                 guard !delta.isEmpty else { return }
+                // 思考段也要跟: 模型把「第 2 步」写在思考里是常态, 只扫正文会让执行轮
+                // 每一次动作都被判成"没声明步骤" —— 表现是正常的执行回合全线被拒。
+                trackDeclaredStep(delta)
                 emit(.thoughtChunk(messageID: lazyID(&thinkMessageID), delta: delta))
 
             default:
@@ -2516,6 +2647,17 @@ final class PiRpcTransport: AgentTransport {
             toolCards[callId] = card
             toolStartAt[callId] = arrivedAt
             toolNamesByCallId[callId] = name
+            // P19 S6: 走到 `tool_execution_start` = 这个动作**真的被放行并开始跑了**
+            // （被拒的调用在扩展侧就 `block` 了，不会有这条事件）。所以"允许"这件事
+            // 只有这一个可信的观测点 —— 在审批桥里记"允许"会需要把每个 early return
+            // 都补一行，漏一处就是一条假审计。
+            // 只记要过审批的那些工具（read/grep 一次回合几十上百条，混进来会把痕迹淹掉）。
+            if executionGuard != nil, ApprovalGate.needsApproval(name) {
+                recordExecAction(step: execDeclaredStep ?? 0,
+                                 kind: name,
+                                 target: (args["command"] as? String) ?? (args["path"] as? String),
+                                 result: "allowed")
+            }
             emit(.toolUpdated(card))
 
         case "tool_execution_update":
@@ -2727,6 +2869,31 @@ final class PiRpcTransport: AgentTransport {
             diffText = nil
         }
         let callId = parts[2]
+        // ── P19 S6: 执行轮的门（红线 + 写围栏 + 步骤围栏）──────────────────────────
+        //
+        // ⚠️ 位置有三条硬理由，一条都不能挪：
+        //   ① **在 `approvalMode.judgesByRisk` 之前** —— 全放行档也必须被拦（§03:
+        //      「红线恒拒，任何档位、任何授权都不放行」）。放在档位判断之后，这条就只在
+        //      "人恰好没关审批"时成立，那与红线无关，只是默认值。
+        //   ② **在 `toolCards` 守卫之前** —— 卡片缺失时下面会直接 `Allow`；
+        //      红线放在守卫之后 ⇒ 一条没有卡的 bash 调用就绕过去了。
+        //   ③ **在 `BashRiskEvaluator.judge` 之前** —— 白名单（`ls`/`cat` 那类）会静默放行；
+        //      `cat ~/.ssh/id_rsa` 正是白名单里的形状。
+        if let g = executionGuard {
+            let tool = parts[3]
+            // bash 的目标是命令原文（可能带 `|`，所以按 dropFirst 拼回）;
+            // write/edit 的目标是路径（`parts[4]`，**不含** diff 分段）。
+            let target: String = tool == "bash"
+                ? parts.dropFirst(4).joined(separator: "|")
+                : (parts.count > 4 ? parts[4] : "")
+            if let denial = ExecGate.check(guard: g, tool: tool, target: target,
+                                          declaredStep: execDeclaredStep) {
+                recordExecDenial(denial, step: execDeclaredStep ?? 0, tool: tool, target: target,
+                                 callId: callId, card: toolCards[callId])
+                respondExtensionUI(reqId, value: "Deny", callId: callId)
+                return
+            }
+        }
         guard var card = toolCards[callId] else {
             respondExtensionUI(reqId, value: "Allow", callId: callId)
             return
