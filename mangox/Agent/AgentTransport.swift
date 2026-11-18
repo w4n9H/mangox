@@ -126,13 +126,6 @@ protocol AgentTransport: AnyObject {
     /// 档位菜单里 ⇒ 主会话也能挂上 dream 扩展）也不做成全局（那会污染别的会话）。
     /// 它同时是 dream 的**第二道闸门**: 只有这一份 transport 知道 spool 在哪。
     func updateDreamSpool(_ spool: String?)
-    /// P19: 这一回合是不是「只读分析段」（助理巡检轮）。**per-turn 实例级**。
-    ///
-    /// 与 `updateDreamSpool` 同一层、同一条纪律（`beginTurn` 里无条件赋值）——
-    /// 它决定 `--tools` 用 allowlist 还是档位面、要不要起 computer、挂不挂知识块 / SOP。
-    /// ⚠️ 不做成第五个 `AgentMode` 档位: 档位是人对人机的偏好（切 minimal 仍带 bash），
-    /// 只读是机器对机器的一次性约束，混在一处会让人以为"我把档位调低它就安全了"。
-    func updateAnalysisReadOnly(_ on: Bool)
     /// P19: 这一回合的 system 注入段（nil = 不注入）。走 `--append-system-prompt`，
     /// **不进 user prompt**（实测: 落成 `role=system` 的 addendum 段，下次 spawn 被替换、
     /// 不累积 —— 见 docs/P19 §02）。spawn 期定格 ⇒ `spawnedExtraSystem` 变了要重启进程。
@@ -140,17 +133,6 @@ protocol AgentTransport: AnyObject {
     /// P19: 执行回合的守卫（nil = 这一回合不是执行轮）。审批桥据此在**弹卡之前**过红线 ——
     /// 红线恒拒，任何授权都不放行，所以它必须发生在"问人"之前。
     func updateExecutionGuard(_ guardValue: ExecutionGuard?)
-    /// P19.2 S10/S12: 本回合的**账本落点与围栏模式**（`nil` = 这一轮没有账本）——
-    /// spawn 期注入 `MANGOX_LEDGER_PATH` env，扩展据此把「新建文件免检」从"项目内"收紧成
-    /// "仅账本这一份"。
-    ///
-    /// 与 `updateExecutionGuard` 同一层、同一条纪律（`beginTurn` 里**无条件**赋值）——
-    /// 漏清的后果与执行守卫同款：`write` 在下一个普通回合里仍然只认那个早已过期的账本，
-    /// 表现是"新建文件忽然都要审批了"，而人想不到是上一轮留下的路径。
-    /// ⚠️ 它**只影响免检**，不构成权限：能不能做由客户端 `LedgerFence` 判（S11 接审批桥）。
-    /// ⚠️ 路径与模式**必须同一次赋值**: 分两个 setter 的话，迟早出现"给了 `ask` 的新落点、
-    /// 配着上一轮的旧模式"，而那种偏差在界面上一个字都看不出来（S12 定）。
-    func updateLedgerFence(_ path: String?, mode: LedgerFence.Mode)
     /// P10.1b: 下发博查 API Key (nil = 未配置; spawn 期注入 `MANGOX_BOCHA_KEY` env)。
     ///
     /// **实例级**, 与 `updateDreamSpool` 同一层 —— 但语义不同: 那个是**任务**语义（只有 dream

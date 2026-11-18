@@ -5717,8 +5717,16 @@ struct SmokeMain {
         // 反例: 解码顺序写反 ⇒ "condition 非空 ⇒ legacy" 红; 删 fire 的 guard ⇒ "不 fire" 红。
         await caseTaskKind()
 
-        // ---- T-WATCHFACE: P19 只读巡检/分析段的工具面（只给该给的，一个都不多） ----
-        await caseWatchFace()
+        // ---- T-WATCHFACE 已整批删除（2026-11-18 boss 定：不要纠结权限，按助理自己选的档位） ----
+        // 那一整段断言的对象（`AnalysisFace` / `analysisFace(...)` / `readOnlyToolNames` /
+        // `patrolToolNames` / `shouldStartComputer` / `toolArguments(for:)`）**整层不存在**了。
+        // 它守的两件真事都没丢: ① 四档的 `--tools` 面 → 上面 T23 / T-P10.4 那几条仍在逐档对拍;
+        // ② "工具面只有一条来源 = 档位" → T-PATROLWRITE ① 用源序钉住。
+        // ⚠️ 别把它当成"删了几条判据"：删掉的是**七个复述已被删实现**的格子。
+
+        // ---- T-STALETOOLS: 旧版「只读分析面」留下的 transcript 不能被复用（2026-11-18） ----
+        // 反例: 判据写成「总是隔离」⇒ ② 两格红（好会话被丢掉，且零信号）。
+        await caseSessionToolsStale()
 
         // ---- T-WATCHSRC: P19 来源 fan-out / 上限 / 错误隔离 / 巡检轮注入 ----
         // 反例: 拿掉 `capped` 的条数截断 ⇒ ④ 红; 字节上限改回按字符 ⇒ ⑤ 红（12000 汉字
@@ -5730,8 +5738,8 @@ struct SmokeMain {
         //       去掉伪造引用校验 ⇒ ④ 红。
         await caseWatchFindings()
 
-        // ---- T-WATCHCHAT: P19 对话轮（同一条会话里的两套上下文） ----
-        // 反例: 把 `!ephemeral` 那半个条件去掉 ⇒ 巡检轮也会绑 session（①红）；
+        // ---- T-WATCHCHAT: P19 对话轮（同一条会话、两套注入段） ----
+        // 反例: 把 fire 的 `ephemeral` 改回 `true` ⇒ ① 红（巡检轮又变成另一条时间线）；
         //       把 `turnExtra == nil` 去掉 ⇒ 巡检轮的注入段被对话段顶掉。
         await caseWatchChat()
 
@@ -5764,21 +5772,13 @@ struct SmokeMain {
         //       `ensureLogSession` 的预建去掉 `if task.isAssistant` ⇒ ⑭c 红。
         await caseHandoffPath()
 
-        // ---- T-LEDGERFENCE: P19.2 S10 账本围栏（纯函数 / env 双闸门 / 扩展真跑 / 无条件清回） ----
-        // ⚠️ 这一步**没有任何调用点**（接审批桥是 S11）—— 判据是它唯一的存在证明。
-        // 反例: 判据换成 `raw.hasPrefix(ledger)`（前缀 + 不做标准化）⇒ ①×2 + ②`../` 一起红;
-        //       扩展 `insideLedger` 改成拿**原串**做前缀 ⇒ ④c 红;
-        //       免检条件去掉三元、一律走 `insideLedger` ⇒ ④g 红。
-        // ⚠️ 前导 `~` 那支**不是安全边界**（`非绝对即拒` 已经兜住），它只值一句更好的话 ——
-        //    所以断言打在**理由串**上; 只判「拒了」的话那支可以整段删掉而全绿。
-        await caseLedgerFence()
+        // ---- T-LEDGERFENCE / T-PATROLWRITE **2026-11-18 整条撤销** ----
+        // 账本围栏（只许写账本这一份）连同"巡检轮唯一能写的东西"一起删了：助理跑在专属机器上，
+        // 路径围栏既拦不住什么，又把正常干活堵死（真机 11:04:49：巡检轮连 `ls` 都被拒）。
+        // 现在的边界在**人**这一侧，见 T-ASSISTANTAPPROVAL：工具级恒关 + 方案级「采纳并执行」。
 
-        // ---- T-PATROLWRITE: P19.2 S11 巡检轮的那支笔（工具面 / 位置纪律 / 退役 App 写盘） ----
-        // 反例(2026-11-17 实测, 四处一起下 ⇒ 10 红): `patrolToolNames` 加 `bash` ⇒ ①×2;
-        //       `readOnlyToolNames` 顺手加 `write` ⇒ T-WATCHFACE ①② + ③×2;
-        //       围栏块挪到 `judgesByRisk` 之后 ⇒ ⑤×2(位置); 恢复 `saveHandoff(...)` ⇒ ⑦。
-        // ⚠️ 位置那两格还需**单独拨一次**才算验过(一起下时看不出"只挪位置会不会红")。
-        await casePatrolWrite()
+        // ---- T-ASSISTANTAPPROVAL: 助理线的两级审批（工具级恒关 / 无项目也能执行） ----
+        await caseAssistantApproval()
 
         // ---- T-DIALOGUE: P19.2 S12 对话轮（那支笔 / 围栏外弹卡 / 可选提议块 / D3 留痕） ----
         // 反例(2026-11-17 实测): mode 一律按 deny 判 ⇒ ①×2; 块头只认一种 ⇒ ②;
@@ -5791,6 +5791,11 @@ struct SmokeMain {
 
         // ---- T-NAG: P19.2 S14 催（判据表 / 落库 / 端到端 / 上限） ----
         await caseNag()
+
+        // ---- T-WAITASK: P19.4「待你决定」真的问得出去（无人值守下唯一的出路） ----
+        // 反例(2026-11-18 实测): 去掉 `waitingFindings` 的同指纹去重 ⇒ ③ 红（每轮都新增，
+        //       而"每轮都问同一件事"和"不问"一样没用）。
+        await caseWaitingAsk()
 
         // ---- T-LIFE: P19.2 S15 前置 助理与它的会话 / 账本成对（删谁都不留中间态） ----
         await caseAssistantLifecycle()

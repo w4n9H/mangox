@@ -65,18 +65,11 @@ final class MockTransport: AgentTransport {
         webSearchKeyUpdates += 1
     }
 
-    /// P19 smoke 断言用: 最近一次的只读面 / system 注入段。判据同 `lastDreamSpool` ——
-    /// **"被清回 false / nil"必须能观察到**：助理巡检轮之后的那次手动回合如果继承只读面，
-    /// 表现是"我随口问一句，它按巡检契约答 NO_FINDING 而且连写工具都没有"。
-    private(set) var lastAnalysisReadOnly: Bool = false
-    private(set) var analysisReadOnlyUpdates: Int = 0
+    /// P19 smoke 断言用: 最近一次的 system 注入段。判据同 `lastDreamSpool` ——
+    /// **"被清回 nil"必须能观察到**：助理巡检轮之后的那次手动回合如果继承巡检契约，
+    /// 表现是"我随口问一句，它按巡检契约答 NO_FINDING"。
     private(set) var lastExtraSystemPrompt: String?
     private(set) var extraSystemPromptUpdates: Int = 0
-
-    func updateAnalysisReadOnly(_ on: Bool) {
-        lastAnalysisReadOnly = on
-        analysisReadOnlyUpdates += 1
-    }
 
     func updateExtraSystemPrompt(_ text: String?) {
         lastExtraSystemPrompt = text
@@ -87,7 +80,7 @@ final class MockTransport: AgentTransport {
     private(set) var lastExecutionGuard: ExecutionGuard?
     private(set) var executionGuardUpdates: Int = 0
     func updateExecutionGuard(_ guardValue: ExecutionGuard?) {
-        // 计数与"清回 nil"两件事都要能观察 —— 同 `lastAnalysisReadOnly` 那条:
+        // 计数与"清回 nil"两件事都要能观察 —— 同 `lastExtraSystemPrompt` 那条:
         // 漏清的表现是"之后每一轮都带着红线", 只有计数能证明它真的被下发过。
         lastExecutionGuard = guardValue
         executionGuardUpdates += 1
@@ -95,17 +88,6 @@ final class MockTransport: AgentTransport {
 
     /// P19 S6 smoke 注入: 本回合的过闸落痕 (mock 无审批桥, 默认空)
     var execActions: [Int: ExecAction] = [:]
-
-    /// P19.2 S10/S12: 账本落点与围栏模式（冒烟断言"巡检/对话回合挂上了、普通回合清掉了"）。
-    /// 模式单独记一份: 「给了笔」与「围栏在拒」是两件事 —— 对话轮两者都有，但模式是 `ask`。
-    private(set) var lastLedgerFencePath: String?
-    private(set) var lastLedgerFenceMode: LedgerFence.Mode = .deny
-    private(set) var ledgerFencePathUpdates: Int = 0
-    func updateLedgerFence(_ path: String?, mode: LedgerFence.Mode) {
-        lastLedgerFencePath = path
-        lastLedgerFenceMode = mode
-        ledgerFencePathUpdates += 1
-    }
 
     func updateSessionBinding(_ sessionId: UUID?) {
         guard boundSessionId != sessionId else { return }

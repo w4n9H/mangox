@@ -40,24 +40,33 @@ extension SmokeMain {
         var exitNote: String?
         link.onFrame = { frames.append($0) }
         link.onExit = { exitNote = $0 }
+        let botId = UUID().uuidString
         do {
-            try link.start(appId: appId, appSecret: secret)
+            try link.start(bots: [RemoteLinkBot(id: botId, appId: appId, secret: secret)])
         } catch {
             check(false, "T-REMOTELIVE 起桥失败: \(error.localizedDescription)"); return
         }
-        // 桥是"启动后 2 秒乐观置 true" —— 给 15 秒余量（冷启动 + token 换取 + 握手）。
+        // 状态帧现在**只在握手真的成功时**才算 connected（S15b 去掉了"2 秒乐观置 true"：
+        // 凭证填错时它会说"通着"）。给 20 秒余量（冷启动 + token 换取 + 握手）。
         let up = await waitUntil({ frames.contains { if case .status = $0 { return true }; return false } },
-                                 timeout: 15)
+                                 timeout: 20)
         check(up, "T-REMOTELIVE 收到 status 帧（子进程真的起来了，且 stdout 是干净的 NDJSON）")
         check(exitNote == nil, "T-REMOTELIVE 桥没有提前退出（\(exitNote ?? "还在跑")）")
+        // **每帧都带 bot** 是多机器人契约的地基: 少了它，全部消息会归到同一个助理。
+        let tagged = frames.contains {
+            if case .status(let b, _, _) = $0 { return b == botId }
+            return false
+        }
+        check(tagged, "T-REMOTELIVE status 帧带回了机器人 id（多机器人路由的唯一键）")
 
         if let chatId = env["FS_CHAT_ID"], !chatId.isEmpty {
-            link.send(chatId: chatId, text: "[MangoX 联调] 这条是 FeishuBridgeLink 的子进程管路自测。")
+            link.send(botId: botId, chatId: chatId,
+                      text: "[MangoX 联调] 这条是 FeishuBridgeLink 的子进程管路自测。")
             let sent = await waitUntil({ frames.contains { if case .sendResult = $0 { return true }; return false } },
                                        timeout: 15)
             var ok = false
             for f in frames {
-                if case .sendResult(let success, _, _) = f { ok = success }
+                if case .sendResult(_, let success, _, _) = f { ok = success }
             }
             check(sent && ok, "T-REMOTELIVE send 命令真的发出一条消息（send_result ok=\(ok)）")
         }

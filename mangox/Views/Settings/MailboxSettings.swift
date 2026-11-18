@@ -267,7 +267,7 @@ private struct MailboxAccountBlock: View {
         reset()
     }
 
-    /// 重设授权码：就地弹一次输入。**不回显旧值**（同 webhook 那条规矩）。
+    /// 重设授权码：就地弹一次输入。**不回显旧值**（凭据一律只写不读，同飞书 secret 那条规矩）。
     private func resetAuth(_ account: MailboxAccount) {
         let alert = NSAlert()
         alert.messageText = String(format: L("重设「%@」的授权码"), account.address)

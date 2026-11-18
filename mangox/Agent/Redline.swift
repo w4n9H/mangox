@@ -1,15 +1,18 @@
 //
 //  Redline.swift
-//  P19 执行段的**硬约束**：红线恒拒 + 目标围栏。设计见 docs/P19 §03「授权与执行」。
+//  P19 执行段的**硬约束**：红线恒拒 + 步骤围栏。设计见 docs/P19 §03「授权与执行」。
 //
 //  为什么是纯函数：红线的全部价值在"它真的拦住了"。拦不住的两种写法都很常见 ——
 //  写在执行路径深处（没人测得动）与写在提示词里（模型不听就没了）。所以判定单独成函数，
 //  入参只有"要干什么"，出参只有"准不准 + 为什么"，判据直接打在它上面。
 //
-//  ⚠️ 红线与围栏**不是同一件事**：
-//    · 红线 = 任何档位、任何授权都不放行（`rm -rf /`、凭据目录、系统目录、支付下单）；
-//    · 围栏 = 授权范围内的边界（写只落在任务项目 / 人显式列的目录）。围栏能被人放宽，
-//      红线不能 —— 混在一起写，早晚有一次会为了"让某个用例跑通"把红线一起放宽。
+//  ⚠️ 这里还剩**两条**，而且它们管的是两件不同的事：
+//    · 红线 = 任何档位、任何授权都不放行（`rm -rf /`、凭据目录、系统目录、危险命令）；
+//    · 步骤围栏 = 动作必须落在**人批过的那几步**里（没声明「第 N 步」= 证明不了 ⇒ 拒）。
+//
+//  ⚠️ 2026-11-18 删掉了第三条第「写范围围栏」（只能写任务项目目录内）。理由见
+//     `denyReason(forWrite:)` 的注释：助理后续跑在同一台专属机器上，"项目外"不成立。
+//     删掉之后**红线与步骤围栏一个字都没放宽** —— 别为了补洞把它们一起改了。
 //
 
 import Foundation
@@ -119,22 +122,22 @@ enum Redline {
         return nil
     }
 
-    /// 写围栏。`projectPath` = 任务绑定的项目目录（nil = 没有围栏，只受红线约束）。
-    /// 返回 nil = 放行。
+    /// 写入红线。`projectPath` 现在**只当相对路径的基准**用（执行轮的 cwd）。
+    ///
+    /// ⚠️ 2026-11-18 删掉了「围栏」那一条（"只许写项目目录内，否则拒"）：助理后续跑在
+    /// **独立的 Mac 主机**上，那台机器整个就是给它用的，"项目外"这个说法在那里不成立。
+    /// 留下的是**红线**——凭据目录、系统目录、危险命令，这些与"在哪台机器上"无关。
+    /// 两级边界改在**人**这一侧：方案级（采纳并执行）+ 重要操作级（写进方案等人批）。
     static func denyReason(forWrite path: String, projectPath: String?) -> String? {
         let proj = projectPath.flatMap { $0.isEmpty ? nil : ($0 as NSString).expandingTildeInPath }
         // 相对路径按**项目根**解（执行轮的 cwd 就是项目根）。不解的话 `> out.txt` 会被判成
-        // "项目外的 out.txt" —— 而它其实就是项目里那个文件，表现是"正常写法莫名全被拒"。
+        // 一个不存在的位置，表现是"正常写法莫名全被拒"。
         let abs = absolutePath(path, base: proj)
         if isCredentialPath(abs) { return "红线：凭据目录不许写" }
         for root in systemRoots where abs == root || abs.hasPrefix(root + "/") {
             return "红线：系统目录不许写（\(root)）"
         }
-        guard let proj else { return nil }
-        // 项目外写入要**人显式授权过**才算数。本版没有"人显式列的目录"这一层 ⇒ 一律拒
-        // （比放行安全: 拒绝的表现是人来加一条授权, 放行的表现是悄悄写到别处）。
-        if abs == proj || abs.hasPrefix(proj + "/") { return nil }
-        return "围栏：目标落在任务项目之外（\(proj)）"
+        return nil
     }
 
     /// 绝对化。**不碰磁盘**：`..` 按字面消掉，不解析符号链接。
@@ -176,8 +179,6 @@ enum ExecGate {
     enum Kind: String, Equatable {
         /// 红线：任何档位、任何授权都不放行。
         case redline
-        /// 围栏：落在授权写入范围之外。
-        case fence
         /// 跑偏：动作对不上已授权的步骤号。
         case drift
     }
@@ -195,7 +196,8 @@ enum ExecGate {
         //    两者的区别**只影响落痕的措辞**（拒不拒由有没有理由决定）：`Redline` 的理由串
         //    以「红线：」/「围栏：」开头，这里按前缀归一次类，不去解析句子。
         func denial(_ reason: String) -> Denial {
-            Denial(kind: reason.contains("围栏") ? .fence : .redline, reason: reason)
+            // 2026-11-18: 只剩红线这一类（"围栏"整条删了 — 见 `denyReason(forWrite:)`）。
+            Denial(kind: .redline, reason: reason)
         }
         if tool == "bash" {
             if let reason = Redline.denyReason(forCommand: target, projectPath: g.projectPath) {

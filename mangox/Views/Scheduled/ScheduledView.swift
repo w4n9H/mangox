@@ -26,18 +26,14 @@ struct ScheduledView: View {
     /// P19: 来源列表。**本版没有添加入口**（外部来源未接入，见 `sourcesCard` 的说明）——
     /// 留着它是因为老库/手改配置里可能有行, 界面对它们要**显示**而不是假装不存在。
     @State private var draftSources: [WatchSourceSpec] = []
-    /// P19 S7 触达草稿。飞书 URL **不进草稿的落库路径** —— 保存时单独写钥匙串。
-    @State private var draftNotifySystem: Bool = true
-    @State private var draftNotifyEmail: String = ""
-    @State private var draftNotifyWebhook: Bool = false
-    /// P19.2 S15: 绑定的飞书单聊 `chat_id`。nil = 不绑（这个助理只能在 MangoX 里用）。
-    @State private var draftRemoteChat: String? = nil
-    /// 新填的 webhook 地址（空 = 不改）。已经在钥匙串里的那条永不回显 —— 见 `notifyCard`。
-    @State private var draftWebhookInput: String = ""
-    /// 钥匙串里现在有没有这条任务的地址（只判是否存在，不读内容到界面）。
-    @State private var webhookStored: Bool = false
+    /// P19 S7 触达草稿。**飞书不在这里** —— 它由「入口 · 飞书」那个机器人决定
+    /// （2026-11-17 群 webhook 删掉之后，触达只剩系统通知与邮件）。
+    /// P19.2 S15b: 这个助理挂在**哪一个**飞书机器人上。`nil` = 只能在 MangoX 里用。
+    ///
+    /// **1:1**（2026-11-17 boss 定）: 一个机器人只归一个助理，一个助理也只有一个机器人 ——
+    /// 于是「一场会话」的含义才干净（一个入口 = 一场对话）。想要第二个入口就再建一个助理。
+    @State private var draftBotId: UUID? = nil
     @State private var draftBudget: String = ""
-    @State private var notifyError: String? = nil
     @State private var hoveringId: UUID?
     // P9-#17: 无人值守恒开 (fire 不再读 task.unattended), 开关与确认弹窗已移除
     // cron 四档录入器: 控件态 → 生成 cron; 编辑时 classifyCron 反解析回填 (解析不出落高级档)
@@ -59,8 +55,6 @@ struct ScheduledView: View {
     @State private var draftMode: String = AgentMode.standard.rawValue
     // 操作反馈: 删除二次确认 / 保存成功闪现
     @State private var showDeleteConfirm: Bool = false
-    /// P19.2 S13: 台账 sheet（助理档）。只读 —— 写者是模型，多一个写者就是两份真源。
-    @State private var showLedger: Bool = false
     /// P19 收件箱: 展开中的那条结论（一次只展开一条 —— 多条同时展开会把列表顶没）。
     @State private var expandedFinding: UUID?
     /// P19 S6: 最近执行过的那一组是否展开。**默认收起**: 它是"回滚的入口"，不是待办 ——
@@ -112,14 +106,6 @@ struct ScheduledView: View {
             } else {
                 Text("任务删除后停止调度。工作日志文件始终保留; 日志会话可选删除。")
             }
-        }
-        // P19.2 S13: 台账。**读法与 fire 同源**（`readHandoff` 里含 S9 的新旧位置回落）——
-        // 这里若自己拼路径，显示的就不是模型正在写的那一份。
-        .sheet(isPresented: $showLedger) {
-            let h = editingTask().flatMap { store.scheduler.readHandoff(for: $0) }
-            AssistantLedgerSheet(title: editingTask()?.name ?? "",
-                                 text: h?.content ?? "",
-                                 updatedAt: h?.updatedAt)
         }
         .onAppear { consumeFindingFocus() }
         // P19 S7: 通知点击可能发生在定时页**已经开着**的时候 ⇒ 那一次 `onAppear` 不会再触发,
@@ -201,6 +187,18 @@ struct ScheduledView: View {
         store.scheduledTasks.first { $0.id == f.taskId }?.name ?? L("未知任务")
     }
 
+    /// 卡片副行那一段（方案几笔 / 等你决定 / 只有结论）。
+    ///
+    /// 空方案**不等于**「只有结论」：`## 待你决定` 落下来的那些正是**在等人回答**，
+    /// 两个情况写同一个标签，人会把它当成一条通知划过去（2026-11-18 boss 提的）。
+    ///
+    /// 判据看的是 `evidence` 那枚落库标记（`WatchFindingService.waitingEvidence`），
+    /// **不是**标题文案 —— 标题是模型写的，会变。那枚标记恒中文、不本地化，两边都不用翻译。
+    private func findingPlanLabel(_ f: AgentFinding) -> String {
+        if !f.plan.isEmpty { return String(format: L("方案 %lld 步"), f.plan.count) }
+        return f.evidence == WatchFindingService.waitingEvidence ? L("等你决定") : L("只有结论")
+    }
+
     /// 住定时任务列表**上方**、不新开主区面板（§03 拍板）: 它是低频、待处理的东西，
     /// 做成主面板就得天天空着，还得为它设计一套空态。没有待处理结论时**一个像素都不占**。
     private var inboxSection: some View {
@@ -245,7 +243,7 @@ struct ScheduledView: View {
                         Text(findingTaskName(f))
                         Text("·")
                         // 方案步数比"严重度"有用: 人一看就知道点进去要不要做决定
-                        Text(f.plan.isEmpty ? L("只有结论") : String(format: L("方案 %lld 步"), f.plan.count))
+                        Text(findingPlanLabel(f))
                         if f.planRev > 1 {
                             Text("·")
                             Text(String(format: L("第 %lld 版"), f.planRev))
@@ -706,9 +704,18 @@ struct ScheduledView: View {
             nameField
             cronRow
             if isLegacyEditing, let t = editingTask() { legacyConditionCard(t) }
-            promptCard
-            if draftKind == .assistant { sourcesCard }
-            if draftKind == .assistant { notifyCard }
+            // 助理**没有**手填目标（2026-11-17 boss: "助理的目标来自我的下发"）：
+            // 目标要么在会话里说，要么 cron 巡检时从账本里长出来 —— 编辑框里写死一个
+            // 静态目标，与"每轮下发"直接冲突。Cron 档不变（它的 prompt 是**指令**）。
+            // ⚠️ dream 例外：它是助理，但指令是出厂常量，必须看得见（否则"为什么改不了"无处可查）。
+            if draftIsDream { dreamPromptCard } else if draftKind != .assistant { editablePromptCard }
+            // 来源卡只在**真有外部来源**时出现。本版没有添加入口（外部来源未接入），
+            // 所以它平时是空的；而在助理档显示一行"项目 · 只读查看"是个陷阱 ——
+            // 项目在顶栏那颗 pill 里选，这块既点不动又和实现矛盾（见 saveBlocker）。
+            if draftKind == .assistant, !draftSources.isEmpty { sourcesCard }
+            // 台账常驻（2026-11-18 晚）: 占的正是原来「触达」那一格 —— 那张卡删了（boss 定的
+            // "移除触达及相关功能"），而台账是助理档唯一一个"我要随时看见"的东西。
+            if draftKind == .assistant, editingTask() != nil { ledgerCard }
             if draftKind == .assistant { remoteCard }
             configCard   // P10.4: 任务级模型/级别/模式
             if editingId != nil && draftContinuous && draftKind == .execute {
@@ -726,17 +733,6 @@ struct ScheduledView: View {
             // 这一栏对它是只读的东西），把开关摆出来会让人以为能关掉它。
             if draftKind == .execute { continuousToggle }
             Spacer()
-            // P19.2 S13: 台账入口只对**已保存的助理**出现 —— 草稿还没有账本文件，
-            // 摆一个点了必空的按钮等于骗人。
-            if draftKind == .assistant, editingTask() != nil {
-                Button(LK("台账")) { showLedger = true }
-                    .buttonStyle(.plain)
-                    .font(CodexTheme.fontSmall)
-                    .foregroundStyle(CodexTheme.info)
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 3)
-                    .contentShape(Rectangle())
-            }
             if let last = editingTask()?.logSessionId {
                 Button("任务日志") {
                     store.selectConversation(last)
@@ -829,34 +825,26 @@ struct ScheduledView: View {
     /// （现有 poll 会置已读）—— 现在摆一个能加、加了却永远采不到的入口，就是
     /// 「看着像支持、配了不生效」。所以这一栏只做两件事：说清当前唯一的可用来源是**绑定项目**，
     /// 以及把库里已有的来源行**如实显示**（老库 / 手改配置里可能有 `kind` 不认识的行）。
+    /// 外部来源列表（仅助理档，且**只在真的有来源时出现**）。
+    ///
+    /// ⚠️ 2026-11-17 boss 报「来源那里点不了」—— 原来这张卡第一行画的是"项目 · 只读查看"，
+    /// 那**不是一个控件**：项目是在顶栏那颗 pill 里选的，这里只是复述它。摆一块看着能点、
+    /// 点下去毫无反应的东西，比不摆更坏。现在项目只住在顶栏，这张卡只管外部来源；
+    /// 而本版没有添加入口（外部来源未接入），所以助理档平时根本看不到它。
+    ///
+    /// 那句"助理至少要有项目这一条来源"也一起删了 —— 它与 `saveBlocker` 直接矛盾
+    /// （那里 2026-11-17 已放宽成"可以没有项目"）。文件说明与判据不一致时，人只会信界面上那句。
     private var sourcesCard: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 6) {
                 Image(systemName: "eye")
                     .font(.system(size: 10))
                     .foregroundStyle(CodexTheme.textMuted)
-                Text("来源")
+                Text("外部来源")
                     .font(CodexTheme.fontTiny)
                     .foregroundStyle(CodexTheme.textMuted)
                 Spacer()
             }
-            // 隐式来源: 项目
-            HStack(spacing: 6) {
-                Image(systemName: draftProjectId == nil ? "circle.dashed" : "folder")
-                    .font(.system(size: 10))
-                    .foregroundStyle(draftProjectId == nil ? CodexTheme.textMuted : CodexTheme.accent)
-                Text(projectLabel)
-                    .font(CodexTheme.fontSmall)
-                    .foregroundStyle(draftProjectId == nil ? CodexTheme.textMuted : CodexTheme.textPrimary)
-                Text("项目 · 只读查看")
-                    .font(CodexTheme.fontTiny)
-                    .foregroundStyle(CodexTheme.textMuted)
-                Spacer()
-            }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 6)
-            .background(CodexTheme.bgElevated)
-            .clipShape(RoundedRectangle(cornerRadius: CodexTheme.radiusSm))
 
             ForEach(draftSources) { s in
                 HStack(spacing: 6) {
@@ -877,7 +865,7 @@ struct ScheduledView: View {
                 .clipShape(RoundedRectangle(cornerRadius: CodexTheme.radiusSm))
             }
 
-            Text("助理至少要有项目这一条来源；外部来源（邮件）本版未接入 —— 它的只读采集要等「不置已读」验证通过。")
+            Text("外部来源（邮件）本版未接入 —— 它的只读采集要等「不置已读」验证通过。")
                 .font(CodexTheme.fontTiny)
                 .foregroundStyle(CodexTheme.textMuted)
         }
@@ -890,169 +878,63 @@ struct ScheduledView: View {
                 .stroke(CodexTheme.border.opacity(0.45), lineWidth: 1)
         )
     }
-    // MARK: - P19 S7 触达与预算
+    // MARK: - P19.2 S13 台账（常驻卡）
 
-    /// 触达卡（仅助理档）：**怎么叫人**，与上面那张「看什么」正交。
+    /// 台账卡（仅助理档）：**不用点，进来就看得见**。
     ///
-    /// 三条写在这里的约束:
-    ///   · 飞书地址**永不回显** —— 它是凭据。已配置只显示"已保存"，要换就整条重填。
-    ///   · 邮件发件人是"第一个能发的账号"，不是每条任务选一次 —— 见 `firstSendableMailboxAccount`。
-    ///   · 预算 0 = 不设限；超了是**跳过并落痕**，不换便宜模型（§04）。
-    private var notifyCard: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 6) {
-                Image(systemName: "bell")
-                    .font(.system(size: 10))
-                    .foregroundStyle(CodexTheme.textMuted)
-                Text("触达")
-                    .font(CodexTheme.fontTiny)
-                    .foregroundStyle(CodexTheme.textMuted)
-                Spacer()
-                if draftNotifySystem == false && draftNotifyEmail.isEmpty && !draftNotifyWebhook {
-                    Text("全都关着 —— 结论只落在收件箱")
-                        .font(CodexTheme.fontTiny)
-                        .foregroundStyle(CodexTheme.blocked)
-                }
-            }
-
-            Toggle(isOn: $draftNotifySystem) {
-                Text("系统通知")
-                    .font(CodexTheme.fontSmall)
-                    .foregroundStyle(CodexTheme.textPrimary)
-            }
-            .toggleStyle(.switch)
-            .controlSize(.small)
-            .help("弹系统通知；受「设置 → 通用 → 回合完成通知」总开关约束")
-
-            // 邮件
-            HStack(spacing: 8) {
-                Image(systemName: "envelope")
-                    .font(.system(size: 10))
-                    .foregroundStyle(CodexTheme.textMuted)
-                TextField("邮件收件人（留空 = 不发）", text: $draftNotifyEmail)
-                    .textFieldStyle(.plain)
-                    .font(CodexTheme.fontSmall)
-                    .frame(maxWidth: 280)
-                Spacer()
-                Text(senderHint)
-                    .font(CodexTheme.fontTiny)
-                    .foregroundStyle(senderHintIsWarn ? CodexTheme.blocked : CodexTheme.textMuted)
-            }
-
-            // 飞书
-            HStack(spacing: 8) {
-                Image(systemName: "paperplane")
-                    .font(.system(size: 10))
-                    .foregroundStyle(CodexTheme.textMuted)
-                Toggle(isOn: $draftNotifyWebhook) {
-                    Text("飞书机器人")
-                        .font(CodexTheme.fontSmall)
-                        .foregroundStyle(CodexTheme.textPrimary)
-                }
-                .toggleStyle(.switch)
-                .controlSize(.small)
-                .fixedSize()
-                if draftNotifyWebhook {
-                    SecureField(webhookStored ? "已保存（不回显）—— 要换就整条重填" : "粘贴自定义机器人 webhook 地址",
-                                text: $draftWebhookInput)
-                        .textFieldStyle(.plain)
-                        .font(CodexTheme.fontSmall)
-                        .frame(maxWidth: 300)
-                }
-                Spacer()
-                if webhookStored && draftNotifyWebhook {
-                    Text("已保存")
-                        .font(CodexTheme.fontTiny)
-                        .foregroundStyle(CodexTheme.toolDone)
-                }
-            }
-
-            // 预算
-            HStack(spacing: 8) {
-                Image(systemName: "gauge.with.dots.needle.33percent")
-                    .font(.system(size: 10))
-                    .foregroundStyle(CodexTheme.textMuted)
-                Text("日预算")
-                    .font(CodexTheme.fontSmall)
-                    .foregroundStyle(CodexTheme.textPrimary)
-                TextField("不限", text: $draftBudget)
-                    .textFieldStyle(.plain)
-                    .font(CodexTheme.fontSmall)
-                    .frame(width: 90)
-                Text("token / 天")
-                    .font(CodexTheme.fontTiny)
-                    .foregroundStyle(CodexTheme.textMuted)
-                Spacer()
-                if let id = editingId {
-                    Text(String(format: L("今日已用 %lld"), store.tokenSpentToday(id)))
-                        .font(CodexTheme.fontTiny)
-                        .foregroundStyle(CodexTheme.textMuted)
-                }
-            }
-            if let e = notifyError {
-                Text(e)
-                    .font(CodexTheme.fontTiny)
-                    .foregroundStyle(CodexTheme.toolError)
-            }
-            Text("外发只带标题与任务名，正文与证据留在 App 内。飞书地址存钥匙串，库里只有「配过」。")
-                .font(CodexTheme.fontTiny)
-                .foregroundStyle(CodexTheme.textMuted)
-        }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 10)
-        .background(CodexTheme.bgComposer)
-        .clipShape(RoundedRectangle(cornerRadius: CodexTheme.radiusLg))
-        .overlay(
-            RoundedRectangle(cornerRadius: CodexTheme.radiusLg)
-                .stroke(CodexTheme.border.opacity(0.45), lineWidth: 1)
-        )
+    /// 2026-11-18 晚（boss）：原来这里是「触达」那张卡（系统通知 / 邮件 / 日预算），
+    /// 整张删掉 —— 触达的配置入口没有意义（飞书推不推由「入口」绑没绑机器人决定，
+    /// 系统通知跟全局开关走），而台账是这个助理**唯一的现状视图**。
+    ///
+    /// 只对**已保存的助理**出现：草稿还没有账本文件，摆一张必空的卡等于骗人。
+    /// 渲染与高度上限都在 `AssistantLedgerCard` 里（含"五节"的结构 —— 结构归
+    /// `AssistantLedger`，这一层不许再写一份认节头的逻辑）。
+    private var ledgerCard: some View {
+        // 读法与 fire 同源（`readHandoff` 里含 S9 的新旧位置回落）——
+        // 这里若自己拼路径，显示的就不是模型正在写的那一份。
+        let h = editingTask().flatMap { store.scheduler.readHandoff(for: $0) }
+        return AssistantLedgerCard(text: h?.content ?? "", updatedAt: h?.updatedAt)
     }
 
-    // MARK: - P19.2 S15 入口（飞书单聊）
+    // MARK: - P19.2 S15b 入口（飞书机器人）
 
-    /// 入口卡（仅助理档）：**谁来找它**，与「看什么」（来源）和「怎么叫人」（触达）都正交。
+    /// 入口卡（仅助理档）：**哪个机器人把这个助理接进飞书**。
     ///
-    /// 为什么绑定在助理这边而不是通道设置那边: 一个单聊只能归一个助理，而"归谁"是这个
-    /// 助理的属性。放在通道页会变成"一张全局对照表"，改一个助理要跑到另一页去翻。
+    /// 为什么绑定在助理这边而不是机器人那边: 「归谁」是这个助理的属性（"我的工作号归
+    /// 日报助理"），在机器人列表里配会变成"一张全局对照表"，改一个助理要跑到另一页去翻。
     ///
-    /// ⚠️ 可选项**只来自"来找过机器人的单聊"**（`remote.pendingChats`）—— 飞书没有
-    /// "列出我的单聊" 接口（实测 `GET /im/v1/chats` 只返回机器人所在的群，且 0 条）。
-    /// 所以这里必然有一句"先去飞书发一句话"，而不是一个看起来能选却永远空着的下拉框。
+    /// ⚠️ **1:1，两端都是**：一个机器人只归一个助理（`remote_bots.assistant_id` 单值列保证），
+    /// 一个助理也只挂一个机器人（这里单选 + 域层 `assignRemoteBot` 顶掉旧的）。
+    /// 已被别人占着的机器人不会静默搬过来 —— 它显示「已归 X」并给一个显式的
+    /// 「改归本助理」。S15 那版是保存时悄悄摘走，症状是"我明明绑给它了，它不回"。
+    ///
+    /// ⚠️ 选择**进草稿**，保存才落库（与这一页其他字段同一条规矩：取消 = 什么都没发生）。
     private var remoteCard: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 6) {
                 Image(systemName: "bubble.left.and.bubble.right")
                     .font(.system(size: 10))
                     .foregroundStyle(CodexTheme.textMuted)
-                Text("入口 · 飞书单聊")
+                Text("入口 · 飞书")
                     .font(CodexTheme.fontTiny)
                     .foregroundStyle(CodexTheme.textMuted)
                 Spacer()
-                if !store.remote.isEnabled {
-                    Text("通道没开（设置 → 集成 → 飞书对话）")
+                if store.remoteBots.isEmpty {
+                    Text("没有机器人（设置 → 集成 → 飞书机器人）")
                         .font(CodexTheme.fontTiny)
                         .foregroundStyle(CodexTheme.blocked)
-                } else if draftRemoteChat == nil {
-                    Text("没绑 —— 只能在 MangoX 里用它")
+                } else if draftBotId == nil {
+                    Text("没选 —— 只能在 MangoX 里用它")
                         .font(CodexTheme.fontTiny)
                         .foregroundStyle(CodexTheme.textMuted)
                 }
             }
 
-            HStack(spacing: 8) {
-                Picker("", selection: $draftRemoteChat) {
-                    Text("不绑定").tag(String?.none)
-                    ForEach(remoteOptions, id: \.self) { chatId in
-                        Text(remoteLabel(chatId)).tag(String?.some(chatId))
-                    }
-                }
-                .labelsHidden()
-                .pickerStyle(.menu)
-                .frame(maxWidth: 320)
-                Spacer()
+            ForEach(store.remoteBots) { bot in
+                botRow(bot)
             }
 
-            Text("在飞书里给机器人发一句话，那个单聊就会出现在这里。它说的话会直接进这个助理的会话，回复原路发回飞书。群聊不接（S15 只做单聊）。")
+            Text("点一行就选中它（选中后要点右上角「保存」才生效）。选中的机器人收到的话会直接进这个助理的会话，回复原路发回飞书。群聊不接（只做单聊）。机器人没有自己的开关 —— 助理关着它就**不连**，飞书那边输入框会变灰。")
                 .font(CodexTheme.fontTiny)
                 .foregroundStyle(CodexTheme.textMuted)
                 .fixedSize(horizontal: false, vertical: true)
@@ -1067,29 +949,58 @@ struct ScheduledView: View {
         )
     }
 
-    /// 下拉里的候选：找过机器人的单聊 + **当前已绑的那个**（即使它不在最近列表里 ——
-    /// 一个绑定不该因为"10 个更新的人说了话"就选不回去）。
-    private var remoteOptions: [String] {
-        var ids = store.remote.pendingChats.map(\.chatId)
-        if let bound = draftRemoteChat, !ids.contains(bound) { ids.insert(bound, at: 0) }
-        return ids
-    }
-
-    private func remoteLabel(_ chatId: String) -> String {
-        if let chat = store.remote.pendingChats.first(where: { $0.chatId == chatId }) {
-            return "\(chat.shortChat) · \(chat.shortSender) · \(chat.lastText)"
+    private func botRow(_ bot: RemoteBot) -> some View {
+        // 「归谁」判的是**库里**的归属，不是草稿 —— 点完「不归它」但还没保存时，
+        // 这一行必须回到"可选"的样子；否则它会说自己「已归：本助理」还劝你「改归本助理」。
+        let selfId = editingTask()?.id
+        let ownerName = bot.assistantId.flatMap { owner in
+            store.scheduledTasks.first { $0.id == owner }?.name
         }
-        return "…" + chatId.suffix(6)
-    }
-
-    /// 邮件发件人提示 —— **说清到底谁发**，否则"填了收件人但没收到"归因不了。
-    private var senderHint: String {        if let a = store.firstSendableMailboxAccount() {
-            return String(format: L("发件: %@"), a.address)
+        let ownedByOther = bot.assistantId != nil && bot.assistantId != selfId
+        let mine = draftBotId == bot.id
+        // ⚠️ 2026-11-17 boss 报「入口那里点不了」：原来只有行尾那 4 个字的按钮是热区，
+        // 行本身点下去毫无反应 —— 整块看着像选择器，实际只有一小撮能点。现在整行是一个按钮
+        // （`contentShape` 铺满，连行尾的留白也算），行尾那行字只是**说明这次点击会发生什么**，
+        // 不再是唯一的入口。被别的助理占着的行同样可点 = 改归本助理（仍要保存才落库）。
+        let action: String = ownedByOther ? L("改归本助理") : (mine ? L("不归它") : L("归它"))
+        return Button {
+            draftBotId = mine ? nil : bot.id
+        } label: {
+            HStack(spacing: 8) {
+                if ownedByOther {
+                    Image(systemName: "lock")
+                        .font(.system(size: 9))
+                        .foregroundStyle(CodexTheme.textMuted)
+                    Text(bot.displayName)
+                        .font(CodexTheme.fontSmall)
+                        .foregroundStyle(CodexTheme.textSecondary)
+                    Text(String(format: L("已归：%@"), ownerName ?? L("另一个助理")))
+                        .font(CodexTheme.fontTiny)
+                        .foregroundStyle(CodexTheme.textMuted)
+                } else {
+                    Image(systemName: mine ? "checkmark.circle.fill" : "circle")
+                        .font(.system(size: 10))
+                        .foregroundStyle(mine ? CodexTheme.accent : CodexTheme.textMuted)
+                    Text(bot.displayName)
+                        .font(CodexTheme.fontSmall)
+                        .foregroundStyle(CodexTheme.textPrimary)
+                    Text(bot.maskedAppId)
+                        .font(.system(size: 10, design: .monospaced))
+                        .foregroundStyle(CodexTheme.textMuted)
+                    // 机器人没有自己的开关了（2026-11-18）⇒ 这里没有"已关"可写；
+                    // 缺 app_id 已经由 `maskedAppId` 自己说出来，别重复一遍。
+                }
+                Spacer()
+                Text(action)
+                    .font(CodexTheme.fontTiny)
+                    .foregroundStyle(ownedByOther || !mine ? CodexTheme.accent : CodexTheme.textSecondary)
+                    .fixedSize()
+            }
+            .padding(.vertical, 2)
+            .contentShape(Rectangle())
         }
-        return L("没有可发的账号 —— 设置 → 集成 → 邮箱账号")
+        .buttonStyle(.plain)
     }
-
-    private var senderHintIsWarn: Bool { store.firstSendableMailboxAccount() == nil }
 
     /// P9-#17: 无人值守恒开徽章 (原开关 + 风险确认弹窗已移除——
     /// fire 恒 unattended, 开关已无语义; 后台日志会话无审批 UI 入口, 弹卡会卡死到超时)。
@@ -1177,11 +1088,41 @@ struct ScheduledView: View {
                     .font(CodexTheme.fontSmall)
                     .foregroundStyle(CodexTheme.textTertiary)
             }
+            // 日预算（2026-11-18 晚从「触达」卡挪过来）: 它不是"怎么叫人"，是**花钱的上限** ——
+            // 跟模型放一起语义才对（"用哪个模型、一天最多花多少"）。只对助理档显示: 巡检轮
+            // 每轮都在烧 token，Cron 档的消耗由 cron 频率本身决定。
+            if draftKind == .assistant { budgetRow }
         }
         .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(CodexTheme.bgElevated)
         .clipShape(RoundedRectangle(cornerRadius: 8))
+    }
+
+    /// 日预算一行。0 / 留空 = 不设限；超了是**跳过并落痕**，不换便宜模型（§04）。
+    /// 「今日已用」只在编辑已保存的任务时有意义（新建的还没有今天）。
+    private var budgetRow: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "gauge.with.dots.needle.33percent")
+                .font(.system(size: 10))
+                .foregroundStyle(CodexTheme.textMuted)
+            Text("日预算")
+                .font(CodexTheme.fontSmall)
+                .foregroundStyle(CodexTheme.textPrimary)
+            TextField("不限", text: $draftBudget)
+                .textFieldStyle(.plain)
+                .font(CodexTheme.fontSmall)
+                .frame(width: 90)
+            Text("token / 天")
+                .font(CodexTheme.fontTiny)
+                .foregroundStyle(CodexTheme.textMuted)
+            Spacer()
+            if let id = editingId {
+                Text(String(format: L("今日已用 %lld"), store.tokenSpentToday(id)))
+                    .font(CodexTheme.fontTiny)
+                    .foregroundStyle(CodexTheme.textMuted)
+            }
+        }
     }
 
     /// 任务级「模型 + 思考强度」(2026-09-24): 复用受控 `ModelPicker`, 替掉原先两个 `CodexPillMenu`。
@@ -1456,10 +1397,6 @@ struct ScheduledView: View {
     /// 保存了、界面还回显"已保存", 却没有任何效果。**能改的东西必须真的生效; 不生效的东西
     /// 必须看出来不能改**（同 `canDelete` 那条"可见性层与能力层同一个规则"）。
     @ViewBuilder
-    private var promptCard: some View {
-        if draftIsDream { dreamPromptCard } else { editablePromptCard }
-    }
-
     /// dream 的指令 —— **出厂文案**: 随版本更新, 不落库、不随本任务保存。
     /// 只读展示 + 一句说明, 让"为什么改不了"有地方可查（否则看着像坏了）。
     private var dreamPromptCard: some View {
@@ -1502,9 +1439,9 @@ struct ScheduledView: View {
                 .padding(.vertical, 10)
                 .frame(minHeight: 220)
             if draftPrompt.isEmpty {
-                Text(LK(draftKind == .assistant
-                        ? "到点要达成的目标（不是动作）——例：保证 CI 是绿的；红了就查清原因给我方案…"
-                        : "到点投递给 Agent 的 prompt…"))
+                // 这张卡现在只服务 Cron 档（助理档不摆目标框，见 `taskEditor`）——
+                // 占位文案因此只剩一种。留一个 assistant 分支等于给"把框加回去"埋一条隐形的路。
+                Text(LK("到点投递给 Agent 的 prompt…"))
                     .font(CodexTheme.fontBody)
                     .foregroundStyle(CodexTheme.textMuted)
                     .padding(.leading, 12)
@@ -1548,7 +1485,8 @@ struct ScheduledView: View {
     private var saveBlocker: SaveBlocker? {
         if isLegacyEditing { return .legacy }
         // P19.2 S13: **助理可以没有目标、可以没有项目**。
-        //   · 没有目标 = "待命"档：目标从账本里长出来（Q2 定的"不跳过，只改注入"）；
+        //   · 2026-11-17 起助理档**根本没有目标输入框**（目标来自每轮下发 / 从账本长出来）
+        //     ⇒ 新建的助理 prompt 恒为空，这一条必须放过，否则助理永远存不下去；
         //   · 没有项目 = 本版"唯一的可用来源是项目"这条限制撤掉了（外部来源仍未接入，
         //     但一轮没有可采数据并不等于配置错 —— 它还能读账本、看有没有该继续追的事）。
         // ⚠️ **Cron 一个字都不许放宽**：它的 prompt 是"要执行的指令"，空指令 = 一条永远
@@ -1633,14 +1571,8 @@ struct ScheduledView: View {
         draftContinuous = false
         draftKind = kind
         draftSources = []
-        draftNotifySystem = true
-        draftNotifyEmail = ""
-        draftNotifyWebhook = false
-        draftWebhookInput = ""
-        webhookStored = false
-        draftRemoteChat = nil
+        draftBotId = nil
         draftBudget = ""
-        notifyError = nil
         draftLog = ""
         handoffUpdatedAt = nil
         showWorkLog = false
@@ -1760,21 +1692,18 @@ struct ScheduledView: View {
         // P15.6b: dream 的指令取出厂常量回填（那一栏只读）。**不读 `task.prompt`** ——
         // 库里那份是种任务时的副本, 可能已经过期; 回填旧文案会让只读的那一栏显示错误的指令。
         draftPrompt = SchedulerService.isDreamTask(task) ? SchedulerService.dreamPrompt : task.prompt
+        // ⚠️ 助理档**不显示**这一栏（2026-11-17），但仍要**原样载入** —— 保存时是整条写回的，
+        // 不载入就等于"改个名字顺手把老目标清空"，而且是零信号的那种清空。
         draftCron = task.cron
         draftProjectId = task.projectId
         draftContinuous = task.continuous
         // P19: legacy 不是可编辑的类型（归档态）⇒ 编辑器按 Cron 呈现，但整页只读
         draftKind = task.isLegacyWaiting ? .execute : task.kind
         draftSources = task.sources
-        draftNotifySystem = task.notify.system
-        draftNotifyEmail = task.notify.emailTo ?? ""
-        draftNotifyWebhook = task.notify.webhook
-        draftRemoteChat = task.remoteChatId
-        // 钥匙串里那条**只判存在、不读出来** —— 读出来就等于把它摆进界面与截图的射程。
-        webhookStored = store.hasWebhookURL(taskId: task.id)
-        draftWebhookInput = ""
+        // 归属从机器人那一侧反查（`remote_bots.assistant_id` 是唯一真源）。
+        // 1:1 ⇒ 最多一个；`first` 而不是 `last` 只是为了"万一库里有两条"时行为可预期。
+        draftBotId = store.remoteBots.first { $0.assistantId == task.id }?.id
         draftBudget = task.dailyTokenBudget > 0 ? String(task.dailyTokenBudget) : ""
-        notifyError = nil
         syncCronControls(task.cron)
         // P10.4: 任务级配置回填 (nil = 跟随全局, 预填当前全局值供开启即用)
         if let cfg = task.config {
@@ -1796,24 +1725,25 @@ struct ScheduledView: View {
         showWorkLog = false
     }
 
-    /// 绑定时把**别处**同一个单聊的绑定清掉（唯一性跨行 ⇒ 只能在这里落地）。
+    /// 保存时把这个助理的归属落成**一条**机器人行。
     ///
-    /// 为什么不在读取侧"取第一条": 那样两条任务都显示"已绑定", 而只有一条真的收得到 ——
-    /// 症状是"我明明绑给它了, 它不回"。宁可保存时悄悄搬走, 也不留下一个看得见却不生效的绑定。
-    private func releaseRemoteBinding(_ chatId: String?, except keep: UUID) {
-        guard let chatId, !chatId.isEmpty else { return }
-        for t in store.scheduledTasks where t.id != keep && t.remoteChatId == chatId {
-            var copy = t
-            copy.remoteChatId = nil
-            store.updateScheduled(copy)
+    /// ⚠️ 这里**不再扫全表摘别人的绑定** —— "一个机器人只归一个助理"由 `assistant_id`
+    /// 单值列保证: 写它就是改归，写 `nil` 就是解绑。S15 那版先写自己再扫别人，
+    /// 两者中间有一个"同时被两条任务声称"的窗口，而症状是"我明明绑给它了，它不回"。
+    /// 1:1 的另一半（一个助理只挂一个）在 `ChatStore.assignRemoteBot` 里顶掉旧的。
+    private func applyRemoteBots(assistantId: UUID) {
+        if let id = draftBotId {
+            store.assignRemoteBot(id, to: assistantId)
+        } else {
+            store.unassignRemoteBots(from: assistantId)
         }
     }
 
     private func saveEditing() {
         guard draftReady else { return }
-        // S7: 触达与预算先校验 —— 校验不过就**整个保存都不做**（半保存会让"我以为改了"变成
-        // "改了一半"，而触达配错的全部表现都是"没收到消息"）。
-        guard let opts = validatedNotifyOptions() else { return }
+        // 预算归一后落库。⚠️ **触达不再由保存写回**（2026-11-18 晚删了配置入口）:
+        // `existing.notify` 原样留在行上 —— "撤下输入框 ≠ 清空数据"（P11 判据①），
+        // 老任务的 `system` 还照旧生效，新建任务走 `NotifyOptions.default`。
         let budget = parsedBudget()
         // 名称留空 → 自动取 prompt 首行前 24 字 (与"保存为记忆"命名规则一致)
         let name = draftName.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1840,14 +1770,10 @@ struct ScheduledView: View {
             // P19: `kind` **不回写** —— 已保存任务的类型不可改（见 `kindPill` 的注释）。
             // 来源照写: 本版界面不能改来源, 但库里已有的行必须原样留住, 否则一次编辑就静默清空。
             existing.sources = draftSources
-            existing.notify = opts
             existing.dailyTokenBudget = budget
-            // P19.2 S15: 飞书入口的绑定。**一个单聊只归一个助理** —— 唯一性没人替我们守,
-            // 库是随手可改的, 所以每次保存都把别人身上同一个 id 清掉（见 `releaseRemoteBinding`）。
-            existing.remoteChatId = draftKind == .assistant ? draftRemoteChat : nil
+            // P19.2 S15b: 飞书入口的归属。**只改机器人行**，助理行上没有这份数据。
             store.updateScheduled(existing)
-            releaseRemoteBinding(draftRemoteChat, except: id)
-            writeWebhookSecret(taskId: id)
+            if draftKind == .assistant { applyRemoteBots(assistantId: id) }
         } else {
             let cron = effectiveCron
             store.addScheduled(name: draftName, prompt: draftPrompt,
@@ -1858,12 +1784,9 @@ struct ScheduledView: View {
             if let idx = store.scheduledTasks.indices.last {
                 store.scheduledTasks[idx].unattended = true   // P9-#17: 恒无人值守
                 store.scheduledTasks[idx].config = buildDraftConfig()   // P10.4
-                store.scheduledTasks[idx].notify = opts
                 store.scheduledTasks[idx].dailyTokenBudget = budget
-                store.scheduledTasks[idx].remoteChatId = draftKind == .assistant ? draftRemoteChat : nil
                 store.updateScheduled(store.scheduledTasks[idx])
-                releaseRemoteBinding(draftRemoteChat, except: store.scheduledTasks[idx].id)
-                writeWebhookSecret(taskId: store.scheduledTasks[idx].id)
+                if draftKind == .assistant { applyRemoteBots(assistantId: store.scheduledTasks[idx].id) }
             }
         }
         // "✓ 已保存"短闪 (与代码块"已复制"同模式)
@@ -1874,52 +1797,10 @@ struct ScheduledView: View {
         }
     }
 
-    /// 触达草稿 → `NotifyOptions`。nil = 校验不过（错误已写进 `notifyError`）。
-    private func validatedNotifyOptions() -> NotifyOptions? {
-        notifyError = nil
-        var opts = NotifyOptions()
-        opts.system = draftNotifySystem
-        let to = draftNotifyEmail.trimmingCharacters(in: .whitespacesAndNewlines)
-        opts.emailTo = to.isEmpty ? nil : to
-        opts.webhook = draftNotifyWebhook
-        if draftNotifyWebhook {
-            let raw = draftWebhookInput.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !raw.isEmpty {
-                guard raw.hasPrefix("https://"), URL(string: raw) != nil else {
-                    notifyError = L("飞书地址要以 https:// 开头")
-                    return nil
-                }
-                if !WatchNotifyService.looksLikeFeishuHook(raw) {
-                    // 只提示不拦: 自建中转也会是别的域名, 拦掉就把那条路堵死了。
-                    notifyError = L("这个域名不像飞书 —— 确认后再保存也行（自建中转可以）")
-                }
-            } else if !webhookStored {
-                notifyError = L("飞书开着, 但还没有地址 —— 粘贴一条自定义机器人的 webhook")
-                return nil
-            }
-        }
-        return opts
-    }
-
     /// 预算草稿 → 整数。空 / 非数字 → 0（不设限）。不拦保存: 这个字段写歪了人一眼能看出来
     /// （"不限"），而拦下整个保存的代价是别的改动也一起丢了。
     private func parsedBudget() -> Int {
         Int(draftBudget.trimmingCharacters(in: .whitespaces)) ?? 0
-    }
-
-    /// 只在**填了新地址**时写钥匙串；关掉飞书开关**不清地址** ——
-    /// 开关表达的是"要不要发"，不是"要不要存"。清掉之后人再打开就得去飞书重抄一遍，
-    /// 而那不是他的意思。
-    private func writeWebhookSecret(taskId: UUID) {
-        let raw = draftWebhookInput.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !raw.isEmpty else { return }
-        store.setWebhookURL(raw, taskId: taskId)
-        if store.hasWebhookURL(taskId: taskId) {
-            webhookStored = true
-            draftWebhookInput = ""   // 存完就不在界面上留一份
-        } else {
-            notifyError = L("地址没能写进钥匙串 —— 飞书这一路会发不出去")
-        }
     }
 
     /// P10.4: 草稿 → 任务级配置 (未开启自定义 = nil 跟随全局)

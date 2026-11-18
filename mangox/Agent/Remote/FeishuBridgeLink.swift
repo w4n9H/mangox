@@ -22,6 +22,13 @@
 //       会表现为"有时候回、有时候不回"。守卫在桥里（PID 锁文件），这里只负责把
 //       "已经有一个在跑" 如实显示出来，不自己再猜。
 //
+//  ── S15b: 一个桥进程管 N 个机器人 ────────────────────────────────────────────
+//  实测（`/tmp/fs-probe/multi.mjs`）: 同一进程里起两个 `WSClient`，两个都
+//  `event-dispatch is ready`、8 秒后仍 `clients=2`。所以不需要"一个机器人一个进程"
+//  —— 那会让单实例锁、孤儿回收、诊断行三件事都变成 N 份。
+//  机器人集合变了（增删改/开关/换 secret）就**整条桥重启**: 热加一个客户端要维护
+//  "哪几个已经起来"的中间态，而重启的代价只是几秒重连（飞书长连接重连很便宜）。
+//
 
 import Foundation
 
@@ -55,6 +62,14 @@ struct NDJSONBuffer {
 
 // MARK: - 缝
 
+/// 交给桥的一个机器人（凭据的**唯一**载体，只在进程启动那一刻存在）。
+struct RemoteLinkBot: Equatable {
+    /// App 侧生成的机器人 id（UUID 字符串）。桥把它原样写进每一帧的 `bot` 字段。
+    let id: String
+    let appId: String
+    let secret: String
+}
+
 /// 通道的实现缝。真实实现是 `FeishuBridgeLink`（node 子进程）；冒烟用 `FakeRemoteLink`。
 ///
 /// ⚠️ `@MainActor`：收发的落点全是 `ChatStore`（主线程模型）。开成任意线程可达会让
@@ -63,9 +78,11 @@ struct NDJSONBuffer {
 protocol RemoteLink: AnyObject {
     var onFrame: ((RemoteFrame) -> Void)? { get set }
     var onExit: ((String) -> Void)? { get set }
-    func start(appId: String, appSecret: String) throws
+    /// 起（或重起）整条桥。**机器人集合变了就整条重来** —— 见文件头。
+    func start(bots: [RemoteLinkBot]) throws
     func stop()
-    func send(chatId: String, text: String)
+    /// 出口跟着消息走: 同一个 `chat_id` 只有那个收到消息的机器人有资格回。
+    func send(botId: String, chatId: String, text: String)
 }
 
 // MARK: - 真实现
@@ -110,20 +127,31 @@ final class FeishuBridgeLink: RemoteLink {
     /// 单实例锁。桥自己会读它、判 PID 存活；App 只负责给一个**稳定路径**。
     static var lockPath: String { NSHomeDirectory() + "/.mangox/feishu-bridge.pid" }
 
-    func start(appId: String, appSecret: String) throws {
+    func start(bots: [RemoteLinkBot]) throws {
         stop()
+        guard !bots.isEmpty else { throw BridgeError.noBots }
         guard let node = Self.nodePath() else {
             throw BridgeError.noNode
         }
         guard let script = Self.scriptURL() else {
             throw BridgeError.noScript
         }
+        // 机器人清单走**一个**环境变量（JSON）。凭据因此落在子进程的 env 里 ——
+        // 同一个用户 `ps eww` 能看到，但同用户本来就能读钥匙串；换成 stdin 下发只是把
+        // "一次性投递"变成"一条要维护的握手协议"，不划算。**别写进文件/日志。**
+        let payload: [[String: String]] = bots.map {
+            ["id": $0.id, "app_id": $0.appId, "app_secret": $0.secret]
+        }
+        guard let json = try? JSONSerialization.data(withJSONObject: payload),
+              let botsJSON = String(data: json, encoding: .utf8) else {
+            throw BridgeError.badBots
+        }
+
         let p = Process()
         p.executableURL = URL(fileURLWithPath: node)
         p.arguments = [script.path]
         var env = ProcessInfo.processInfo.environment
-        env["FS_APP_ID"] = appId
-        env["FS_APP_SECRET"] = appSecret
+        env["FS_BOTS"] = botsJSON
         env["FS_LOCK"] = Self.lockPath
         // 桥把环境里的 PATH 带下去，但 node 已显式指定 ⇒ 这里只为 SDK 内部可能起的
         // 子进程（没有）留个正常值。
@@ -181,9 +209,9 @@ final class FeishuBridgeLink: RemoteLink {
         buffer.reset()
     }
 
-    func send(chatId: String, text: String) {
+    func send(botId: String, chatId: String, text: String) {
         guard let pipe = stdinPipe else { return }
-        let payload: [String: Any] = ["type": "send", "chat_id": chatId, "text": text]
+        let payload: [String: Any] = ["type": "send", "bot": botId, "chat_id": chatId, "text": text]
         guard let data = try? JSONSerialization.data(withJSONObject: payload),
               var line = String(data: data, encoding: .utf8) else { return }
         line += "\n"
@@ -213,6 +241,8 @@ final class FeishuBridgeLink: RemoteLink {
     enum BridgeError: LocalizedError {
         case noNode
         case noScript
+        case noBots
+        case badBots
 
         var errorDescription: String? {
             switch self {
@@ -220,6 +250,10 @@ final class FeishuBridgeLink: RemoteLink {
                 return L("找不到 node —— 桥要靠它跑（Homebrew 的 /opt/homebrew/bin/node）")
             case .noScript:
                 return L("App 里缺少 feishu-bridge.cjs —— 打包时资源没进去")
+            case .noBots:
+                return L("一个机器人也连不了（没填 app_id 或没填 app_secret）")
+            case .badBots:
+                return L("机器人清单组装失败 —— 这是程序内部错误")
             }
         }
     }
@@ -235,17 +269,22 @@ final class FakeRemoteLink: RemoteLink {
 
     private(set) var started = 0
     private(set) var stopped = 0
-    private(set) var sent: [(chatId: String, text: String)] = []
+    /// 每次 start 收到的机器人清单（"整条重起"这条判据的唯一证据）。
+    private(set) var startedBots: [[RemoteLinkBot]] = []
+    private(set) var sent: [(botId: String, chatId: String, text: String)] = []
     var startError: Error?
 
-    func start(appId: String, appSecret: String) throws {
+    func start(bots: [RemoteLinkBot]) throws {
         if let e = startError { throw e }
         started += 1
+        startedBots.append(bots)
     }
 
     func stop() { stopped += 1 }
 
-    func send(chatId: String, text: String) { sent.append((chatId, text)) }
+    func send(botId: String, chatId: String, text: String) {
+        sent.append((botId, chatId, text))
+    }
 
     /// 模拟桥推进来一帧。
     func emit(_ frame: RemoteFrame) { onFrame?(frame) }

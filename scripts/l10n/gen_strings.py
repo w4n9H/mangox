@@ -148,6 +148,11 @@ EXCLUDE_FILES = {
     #         换一个 key ⇒ 流水里堆出十几行同一个标题, 而且**零红灯**。
     #    代价同上面几行: 在此文件里写 `L()` 的 key 永远进不了词表。**UI 文案请写在 View 侧**。
     'mangox/Models/TimelineDoc.swift',             # 时间线落盘字节 + 注入段头 (无 UI 文案)
+    # ⚠️ 2026-11-18: 本文件里那几个中文**是指令 token，不是界面文案** ——
+    #    `RemoteCommand.approveWords` / `dismissWords` 是"人在飞书里要打的那两个字"，
+    #    本地化它们 = 英文界面上让人去发一个不存在的中文词（或者反过来，中文界面上匹配不到英文输入）。
+    #    代价同上面几行: 在此文件里写 `L()` 的 key 永远进不了词表。本文件**不该有 UI 文案**（纯判据）。
+    'mangox/Agent/Remote/RemoteRouting.swift',     # 审批指令 token (恒中文)
     # ⚠️ P19 (2026-11-16): 本文件产出的是**巡检轮 system 注入段的字节**（段头「【来源：X】」、
     #    条数/截断标记、外部数据免责句）与**日志时间线的落库字节**。三条理由排除:
     #      ① 逐字进 `--append-system-prompt` ⇒ 本地化 = 界面语言改掉注入字节（同 `TimelineDoc`）；

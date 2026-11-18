@@ -141,14 +141,6 @@ final class PiRpcTransport: AgentTransport {
     /// 免得又冒出一个"从别处顺手改一下"的调用点 —— 双闸门靠的就是"只有这里能改"。
     func updateDreamSpool(_ spool: String?) { dreamSpool = spool }
 
-    /// P19: 这一份实例的回合是不是**只读巡检/分析段**（per-turn 下发, 与 `dreamSpool` 同一层）。
-    ///
-    /// ⚠️ 它改的是 **spawn 面**（工具面、挂哪些扩展、起不起 computer），所以和 `desiredMode`
-    /// 一样是"下回合生效"; 进程复用期间由 `spawnedAnalysisReadOnly` 判断要不要重启。
-    private var analysisReadOnly = false
-    private var spawnedAnalysisReadOnly = false
-    func updateAnalysisReadOnly(_ on: Bool) { analysisReadOnly = on }
-
     /// P19: 巡检轮 / 执行轮的**系统级注入**（交接文件 + 输出契约 + Observation 快照）。
     ///
     /// ⚠️ 走 `--append-system-prompt` 而不是塞进 user prompt, 理由是**转录污染**:
@@ -163,8 +155,7 @@ final class PiRpcTransport: AgentTransport {
     /// P19 执行守卫（per-turn）。它不只影响审批裁决 —— 只要它非空，spawn 期还会多给一个
     /// env（`MANGOX_EXEC_PROJECT`，写围栏在扩展侧的那一半），所以它也在重启判据里。
     ///
-    /// ⚠️ 与 `analysisReadOnly` 的赋值纪律**相反**: 那两个是无条件赋值且进程复用时要重启；
-    /// 这一个同样是**无条件**赋值（不清就会漏进下一回合 —— 忘了清 = 之后每一轮都带着红线，
+    /// ⚠️ 与 `extraSystemPrompt` 的赋值纪律一致: 都是**无条件**赋值（不清就会漏进下一回合 —— 忘了清 = 之后每一轮都带着红线，
     /// 表面上只是"某些命令莫名被拒"）。
     private var executionGuard: ExecutionGuard?
     private var spawnedExecProject: String?
@@ -176,22 +167,6 @@ final class PiRpcTransport: AgentTransport {
         execStepBuffer = ""
         execActions.removeAll()
         executionGuard = guardValue
-    }
-
-    /// P19.2 S10: 本回合的账本落点（nil = 这一轮没有账本）。
-    ///
-    /// 它只影响**扩展侧的免检判断**（`MANGOX_LEDGER_PATH`）—— 能不能写由客户端 `LedgerFence`
-    /// 判（S11 接审批桥）。spawn 期定格 ⇒ 与 `executionGuard` 一样进重启判据:
-    /// 漏了它，同一个日志会话里「巡检轮（有账本）→ 手动问一句（没有账本）」会**沿用**
-    /// 上一轮的 env —— 表现是"我说的那句话它还是只肯写那个文件"，而进程根本没重启过。
-    private var ledgerFencePath: String?
-    /// 围栏外怎么办（P19.2 S12）。**不进重启判据** —— 它不落进 env、不落进 spawn 参数，
-    /// 只在审批桥被问到时读一次。进了重启判据只会让"巡检轮→对话轮"多一次无谓重启。
-    private var ledgerFenceMode: LedgerFence.Mode = .deny
-    private var spawnedLedgerFence: String?
-    func updateLedgerFence(_ path: String?, mode: LedgerFence.Mode) {
-        ledgerFencePath = path
-        ledgerFenceMode = mode
     }
 
     /// 模型正文里**最新**声明到的步骤号（「第 N 步」）。审批桥拿它比已授权步骤。
@@ -321,84 +296,18 @@ final class PiRpcTransport: AgentTransport {
     ///
     /// - Note: 后两个可选段**都有默认值**, 所以既有调用点逐字节不变 —— 这不是方便,
     ///   是 P13 那条"传 nil 时整段不变"的判据能继续成立的形式化（三老档零影响）。
-    /// P19: **巡检/分析段的 spawn 面** —— 纯函数, 冒烟逐字对拍。
-    ///
-    /// 为什么把它提成结构体而不是散在 `spawnProcess` 里: 判据必须能"对拍数组", 而
-    /// `spawnProcess` 一进门就 `guard let spec = launchSpec()` —— 没有 pi 的机器上整条路
-    /// 直接返回, 断言就永远绿（假门）。把"该挂什么、该给哪些工具"提出来之后, 判据落在
-    /// 这个纯结构上, 与机器上装没装 pi 无关。
-    ///
-    /// 四个恒假项**故意写成固定值而不是 `false` 常量字段**: 它们在语义上是"这一档不许有",
-    /// 谁把它们改成可配置的, `CaseWatchFace` 立刻红。
-    struct AnalysisFace: Equatable {
-        /// `--tools` 的取值（逐字来自 `AgentMode.readOnlyToolNames`）。
-        let toolNames: [String]
-        /// 要挂的**托管扩展**。只有联网搜索那一个; 空 = 用户没配搜索（分析段仍可读盘, 只是查不了网）。
-        let mountedExtensionPaths: [String]
-        /// 起不起 computer helper。恒 false —— 这是"分析"与"动手"的分界线。
-        let startsComputer: Bool
-        /// 注不注知识块。恒 false —— 巡检轮是 ephemeral 的, 塞一份"我是谁"只会挤掉任务本身。
-        let injectsKnowledge: Bool
-        /// 注不注 SOP。恒 false —— 手册教的是"怎么操作 App", 而这一档一个操作都不许做。
-        let injectsSOP: Bool
-    }
 
-    /// 组装分析段的面。`webSearchPath` = 启用列表里那个联网搜索扩展的路径（没有就传 nil）。
-    /// `canWriteLedger` = 这一轮**有账本落点**（P19.2 S11）⇒ 工具面换成 `patrolToolNames`
-    /// （只读五件 + `write`），否则仍是纯只读五件。
+    /// 审批桥里「账本围栏」那一支的**决策口** —— **2026-11-18 已整层删除**。
     ///
-    /// ⚠️ 判据是"这一轮有没有账本"，**不是**"是不是助理任务" —— 同一个助理任务在**对话轮**
-    /// 里也可能没有账本（S12 才会给它），那时它就该是纯只读。拿任务类型当判据会让
-    /// "哪一轮能写"和"哪一轮有账本"变成两份真源。
-    /// ⚠️ 判据是"启用列表里有没有它", 不是"配没配 key" —— 与 `spawnProcess` 里那条
-    /// `desiredExtensions.contains(...)` 同源, 不要另立一份判据。
+    /// 删掉的理由（boss 的口径）：围栏把助理的写限制在"账本这一个文件"上，而助理后续会跑在
+    /// **独立的 Mac 主机**上 —— 那台机器整个就是给它用的，"只能写项目目录/只能写账本"既拦不住
+    /// 什么，又制造了一堆"它想干活却写不了"的死路（巡检轮连 `ls` 都被拒，实测 11:04:49）。
     ///
-    /// ⚠️ 后三个 `false` 是**这个类型存在的理由**（不是默认值）: 它们被 `spawnProcess` 直接消费
-    /// （`analysisFace?.startsComputer ?? true` 这类写法），所以谁把这里改成 `true`,
-    /// 进程面立刻多出 helper / 知识段 / 手册 —— 而 `CaseWatchFace` 会在同一次门禁里红。
-    static func analysisFace(webSearchPath: String?, canWriteLedger: Bool = false) -> AnalysisFace {
-        AnalysisFace(toolNames: canWriteLedger ? AgentMode.patrolToolNames
-                                               : AgentMode.readOnlyToolNames,
-                     mountedExtensionPaths: webSearchPath.map { [$0] } ?? [],
-                     startsComputer: false,
-                     injectsKnowledge: false,
-                     injectsSOP: false)
-    }
-
-    /// 审批桥里「账本围栏」那一支的**决策口**。`nil` = 放行给后面的档位判断。
-    ///
-    /// 提出来是为了让冒烟能直访（同 `ensureLogSession` 那条 `// internal — 冒烟直访`）:
-    /// 桥本身是 private、还要挂在真进程的 RPC 上，判据只能靠"真跑一轮让它去写 /tmp"。
-    /// 它做两件事，顺序固定：
-    ///   ① **没有账本落点 ⇒ nil**（这一轮不是账本轮，别管）；
-    ///   ② **有人在场（`mode == .ask`）⇒ nil**（P19.2 S12）—— 不判，交给下面的弹卡。
-    ///      这一支不是"放宽"：`ask` 模式下围栏**仍然**让扩展把写赶进桥（免检只对账本开），
-    ///      只是到了桥里改由人回答。判据在 `LedgerFence.Mode` 的注释里。
-    ///
-    /// ⚠️ 它**只在桥的"档位判断之前"被调用**才算数。位置纪律见 `handleExtensionUIRequest`
-    /// 里那三条理由 —— 挪到 `judgesByRisk` 之后，这个函数照样返回正确答案，而无人值守那一档
-    /// 根本走不到它（`CasePatrolWrite` 有一条源序断言专门钉这件事）。
-    static func ledgerDenyReason(tool: String, target: String,
-                                 ledgerPath: String?, cwd: String,
-                                 mode: LedgerFence.Mode = .deny) -> String? {
-        guard let ledgerPath else { return nil }
-        guard mode == .deny else { return nil }
-        if case .deny(let reason) = LedgerFence.check(tool: tool, target: target,
-                                                      ledgerPath: ledgerPath, cwd: cwd) {
-            return reason
-        }
-        return nil
-    }
-
-    /// 这一轮要不要起 computer helper。**唯一决策点**（生产与判据共用）：
-    /// `nil` = 普通回合（照旧看作用域）· `face.startsComputer = false` = 分析段（连 start 都不调）。
-    static func shouldStartComputer(_ face: AnalysisFace?) -> Bool { face?.startsComputer ?? true }
-
-    /// 只读段的 `--tools` 段。**生产与冒烟共用这一处** —— 冒烟若自己拼一遍串再断言,
-    /// 那它验的是"我拼得对不对", 不是"生产发出去的是什么"(同 P12 那条"判据不自证")。
-    static func toolArguments(for face: AnalysisFace) -> [String] {
-        ["--tools", face.toolNames.joined(separator: ",")]
-    }
+    /// 安全边界改成两级，都在**人**这一侧：
+    ///   ① **方案级**：要动手的事写成带方案的提议，人点「采纳并执行」才起执行轮；
+    ///   ② **重要操作级**：删/覆盖/重启/对外发 —— 在方案里单独列出来等人批。
+    /// 工具级弹卡在助理线上**恒关**（`ChatStore.beginTurn` 里按"是不是助理会话"钉死），
+    /// 因为"改个文件就问我一次"是纯噪音，不是保护。
 
     static func extensionArguments(hostedExtensionPath: String,
                                    codemodeExtensionPath: String?,
@@ -462,24 +371,9 @@ final class PiRpcTransport: AgentTransport {
         return env
     }
 
-    /// P19.2 S10: 账本围栏的 env（`MANGOX_LEDGER_PATH`）。**只有巡检轮的 spawn 会设它**。
-    ///
-    /// 与 `execFenceEnvironment` 是**同一套双闸门写法**，理由也一样：
-    ///   ① 返回 nil = "什么都不用改"（这一轮没有账本，父进程里也没有残留）；
-    ///   ② 父进程有残留时返回的是**删掉了那个键**的完整环境 —— 不删的话一个普通会话会莫名
-    ///      带上账本围栏（表现是"新建文件忽然都要审批了"，而界面上没有任何地方写着为什么）。
-    ///
-    /// ⚠️ 契约 token：逐字进子进程 env，`mangox-approval.ts` 那侧读的就是它。不得本地化 / 改写。
-    static let ledgerFenceEnvKey = "MANGOX_LEDGER_PATH"
-    static func ledgerFenceEnvironment(existing: [String: String]?,
-                                       ledgerPath: String?,
-                                       inherited: [String: String]) -> [String: String]? {
-        let desired = (ledgerPath?.isEmpty == false) ? ledgerPath : nil
-        if desired == nil, inherited[ledgerFenceEnvKey] == nil { return nil }
-        var env = existing ?? inherited
-        env[ledgerFenceEnvKey] = desired    // nil = 移除该键（同 `execFenceEnvironment`）
-        return env
-    }
+    /// P19.2 S10 的 `MANGOX_LEDGER_PATH`（账本围栏 env）**2026-11-18 整段删掉了** ——
+    /// 围栏撤掉之后没有第二个人读这个键（扩展侧那一半也一并删了），留着只会让人以为
+    /// "账本还有一道保护"。
 
     /// 审批扩展的源码 —— **纯函数, 不落盘**(冒烟直测)。
     /// P18 批 2a: 两个工具集合从 `ApprovalGate` **插值**进来, 不在 JS 里另抄一份。
@@ -521,22 +415,9 @@ final class PiRpcTransport: AgentTransport {
             const abs = nodePath.resolve(PROJECT_ROOT, raw);
             return !(abs === PROJECT_ROOT || abs.indexOf(PROJECT_ROOT + nodePath.sep) === 0);
           };
-          // P19.2 S10: 账本落点。**只有巡检轮的 spawn 会设它**（同 EXEC_PROJECT 那套）。
-          // 它把「新建文件免检」从"项目内"收紧成"仅账本这一份"。
-          // ⚠️ 这个扩展只回答**能不能免检**；能不能做由客户端 `LedgerFence` 判（S11 接审批桥）。
-          //    巡检轮无人值守 ⇒ 卡上去等于死锁，所以那一路必须走客户端 Deny，不能指望这里。
-          const LEDGER_PATH = process.env.MANGOX_LEDGER_PATH || "";
-          const LEDGER_RESOLVED = LEDGER_PATH ? nodePath.resolve(LEDGER_PATH) : "";
-          // 落在账本上? 只认**同一个绝对路径**:
-          //   · 前导 `~` ⇒ 否（Node 不展开 `~`，判不清写到哪）
-          //   · 相对路径 ⇒ 否（基准目录不一定是以为的那个）
-          //   · 其余比**标准化之后是否相等**，不做前缀比较 —— `<账本>/../x` 前缀一样却不在账本上。
-          const insideLedger = (p) => {
-            if (!LEDGER_RESOLVED || !p) return false;
-            const raw = String(p);
-            if (raw.charAt(0) === "~" || !nodePath.isAbsolute(raw)) return false;
-            return nodePath.resolve(raw) === LEDGER_RESOLVED;
-          };
+          // P19.2 S10 的「账本落点」2026-11-18 **整段删掉了**: 围栏撤掉之后,
+          // "新建文件只在账本上免检"这句话没有对象了 —— 现在只有执行围栏(EXEC_PROJECT)
+          // 还管免检范围, 其余一律按 `hasUI` / 档位那套走。
           const MAX_DIFF_LINES = 120;
           const MAX_LINE_CHARS = 200;
           const truncLine = (s) => {
@@ -618,7 +499,7 @@ final class PiRpcTransport: AgentTransport {
             if (!ctx.hasUI) return undefined;
             const input = event.input || {};
             if (event.toolName === "write" && input.path && !fs.existsSync(input.path)
-                && (LEDGER_PATH ? insideLedger(input.path) : !outsideExecFence(input.path))) {
+                && !outsideExecFence(input.path)) {
               return undefined;   // 新建文件: 无覆盖风险, 放行
             }
             // computer 工具没有 command / path / url —— 不看这一支的话卡片上那一行是空的,
@@ -2002,6 +1883,54 @@ final class PiRpcTransport: AgentTransport {
         try? FileManager.default.removeItem(atPath: sessionFilePath(for: id))
     }
 
+    // MARK: - 旧声明的 transcript（2026-11-18）
+
+    /// 读一份 transcript 里**声明的内置工具名**（首条带 `toolsAdded` 的 system message）。
+    /// 读不出（没这文件 / 没这段 / 坏 JSON）一律 nil —— 那是"不知道"，不是"没有"。
+    static func declaredToolNames(inSessionFile path: String) -> [String]? {
+        guard let h = FileHandle(forReadingAtPath: path) else { return nil }
+        defer { try? h.close() }
+        // 只读前 256 KiB: 声明在首条 system message 里，正常会话前几行就到。
+        let data = h.readData(ofLength: 256 * 1024)
+        for line in data.split(separator: 0x0A) {
+            guard let raw = try? JSONSerialization.jsonObject(with: Data(line)),
+                  let obj = raw as? [String: Any],
+                  let msg = obj["message"] as? [String: Any],
+                  (msg["role"] as? String) == "system" else { continue }
+            if let added = msg["toolsAdded"] as? [[String: Any]] {
+                return added.compactMap { $0["name"] as? String }
+            }
+        }
+        return nil
+    }
+
+    /// 这份 transcript 的工具面是**旧声明**（缺 `bash` / `edit`）⇒ 把它挪走，让 pi 起一份新的。
+    ///
+    /// 为什么非处理不可（2026-11-18，boss 真机撞到的那个 bug 的下半截）：
+    /// pi 把「这一场能用哪些工具」写进会话**首条** system message 的 `toolsAdded`，之后每次恢复
+    /// 都拿它当权威（`_restoreToolsFromTranscript`：记录集 + `--tools +x` 增补，**内置工具不补回**）。
+    /// 所以 0.2.x 之前那版「只读分析面」写下的声明，会把这会话**永久**锁成
+    /// `read/grep/find/ls/write` —— 档位改了、代码改了，它照样半残（有 `write`，没 `bash`/`edit`）。
+    ///
+    /// 判据是「缺 `bash` 或 `edit`」：四档（minimal / standard / full / codemode）**都**有这两个
+    /// 内置工具，缺了只能是旧声明或坏数据。**不去猜"应该有哪些"** —— 扩展工具名 App 不知道，
+    /// 正向推导一定被它打偏（实测：旧声明里就有 `bocha_web_search`）。
+    ///
+    /// 处理是**隔离，不是修复**：改名成 `<file>.stale-<ts>` 留着（不删），这一轮起一份新的。
+    /// 手改 pi 的落盘格式 = 和它的内部结构绑死，那个代价比"模型忘掉这一段对话"大得多
+    /// （UI 里的消息在我们自己的库里，一条不丢；丢的只是模型侧的记忆，且只丢这一次）。
+    @discardableResult
+    static func quarantineStaleSessionFile(_ path: String, now: Date = Date()) -> String? {
+        guard FileManager.default.fileExists(atPath: path) else { return nil }
+        guard let names = declaredToolNames(inSessionFile: path) else { return nil }
+        guard !names.contains("bash") || !names.contains("edit") else { return nil }
+        let fmt = DateFormatter()
+        fmt.dateFormat = "yyyyMMdd-HHmmss"
+        let moved = path + ".stale-" + fmt.string(from: now)
+        guard (try? FileManager.default.moveItem(atPath: path, toPath: moved)) != nil else { return nil }
+        return moved
+    }
+
     /// P6.3.1: 按显式路径删除 transcript (侧问 fork 产物文件名不可派生)。
     static func removeSessionFile(atPath path: String) {
         try? FileManager.default.removeItem(atPath: path)
@@ -2117,18 +2046,14 @@ final class PiRpcTransport: AgentTransport {
         // 这个分支不是为了第一次 fire（那次 process 本来就是 nil）—— 是为了
         // 用户点开任务日志会话说了句话（普通回合, `dreamSpool` 被置回 nil）之后再点「立即运行」。
         if process != nil, spawnedCwd != target || spawnedDreamSpool != dreamSpool
-            || spawnedAnalysisReadOnly != analysisReadOnly
             || spawnedExtraSystem != extraSystemPrompt
-            || spawnedExecProject != executionGuard?.projectPath
-            || spawnedLedgerFence != ledgerFencePath {
+            || spawnedExecProject != executionGuard?.projectPath {
             // 诊断日志: 进程**复用**是常态, 重启是例外 —— 后者会丢进程内对话记忆,
             // 排查时"这一轮为什么没记忆"要能一眼看出是这里拆的。
             Log.process("teardown", ["cwdChanged": spawnedCwd != target ? "1" : "0",
                                      "dreamChanged": spawnedDreamSpool != dreamSpool ? "1" : "0",
-                                     "readOnlyChanged": spawnedAnalysisReadOnly != analysisReadOnly ? "1" : "0",
                                      "injectChanged": spawnedExtraSystem != extraSystemPrompt ? "1" : "0",
-                                     "fenceChanged": spawnedExecProject != executionGuard?.projectPath ? "1" : "0",
-                                     "ledgerChanged": spawnedLedgerFence != ledgerFencePath ? "1" : "0"])
+                                     "fenceChanged": spawnedExecProject != executionGuard?.projectPath ? "1" : "0"])
             teardownProcess()
         }
         guard process == nil else {
@@ -2153,27 +2078,20 @@ final class PiRpcTransport: AgentTransport {
     private func spawnProcess(cwd: String) {
         guard let spec = Self.launchSpec() else { return }
         let extPath = Self.ensureExtensionFile()
-        // P19: 只读巡检/分析段的**面**（工具面 / 挂哪些扩展 / 起不起 computer）。
-        // ⚠️ 这个 `nil` 是**所有**只读分支的唯一开关: 下面 codemode / dream / computer / 知识 / SOP
-        //    全部用 `analysisFace == nil` 这个条件收口, 它们不各自判一次 —— 四处各判一次,
-        //    迟早有一处漏, 而漏掉的那一处不会红, 只会让"只读段"悄悄多出一个工具。
-        let analysisFace: AnalysisFace? = analysisReadOnly
-            ? Self.analysisFace(webSearchPath: desiredExtensions.first {
-                  $0.hasSuffix(Self.webSearchExtensionFileName)
-              },
-              // P19.2 S11: **有账本落点才给那一支笔**。`ledgerFencePath` 由 `beginTurn` 无条件
-              // 下发（巡检轮非 nil，其余 nil）⇒ 这一行同时是"哪一轮能写"的唯一判据。
-              canWriteLedger: ledgerFencePath != nil)
-            : nil
+        // ⚠️ 2026-11-18 起这里**不再有"只读分析面"这一层**（boss 定: 助理按它自己选的档位
+        //    拿权限）。原来那张面把工具裁成"只读五件 + write"、还顺手关掉 computer/知识/SOP，
+        //    理由写在 `AnalysisFace` 里 —— 但 `--tools` 的 allowlist 会被 pi 写进会话首条声明，
+        //    之后同会话里按档位跑（`+grep` 那种 modifier 写法）会被那条声明**覆盖回来**，
+        //    于是"只想让巡检轮只读"变成"整个会话永远只有只读五件"，bash/edit 拿不回来。
+        //    删掉之后 spawn 面只有一条来源 = 档位（`AgentMode`），与普通会话同源。
         // P13: 自建 codemode 扩展**只在这一档落地** —— 三老档连"挂载"这一步都没有,
         // 所以它们的扩展段逐字节不变 (是"不存在", 不是"挂了但没生效")。
-        let codemodeExtPath = (analysisFace == nil && desiredMode.mountsCodemodeExtension)
+        let codemodeExtPath = desiredMode.mountsCodemodeExtension
             ? Self.ensureCodemodeExtensionFile() : nil
         // P15.3: dream 扩展**只在这一份实例是 dream fire 时挂** —— `dreamSpool` 由
         // `SchedulerService` 在 fire 前设、fire 收尾时清。三老档与普通会话上它是 nil
         // ⇒ 扩展段逐字节不变（同 codemode 那条"是'不存在', 不是'挂了但没生效'"）。
-        let dreamExtPath = (analysisFace == nil && dreamSpool != nil)
-            ? Self.ensureDreamExtensionFile() : nil
+        let dreamExtPath = dreamSpool != nil ? Self.ensureDreamExtensionFile() : nil
         // P10.1b: 搜索扩展**保底落地**（文件本来由 `ChatStore.scanExtensions` 写好了, 这里只防
         // "列表里有它、文件却不在"——删过 / 换过托管目录 / 首次 spawn 抢在扫掠之前）。
         // 判据 = 它在**启用列表**里（那已经是"用户开着 + 有 key"的交集, 见 `ChatStore.scanExtensions`）
@@ -2204,17 +2122,16 @@ final class PiRpcTransport: AgentTransport {
         // 接管检测(2026-11-02): 原来是"档位对了就装", 而 `interactive` 是默认档 ⇒ 用户什么都
         // 还没要, 系统先弹「MangoX 想监听你的键盘输入」。现在是三段与门(档位 ∧ 显式开关 ∧ 已有
         // 权限), 判据与 `granted` 的取法全在 `ComputerSettings.shouldInstallTakeover` 里。
-        // P19: 只读段**连 start 都不调**（不是"起了但不挂"）。判据在 `AnalysisFace.startsComputer`,
-        // 这里只是消费它 —— 消费点只有这一个，所以"分析段起了 helper"这件事在代码里没有第二条路。
-        let computerSock: String? = Self.shouldStartComputer(analysisFace)
-            ? computerHost.start(allowedBundles: computerBundles,
-                                 actBundles: computerActBundles,
-                                 imageBundles: ComputerSettings.shared.activeImageBundles,
-                                 takeover: ComputerSettings.shared.shouldInstallTakeover(
-                                             expectsHuman: approvalMode.expectsHumanAtKeyboard),
-                                 tap: ComputerSettings.shared.tapEnabled,
-                                 type: ComputerSettings.shared.typeEnabled)
-            : nil
+        // 只读分析面删掉之后，这里不再有"某些轮次连 start 都不调"这一支 —— 起不起只看作用域
+        // （`ComputerHost.start` 对空名单自己返回 nil），判据仍然只有一处。
+        let computerSock: String? = computerHost.start(
+            allowedBundles: computerBundles,
+            actBundles: computerActBundles,
+            imageBundles: ComputerSettings.shared.activeImageBundles,
+            takeover: ComputerSettings.shared.shouldInstallTakeover(
+                        expectsHuman: approvalMode.expectsHumanAtKeyboard),
+            tap: ComputerSettings.shared.tapEnabled,
+            type: ComputerSettings.shared.typeEnabled)
         let computerExtPath = computerSock != nil ? Self.ensureComputerExtensionFile() : nil
         var args = spec.scriptArgs + ["--mode", "rpc"]
         // P12.1b + P13: 扩展参数 (关自动发现 + 补回内置 provider + 挂托管扩展 + codemode 层)。
@@ -2229,11 +2146,7 @@ final class PiRpcTransport: AgentTransport {
             codemodeExtensionPath: codemodeExtPath,
             dreamExtensionPath: dreamExtPath,
             computerExtensionPath: computerExtPath,
-            // P19: 只读段**只挂分析面自己点名的扩展**（联网搜索那一个）——
-            // 业务扩展 / 其它一律不挂。allowlist 写法会裁掉扩展注册的工具（实测），
-            // 所以"挂谁"必须与 `readOnlyToolNames` 里点名的名字**同源**。
-            enabled: analysisFace.map(\.mountedExtensionPaths)
-                ?? (desiredMode.mountsBusinessExtensions ? desiredExtensions : []))
+            enabled: desiredMode.mountsBusinessExtensions ? desiredExtensions : [])
         if let fork = desiredForkSource {
             // P6.3.1: 侧问首回合 — fork 源快照 (互斥分支: 不带 --session/--no-session)。
             // --session-dir 把产物收进托管目录 (否则落 pi 默认 ~/.pi/agent/sessions);
@@ -2255,10 +2168,18 @@ final class PiRpcTransport: AgentTransport {
             // 侧问会话 (回读过产物) 用显式路径; 普通会话走 UUID 派生。
             try? FileManager.default.createDirectory(atPath: Self.sessionDirectory,
                                                      withIntermediateDirectories: true)
-            args += ["--session",
-                     desiredSessionFile ?? Self.sessionFilePath(for: sessionId)]
+            let file = desiredSessionFile ?? Self.sessionFilePath(for: sessionId)
+            // ⚠️ 2026-11-18: 旧版「只读分析面」把工具面写进了首条 system message，pi 恢复时拿它
+            //    当权威 ⇒ 这份 transcript 会**永久**半残。判断与处置都收在那一处（隔离，不手改）。
+            if let moved = Self.quarantineStaleSessionFile(file) {
+                Log.event("session-tools-stale", ["moved": (moved as NSString).lastPathComponent])
+            }
+            args += ["--session", file]
         } else if let file = desiredSessionFile {
             // 无 UUID 绑定但有显式文件 (防御分支, 当前调用面不会走到)
+            if let moved = Self.quarantineStaleSessionFile(file) {
+                Log.event("session-tools-stale", ["moved": (moved as NSString).lastPathComponent])
+            }
             args += ["--session", file]
         } else {
             // ephemeral: 任务 fire 轮次等, transcript 仅存进程内存
@@ -2267,15 +2188,10 @@ final class PiRpcTransport: AgentTransport {
         // P7-M4 + P13: 档位对 --tools 的取值 (极简裁内置 / 常规·完整在其上增补只读三件套 / codemode 加自己的 modifier)。
         // ⚠️ 与上面那段 extensionArguments **必须同进同退**: codemode 档要"挂上"与"激活"两件事都做
         //    (扩展是 defaultActive: false —— 只 `--extension` 挂载不会生效, 已实测)。
-        // P19: 只读段不走档位 —— 它的面来自 `AnalysisFace`, 与用户选的档位无关
-        //    （用户把全局档位设成 full，巡检轮也仍然是只读的：那是任务语义，不是用户偏好）。
-        if let face = analysisFace {
-            args += Self.toolArguments(for: face)
-        } else {
-            args += AgentMode.spawnArguments(for: desiredMode, businessExtensions: [])
-        }
+        // 工具面**只有一条来源 = 档位**（2026-11-18: "只读分析面"整层删掉）。
+        args += AgentMode.spawnArguments(for: desiredMode, businessExtensions: [])
         // P3.7: 知识注入块挂在 spawn 参数上 (--append-system-prompt 可重复传; 会话内不可改)
-        if analysisFace?.injectsKnowledge ?? true, let knowledge = desiredKnowledge, !knowledge.isEmpty {
+        if let knowledge = desiredKnowledge, !knowledge.isEmpty {
             args += ["--append-system-prompt", knowledge]
         }
         // P19: 巡检/执行轮的系统级注入（交接文件 + 输出契约 + Observation）。
@@ -2292,7 +2208,7 @@ final class PiRpcTransport: AgentTransport {
         //   扩展没挂上就没有那套工具, 却把手册教给模型 = 教它用手边不存在的东西。
         // ⚠️ 手册正文是**代码常量**（`SopManual.text`）, 不读盘; 现算的只有名单与档位 ——
         //   两样都在这一处定格 ⇒ 不存在"改了设置但提示词还是旧的"的窗口。
-        if analysisFace?.injectsSOP ?? true, computerSock != nil {
+        if computerSock != nil {
             let sop = SopInjection.block(bundles: computerBundles,
                                          actBundles: computerActBundles,
                                          codemode: desiredMode == .codemode)
@@ -2350,14 +2266,6 @@ final class PiRpcTransport: AgentTransport {
                                                inherited: ProcessInfo.processInfo.environment) {
             p.environment = env
         }
-        // P19.2 S10: 账本落点 env（扩展侧那一半，见 `approvalExtensionSource` 的 `insideLedger`）。
-        // 与执行围栏同款: 必须**整体赋值**（`p.environment` 可能是 nil = 继承父环境，
-        // `p.environment?[k] = v` 那时是静默空操作），且必须**显式删掉**父进程里的残留。
-        if let env = Self.ledgerFenceEnvironment(existing: p.environment,
-                                                 ledgerPath: ledgerFencePath,
-                                                 inherited: ProcessInfo.processInfo.environment) {
-            p.environment = env
-        }
         // P10.1b: 博查 key 只走 env（Keychain → 子进程环境），**不落盘**。
         // ⚠️ 守卫 26 同款: 上面那段只在"有自管模型"时才给 `p.environment` 赋值, 其余情况它是
         //    **nil**（= 子进程自己继承父环境）。那时 `p.environment?[k] = v` 是**静默空操作** ——
@@ -2412,10 +2320,8 @@ final class PiRpcTransport: AgentTransport {
                                 "gen": "\(spawnGeneration + 1)"])
         spawnedCwd = cwd
         spawnedDreamSpool = dreamSpool
-        spawnedAnalysisReadOnly = analysisReadOnly
         spawnedExtraSystem = extraSystemPrompt
         spawnedExecProject = executionGuard?.projectPath
-        spawnedLedgerFence = ledgerFencePath
         self.outPipe = outPipe
         self.errPipe = errPipe
         stdinHandle = inPipe.fileHandleForWriting
@@ -2991,48 +2897,20 @@ final class PiRpcTransport: AgentTransport {
                 return
             }
         }
-        // ── P19.2 S11: 账本围栏（巡检轮）────────────────────────────────────────
+        // ── P19.2 S11 的账本围栏（2026-11-18 删除）──────────────────────────────
         //
-        // 这一段是「给巡检轮加 write」这件事的**全部保险**。三条位置理由与上面 S6 那段**逐条相同**，
-        // 一条都不能挪：
-        //   ① **在 `approvalMode.judgesByRisk` 之前** —— 巡检轮恒 `unattended` ⇒ `askApproval = false`
-        //      ⇒ 下面那个 `guard` 会直接回 Allow。围栏放在它之后 = 一条能往任意路径写、
-        //      零审批、无人在场的后台回路，比不给 write 更糟。
-        //   ② **在 `toolCards` 守卫之前** —— 卡片缺失时下面直接 `Allow`（那张卡是 UI 产物，
-        //      而"没有卡"恰恰是无人值守时最常见的情况）。围栏放在守卫之后 ⇒ 一条没有卡的
-        //      write 就绕过去了。
-        //   ③ **在 `BashRiskEvaluator.judge` 之前** —— 白名单会静默放行，而白名单只管 bash；
-        //      围栏要管的是所有写文件的工具。
-        // ⚠️ 与 `executionGuard` **互斥**（执行轮 / 巡检轮不会同时成立），所以两段并列而不是嵌套:
-        //    嵌套会让人以为"巡检轮也可能带着执行守卫"，而那种组合从来不存在。
-        // ⚠️ P19.2 S12: **对话轮也走这一段**（它同样有一支笔），但 `ledgerFenceMode == .ask`
-        //    ⇒ 决策口直接返回 nil，落到下面的弹卡。所以"围栏在这一段"与"围栏在拒"是两件事:
-        //    位置管的是**扩展拦不住的那条路**（桥被问到时先看围栏），`mode` 管的才是后果。
-        if let ledger = ledgerFencePath {
-            let tool = parts[3]
-            // 目标与 S6 那边同构: bash 的命令按 `|` 拼回（围栏会拒它，但理由要说对）;
-            // write/edit 的路径是 `parts[4]`，**不含** `@@MANGOX_DIFF@@` 分段。
-            let target: String = tool == "bash"
-                ? parts.dropFirst(4).joined(separator: "|")
-                : (parts.count > 4 ? parts[4] : "")
-            if let reason = Self.ledgerDenyReason(tool: tool, target: target,
-                                                  ledgerPath: ledger,
-                                                  cwd: desiredCwd ?? NSHomeDirectory(),
-                                                  mode: ledgerFenceMode) {
-                // 落痕: 卡在就标红（人翻日志会话时能看见"它想写哪、为什么被拒"）;
-                // 卡不在就只留诊断日志 —— 无人值守时这张卡常常压根没人看，但它必须在。
-                if var denied = toolCards[callId] {
-                    denied = denied.withPhase(.error(String(reason.prefix(160))))
-                    toolCards[callId] = denied
-                    emit(.toolUpdated(denied))
-                }
-                Log.process("ledger-deny", ["tool": tool,
-                                            "path": String(target.prefix(120)),
-                                            "why": String(reason.prefix(120))])
-                respondExtensionUI(reqId, value: "Deny", callId: callId)
-                return
-            }
-        }
+        // 这里原来有一整段「围栏外一律 Deny」：巡检轮 `mode == .deny`、对话轮 `mode == .ask`。
+        // 删掉的不是"保护"，是"看起来是保护"：助理后续跑在**独立 Mac 主机**上，那台机器整个
+        // 就是给它用的，限死"只能写账本"既拦不住有意为之的动作，又把正常干活堵死
+        // （实测 11:04:49：巡检轮连 `ls` 都被拒）。
+        //
+        // 现在的边界在**人**这一侧，两级:
+        //   ① 方案级 —— 要动手的事写成带方案的提议，人点「采纳并执行」才起执行轮;
+        //   ② 重要操作级 —— 删 / 覆盖 / 重启 / 对外发, 在方案里单独列出来等人批。
+        // 工具级弹卡在助理线上恒关（`ChatStore.beginTurn` 按"是不是助理会话"钉死）。
+        //
+        // ⚠️ 上面 `executionGuard` 那一段**保留**: 执行轮的「只做批过的那几步」是审批的兑现，
+        //    不是围栏 —— 人批的是那几步，跑偏就该拦（`CaseWatchExec` 钉着）。
         guard var card = toolCards[callId] else {
             respondExtensionUI(reqId, value: "Allow", callId: callId)
             return

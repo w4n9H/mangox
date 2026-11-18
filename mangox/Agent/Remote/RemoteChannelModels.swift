@@ -8,11 +8,14 @@
 //  create_time 是毫秒**字符串**、SDK 会往 stdout 打非协议行）全在解析里。
 //
 //  桥的 emit 形状（`scripts/feishu-bridge/bridge.mjs` 顶部注释是同一份契约）:
-//    {"type":"status","connected":true,"note":"..."}
-//    {"type":"message","chat_id":..,"chat_type":..,"message_id":..,"create_time":"1794...",
-//     "text":"Hi","msg_type":"text","sender_type":"user","open_id":"ou_.."}
-//    {"type":"send_result","ok":true,"message_id":"om_.."}
+//    {"type":"status","bot":"<id>","connected":true,"note":"..."}
+//    {"type":"message","bot":"<id>","chat_id":..,"chat_type":..,"message_id":..,
+//     "create_time":"1794...","text":"Hi","msg_type":"text","sender_type":"user","open_id":"ou_.."}
+//    {"type":"send_result","bot":"<id>","ok":true,"message_id":"om_.."}
 //    {"type":"error","msg":"..."}
+//
+//  ⚠️ **每一帧都带 `bot`**（S15b: 一个桥进程管 N 个机器人）。不带的那一帧投不出也回不了，
+//  而"哪个机器人说的"恰恰是路由的唯一键 —— 少了它，多机器人下全部消息会归到同一个助理。
 //
 
 import Foundation
@@ -21,9 +24,10 @@ import Foundation
 
 /// 桥 → App 的一行。
 enum RemoteFrame: Equatable {
-    case status(connected: Bool, note: String?)
+    /// `botId` 是**桥那边的机器人标识**（App 侧生成 UUID 字符串传下去）。
+    case status(botId: String, connected: Bool, note: String?)
     case message(RemoteInbound)
-    case sendResult(ok: Bool, messageId: String?, msg: String?)
+    case sendResult(botId: String, ok: Bool, messageId: String?, msg: String?)
     case error(String)
 
     /// 解一行。**非 JSON 一律 nil**（不当作 error）—— 桥那边已经把 SDK 的
@@ -35,13 +39,15 @@ enum RemoteFrame: Equatable {
               let type = obj["type"] as? String else { return nil }
         switch type {
         case "status":
-            return .status(connected: obj["connected"] as? Bool ?? false,
+            return .status(botId: obj["bot"] as? String ?? "",
+                           connected: obj["connected"] as? Bool ?? false,
                            note: obj["note"] as? String)
         case "message":
             guard let m = RemoteInbound(json: obj) else { return nil }
             return .message(m)
         case "send_result":
-            return .sendResult(ok: obj["ok"] as? Bool ?? false,
+            return .sendResult(botId: obj["bot"] as? String ?? "",
+                               ok: obj["ok"] as? Bool ?? false,
                                messageId: obj["message_id"] as? String,
                                msg: obj["msg"] as? String)
         case "error":
@@ -54,6 +60,8 @@ enum RemoteFrame: Equatable {
 
 /// 桥推进来的一条飞书消息。
 struct RemoteInbound: Equatable {
+    /// 哪个机器人收到的。**路由的唯一键**（S15b）。
+    let botId: String
     let chatId: String
     let chatType: String        // "p2p" / "group"
     let messageId: String
@@ -66,6 +74,7 @@ struct RemoteInbound: Equatable {
 
     init?(json: [String: Any]) {
         guard let chatId = json["chat_id"] as? String, !chatId.isEmpty else { return nil }
+        self.botId = json["bot"] as? String ?? ""
         self.chatId = chatId
         self.chatType = json["chat_type"] as? String ?? ""
         self.messageId = json["message_id"] as? String ?? ""
@@ -77,8 +86,10 @@ struct RemoteInbound: Equatable {
     }
 
     /// 直接构造（冒烟用，不经 JSON 往返）。
-    init(chatId: String, chatType: String = "p2p", messageId: String, createTimeMillis: Int64 = 0,
-         text: String, msgType: String = "text", senderType: String = "user", openId: String = "ou_test") {
+    init(botId: String = "bot_test", chatId: String, chatType: String = "p2p", messageId: String,
+         createTimeMillis: Int64 = 0, text: String, msgType: String = "text",
+         senderType: String = "user", openId: String = "ou_test") {
+        self.botId = botId
         self.chatId = chatId
         self.chatType = chatType
         self.messageId = messageId

@@ -1157,17 +1157,16 @@ VALUES = {
     '助理（目标式）': 'Assistant (goal-based)',
     '助理 · %lld 个来源': 'Assistant · %lld sources',
     '助理：到点只读巡检，产出结论等你批准（`prompt` 写目标，不是动作）': 'Assistant: read-only check when due, conclusions wait for your approval (`prompt` states the goal, not the actions)',
-    '助理至少要有项目这一条来源；外部来源（邮件）本版未接入 —— 它的只读采集要等「不置已读」验证通过。': 'An assistant needs at least the project source. External sources (mail) are not wired up yet — read-only collection waits for a proven "never marks as read" path.',
+    '外部来源（邮件）本版未接入 —— 它的只读采集要等「不置已读」验证通过。': 'External sources (mail) are not wired up yet — read-only collection waits for a proven "never marks as read" path.',
     '新建：Cron 定时（动作写死）或 助理（目标式，只读巡检）': 'New: Cron schedule (fixed actions) or Assistant (goal-based, read-only checks)',
-    '到点要达成的目标（不是动作）——例：保证 CI 是绿的；红了就查清原因给我方案…': 'The goal to reach when due (not the actions) — e.g. keep CI green; if it goes red, find the cause and give me a plan…',
     '只读': 'read-only',
     '外部来源': 'External source',
     '不支持的类型': 'Unsupported type',
-    '项目 · 只读查看': 'Project · read-only',
     '待处理': 'Pending',
     '追问': 'Ask follow-up',
     '未知任务': 'Unknown task',
     '只有结论': 'conclusion only',
+    '等你决定': 'needs your call',
     '方案 %lld 步': 'plan · %lld steps',
     '第 %lld 版': 'rev %lld',
     '从待处理里移除（不是解决 —— 结论本身留着）': 'Remove from the pending list (this does not resolve it — the finding stays)',
@@ -1185,32 +1184,12 @@ VALUES = {
     '已从快照还原': 'restored from snapshot',
     '已回滚到执行前的快照': 'Rolled back to the pre-run snapshot',
     'MangoX 执行拦下: %@': 'MangoX blocked this run: %@',
-    # P19 S7 触达常驻（预算闸 / 邮件与飞书 sink / 通知直达 / 登录项）
-    '触达': 'Delivery',
-    '系统通知': 'System notification',
+    # P19 S7 结论推送（预算闸 / 飞书私聊 / 通知直达 / 登录项）—— 邮件 sink 2026-11-18 晚删
     '飞书机器人': 'Feishu bot',
     '日预算': 'Daily budget',
     'token / 天': 'tokens / day',
     '不限': 'No limit',
     '今日已用 %lld': 'Used today: %lld',
-    '发件: %@': 'From: %@',
-    '没有可发的账号 —— 设置 → 集成 → 邮箱账号': 'No sendable account — Settings → Integrations → Mailbox accounts',
-    '全都关着 —— 结论只落在收件箱': 'All off — findings only land in the inbox',
-    '弹系统通知；受「设置 → 通用 → 回合完成通知」总开关约束': 'Show a system notification. The global "turn finished" switch in Settings → General still applies',
-    '邮件收件人（留空 = 不发）': 'Email recipient (blank = do not send)',
-    '粘贴自定义机器人 webhook 地址': 'Paste the custom-bot webhook URL',
-    '已保存': 'Saved',
-    '已保存（不回显）—— 要换就整条重填': 'Saved (not shown) — paste a new one to replace it',
-    '外发只带标题与任务名，正文与证据留在 App 内。飞书地址存钥匙串，库里只有「配过」。': 'Outgoing messages carry only the title and task name; the body and evidence stay inside the app. The Feishu URL lives in the keychain — the database only records that one was set.',
-    '地址没能写进钥匙串 —— 飞书这一路会发不出去': 'The URL could not be written to the keychain — Feishu delivery will fail',
-    '飞书地址要以 https:// 开头': 'The Feishu URL must start with https://',
-    '这个域名不像飞书 —— 确认后再保存也行（自建中转可以）': 'This domain does not look like Feishu — you can still save it (self-hosted relays are fine)',
-    '飞书开着, 但还没有地址 —— 粘贴一条自定义机器人的 webhook': 'Feishu is on but has no URL yet — paste a custom-bot webhook',
-    '飞书拒绝（code %@）: %@': 'Feishu refused (code %@): %@',
-    '响应不是 JSON（机器人地址对吗？）': 'The response is not JSON (is the bot URL correct?)',
-    '（不是合法 URL）': '(not a valid URL)',
-    '【MangoX】%@\\n打开 App 的收件箱处理 —— 正文与证据留在本地。': '[MangoX] %@\\nOpen the inbox in the app to handle it — the body and evidence stay local.',
-    '%@\\n\\n任务：%@\\n处理：打开 MangoX → 定时任务 → 待处理\\n\\n—— 正文与证据留在 App 内，不经邮件外发。': '%@\\n\\nTask: %@\\nHandle: open MangoX → Scheduled → Pending\\n\\n— The body and evidence stay inside the app and are never sent by email.',
     # 收件箱直达
     # 登录项
     '随登录启动': 'Launch at login',
@@ -1265,40 +1244,14 @@ VALUES = {
         'itself is not affected.',
 
     # ── P19.2 S15 飞书对话通道 ──────────────────────────────────────────────
-    '飞书对话': 'Feishu chat',
-    '在飞书的单聊里直接跟助理说话。用得着自建应用的 app_id / app_secret, 两个都存钥匙串。MangoX 关掉通道就断 —— 它不是服务端。':
-        'Talk to your assistant right inside a Feishu direct message. It needs the app_id / app_secret '
-        'of a self-built app; both are kept in the keychain. The channel dies with MangoX — it is not a server.',
     '自建应用的 App Secret': 'App Secret of the self-built app',
-    '已保存 —— 要换就整条重填': 'Saved — to change it, fill in the whole thing again',
-    '换一个': 'Replace',
-    '保存凭据': 'Save credentials',
-    '两个都要填 —— 只填一个换不到 token': 'Both are required — one of them alone cannot fetch a token',
     '存钥匙串失败：%@': 'Could not write to the keychain: %@',
-    '启用飞书对话': 'Enable Feishu chat',
     '重连': 'Reconnect',
     '未启用': 'Not enabled',
     '正在连接…': 'Connecting…',
     '通道开着（App 关掉就断）': 'Channel is up (quits with the app)',
     '通道断了（%@），点「重连」': 'Channel dropped (%@) — hit “Reconnect”',
-    '还没填 app_id / app_secret': 'app_id / app_secret not filled in yet',
-    '最近一条': 'last at',
     '发消息失败': 'Sending failed',
-    '来找过机器人的单聊': 'Direct messages that reached the bot',
-    '未绑定': 'Not bound',
-    '已绑：%@': 'Bound to %@',
-    '绑定在「定时/助理」里选 —— 打开那个助理，入口那一栏挑这个单聊。飞书没有「列出我的单聊」的接口，所以这个列表只会出现在这儿跟你说过话的会话。':
-        'Binding happens in “Scheduled / Assistant” — open that assistant and pick this chat under its inbound section. '
-        'Feishu has no “list my direct messages” API, so this list only ever holds chats that have talked to the bot.',
-    '入口 · 飞书单聊': 'Inbound · Feishu DM',
-    '通道没开（设置 → 集成 → 飞书对话）': 'Channel is off (Settings → Integrations → Feishu chat)',
-    '没绑 —— 只能在 MangoX 里用它': 'Not bound — this assistant only works inside MangoX',
-    '不绑定': 'Not bound',
-    '在飞书里给机器人发一句话，那个单聊就会出现在这里。它说的话会直接进这个助理的会话，回复原路发回飞书。群聊不接（S15 只做单聊）。':
-        'Send the bot one message in Feishu and that DM shows up here. What you say goes straight into this '
-        'assistant’s session, and the reply travels back the same way. Group chats are not supported (DMs only).',
-    '这个单聊还没绑定助理。在 MangoX 的助理设置里选上它，就能直接说话了。':
-        'This DM is not bound to an assistant yet. Pick it in the assistant settings inside MangoX and you can talk right away.',
     '这个助理现在是停用状态，先在 MangoX 里把它打开。':
         'This assistant is currently disabled — turn it on in MangoX first.',
     '上一个回合还在跑，等它结束再发。': 'The previous turn is still running — wait for it to finish before sending another.',
@@ -1313,4 +1266,88 @@ VALUES = {
         'node not found — the bridge runs on it (Homebrew’s /opt/homebrew/bin/node)',
     'App 里缺少 feishu-bridge.cjs —— 打包时资源没进去':
         'feishu-bridge.cjs is missing from the app — the resource was not packaged',
+    'app_id 要填 —— 它在飞书自建应用的「凭证与基础信息」里':
+        "app_id is required — it lives in the Feishu app's Credentials & Basic Info page",
+    '一个机器人也连不了（没填 app_id 或没填 app_secret）':
+        'No bot can connect (app_id or app_secret missing)',
+    '上次说话 %@':
+        'Last message %@',
+    '不归它':
+        'Unassign',
+    '从旧版读取':
+        'Import from old version',
+    '例：工作号':
+        'e.g. Work account',
+    '入口 · 飞书':
+        'Inbound · Feishu',
+    '凭据只进钥匙串，不进库、不写日志。填完保存后桥会按新清单整条重起（几秒钟）。':
+        'Credentials go to the keychain only — never to the database or the logs. Saving restarts the bridge with the new list (a few seconds).',
+    '点一行就选中它（选中后要点右上角「保存」才生效）。选中的机器人收到的话会直接进这个助理的会话，回复原路发回飞书。群聊不接（只做单聊）。机器人没有自己的开关 —— 助理关着它就**不连**，飞书那边输入框会变灰。':
+        "Click a row to select it (it only takes effect after Save). Messages sent to the selected bot go straight into this assistant's session, and the reply travels back to Feishu. Group chats are ignored (direct messages only). Bots have no switch of their own — while the assistant is paused the bot does not connect, and the Feishu input box greys out.",
+    '名字':
+        'Name',
+    '在飞书的单聊里直接跟助理说话。每个机器人是一个飞书自建应用，凭据存钥匙串；一个机器人只归一个助理。机器人没有自己的开关 —— 它连不连，跟那条助理的开关走（助理关着它就不连，MangoX 关掉也断）。':
+        "Talk to assistants right inside a Feishu direct message. Each bot is a Feishu custom app whose credentials live in the keychain, and one bot belongs to exactly one assistant. A bot has no switch of its own — whether it connects follows its assistant's switch (a paused assistant means no connection, and quitting MangoX disconnects it too).",
+    '已从旧版搬过来 —— 桥会按新凭据重连':
+        'Imported from the old version — the bridge will reconnect with the new credentials',
+    '已保存 —— 留空就不改':
+        'Saved — leave blank to keep it',
+    '已归：%@':
+        'Owned by %@',
+    '归它':
+        'Assign',
+    '归：%@':
+        'Owner: %@',
+    '改归本助理':
+        'Move to this assistant',
+    '新增机器人':
+        'Add bot',
+    '旧版':
+        'Old version',
+    '旧版里也没读到凭据 —— 那就手填一次 app_id / app_secret':
+        'Nothing found in the old version either — enter app_id / app_secret once by hand',
+    '最近来找过机器人的会话':
+        'Recent sessions that reached a bot',
+    '机器人清单组装失败 —— 这是程序内部错误':
+        'Failed to assemble the bot list — internal error',
+    '没选 —— 只能在 MangoX 里用它':
+        'Nothing selected — usable only inside MangoX',
+    '没有机器人（设置 → 集成 → 飞书机器人）':
+        'No bots yet (Settings → Integrations → Feishu bots)',
+    '确认删除':
+        'Confirm delete',
+    '编辑':
+        'Edit',
+    '缺 app_id':
+        'Missing app_id',
+    '缺 app_id（从 S15 的旧配置迁过来的）':
+        'Missing app_id (migrated from the old config)',
+    '缺 app_secret':
+        'Missing app_secret',
+    '还没填 app_secret —— 它连不上，补上就自动连':
+        'No app_secret yet — it cannot connect; add one and it connects by itself',
+    '还没归助理 —— 收到的话会回一句「先归给一个助理」':
+        "Not assigned to an assistant yet — incoming messages get 「assign me to an assistant first」",
+    '还没有机器人。飞书自建应用就是你跟助理说话的那个「账号」 —— 一个机器人只归一个助理。':
+        "No bots yet. A Feishu custom app is the account you talk to, and one bot belongs to exactly one assistant.",
+    '这个机器人还没归给助理。在 MangoX 里把它绑给一个助理，就能直接说话了。':
+        'This bot is not assigned to any assistant yet. Assign it to one in MangoX and you can talk right here.',
+    '这张表只是**诊断** —— 它证明连接真的通了、谁跟哪个机器人说过话。绑定不在这里做：去「定时/助理」里选一个机器人（一个助理只挂一个）。':
+        "This list is diagnostics only — it proves the connection really works and shows who talked to which bot. Assignment happens in Scheduled / Assistants, not here, and each assistant takes a single bot.",
+    '另一个助理':
+        'another assistant',
+    '没绑机器人 —— 在助理的「入口 · 飞书」里选一个': 'No bot is bound — pick one under Inbound · Feishu in the assistant.',
+    '助理关着 —— 打开助理它才会连': 'The assistant is paused — turn it on and this bot connects.',
+    '助理是关着的 —— 打开它才会推': 'The assistant is paused — turn it on and findings will be pushed.',
+    '还没归给助理 —— 归了才会连': 'Not assigned to an assistant yet — it connects once assigned.',
+    '还没有人跟它说过话 —— 先在飞书里给它发一句，之后结论就推到这个私聊': 'Nobody has talked to it yet — send it one message in Feishu and findings will go to that direct message from then on.',
+    '通道没连上（设置 → 集成 → 飞书机器人 里能看灯）': 'The channel is not connected (check the light under Settings → Integrations → Feishu bots).',
+    '已推给「%@」的私聊': 'Pushed into the direct message of 「%@」',
+    '回「同意」我就按这份方案去做（起手做快照，跑完能回滚）；回「先别动」就搁置。': 'Reply 「同意」 and I will run this plan (snapshot first, rollback available); reply 「先别动」 to shelve it.',
+    '这条是问你 / 告诉你，不用批。回「先别动」可以把它搁置。': 'This one is a question / notice — nothing to approve. Reply 「先别动」 to shelve it.',
+    '已搁置（那条结论本身还在 App 里）。': 'Shelved (the finding itself stays in the app).',
+    '已采纳，开始执行（起手做快照，跑完能回滚）。结果我发这里。': 'Approved — starting now (snapshot first, rollback available). I will report back here.',
+    '没执行起来：%@': "Couldn't start: %@",
+    '现在没有等你批的事。直接说话就是跟我聊。': 'Nothing is waiting for your approval. Just talk to me.',
+    '这一条只是问你 / 告诉你，没有可执行的方案 —— 没有「同意」这个动作。回「先别动」可以把它搁置。': 'This one only asks you something — there is no plan to run, so there is nothing to approve. Reply 「先别动」 to shelve it.',
 }

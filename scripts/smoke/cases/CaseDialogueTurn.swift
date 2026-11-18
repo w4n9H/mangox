@@ -29,28 +29,11 @@ extension SmokeMain {
     @MainActor
     static func caseDialogueTurn() async {
         let dir = fixtureDir("p19dialogue")
-        let ledger = dir + "/proj/.mangox/assistant/LEDGER.md"
 
-        // ══ ① 围栏模式：同一个输入，deny 拒 / ask 不拒 ═══════════════════════
-        // 这一对必须**成对**存在: 只判「ask 返回 nil」的话，一个恒返回 nil 的实现也能全绿。
-        let deniedForPatrol = PiRpcTransport.ledgerDenyReason(
-            tool: "write", target: "/tmp/x.md", ledgerPath: ledger, cwd: dir, mode: .deny)
-        check(deniedForPatrol?.hasPrefix(LedgerFence.denyPrefix) == true,
-              "T-DIALOGUE ①围栏外写别处: 巡检轮（deny）⇒ 拒（\(deniedForPatrol ?? "nil")）")
-        let askedInDialogue = PiRpcTransport.ledgerDenyReason(
-            tool: "write", target: "/tmp/x.md", ledgerPath: ledger, cwd: dir, mode: .ask)
-        check(askedInDialogue == nil,
-              "T-DIALOGUE ①同一个输入在对话轮（ask）⇒ **不拒**，交给后面的弹卡（人在场，拒等于替人做决定）")
-        // 写账本两种模式都放行 —— ask 不改变「账本本身」的结论，只改「账本之外」的后果
-        check(PiRpcTransport.ledgerDenyReason(tool: "write", target: ledger,
-                                              ledgerPath: ledger, cwd: dir, mode: .ask) == nil
-              && PiRpcTransport.ledgerDenyReason(tool: "write", target: ledger,
-                                                 ledgerPath: ledger, cwd: dir, mode: .deny) == nil,
-              "T-DIALOGUE ①写账本在两种模式下都放行（模式只改「围栏外」的后果）")
-        // bash 在 ask 下也不拒（它在对话轮里本来就该走弹卡），但巡检轮仍然拒
-        check(PiRpcTransport.ledgerDenyReason(tool: "bash", target: "echo hi > " + ledger,
-                                              ledgerPath: ledger, cwd: dir, mode: .ask) == nil,
-              "T-DIALOGUE ①bash 在对话轮也交给弹卡（它要写哪判不了 ⇒ 问人）")
+        // ══ ① 围栏模式 —— **2026-11-18 整格删除** ═══════════════════════════
+        // 账本围栏（只许写账本这一份）连同 `ledgerDenyReason` 一起删了：助理跑在专属机器上，
+        // 路径围栏既拦不住什么，又把正常干活堵死（真机 11:04:49：巡检轮连 `ls` 都被拒）。
+        // 这一条用例现在只测 ②③④ —— 与工具的边界改在**人**那一侧，见 T-ASSISTANTAPPROVAL。
 
         // ══ ② 提议块抽取（纯函数） ═════════════════════════════════════════
         let withBlock = """
@@ -147,9 +130,11 @@ extension SmokeMain {
               "T-DIALOGUE ④且工作会话**一起走了**（传 `deleteSessions: false` 也照样走 —— "
               + "该参数对助理失效；中间态不存在，所以不需要留痕）")
 
-        // ══ ⑤ per-turn 清回：普通会话不能继承对话轮的笔 ═══════════════════════
+        // ══ ⑤ per-turn 清回：普通会话不能继承对话轮的**注入段** ═══════════════
+        // （原来还有"落点与围栏模式都清回"那条 —— 围栏删了，落点不再下发给 transport。
+        //   要清的只剩 `extraSystemPrompt`：不清的话手动回合会按助理契约答 NO_FINDING。）
         store.beginTurn(sid: UUID(), prompt: "你好", ephemeral: false, cwd: nil, unattended: false)
-        check(mock.lastLedgerFencePath == nil && mock.lastLedgerFenceMode == .deny,
-              "T-DIALOGUE ⑤普通会话把落点与模式**都清回**（谈成 `if let` 的话这里会继承上一轮）")
+        check(mock.lastExecutionGuard == nil,
+              "T-DIALOGUE ⑤普通会话把执行守卫清回（不清 = 上一轮的红线与步骤号还在拦）")
     }
 }

@@ -1,43 +1,32 @@
 //
 //  CaseWatchNotify.swift
-//  P19 S7 · 触达常驻：日预算闸 / 三个 sink 的脱敏与失败路径 / 通知直达 / 登录项文案
+//  P19 S7 · 结论推送：日预算闸 / 飞书私聊的脱敏与失败路径 / 通知直达 / 登录项文案
 //
 //  ⚠️ 这一批的判据分三层，缺一层就有一整类"看起来配好了"的静默失败:
-//    · **纯函数**（`feishuBody` / `redact` / `feishuError` / `statusText`）—— 回答"内容长什么样";
-//    · **真路径**（`sendEmail` / `sendWebhook`）—— 回答"它有没有真的接上";
+//    · **纯函数**（`payload` / `statusText`）—— 回答"内容长什么样";
+//    · **真路径**（`deliverFinding` → 私聊推送）—— 回答"它有没有真的接上";
 //    · **闸门**（`budgetBlockedReason` + `runScheduledFire`）—— 回答"该不该跑"。
+//
+//  ⚠️ 2026-11-18 晚：**编辑器里的「触达」卡整张删掉**（boss: 移除触达及相关功能），
+//     连带删掉**邮件外发通道**。对应的判据跟着对象一起删：③ 的邮件三格、⑤ 整段（邮件真路径）、
+//     ⑥ 里读 `emailAddress` / `isAllOff` 的那两格。**飞书私聊那条保留**（④），它是"人不在
+//     电脑前也能批"的唯一入口 —— 删了它，方案级审批就没有投递面。
+//     日预算（①②）与 `system` 落库（⑥）原样保留：它们与"怎么叫人"无关。
+//
+//  ⚠️ 2026-11-17：群 webhook 整条删掉（boss: 群不做了），飞书这一路只剩"推给入口机器人的私聊"。
+//     原来 ③④ 里验 URL 脱敏 / 飞书 code / 域名白名单的那批判据**跟着对象一起删** ——
+//     验一个已删除功能的判据会让人以为那条通道还在。
 //
 //  反例预测（改坏之后哪几条该红）:
 //    · 预算闸挪到采集之后 ⇒ ② 仍然绿（人看不出差别），但把 `return` 改成放行 ⇒ ② 红；
 //    · 账本用覆盖而不是累加 ⇒ ① 红（和等于最后一次）；
-//    · 把 `redact` 换成原样返回 ⇒ ③④ 红；
-//    · 飞书判成功只看 HTTP 200 ⇒ ④ 的 code≠0 那格红；
-//    · 载荷里带上 `finding.body` ⇒ ③ 红（这是"外发脱敏"唯一守得住的地方）。
+//    · `pushFinding` 不看 `botPhase` ⇒ ④「通道没连上」那格红（会把话写进没人读的 stdin）；
+//    · 载荷里带上 `finding.body` ⇒ ③④ 红（这是"外发脱敏"唯一守得住的地方）。
 //
 
 import Foundation
 
 extension SmokeMain {
-
-    /// 只记不发的 webhook 缝 —— 真的往飞书群里发一条是**别人看得见**的动作。
-    @MainActor
-    final class RecordingWebhook: WebhookSender {
-        struct Call { let url: String; let body: String }
-        var calls: [Call] = []
-        /// 非 nil ⇒ 这一跳抛错（模拟断网）。
-        var error: Error?
-        /// 服务端返回的 body（飞书对参数错误也回 200）。
-        var responseBody = #"{"code":0,"msg":"success"}"#
-        var status = 200
-
-        func post(_ url: URL, json: Data) async throws -> (status: Int, body: String) {
-            if let error { throw error }
-            calls.append(Call(url: url.absoluteString, body: String(data: json, encoding: .utf8) ?? ""))
-            return (status, responseBody)
-        }
-    }
-
-    struct FakeWebhookError: Error {}
 
     @MainActor
     static func caseWatchNotify() async {
@@ -141,124 +130,92 @@ extension SmokeMain {
         check(payload.line == "CI 看守 · CI 连续三次失败",
               "T-WATCHNOTIFY ③载荷 = 任务名 + 标题（实际「\(payload.line)」）")
 
-        let mail = WatchNotifyService.mail(payload, to: "me@example.com", from: "bot@163.com")
-        check(mail.to == "me@example.com", "T-WATCHNOTIFY ③收件人是配置的那个")
-        check(mail.subject.contains("CI 连续三次失败") && mail.subject.contains("CI 看守"),
-              "T-WATCHNOTIFY ③主题带标题与任务名（实际「\(mail.subject)」）")
-        check(!mail.body.contains(evidence) && !mail.body.contains(body),
-              "T-WATCHNOTIFY ③邮件正文**不许带证据与正文** —— 那是锁屏/离开这台机器都看得见的地方")
+        // ⚠️ 2026-11-17 这一段的 5 条判据（飞书 text 载荷 / `feishuError` 读 body 里的 code /
+        //    `redact` 砍路径段 / `looksLikeFeishuHook`）**跟着 webhook 一起删了**。删的理由不是
+        //    "它们不对"，而是**对象没了**：群不做 ⇒ webhook 不做了 ⇒ 没有 URL 要脱敏、
+        //    没有 code 要读。留着一堆"验一个已删除功能"的判据，比没有判据更误导人 ——
+        //    它会让下一个人以为这条通道还在。飞书现在的出口只有一条：私聊推送（见 ④）。
 
-        let hook = WatchNotifyService.feishuBody(payload) ?? Data()
-        let hookText = String(data: hook, encoding: .utf8) ?? ""
-        check(hookText.contains("CI 连续三次失败") && hookText.contains("text"),
-              "T-WATCHNOTIFY ③飞书载荷是 text 消息且带标题（实际 \(hookText)）")
-        check(!hookText.contains(evidence) && !hookText.contains(body),
-              "T-WATCHNOTIFY ③飞书载荷同样不许带证据与正文")
+        // MARK: - ④ 飞书私聊：结论推到跟助理绑的那个机器人
 
-        check(WatchNotifyService.feishuError(#"{"code":0,"msg":"success"}"#) == nil,
-              "T-WATCHNOTIFY ③飞书 code=0 ⇒ 成功")
-        let feishuFail = WatchNotifyService.feishuError(#"{"code":19021,"msg":"sign match fail"}"#) ?? ""
-        check(feishuFail.contains("19021") && feishuFail.contains("sign match fail"),
-              "T-WATCHNOTIFY ③飞书**对参数错误也回 200** ⇒ 判据必须读 body 里的 code（实际「\(feishuFail)」）")
-        check(WatchNotifyService.feishuError("<html>502</html>") != nil,
-              "T-WATCHNOTIFY ③不是 JSON 的响应要判失败（多半是地址错了 / 被网关截了）")
+        // 2026-11-17 换掉的是**落点和判据**，不是"删了一个功能"：
+        // 原来只有"群 webhook"，现在只有"入口机器人的私聊" —— 四种推不出去的情形各有各的话。
+        func isSkipped(_ o: NotifyOutcome) -> Bool { if case .skipped = o { return true }; return false }
+        let fake = FakeRemoteLink()
+        fireStore.remote.attachLink(fake)
 
-        let rawHook = "https://open.feishu.cn/open-apis/bot/v2/hook/SUPER-SECRET-TOKEN"
-        let redacted = WatchNotifyService.redact(rawHook)
-        check(!redacted.contains("SUPER-SECRET-TOKEN"),
-              "T-WATCHNOTIFY ③脱敏必须砍掉路径段（那一段本身就是凭据；实际「\(redacted)」）")
-        check(redacted.contains("open.feishu.cn"),
-              "T-WATCHNOTIFY ③脱敏要保留 host —— 人要能从日志看出「我配的是不是那个机器人」")
-        check(WatchNotifyService.redact("") == "", "T-WATCHNOTIFY ③空串进、空串出")
-        check(!WatchNotifyService.redact("SUPER-SECRET-TOKEN").contains("SUPER-SECRET-TOKEN"),
-              "T-WATCHNOTIFY ③连 URL 都解不出时**一个字都不回显**（那时候它可能就是密钥本身）")
+        let noBot = fireStore.remote.pushFinding(payload, taskId: over.id)
+        check(isSkipped(noBot) && noBot.text.contains("没绑机器人"),
+              "T-WATCHNOTIFY ④没绑机器人 ⇒ 说出来去配（静默跳过 = 「我以为配了」; 实际「\(noBot.text)」）")
 
-        check(WatchNotifyService.looksLikeFeishuHook(rawHook),
-              "T-WATCHNOTIFY ③飞书官方域名认得出来")
-        check(!WatchNotifyService.looksLikeFeishuHook("http://open.feishu.cn/x"),
-              "T-WATCHNOTIFY ③非 https 不算（飞书只收 https）")
+        let pushBot = UUID()
+        fireStore.addRemoteBot(RemoteBot(id: pushBot, name: "推送号", appId: "cli_push0000000000"))
+        _ = fireStore.setRemoteBotSecret("s3cret", for: pushBot)
+        fireStore.assignRemoteBot(pushBot, to: over.id)
+        let noChat = fireStore.remote.pushFinding(payload, taskId: over.id)
+        check(isSkipped(noChat) && noChat.text.contains("跟它说过话"),
+              "T-WATCHNOTIFY ④还没人跟它说过话 ⇒ **说清缺什么**（没有 chatId 就没有落点; 实际「\(noChat.text)」）")
 
-        // MARK: - ④ webhook 真路径：失败要说得出话，且绝不回显 URL
+        // 一次真实往返：谁跟它说过话 → 通道握手成功
+        let pushChat = "oc_push_chat_0001"
+        fireStore.touchRemoteBotChat(pushBot, chatId: pushChat)
+        fake.emit(.status(botId: pushBot.uuidString, connected: true, note: "ws handshake ok"))
+        check(fireStore.remote.phase(for: pushBot) == .up,
+              "T-WATCHNOTIFY ④前置: 通道握手成功（后面两格要判「推得出去」）")
 
-        let rec = RecordingWebhook()
-        fireStore.scheduler.webhookSender = rec
-        let secrets = InMemoryNotifySecretStore()
-        fireStore.scheduler.notifySecrets = secrets
+        let pushed = fireStore.remote.pushFinding(payload, taskId: over.id)
+        check(!isSkipped(pushed) && pushed.text.contains("已推给"),
+              "T-WATCHNOTIFY ④连上了 + 有落点 ⇒ 推出去（实际「\(pushed.text)」）")
+        check(fake.sent.last?.chatId == pushChat,
+              "T-WATCHNOTIFY ④推到**跟它说过话的那个私聊**（`chat_id` 是地址, 不是身份）")
+        check(fake.sent.last?.botId == pushBot.uuidString,
+              "T-WATCHNOTIFY ④用的是**这个助理绑的那个机器人**（借别的机器人发 = 用错身份说话）")
+        // 2026-11-18: 正文 = `payload.line` + **怎么回**。人不在电脑前，收到这一条之后
+        // 唯一能做的就是回两个字；不告诉他回什么，这条推送就只是一条通知。
+        check(fake.sent.last?.text.hasPrefix(payload.line) == true,
+              "T-WATCHNOTIFY ④推送正文以 `payload.line` 打头 —— 脱敏载荷只许有**一处**组装"
+              + "（实际「\(fake.sent.last?.text ?? "nil")」）")
+        check(fake.sent.last?.text.contains("先别动") == true,
+              "T-WATCHNOTIFY ④且写明**怎么回**（回「同意」/「先别动」—— 不写他就只能回 App，而他人不在电脑前）")
+        check(!(fake.sent.last?.text.contains(evidence) ?? true)
+              && !(fake.sent.last?.text.contains(body) ?? true),
+              "T-WATCHNOTIFY ④私聊里同样不许带证据与正文（离开这台机器的地方一律只带标题）")
 
-        let noURL = await fireStore.scheduler.sendWebhook(payload, taskId: over.id)
-        check(noURL.isFailed && noURL.text.contains("没配"),
-              "T-WATCHNOTIFY ④没配地址要**说出来**（静默跳过 = 「我以为配了」; 实际「\(noURL.text)」）")
+        // **接线**：上面验的是"这个方法能推"，这一格验"结论产生时真的会调它" ——
+        // 只测服务不测接线，等于没测（S7 那版把 webhook 分支写成 `if opts.webhook`，
+        // 而默认 false ⇒ 全部静默不发，一个红灯都没有）。
+        let beforeSink = fake.sent.count
+        if let live = fireStore.scheduledTasks.first(where: { $0.id == over.id }) {
+            fireStore.scheduler.deliverFinding(finding, task: live, logId: logId)
+        }
+        check(fake.sent.count == beforeSink + 1,
+              "T-WATCHNOTIFY ④结论产生 ⇒ 外发 sink **真的**推了一条（实际多了 \(fake.sent.count - beforeSink) 条）")
 
-        try? secrets.setWebhookURL("http://open.feishu.cn/open-apis/bot/v2/hook/SUPER-SECRET-TOKEN",
-                                   taskId: over.id)
-        let badScheme = await fireStore.scheduler.sendWebhook(payload, taskId: over.id)
-        check(badScheme.isFailed && !badScheme.text.contains("SUPER-SECRET-TOKEN"),
-              "T-WATCHNOTIFY ④地址不合法时**报错文案也不能带 URL**（实际「\(badScheme.text)」）")
+        // ⚠️ 2026-11-18 换的这一格：机器人**没有自己的开关**了（boss: 只留助理的开关）⇒
+        //    "推不出去"的第三种理由是"助理关着"，不再是"机器人被关"。判据跟着对象一起换，
+        //    否则就是在验一个不存在的状态（那种判据永远绿，也永远不代表任何事）。
+        let stoppedBefore = fake.stopped
+        fireStore.toggleScheduled(id: over.id)      // 关助理
+        check(fake.stopped > stoppedBefore,
+              "T-WATCHNOTIFY ④关助理 ⇒ 桥停下（助理那盏开关就是机器人唯一的开关）")
+        let botOff = fireStore.remote.pushFinding(payload, taskId: over.id)
+        check(isSkipped(botOff) && botOff.text.contains("关着"),
+              "T-WATCHNOTIFY ④助理关着 ⇒ 说「助理是关着的」（而不是「通道坏了」; 实际「\(botOff.text)」）")
 
-        try? secrets.setWebhookURL(rawHook, taskId: over.id)
-        let okHook = await fireStore.scheduler.sendWebhook(payload, taskId: over.id)
-        check(okHook == .sent("已发送"), "T-WATCHNOTIFY ④正常地址 ⇒ 已发送（实际「\(okHook.text)」）")
-        check(rec.calls.count == 1, "T-WATCHNOTIFY ④确实发出了 1 跳（实际 \(rec.calls.count)）")
-        check(rec.calls.first?.body.contains("CI 连续三次失败") == true,
-              "T-WATCHNOTIFY ④发出去的载荷带标题")
-
-        rec.responseBody = #"{"code":19021,"msg":"sign match fail"}"#
-        let rejected = await fireStore.scheduler.sendWebhook(payload, taskId: over.id)
-        check(rejected.isFailed && rejected.text.contains("19021"),
-              "T-WATCHNOTIFY ④HTTP 200 但 code≠0 必须判失败（这条错了就是「以为发了, 群里什么都没有」）")
-
-        rec.responseBody = #"{"code":0,"msg":"success"}"#
-        rec.error = FakeWebhookError()
-        let boom = await fireStore.scheduler.sendWebhook(payload, taskId: over.id)
-        check(boom.isFailed && !boom.text.contains("SUPER-SECRET-TOKEN"),
-              "T-WATCHNOTIFY ④投递抛错也不许把 URL 带进文案（实际「\(boom.text)」）")
-        rec.error = nil
-
-        // MARK: - ⑤ 邮件真路径：凭据只从钥匙串取，发件人是"第一个能发的账号"
-
-        let noAccount = await fireStore.scheduler.sendEmail(payload, to: "me@example.com")
-        check(noAccount.isFailed && noAccount.text.contains("邮箱账号"),
-              "T-WATCHNOTIFY ⑤没有账号时要指名去什么地方配（实际「\(noAccount.text)」）")
-
-        let acct = MailboxAccount(label: "发件箱", address: "bot@163.com", presetId: "163",
-                                  imapHost: "imap.163.com:993", smtpHost: "smtp.163.com:465")
-        fireStore.addMailboxAccount(acct)
-        check(fireStore.firstSendableMailboxAccount() == nil,
-              "T-WATCHNOTIFY ⑤有 SMTP 主机但**没有授权码**不算能发（半个配置比没有更坏）")
-
-        let mailMock = MockMailTransport(accountId: acct.id)
-        fireStore.scheduler.mailTransportFactory = { _, _ in mailMock }
-        fireStore.setMailboxAuth("secret-auth-code", accountId: acct.id)
-        check(fireStore.firstSendableMailboxAccount()?.id == acct.id,
-              "T-WATCHNOTIFY ⑤主机 + 授权码齐了才算发件账号")
-
-        let sent = await fireStore.scheduler.sendEmail(payload, to: "me@example.com")
-        check(sent == .sent("已发给 me@example.com"),
-              "T-WATCHNOTIFY ⑤发送成功（实际「\(sent.text)」）")
-        check(mailMock.sentMails.count == 1, "T-WATCHNOTIFY ⑤确实投了 1 封（实际 \(mailMock.sentMails.count)）")
-        check(mailMock.sentMails.first?.to == "me@example.com",
-              "T-WATCHNOTIFY ⑤收件人是配置的那个")
-        check(mailMock.sentMails.first?.body.contains("CI 连续三次失败") == true,
-              "T-WATCHNOTIFY ⑤正文带标题")
-        check(mailMock.sentMails.first?.body.contains(evidence) == false,
-              "T-WATCHNOTIFY ⑤正文**不带证据**（脱敏在外发这一层, 不在调用方自觉上）")
-
-        mailMock.sendError = .send("535 Login denied")
-        let mailFail = await fireStore.scheduler.sendEmail(payload, to: "me@example.com")
-        check(mailFail.isFailed && mailFail.text.contains("535"),
-              "T-WATCHNOTIFY ⑤发送失败必须把服务端的原话带出来（「没收到」最难归因）")
+        fireStore.toggleScheduled(id: over.id)      // 打开回来
+        fake.emit(.status(botId: pushBot.uuidString, connected: false, note: "ws failed"))
+        let down = fireStore.remote.pushFinding(payload, taskId: over.id)
+        check(!isSkipped(down) && down.text.contains("通道没连上"),
+              "T-WATCHNOTIFY ④通道没连上 ⇒ **失败**而不是跳过（写进桥的 stdin 是没人读的, 装作发了最坏; 实际「\(down.text)」）")
 
         // MARK: - ⑥ 配置默认值与落库往返
 
         let fresh = NotifyOptions()
-        check(fresh.system && fresh.emailAddress == nil && !fresh.webhook,
-              "T-WATCHNOTIFY ⑥默认只开系统通知（缺省值一变, 升级上来的每条 Cron 任务都会被顺带改掉）")
-        let blank = NotifyOptions(system: false, emailTo: "   ", webhook: false)
-        check(blank.emailAddress == nil && blank.isAllOff,
-              "T-WATCHNOTIFY ⑥全空白收件人 = 没填")
+        check(fresh.system,
+              "T-WATCHNOTIFY ⑥默认开系统通知（缺省值一变, 升级上来的每条 Cron 任务都会被顺带改掉）")
 
         var roundtrip = ScheduledTask(id: UUID(), name: "往返", prompt: "x", cron: "0 0 1 1 *")
-        roundtrip.notify = NotifyOptions(system: false, emailTo: "a@b.c", webhook: true)
+        roundtrip.notify = NotifyOptions(system: false, emailTo: "a@b.c")
         roundtrip.dailyTokenBudget = 1234
         roundtrip.logSessionId = nil
         try? p.upsertScheduled(roundtrip)
@@ -267,8 +224,10 @@ extension SmokeMain {
               "T-WATCHNOTIFY ⑥触达配置落库往返（实际 \(String(describing: back?.notify))）")
         check(back?.dailyTokenBudget == 1234,
               "T-WATCHNOTIFY ⑥日预算落库往返（实际 \(String(describing: back?.dailyTokenBudget))）")
-        check(back.map { !$0.notify.system && $0.notify.webhook } == true,
-              "T-WATCHNOTIFY ⑥关掉系统通知这件事必须读得回来（读不回来 = 关不掉）")
+        // 2026-11-18 晚: 界面上已经没有"关掉它"的入口了，但**字段必须照旧读得回来** ——
+        // 老任务配过的 `system=false` / `emailTo` 原样留在行上（"撤下输入框 ≠ 清空数据"）。
+        check(back.map { !$0.notify.system && $0.notify.emailTo == "a@b.c" } == true,
+              "T-WATCHNOTIFY ⑥旧行上的触达字段必须照旧读得回来（读不回来 = 一次编辑就静默清空）")
 
         // 老库: notify 列为 NULL ⇒ 回落默认（宁可多弹一条通知, 也不能让一条任务读不出来）
         var legacy = ScheduledTask(id: UUID(), name: "老行", prompt: "x", cron: "0 0 1 1 *")

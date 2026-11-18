@@ -186,7 +186,9 @@ enum WatchExecService {
         parts.append("【已授权的步骤】\n" + finding.plan
             .map { "\($0.n). \($0.text)" }
             .joined(separator: "\n"))
-        if let projectPath { parts.append("【写入范围】\n只允许写 \(projectPath) 之内；此外一律拒。") }
+        // 2026-11-18: 这里原来写的是「只允许写 <项目> 之内；此外一律拒」。围栏撤掉之后
+        // 那句话是假话 —— 它会照着"我不能写外面"去自我审查, 而代码已经放行了。
+        if let projectPath { parts.append("【工作目录】\n\(projectPath)") }
         parts.append("【已授权步骤号】\(authorizedSteps.map(String.init).joined(separator: ","))")
         // 收尾格式是**机器接口**，与巡检轮的四段同性质：解析器只认这两行，
         // 写得再漂亮但没有 RESULT 的回合会被记成 failed（"无法证明"按失败算）。

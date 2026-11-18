@@ -679,7 +679,7 @@ final class SchedulerService: ObservableObject {
             // 与首次通知**同一条路**: 系统通知受全局开关管，任务级 `notify.system` 是它上面一层；
             // 邮件 / 飞书复用同一个载荷（不另造一种"催促"通知形状 —— 那会多一份会漂的规则）。
             if task.notify.system { store.notifyWatchFinding(nf, taskName: task.name) }
-            deliverExternalSinks(nf, task: task, logId: logId)
+            deliverFinding(nf, task: task, logId: logId)
             Log.event("nag", ["finding": String(nf.id.uuidString.prefix(8)),
                               "n": "\(nf.nagCount)"])
         }
@@ -825,7 +825,11 @@ final class SchedulerService: ObservableObject {
         let promptMsg = ChatMessage(role: .user, content: .text(prompt))
         store.persistMessage(promptMsg, sid: logId)
         if viewing { store.messages.append(promptMsg) }
-        // fire 是独立轮次: ephemeral (--no-session), 连续性靠交接文件 (P3.9 拍板);
+        // ⚠️ 2026-11-18 boss 定: **定时轮和对话轮走同一场会话** —— 助理档不再用
+        // `--no-session`，它和对话轮读写同一份 transcript（同一身份、同一段记忆）。
+        // 从前那条"fire 是 ephemeral、连续性靠交接文件"（P3.9）对助理作废；交接文件仍然写，
+        // 它现在只是"给下一轮看的结构化摘要"，不再是唯一的连续性来源。
+        // ⚠️ **Cron 档一字不动**：非助理任务仍然 `--no-session`（"Cron 零改动"是定过的线）。
         // cwd 用任务项目路径 (无项目回落 home)。
         // P9-#17: 恒无人值守 (task.unattended 仅作历史记录) —— 后台日志会话的审批卡
         // 停在 liveTurns 镜像里无 UI 入口, 弹卡 = 任务卡死到 pi 32s 超时 deny
@@ -853,24 +857,18 @@ final class SchedulerService: ObservableObject {
             if let targeted { dreamTargets[logId] = targeted.id }
             fireSpool = spool
         }
-        store.beginTurn(sid: logId, prompt: prompt, ephemeral: true,
+        store.beginTurn(sid: logId, prompt: prompt, ephemeral: !task.isAssistant,
                         cwd: cwd, unattended: true,
                         modeOverride: cfg.flatMap { AgentMode(rawValue: $0.agentMode) },
                         modelOverride: cfg.map {
                             (provider: $0.provider, modelId: $0.modelId, thinking: $0.thinkingLevel)
                         },
                         dreamSpool: fireSpool,
-                        // P19: 助理 = 只读分析面 + system 注入段。两个都是 per-turn，
-                        // `beginTurn` 里**无条件**下发（见那里的注释: 不清就会漏进下一回合）。
-                        analysisReadOnly: task.isAssistant,
-                        extraSystemPrompt: watchExtra,
-                        // P19.2 S11: 账本落点 = 巡检轮**唯一**能写的那一份。
-                        // 它同时决定三件事（都从这里出发，不各判一次）:
-                        //   ① `AnalysisFace` 给不给 `write`（`canWriteLedger`）
-                        //   ② 扩展侧 `MANGOX_LEDGER_PATH` 免检口径
-                        //   ③ 审批桥里的 `LedgerFence`
-                        // Cron 恒 nil ⇒ 三件事都退回 S10 之前的形状。
-                        ledgerPath: task.isAssistant ? handoffPath(for: task) : nil)
+                        // P19: 助理 = 注入段（观察 + 契约 + 交接）。per-turn，`beginTurn` 里
+                        // **无条件**下发（见那里的注释: 不清就会漏进下一回合）。
+                        // ⚠️ 2026-11-18: 这里原来还有 `analysisReadOnly: task.isAssistant`
+                        // —— 只读面整层删了，助理的工具面按它自己选的档位（boss 定）。
+                        extraSystemPrompt: watchExtra)
         // P10.3 联动: 日志会话行带上任务配置 (点开会话即恢复其执行配置)
         if let cfg { store.persistence?.saveSessionConfig(id: logId, config: cfg) }
         // P15.9: 定向 fire **不推进 `lastRunAt` / `runCount`** —— 它不是"这个定时任务的一次运行"。
@@ -934,7 +932,18 @@ final class SchedulerService: ObservableObject {
     ## 在跟踪
     当前正在推进的事，一行一件；没有就写「无」。
     ## 待你决定
-    需要人授权 / 给材料 / 做选择的事，一行一件；没有就写「无」。
+    要人授权 / 给材料 / 做选择的事，**一行一件**；没有就写「无」。
+    这一节不是记给自己看的笔记 —— **每一行都会被主动发到人的飞书**（一次发一条），
+    所以它写的是"问他"，一行就必须能独立读懂。每行自带三件事，缺一件就别写这一行：
+    **要什么 · 为什么（带观察编号 [n] 或文件位置）· 他怎么答**（回「可以 / 不行」还是给一段信息）。
+    - **查得到的不要问**：能用 read / grep / find / ls 看到的，先看了再说话。
+      把查得到的东西拿来问，比不问更浪费人。
+    - **这一节只放「要信息」，不放「要动手」**：动手的事写进输出契约的「方案」那一段 ——
+      那一份才有人点「采纳并执行」，起手会做快照。把"我要删掉 X"写成这里的问句，
+      人会以为点个头就完了，而实际没人会去删。
+    - **已经在这一节里的，原样保留那一行**（一个字都别改）。改写措辞会被当成**另一件事**，
+      人就再被打扰一次。它没解决就一直留着，别每轮换个说法重写。
+    - 人回答之后：把那一行从这一节**撤掉**，结论写进「在跟踪」或「已完成（归档）」。
     ## 已完成（归档）
     已经收尾的事，一行一件，写成「日期 + 一句话」（如 2026-11-17 修好 CI：根因是时区写死）。
     这件事做完就把它的验收项从「完成状态」撤下来、在这里记一条；没有就写「无」。
@@ -968,8 +977,7 @@ final class SchedulerService: ObservableObject {
 
     /// 巡检轮的 system 注入段（走 `--append-system-prompt`）。**纯函数**: 参数即全部输入。
     /// `ledgerPath` **不是可选的** —— 巡检轮按构造永远有一份账本（`handoffPath` 总能算出
-    /// 一条路径）。留一个 nil 分支只会让人以为"某一轮可以没有账本"，而那种轮次的
-    /// 真实含义是"它不该有笔"，那件事由 `AnalysisFace` 决定，不是由这里的一句话决定。
+    /// 一条路径）。留一个 nil 分支只会让人以为"某一轮可以没有账本"。
     /// `goal` 是任务的目标（= `task.prompt`）。**只在它为空时说话**：非空时目标已经是
     /// 这一轮的 user 消息，搬进 system 段只是把同一句话写两遍，还会让人分不清哪个算数。
     static func watchSystemPrompt(project: WatchProjectContext?,
@@ -981,10 +989,18 @@ final class SchedulerService: ObservableObject {
         parts.append("""
         【助理任务 · 巡检轮】
         你是在替一个人看守一个**长程目标**（可能持续几周甚至几个月），不是执行一条命令。
-        这一轮你**只有一支笔**: 只许写下面这一份文件（账本），别的一律不许动 ——
-        \(ledgerPath)
-        写别处会被拒（应用层按路径逐字符比对，不做前缀放行）。想改项目里的东西，
-        就把方案写出来等人批准，不要伸手。
+        ⚠️ 这一轮**没有人坐在你旁边**（到点自己跑的那一轮）：不弹审批卡，也没人会按。
+        所以边界只能靠你自己分清楚，下面三条一句话一条：
+
+        · **普通活直接干** —— 读、看、写普通文件、跑脚本、装依赖、查日志。不用问，没人拦你。
+        · **重要操作先别动** —— 删东西、覆盖已有的重要内容、重启/停服务、动数据库、
+          对外发消息（邮件 / 飞书 / 任何别人能看见的东西）、花钱。
+          把它写成**输出契约里的「方案」那一段**（编号步骤，每步写清动什么、能不能撤销），
+          人点了「采纳并执行」才会真做 —— 那条路起手会做整轮快照，跑完能回滚。
+        · **要信息 / 要人做选择**（不是要动手）—— 写进账本的「## 待你决定」，
+          那一节会被**主动发到人的飞书**。缺材料也一样：查过之后仍然缺，就写进那一节问人。
+
+        账本在：\(ledgerPath)（要记进度就写它；只写这一个地方不会被当成「没干活」）
         """)
         if let p = project, !p.path.isEmpty {
             parts.append("【项目】\n\(p.name) · \(p.path)\n这一轮的工作目录就是它，read / grep / find / ls 可以直接看。")
@@ -1052,6 +1068,15 @@ final class SchedulerService: ObservableObject {
 
     private var dialogueTurns: [UUID: DialogueTurnContext] = [:]
 
+    /// 这场会话是不是**某个助理的**（巡检轮 / 对话轮 / 执行轮都算）。
+    ///
+    /// 与 `assistantChatTurn` 的区别只有一件事：那个还要**生成对话轮的注入段**，这个只回答是/否。
+    /// `ChatStore.beginTurn` 用它来钉「助理线上工具级审批恒关」—— 那边只是要一个布尔值，
+    /// 顺手调 `assistantChatTurn` 会白算一遍注入（而那份注入有一处 `readHandoff` 是读盘的）。
+    func isAssistantLogSession(_ sid: UUID) -> Bool {
+        scheduledTasks.contains { $0.isAssistant && $0.logSessionId == sid }
+    }
+
     /// 这场会话是不是某个**助理任务的对话轮**？（纯读，不落任何状态 —— 冒烟直接断言这个。）
     ///
     /// 为什么靠 `logSessionId` 反查、而不是给会话打一个"我是助理会话"的标记:
@@ -1083,19 +1108,35 @@ final class SchedulerService: ObservableObject {
 
     private func dialoguePrompt(for task: ScheduledTask, ledgerPath: String) -> String {
         var parts: [String] = []
-        parts.append("""
+        var head = """
         【助理任务 · 对话轮】
         这一轮是人在跟你说话，不是定时巡检。
-        你的长期目标：\(task.prompt)
-        """)
+        """
+        // 2026-11-17：助理编辑器**不再有**手填目标（目标靠每轮下发 / 从账本长出来），
+        // 所以这一行是按需出现的 —— 老助理写过目标的照样注入（那是它们唯一的长期上下文），
+        // 新助理不写就不出现。空着还硬留一行「你的长期目标：」比不写更糟：模型会去猜那是什么。
+        let goal = task.prompt.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !goal.isEmpty { head += "\n你的长期目标：\(goal)" }
+        parts.append(head)
         parts.append("""
+        【能做什么】
+        这一轮**人在跟你说话**（可能在 App 里，也可能从飞书发过来 —— 同一场会话）。
+        工具级审批在你这儿是**关的**：改文件、跑命令不会弹卡，也没人会拦你。
+        所以边界只能靠你自己守：
+        · **普通活直接做** —— 读、看、改普通文件、跑脚本、查日志。
+        · **重要操作先说一句再动** —— 删东西、覆盖已有的重要内容、重启/停服务、动数据库、
+          对外发消息（邮件 / 飞书 / 任何别人能看见的东西）、花钱。
+          说清「我要做什么 / 为什么 / 做完能不能撤」，等人答「可以」再动手；
+          他没答或者答得含糊，就先别动。
+        · **他答不了的事**（缺材料、要他去别处点一下）—— 写进账本的「## 待你决定」。
+
         【写账本】
-        这一轮你**只有一支笔**：只许写下面这一份文件，写别处一律会被拦下。
-        \(ledgerPath)
-        三条硬规矩：
-        1. **写绝对路径**，不要用 `~` 也不要写相对路径 —— 判不清会落到哪，一律拒。
-        2. **整篇覆盖**: 把当前账本（在下面）连同这一轮的更新合成一篇，一次 write 写完。
-        3. 写别处会**弹卡让人按**（不会静默放行）—— 别把"人可能点同意"当成许可去试探。
+        账本在：\(ledgerPath)
+        两条硬规矩：
+        1. **整篇覆盖**: 把当前账本（在下面）连同这一轮的更新合成一篇，一次 write 写完。
+        2. **「## 待你决定」的写法与账本契约里那一条完全相同**（一行一件、自带三要素、
+           查得到的不许问、已有的原样保留）：那一节每一行都会主动发到他的飞书，
+           所以改写措辞 = 再打扰他一次。它只放「要信息」的事，不放「要动手」的事。
         """)
         let open = (store?.findings ?? []).filter { $0.taskId == task.id && $0.status.isInboxVisible }
         if !open.isEmpty {
@@ -1189,7 +1230,8 @@ final class SchedulerService: ObservableObject {
     struct ExecFireContext: Equatable {
         let taskId: UUID
         let findingId: UUID
-        let projectPath: String
+        /// `nil` = 这个助理没绑项目 ⇒ 这一轮没有快照（也就没有整轮回滚）。
+        let projectPath: String?
         let authorizedSteps: [Int]
     }
 
@@ -1221,13 +1263,15 @@ final class SchedulerService: ObservableObject {
             return .rejected("它归属的助理任务已经不在了")
         }
         if task.isLegacyWaiting { return .rejected("旧类型的任务不能执行（重建为助理）") }
-        // 写入范围 = 任务项目目录。**没有它就没有围栏、也没有可回滚的范围** ⇒ 拒。
-        // 这不是"少了一层保护"，是"这层承诺兑现不了"：快照要 `-C 项目根`，围栏要比项目根。
-        guard let projectPath = task.projectId
-                .flatMap({ pid in store.projects.first(where: { $0.id == pid })?.path }),
-              !projectPath.isEmpty else {
-            return .rejected("这个助理的项目没绑定目录 —— 执行既没有围栏，也没有可回滚的范围")
-        }
+        // 2026-11-18: **不再要求绑项目**。原来这里是一道硬门（"没项目就没有围栏、也没有
+        // 可回滚的范围 ⇒ 拒"），而围栏已经整层删了 ⇒ 这道门挡掉的是"整个功能用不了"
+        // （助理跑在专属机器上时根本没有"项目目录"这个概念）。
+        //
+        // 代价写在时间线上，不藏着：没有项目 ⇒ **没有整轮快照、不能整轮回滚**。
+        // 有项目就照旧做快照 —— 快照是"能回滚"这个承诺，不是审批的前置条件。
+        let projectPath: String? = task.projectId
+            .flatMap { pid in store.projects.first(where: { $0.id == pid })?.path }
+            .flatMap { $0.isEmpty ? nil : $0 }
         guard let logId = ensureLogSession(for: task) else { return .rejected("建不出任务日志会话") }
         if store.runningTurns.contains(logId) { return .rejected("这场任务的回合还在跑，等它结束") }
         if store.runningTurns.count >= store.maxConcurrentTurns { return .rejected("并发已满") }
@@ -1238,8 +1282,25 @@ final class SchedulerService: ObservableObject {
         running.decidedAt = f.decidedAt ?? Date()
         try? p.upsertFinding(running)
         store.reloadFindings()
+        let stepList = steps.map(String.init).joined(separator: ",")
+        guard let projectPath else {
+            // 没绑项目: **不快照，直接起执行轮**。时间线必须把"这次不能回滚"说出来 ——
+            // 不说的话，人点回滚时会以为按钮坏了（那才是最难查的一种）。
+            appendTimeline("── \(stamp()) 采纳并开始执行（方案第 \(f.planRev) 版 · 第 "
+                           + stepList + " 步）—— 这个助理没绑项目，**这次不做快照、不能整轮回滚** ──",
+                           to: logId)
+            var started = f
+            started.status = .running
+            started.undoPath = nil
+            try? p.upsertFinding(started)
+            execFires[logId] = ExecFireContext(taskId: task.id, findingId: findingId,
+                                               projectPath: nil, authorizedSteps: steps)
+            beginExecTurn(task: task, finding: started, logId: logId,
+                          projectPath: nil, steps: steps)
+            return .started
+        }
         appendTimeline("── \(stamp()) 采纳并开始执行（方案第 \(f.planRev) 版 · 第 "
-                       + steps.map(String.init).joined(separator: ",") + " 步），先做快照 ──",
+                       + stepList + " 步），先做快照 ──",
                        to: logId)
 
         // 快照放后台: 它按项目根打包，在点击那一刻卡主线程 = "点了没反应"。
@@ -1279,7 +1340,7 @@ final class SchedulerService: ObservableObject {
     }
 
     private func beginExecTurn(task: ScheduledTask, finding: AgentFinding, logId: UUID,
-                               projectPath: String, steps: [Int]) {
+                               projectPath: String?, steps: [Int]) {
         guard let store else { return }
         let prompt = Self.watchExecPrompt(goal: task.prompt, finding: finding)
         let msg = ChatMessage(role: .user, content: .text(prompt))
@@ -1288,7 +1349,9 @@ final class SchedulerService: ObservableObject {
         let extra = WatchExecService.executionSystemPrompt(finding: finding,
                                                            authorizedSteps: steps,
                                                            projectPath: projectPath)
-        store.beginTurn(sid: logId, prompt: prompt, ephemeral: false, cwd: projectPath,
+        // 没绑项目时 cwd 落 home —— 执行轮的相对路径就按它解（红线判据用的是同一个基准）。
+        store.beginTurn(sid: logId, prompt: prompt, ephemeral: false,
+                        cwd: projectPath ?? NSHomeDirectory(),
                         unattended: false,
                         extraSystemPrompt: extra,
                         executionGuard: ExecutionGuard(projectPath: projectPath,
@@ -1360,6 +1423,9 @@ final class SchedulerService: ObservableObject {
         let head = status == .resolved ? "执行结束：已解决" : "执行结束：未完成"
         let tail = note.isEmpty ? "" : "（\(note)）"
         appendTimeline("── \(stamp()) \(head)\(tail) ──", to: sid)
+        // 从飞书批的那一次：把结果推回那个私聊。人不一定回 App 看时间线 ——
+        // 而"批完之后没有下文"是最让人不敢再用的一种失败（2026-11-18）。
+        store.remote.reportExecFinished(sid: sid, line: head + tail)
         if let undo = store.findings.first(where: { $0.id == ctx.findingId })?.undoPath {
             appendTimeline("── 快照留在 \(undo)，7 天内可从收件箱回滚 ──", to: sid)
         }
@@ -1883,7 +1949,7 @@ final class SchedulerService: ObservableObject {
         // ── 账本写盘: **App 不写了**（P19.2 S11 翻面；2026-11-16 的「由 App 写」已退役）──
         //
         // 历史: S11 之前巡检轮没有写工具，让它自己写是做不到的事，所以内容进输出契约、
-        // 落盘归 App。S11 给了它一支笔（`patrolToolNames` + 账本围栏），于是这里只把
+        // 落盘归 App。S11 给了它一支笔（`write` 来自档位 + 账本围栏），于是这里只把
         // 回复里的「工作日志」段**有意忽略**。
         //
         // 为什么必须退役而不是留着: 两个写者 = 两份真源。模型这一轮刚写完的账本，
@@ -1900,89 +1966,54 @@ final class SchedulerService: ObservableObject {
             // 系统通知仍受**全局开关**管（`notifyWatchFinding` 里判）; 任务级 `notify.system`
             // 是它上面的一层：人可以在"全都收"的前提下，把某一条吵人的任务单独静音。
             if task.notify.system { store.notifyWatchFinding(f, taskName: task.name) }
-            deliverExternalSinks(f, task: task, logId: sid)
+            deliverFinding(f, task: task, logId: sid)
         }
+        // ── 「## 待你决定」→ findings（P19.4）────────────────────────────────
+        // 为什么这一节必须落地成 findings: 无人值守下 fire 恒 `unattended` ⇒ 审批卡**根本不发**
+        // （`beginTurn` 里 `askApproval: false`），而巡检轮的围栏模式是 `deny` ⇒ 围栏外一律拒。
+        // 所以"重要操作等人确认 / 缺材料问人"这两件事在 fire 轮**没有任何出路** ——
+        // 而模型能表达它们的唯一地方就是账本这一节，账本却**没有触达**：人永远不会知道。
+        //
+        // 落成 `info` finding 之后，催（`WatchNagService.due`）、催的上限、系统通知、飞书私聊
+        // 全部自动接上，不必为"提问"再开一条外发通道（那会多一份会漂的频控规则）。
+        //
+        // ⚠️ **落库全部、外发只发第一条**。一次 fire 有五件在等人决定，就往飞书塞五条消息 ——
+        //    人的反应是把通道整个关掉。第一条已经足够让人知道"它有事问你"，剩下的在 App 里
+        //    逐条看；而没被回答的那些，催会按冷却和上限一轮一轮盯着（这才是它们的常态）。
+        let ledgerText = readHandoff(for: task)?.content ?? ""
+        let waiting = WatchFindingService.waitingFindings(
+            ledger: AssistantLedger.parse(ledgerText),
+            taskId: task.id, sessionId: sid, existing: existing, now: Date())
+        for (i, f) in waiting.added.enumerated() {
+            try? p.upsertFinding(f)
+            guard i == 0 else { continue }
+            if task.notify.system { store.notifyWatchFinding(f, taskName: task.name) }
+            deliverFinding(f, task: task, logId: sid)
+        }
+        if !waiting.summary.isEmpty { appendTimeline(waiting.summary, to: sid) }
         store.reloadFindings()
     }
 
-    // MARK: - P19 S7 触达：邮件 / 飞书（独立 sink，只发不收）
+    // MARK: - P19 S7 结论推送：只剩飞书私聊（只发不收）
 
-    /// webhook 投递缝。冒烟注入"只记不发"的实现 —— 真的发一条出去是**别人看得见**的动作。
-    var webhookSender: WebhookSender = URLSessionWebhookSender()
-    /// 邮件 transport 缝（P19 S7）。生产 = `CurlMailTransport`；冒烟注入 `MockMailTransport`
-    /// —— 一条测试都不许往真实 SMTP 投信。
-    var mailTransportFactory: (MailboxAccount, String?) -> any MailTransport = { account, auth in
-        CurlMailTransport(account: account, auth: auth)
-    }
-    /// webhook URL 的钥匙串缝（冒烟注入内存实现，否则读真钥匙串会弹授权框 + 挂死）。
-    var notifySecrets: NotifySecretStore = KeychainNotifySecretStore.current
-
-    /// 外发 sink 分发。**与系统通知共用同一个闸门**（`plan.shouldNotify`）——
-    /// 三个通道各自再判一次频控就有三份会漂的规则，而"同指纹不重发 / 同任务 30 分钟"
-    /// 说的本来就是"打扰人的预算"，与走哪个通道无关。
+    /// 把一条结论推到**助理绑定的那个机器人的私聊**。
     ///
-    /// internal — 冒烟直访：验收 ⑫「库与日志中不出现完整 URL」要打在**真路径**上。
-    func deliverExternalSinks(_ f: AgentFinding, task: ScheduledTask, logId: UUID) {
-        let opts = task.notify
+    /// 2026-11-18 晚（boss）: 编辑器里的「触达」卡整张删了 —— 系统通知由全局开关管、
+    /// 飞书由「入口」绑没绑机器人决定、日预算挪进了模型卡。**邮件外发通道一并删除**：
+    /// 它唯一的配置入口就是那张卡，卡没了还留着投递路径 = "我看不见它，但它还在发信"。
+    /// （底层 `MailTransport` / `CurlMailTransport` 保留 —— 设置页的"测试连接"用它。）
+    ///
+    /// ⚠️ **推不出去也要写进时间线**："没收到"和"没发"必须长得不一样。
+    /// ⚠️ 只在**助理**档走这一句：入口（机器人绑定）是助理才有的东西。不加这个守卫的话，
+    ///    每条 Cron 任务每次跑完都会落一行「没绑机器人」—— 真话，但是噪音。
+    ///
+    /// internal — 冒烟直访：判据要打在**真路径**上。
+    func deliverFinding(_ f: AgentFinding, task: ScheduledTask, logId: UUID) {
+        guard let store, task.kind == .assistant else { return }
         let payload = WatchNotifyService.payload(finding: f, taskName: task.name)
-        if let to = opts.emailAddress {
-            Task { @MainActor [weak self] in
-                guard let self else { return }
-                let outcome = await self.sendEmail(payload, to: to)
-                self.appendTimeline("── 触达 · 邮件: \(outcome.text) ──", to: logId)
-            }
-        }
-        if opts.webhook {
-            Task { @MainActor [weak self] in
-                guard let self else { return }
-                let outcome = await self.sendWebhook(payload, taskId: task.id)
-                self.appendTimeline("── 触达 · 飞书: \(outcome.text) ──", to: logId)
-            }
-        }
-    }
-
-    /// 邮件 sink。**凭据只从 Keychain 取**（`store.mailboxAuth` 背后是
-    /// `MailboxCredentialStore`；库里只有连接参数）。
-    /// internal — 冒烟直访（同上）。
-    func sendEmail(_ p: NotifyPayload, to recipient: String) async -> NotifyOutcome {
-        guard let store else { return .failed("本地状态不可用") }
-        guard let account = store.firstSendableMailboxAccount() else {
-            return .failed("没有可发的邮箱账号（设置 → 集成 → 邮箱账号: 要有 SMTP 主机与授权码）")
-        }
-        let auth = store.mailboxAuth(account.id)
-        let transport = mailTransportFactory(account, auth)
-        do {
-            try await transport.send(WatchNotifyService.mail(p, to: recipient, from: account.address))
-            return .sent("已发给 \(recipient)")
-        } catch let e as MailTransportError {
-            // `MailTransportError.label` 已经把 curl 的 stderr 洗过（`secrets:` 那一层），
-            // 不会把授权码带进日志。
-            return .failed(e.label)
-        } catch {
-            return .failed("\(error)")
-        }
-    }
-
-    /// 飞书 sink。⚠️ **这条路径上的任何一句话都不许含 URL** —— 见 `WatchNotifyService.redact`。
-    /// internal — 冒烟直访（同上）。
-    func sendWebhook(_ p: NotifyPayload, taskId: UUID) async -> NotifyOutcome {
-        guard let raw = notifySecrets.webhookURL(taskId: taskId), !raw.isEmpty else {
-            return .failed("没配 webhook 地址（或钥匙串里那条没了 —— 重新填一次）")
-        }
-        guard let url = URL(string: raw), url.scheme == "https" else {
-            return .failed("webhook 地址不是合法的 https URL: \(WatchNotifyService.redact(raw))")
-        }
-        guard let body = WatchNotifyService.feishuBody(p) else { return .failed("载荷编码失败") }
-        do {
-            let r = try await webhookSender.post(url, json: body)
-            if let err = WatchNotifyService.feishuError(r.body) { return .failed(err) }
-            guard (200..<300).contains(r.status) else {
-                return .failed("HTTP \(r.status)")
-            }
-            return .sent("已发送")
-        } catch {
-            return .failed("发送失败: \(error.localizedDescription)")
-        }
+        // 同步（`link.send` 只是往桥的 stdin 写一行，没有网络等待）。
+        let outcome = store.remote.pushFinding(payload, taskId: task.id)
+        appendTimeline("── 触达 · 飞书私聊: \(outcome.text) ──", to: logId)
     }
 
     // MARK: - P19 S7 日预算

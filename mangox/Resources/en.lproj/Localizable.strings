@@ -7,7 +7,7 @@
    **本文件由 scripts/l10n/gen_strings.py --write 生成, 别手改** ——
    译文改 scripts/l10n/en_values.py 的 VALUES, 再跑 --write。
 
-   条数: 1074
+   条数: 1083
 */
 
 " (值:\"%@\")" = " (value: %@)";
@@ -44,7 +44,6 @@
 "%@ 得按编号来 —— 它要知道动的是哪一格。" = "%@ has to go by row number - it needs to know which row it is moving.";
 "%@ 拷贝失败: %@" = "Failed to copy %@: %@";
 "%@ 落在**别的 App** 的窗口上(不是「%@」) ⇒ 没点。" = "%@ lands on **another app**'s window (not \"%@\") ⇒ nothing was tapped.";
-"%@\n\n任务：%@\n处理：打开 MangoX → 定时任务 → 待处理\n\n—— 正文与证据留在 App 内，不经邮件外发。" = "%@\n\nTask: %@\nHandle: open MangoX → Scheduled → Pending\n\n— The body and evidence stay inside the app and are never sent by email.";
 "%lld 个" = "%lld";
 "%lld 个人格文件 frontmatter 破损, 未注入且已禁止新建 key: %@" = "%lld persona files have broken frontmatter — not injected, and creating keys is blocked: %@";
 "%lld 个人格文件是「按需」的, 模型不知道它们存在: %@" = "%lld persona files are “on demand” — the model does not know they exist: %@";
@@ -115,6 +114,7 @@
 "SMTP 主机" = "SMTP host";
 "UID %lld 未取到邮件正文" = "No message body returned for UID %lld";
 "agent 每改一个文件, 这里就会多一行" = "Every file the agent touches adds a row here";
+"app_id 要填 —— 它在飞书自建应用的「凭证与基础信息」里" = "app_id is required — it lives in the Feishu app's Credentials & Basic Info page";
 "base URL 无效" = "Invalid base URL";
 "cron 无效" = "Invalid cron expression";
 "curl 退出码 %d" = "curl exit code %d";
@@ -183,8 +183,8 @@
 "「%@」附近没有可写的滚动条(它自己和上面几层都没有) ⇒ 滚不动。" = "There is no writable scroll bar around %@ (not on it, nor a few levels above it) ⇒ it cannot be scrolled.";
 "「按坐标点击」这一档关着 ⇒ 没点。" = "\"Click by position\" is off ⇒ nothing was tapped.";
 "「模拟键盘输入」这一档关着 ⇒ 没写。" = "\"Keyboard input\" is off ⇒ nothing was typed.";
-"【MangoX】%@\n打开 App 的收件箱处理 —— 正文与证据留在本地。" = "[MangoX] %@\nOpen the inbox in the app to handle it — the body and evidence stay local.";
 "一" = "Mon";
+"一个机器人也连不了（没填 app_id 或没填 app_secret）" = "No bot can connect (app_id or app_secret missing)";
 "三" = "Wed";
 "上一个回合还在跑，等它结束再发。" = "The previous turn is still running — wait for it to finish before sending another.";
 "上一场 dream 还在跑，等它结束再试" = "Another dream is still running — try again when it finishes";
@@ -199,6 +199,7 @@
 "上下文自动压缩（溢出恢复）· %lld → %lld tokens" = "Context auto-compacted (overflow recovery) · %lld → %lld tokens";
 "上次 %@" = "%@ last time";
 "上次没读完(已置灰):" = "Not fully read last time (greyed out):";
+"上次说话 %@" = "Last message %@";
 "上次读出来 0 行 —— 这个应用没有可寻址的东西, 勾了也动不了" = "Last read came back with 0 rows - this app has nothing addressable, so ticking Act would do nothing";
 "下单" = "Place order";
 "下载落盘/上传文件" = "downloading or uploading files";
@@ -207,15 +208,14 @@
 "不可截图" = "No image";
 "不可操作" = "Read-only";
 "不弹卡, 全部放行 — 定时任务用 (无人点击, 弹卡即死锁)。" = "No prompts, everything allowed — for scheduled tasks (nobody is there to click; a prompt would deadlock).";
+"不归它" = "Unassign";
 "不支持的类型" = "Unsupported type";
 "不是能写字的地方 ⇒ 我不往里写。" = " is not a field you can type into ⇒ I will not write there.";
 "不用单独给。辅助功能一给，键盘监听就有了 —— 所以系统设置那一页里看不到 MangoX，那是正常的，不是漏装。" = "Nothing to grant separately. Accessibility already covers keyboard listening, so MangoX will not show up on that page of System Settings — that is normal, not a missing install.";
-"不绑定" = "Not bound";
 "不采纳该候选, 直接删除" = "Dismiss this candidate and delete it";
 "不限" = "No limit";
 "丢弃" = "Discard";
 "丢弃本地修改, 重读磁盘文件" = "Discard local changes and reread the file from disk";
-"两个都要填 —— 只填一个换不到 token" = "Both are required — one of them alone cannot fetch a token";
 "两个都说, 我不知道该按哪个。" = "Both were given; I do not know which one you mean.";
 "个任务" = " tasks";
 "中" = "Medium";
@@ -245,6 +245,7 @@
 "仍然覆盖" = "Overwrite anyway";
 "从待处理里移除（不是解决 —— 结论本身留着）" = "Remove from the pending list (this does not resolve it — the finding stays)";
 "从托管区删除" = "Remove from managed area";
+"从旧版读取" = "Import from old version";
 "付款" = "Payment";
 "代价：写错地方撤不回；写完之后按一次回车，在不少应用里就等于「发送」—— 那一下也不会再问你。" = "Cost: text that lands in the wrong place cannot be taken back, and pressing Return afterwards means \"send\" in many apps — that step will not ask you again.";
 "代价：可能点到别的地方，而且没有撤销；点的那一下你的光标会动。" = "Cost: it can land somewhere else and there is no undo; the cursor moves for that click.";
@@ -266,13 +267,13 @@
 "你是谁" = "Who You Are";
 "你此刻正按着鼠标键 ⇒ 没写。松开之后再说一次。" = "You are holding a mouse button right now ⇒ nothing was typed. Ask again after you let go.";
 "你此刻正按着鼠标键(可能在拖拽) ⇒ 没点。松开之后再说一次。" = "You are holding a mouse button right now (dragging, most likely) ⇒ nothing was tapped. Ask again after you let go.";
+"例：工作号" = "e.g. Work account";
 "侧问 · %@" = "Side · %@";
 "侧问创建失败：快照回读未完成 (回合未成功)" = "Could not start the side chat: the snapshot could not be read back (the turn did not succeed).";
 "侧问快照创建失败：无法读取源会话记忆文件" = "Could not create the side-chat snapshot: the source session's memory file is unreadable.";
 "保存" = "Save";
 "保存 (⌘S); 标题可留空, 自动取正文首行" = "Save (⌘S); leave the title empty to use the first line of the body";
 "保存为记忆" = "Save as memory";
-"保存凭据" = "Save credentials";
 "保存并启用" = "Save and enable";
 "保存日志" = "Save log";
 "保存更改" = "Save changes";
@@ -291,14 +292,13 @@
 "先点进输入框(或者用 computer_act 的 focus)再写。" = "Click into a text field first (or use computer_act with focus), then write.";
 "先给它一条读法：勾「可读」或「视觉」—— 没有编号就没有能点的东西" = "Give it a way to read first: tick \"Read\" or \"Vision\" - without row numbers there is nothing to act on";
 "免手册（界面极简，量一次就穷尽）：%@" = "No manual needed (tiny UI, one measurement covers it): %@";
-"入口 · 飞书单聊" = "Inbound · Feishu DM";
+"入口 · 飞书" = "Inbound · Feishu";
 "全局" = "Global";
 "全局唤起捕获输入条: 输入后回车即以无人值守模式开跑 (关审批 + Minimal 档); Esc 或点击外部关闭" = "Global hotkey opens the capture bar: type and press Enter to run unattended (approval off, Minimal mode); Esc or clicking outside closes it.";
 "全局开关: 开 = 常规与完整模式的会话都能读你勾过的应用的界面, 不是只对当前会话生效 (极简与 codemode 档看不到这些工具)。再给某个 App 勾上「可操作」它才能按按钮/填输入框 —— 勾上就是允许, 不再逐次问你; 没勾的一律只读。再给某个 App 勾上「视觉」, 它才允许看这个应用的屏幕 —— 文字读得出来时按文字走(图只补颜色和图标), 读不出来时按图数编号; 默认关, 因为图里是像素, 会绕过输入框的遮蔽。让助手打开一个 App 只需要「可读」或「视觉」(那等于替你点一下图标)" = "Global switch: on means sessions in the standard and full modes can read the apps you ticked, not just the current conversation (the minimal and codemode modes do not see these tools). Ticking \"Act\" for an app is what lets it press buttons and fill fields - a tick is permission, it will not ask again; anything unticked is read-only. Ticking \"Vision\" is what allows me to look at that app's screen - when the text read works I go by the text (the picture only fills in colours and icons), and when it comes back empty I number things from the picture; off by default because a picture is pixels and pixels bypass the mask on input fields. Opening an app only needs \"Read\" or \"Vision\" (it is the same as clicking its icon for you)";
 "全文" = "Full text";
 "全部丢弃" = "Discard all";
 "全部采纳" = "Accept all";
-"全都关着 —— 结论只落在收件箱" = "All off — findings only land in the inbox";
 "六" = "Sat";
 "关" = "Off";
 "关闭" = "Close";
@@ -318,6 +318,7 @@
 "写文件 (重定向)" = "writes a file (redirection)";
 "写点值得记住的东西…" = "Write down something worth remembering…";
 "写盘失败 — 检查目录权限与磁盘空间" = "Write failed — check directory permissions and free space";
+"凭据只进钥匙串，不进库、不写日志。填完保存后桥会按新清单整条重起（几秒钟）。" = "Credentials go to the keychain only — never to the database or the logs. Saving restarts the bridge with the new list (a few seconds).";
 "出厂指令 · 随版本更新；本任务能改的是档期、开关与执行配置" = "Factory instruction · ships with the app version; what you can change for this task is its schedule, toggle and run configuration";
 "出图失败" = "Could not create the image";
 "分" = "Min";
@@ -351,7 +352,6 @@
 "删除项目「%@」？" = "Delete the project “%@”?";
 "删除项目及其全部 AI 记忆文件" = "Delete the project and all its AI memory files";
 "到点投递给 Agent 的 prompt…" = "The prompt delivered to the agent when the time comes…";
-"到点要达成的目标（不是动作）——例：保证 CI 是绿的；红了就查清原因给我方案…" = "The goal to reach when due (not the actions) — e.g. keep CI green; if it goes red, find the cause and give me a plan…";
 "刷新" = "Refresh";
 "刷新中…" = "Refreshing…";
 "刷新工作区" = "Refresh workspace";
@@ -364,9 +364,10 @@
 "助理" = "Assistant";
 "助理 · %lld 个来源" = "Assistant · %lld sources";
 "助理「%@」连同它的工作会话与账本文件一起删除；巡检停止，账本无法恢复。" = "Assistant “%@” will be deleted together with its working session and ledger file. Its patrols stop and the ledger cannot be restored.";
+"助理关着 —— 打开助理它才会连" = "The assistant is paused — turn it on and this bot connects.";
 "助理巡检住在 App 进程里, 不开 App 就不会巡检。开启后 macOS 可能要求你在「登录项」里批准一次" = "Assistant checks run inside the app process, so nothing runs while it is closed. macOS may ask you to approve it once in Login Items";
+"助理是关着的 —— 打开它才会推" = "The assistant is paused — turn it on and findings will be pushed.";
 "助理结论的邮件通知借它发出。授权码存钥匙串, 不落数据库; 第一个能发的账号就是发件人。" = "Used to send email notifications for assistant findings. The auth code lives in the keychain, not the database; the first sendable account is the sender.";
-"助理至少要有项目这一条来源；外部来源（邮件）本版未接入 —— 它的只读采集要等「不置已读」验证通过。" = "An assistant needs at least the project source. External sources (mail) are not wired up yet — read-only collection waits for a proven \"never marks as read\" path.";
 "助理（目标式）" = "Assistant (goal-based)";
 "助理：到点只读巡检，产出结论等你批准（`prompt` 写目标，不是动作）" = "Assistant: read-only check when due, conclusions wait for your approval (`prompt` states the goal, not the actions)";
 "单条消息最多 %lld 张图片, 超出请拆条发送" = "Up to %lld images per message — split into several messages if you need more";
@@ -380,7 +381,6 @@
 "去审核" = "Review";
 "去结算" = "Checkout";
 "去调 priority, 或把它改成「需要时才查」" = "Raise its priority, or switch it to “On demand”";
-"发件: %@" = "From: %@";
 "发件人与登录用户名都是它" = "Used as both the sender and the login name";
 "发件服务器 %@" = "Outgoing server %@";
 "发件账号" = "Sender";
@@ -391,6 +391,7 @@
 "变更史 · %lld 条" = "History · %lld";
 "口令 / 系统设置类应用: 一张都不拍 —— 像素会绕过输入框的遮蔽" = "Password / system-settings apps: never captured - pixels would bypass the mask on input fields";
 "口令 / 系统设置类应用: 只读, 永远不给操作权限" = "Password managers and System Settings stay read-only — acting is never allowed";
+"另一个助理" = "another assistant";
 "只保证 MangoX 自己不被休眠打断。任务实际是在后台进程里跑的，系统会不会让它变慢，这条设置影响不到。" = "This only keeps MangoX itself from being interrupted by sleep. Tasks actually run in the background, and this setting cannot affect whether the system slows them down.";
 "只出提案，不改任何文件" = "Proposals only, no files touched";
 "只列真机量过的应用：内置的几个恒列，第三方的（如 Chrome）装了才会出现。大部分在手册里写了怎么读、哪些事做不到；别的应用界面差异太大，量不准，先不开。" = "Only apps measured on a real machine: the built-in ones are always listed, third-party ones (such as Chrome) appear only when installed. Most have a manual saying how to read them and what they cannot do; other apps vary too much to measure reliably, so they stay closed for now.";
@@ -412,6 +413,7 @@
 "右边是空的 —— 采纳后这篇进系统废纸篓, 还能在那里捞回来。" = "The right side is empty — accepting moves this note to the system Trash, where you can still recover it.";
 "合盖休眠期间仍然不跑; 唤醒后按「漏跑」清单补最近一次（列表在定时任务页顶部）。" = "Nothing runs while the lid is closed; after waking it catches up on the most recent missed run (the list sits at the top of the Scheduled page).";
 "同时在跑的回合已达上限（%lld），这句没跑。" = "The concurrent-turn limit (%lld) is already reached — this message was not run.";
+"名字" = "Name";
 "后台点不动(实测前后两帧一模一样), 而且真点下去会把它拽到最前面。" = "a click in the background does not land (measured: the two frames are byte-identical), and a real one would drag it to the front.";
 "向上" = "Up";
 "向下" = "Down";
@@ -420,11 +422,10 @@
 "含端口, 如 smtp.example.com:465" = "Include the port, e.g. smtp.example.com:465";
 "启停 (重启引擎生效)" = "Enable / disable (restart the engine to apply)";
 "启用" = "Enabled";
-"启用飞书对话" = "Enable Feishu chat";
 "命中统计将在启用后生效" = "Hit stats take effect once enabled";
-"响应不是 JSON（机器人地址对吗？）" = "The response is not JSON (is the bot URL correct?)";
 "响应格式不认识" = "Unrecognized response format";
 "四" = "Thu";
+"回「同意」我就按这份方案去做（起手做快照，跑完能回滚）；回「先别动」就搁置。" = "Reply 「同意」 and I will run this plan (snapshot first, rollback available); reply 「先别动」 to shelve it.";
 "回到最新" = "Back to latest";
 "回合完成 · 耗时 %02d:%02d" = "Turn finished · took %02d:%02d";
 "回合完成 · 耗时 %02d:%02d\n%@" = "Turn finished · took %02d:%02d\n%@";
@@ -443,9 +444,7 @@
 "在跟踪" = "Tracking";
 "在这里输入该做什么…" = "Type what to do…";
 "在追" = "In progress";
-"在飞书的单聊里直接跟助理说话。用得着自建应用的 app_id / app_secret, 两个都存钥匙串。MangoX 关掉通道就断 —— 它不是服务端。" = "Talk to your assistant right inside a Feishu direct message. It needs the app_id / app_secret of a self-built app; both are kept in the keychain. The channel dies with MangoX — it is not a server.";
-"在飞书里给机器人发一句话，那个单聊就会出现在这里。它说的话会直接进这个助理的会话，回复原路发回飞书。群聊不接（S15 只做单聊）。" = "Send the bot one message in Feishu and that DM shows up here. What you say goes straight into this assistant’s session, and the reply travels back the same way. Group chats are not supported (DMs only).";
-"地址没能写进钥匙串 —— 飞书这一路会发不出去" = "The URL could not be written to the keychain — Feishu delivery will fail";
+"在飞书的单聊里直接跟助理说话。每个机器人是一个飞书自建应用，凭据存钥匙串；一个机器人只归一个助理。机器人没有自己的开关 —— 它连不连，跟那条助理的开关走（助理关着它就不连，MangoX 关掉也断）。" = "Talk to assistants right inside a Feishu direct message. Each bot is a Feishu custom app whose credentials live in the keychain, and one bot belongs to exactly one assistant. A bot has no switch of its own — whether it connects follows its assistant's switch (a paused assistant means no connection, and quitting MangoX disconnects it too).";
 "坐标只能配 press(在那个点上按一下) ⇒ 没动。" = "A point only goes with press (one click at that spot) - nothing was done.";
 "坐标是全局屏幕坐标, 左上原点, 和快照里每行末尾那个 (x,y) 同一套。" = "Coordinates are global screen coordinates with the origin at the top left - the same system as the (x,y) at the end of every outline row.";
 "坐标点击(还没做) —— 那就如实告诉用户。" = "coordinate clicks, which are not implemented yet — tell the user that plainly.";
@@ -457,9 +456,9 @@
 "复制" = "Copy";
 "复制全文" = "Copy all";
 "复制全部输出" = "Copy all output";
-"外发只带标题与任务名，正文与证据留在 App 内。飞书地址存钥匙串，库里只有「配过」。" = "Outgoing messages carry only the title and task name; the body and evidence stay inside the app. The Feishu URL lives in the keychain — the database only records that one was set.";
 "外观" = "Appearance";
 "外部来源" = "External source";
+"外部来源（邮件）本版未接入 —— 它的只读采集要等「不置已读」验证通过。" = "External sources (mail) are not wired up yet — read-only collection waits for a proven \"never marks as read\" path.";
 "外链图片不在应用内加载" = "Remote images are not loaded in the app";
 "大小" = "Size";
 "太长 · 改用复制" = "Too long · copy text";
@@ -508,10 +507,9 @@
 "工具相位落库" = "Persist tool phases";
 "左边是空的 —— 这是一篇**还不存在**的笔记(增)。" = "The left side is empty — this note does not exist yet (new).";
 "已从快照还原" = "restored from snapshot";
-"已保存" = "Saved";
+"已从旧版搬过来 —— 桥会按新凭据重连" = "Imported from the old version — the bridge will reconnect with the new credentials";
 "已保存 (重新输入可覆盖)" = "Saved (type a new key to replace)";
-"已保存 —— 要换就整条重填" = "Saved — to change it, fill in the whole thing again";
-"已保存（不回显）—— 要换就整条重填" = "Saved (not shown) — paste a new one to replace it";
+"已保存 —— 留空就不改" = "Saved — leave blank to keep it";
 "已停用 —— 索引里不出现这个库" = "Disabled — this base does not appear in the index";
 "已允许" = "Allowed";
 "已允许（始终）" = "Allowed (always)";
@@ -526,18 +524,21 @@
 "已完成 · 可收尾" = "Done · ready to wrap up";
 "已完成（归档）" = "Done (archived)";
 "已开始 dream：%@" = "Dream started: %@";
+"已归：%@" = "Owned by %@";
 "已执行" = "ran";
 "已拒绝" = "Denied";
 "已挂载的知识库 %lld 个没进索引: %@" = "%lld mounted knowledge bases did not make it into the index: %@";
+"已推给「%@」的私聊" = "Pushed into the direct message of 「%@」";
+"已搁置（那条结论本身还在 App 里）。" = "Shelved (the finding itself stays in the app).";
 "已暂停" = "Paused";
 "已更新: %lld 家 / %lld 条" = "Updated: %lld providers / %lld models";
 "已注册，但系统要求你批准 —— 系统设置 → 通用 → 登录项 → 允许 MangoX" = "Registered, but macOS needs your approval — System Settings → General → Login Items → allow MangoX";
 "已清空 %lld 条提案" = "Cleared %lld proposals";
 "已经有同名笔记了" = "A note with that name already exists";
-"已绑：%@" = "Bound to %@";
 "已跑 %lld 次" = "Ran %lld times";
 "已采纳 %lld 条" = "Accepted %lld";
 "已采纳 %lld 条，%lld 条没成，仍留在队列里" = "Accepted %lld, %lld failed and stayed in the queue";
+"已采纳，开始执行（起手做快照，跑完能回滚）。结果我发这里。" = "Approved — starting now (snapshot first, rollback available). I will report back here.";
 "已随登录启动 —— 合盖休眠期间仍然不跑，唤醒后按漏跑清单补最近一次" = "Launches at login — still does not run while the lid is closed; after waking it catches up on the most recent missed run";
 "常规与完整模式的会话都能用 (不是只对当前会话); 改完勾选, 下一次对话才生效" = "Sessions in Standard or Full mode can use this (not just the current one). Ticked changes take effect on the next turn.";
 "常规模式" = "Standard mode";
@@ -559,8 +560,9 @@
 "引擎返回了空回合 · 引擎没有返回任何内容, 请检查模型与凭据" = "The engine returned an empty turn — nothing came back; check the model and credentials";
 "引擎返回了空回合 · 模型 %@ 可能不存在或已下线" = "The engine returned an empty turn · model %@ may not exist or is no longer available";
 "引用工作区文件" = "Reference a workspace file";
-"弹系统通知；受「设置 → 通用 → 回合完成通知」总开关约束" = "Show a system notification. The global \"turn finished\" switch in Settings → General still applies";
+"归它" = "Assign";
 "归属" = "Goes to";
+"归：%@" = "Owner: %@";
 "当前" = "Current";
 "当前会话 %lld 轮" = "Current session: %lld turns";
 "当前会话未绑定项目目录" = "This session has no project directory";
@@ -622,7 +624,6 @@
 "捕获消息落库" = "Persist captured messages";
 "捕获追加落库" = "Persist appended captures";
 "换" = "Swap";
-"换一个" = "Replace";
 "换一个标题" = "pick another title";
 "换行" = "Wrap";
 "授权码" = "Auth code";
@@ -656,6 +657,7 @@
 "改动" = "Changes";
 "改动未生效 · 重启引擎" = "Changes not live · restart the engine";
 "改完要点保存 —— 自动保存会把写了一半的句子也落盘, 还会跟你在外部编辑器里的改动抢。" = "Save explicitly — autosave would persist half-written sentences and race with your edits in an external editor.";
+"改归本助理" = "Move to this assistant";
 "教训" = "Lesson";
 "数据" = "Data";
 "数据库拷贝失败: %@" = "Copying the database failed: %@";
@@ -672,6 +674,7 @@
 "新会话" = "New session";
 "新会话-%@" = "New session-%@";
 "新增:" = "Added:";
+"新增机器人" = "Add bot";
 "新对话" = "New chat";
 "新建会话" = "New session";
 "新建条目" = "New entry";
@@ -693,6 +696,8 @@
 "既不在索引里、也不是因预算缺席 — 这是组装 bug, 请反馈" = "Neither in the index nor skipped for budget — this is an assembly bug; please report it";
 "日" = "Sun";
 "日预算" = "Daily budget";
+"旧版" = "Old version";
+"旧版里也没读到凭据 —— 那就手填一次 app_id / app_secret" = "Nothing found in the old version either — enter app_id / app_secret once by hand";
 "旧类型 · 已停用（不再值守）" = "Legacy type · disabled (no longer watching)";
 "旧类型已停用，不能保存" = "Legacy type is disabled and cannot be saved";
 "时" = "Hour";
@@ -712,9 +717,9 @@
 "最多 %lld 张" = "Up to %lld";
 "最小化为任务台" = "Minimize to the task bar";
 "最近 %@" = "Last %@";
-"最近一条" = "last at";
 "最近执行" = "Recently run";
 "最近提交" = "Recent commits";
+"最近来找过机器人的会话" = "Recent sessions that reached a bot";
 "最高" = "Max";
 "有些 App(尤其网页内容)不把滚动条交给系统 —— 那就趁早告诉用户这一页我一次读不完," = "Some apps — web content in particular — never hand a scroll bar to the system, so tell the user early that this page cannot be read in one go,";
 "有些应用写不进字（微信没有可用的输入框控件）。开着：我能把一段文字敲进当前的输入框。" = "Some apps cannot be typed into at all (WeChat exposes no usable text field). On: I can type a piece of text into the focused field.";
@@ -737,7 +742,6 @@
 "未知失败" = "Unknown failure";
 "未知错误" = "Unknown error";
 "未知项目" = "Unknown project";
-"未绑定" = "Not bound";
 "未选择备份目录" = "No backup directory chosen";
 "未配置 Key" = "No key set";
 "未配置 —— 联网搜索不可用" = "Not configured - web search unavailable";
@@ -750,7 +754,7 @@
 "本次没有改动文件" = "No files changed this turn";
 "本次注入 (只读)" = "This turn's injection (read-only)";
 "本轮" = "This turn";
-"来找过机器人的单聊" = "Direct messages that reached the bot";
+"机器人清单组装失败 —— 这是程序内部错误" = "Failed to assemble the bot list — internal error";
 "来源" = "Origin";
 "来源 · %lld 条" = "Sources · %lld";
 "来自「%@」的快照 · 含 %lld 轮上下文" = "Snapshot from “%@” · %lld turns of context";
@@ -787,11 +791,13 @@
 "每轮都带上" = "Every turn";
 "每轮都带上 %lld 条 · %lld 字 / %lld 字" = "%lld every turn · %lld / %lld chars";
 "永久删除" = "Erase";
+"没执行起来：%@" = "Couldn't start: %@";
 "没有匹配的会话或项目" = "No matching chats or projects";
 "没有可勾的应用" = "No apps to select";
-"没有可发的账号 —— 设置 → 集成 → 邮箱账号" = "No sendable account — Settings → Integrations → Mailbox accounts";
-"没绑 —— 只能在 MangoX 里用它" = "Not bound — this assistant only works inside MangoX";
+"没有机器人（设置 → 集成 → 飞书机器人）" = "No bots yet (Settings → Integrations → Feishu bots)";
+"没绑机器人 —— 在助理的「入口 · 飞书」里选一个" = "No bot is bound — pick one under Inbound · Feishu in the assistant.";
 "没给要写的字 ⇒ 没写。" = "No text to write ⇒ nothing was typed.";
+"没选 —— 只能在 MangoX 里用它" = "Nothing selected — usable only inside MangoX";
 "注入块在 spawn 期生效; 点此重启引擎立刻生效" = "The injection block takes effect at spawn; restart the engine to apply it now";
 "注入块已是最新" = "Injected block is up to date";
 "注入量" = "PAYLOAD";
@@ -816,11 +822,13 @@
 "漏 %lld 次" = "%lld missed";
 "漏跑 %lld 个任务" = "%lld tasks missed";
 "点「常驻」区头的文件夹按钮: 目录不在时会就地建出来; 若那个位置被同名文件占着, 请先移走它" = "Click the folder button in the “Always on” header: it creates the folder if it is missing; if a file of the same name occupies that spot, move it away first";
+"点一行就选中它（选中后要点右上角「保存」才生效）。选中的机器人收到的话会直接进这个助理的会话，回复原路发回飞书。群聊不接（只做单聊）。机器人没有自己的开关 —— 助理关着它就**不连**，飞书那边输入框会变灰。" = "Click a row to select it (it only takes effect after Save). Messages sent to the selected bot go straight into this assistant's session, and the reply travels back to Feishu. Group chats are ignored (direct messages only). Bots have no switch of their own — while the assistant is paused the bot does not connect, and the Feishu input box greys out.";
 "点击复制 hash: %@" = "Click to copy hash: %@";
 "点击查看大图" = "Click to view full size";
 "熄屏后保持唤醒" = "Stay awake";
 "熄屏后保持唤醒 = 屏幕可以熄灭，电脑不睡；保持屏幕常亮 = 连屏幕也不熄灭（更费电）。" = "Stay awake = the screen may turn off but the computer keeps running; Keep screen on = the screen stays lit as well (uses more power).";
 "现在" = "Now";
+"现在没有等你批的事。直接说话就是跟我聊。" = "Nothing is waiting for your approval. Just talk to me.";
 "生成中…" = "Generating…";
 "用户" = "User";
 "由此 Dream" = "Dream from here";
@@ -844,6 +852,7 @@
 "知识库索引整段未进本轮 prompt (体积超预算): %@" = "The knowledge-base index did not fit this turn (over budget): %@";
 "硬规" = "Rule";
 "确认" = "Confirm";
+"确认删除" = "Confirm delete";
 "确认支付" = "Confirm payment";
 "确认计划" = "Confirm plan";
 "确认购买" = "Confirm purchase";
@@ -859,23 +868,25 @@
 "笔记目录" = "Notes folder";
 "第 %lld 版" = "rev %lld";
 "第 %lld 轮" = "Turn %lld";
+"等你决定" = "needs your call";
 "等待" = "Waiting";
 "等待审批" = "Awaiting approval";
-"粘贴自定义机器人 webhook 地址" = "Paste the custom-bot webhook URL";
 "系统权限" = "System permissions";
-"系统通知" = "System notification";
 "索引宁缺勿残 — 残缺的索引会让你以为资料只有这些; 摘掉或停用一两个库即可恢复" = "A partial index is worse than none — it would read as “these are all the materials”. Unmount or disable a base or two to restore it";
 "索引预览" = "Index preview";
 "细节" = "Details";
-"绑定在「定时/助理」里选 —— 打开那个助理，入口那一栏挑这个单聊。飞书没有「列出我的单聊」的接口，所以这个列表只会出现在这儿跟你说过话的会话。" = "Binding happens in “Scheduled / Assistant” — open that assistant and pick this chat under its inbound section. Feishu has no “list my direct messages” API, so this list only ever holds chats that have talked to the bot.";
 "给 MangoX 发消息…" = "Message MangoX…";
 "缓存" = "Cache";
 "编号只对刚才那一次读有效, 重新读一次。" = "Item numbers are only valid for the read that produced them — read again.";
 "编号和坐标只能给一个(给了 #%@ 又给了 %@) ⇒ 没动。" = "Give either a row number or a point, not both (#%@ and %@ were both given) - nothing was done.";
+"编辑" = "Edit";
 "编辑内容后采纳, 转为正式条目 (需重启引擎生效)" = "Edit and accept to turn it into a proper entry (restart the engine to apply)";
 "缺 IMAP 主机" = "IMAP host missing";
 "缺 SMTP 主机" = "SMTP host missing";
 "缺 SMTP 主机 —— 没有它发不了信（选了自定义就要手填）" = "Missing SMTP host — no mail can be sent without it (fill it in when using a custom provider)";
+"缺 app_id" = "Missing app_id";
+"缺 app_id（从 S15 的旧配置迁过来的）" = "Missing app_id (migrated from the old config)";
+"缺 app_secret" = "Missing app_secret";
 "缺少 Message-ID" = "Missing Message-ID";
 "缺授权码" = "Auth code missing";
 "网易 126 邮箱" = "NetEase 126 Mail";
@@ -913,7 +924,6 @@
 "要让它能动, 请在 设置 › 集成 › 电脑操作 里给它开「可操作」。" = "To let it act, tick Act for it under Settings › Integrations › Computer use.";
 "视觉" = "Vision";
 "解析失败: %@" = "Parsing failed: %@";
-"触达" = "Delivery";
 "计划提问" = "Plan question";
 "计划确认还没接上引擎 —— 目前只作展示" = "Plan confirmation is not wired up yet — this card is display only for now";
 "认下这批漏跑, 不再提示" = "Accept these misses and stop asking";
@@ -965,14 +975,19 @@
 "还有 %lld 个" = "%lld more";
 "还有 %lld 行 · 展开" = "%lld more lines · Expand";
 "还没勾选任何应用 ⇒ 所有会话都用不了" = "No app ticked yet ⇒ no session can use it";
-"还没填 app_id / app_secret" = "app_id / app_secret not filled in yet";
+"还没填 app_secret —— 它连不上，补上就自动连" = "No app_secret yet — it cannot connect; add one and it connects by itself";
+"还没归助理 —— 收到的话会回一句「先归给一个助理」" = "Not assigned to an assistant yet — incoming messages get 「assign me to an assistant first」";
+"还没归给助理 —— 归了才会连" = "Not assigned to an assistant yet — it connects once assigned.";
+"还没有人跟它说过话 —— 先在飞书里给它发一句，之后结论就推到这个私聊" = "Nobody has talked to it yet — send it one message in Feishu and findings will go to that direct message from then on.";
 "还没有列出验收项" = "No acceptance items yet";
 "还没有常驻内容\n点右上角 + 新建条目, 或用常驻区与笔记区的入口放入文件" = "Nothing always-on yet\nUse + in the top right to add an entry, or use the resident and notes section entries to put files in place";
 "还没有归档" = "Nothing archived yet";
 "还没有打开文件" = "No file open";
+"还没有机器人。飞书自建应用就是你跟助理说话的那个「账号」 —— 一个机器人只归一个助理。" = "No bots yet. A Feishu custom app is the account you talk to, and one bot belongs to exactly one assistant.";
 "还没有账本" = "No ledger yet";
 "这一场只有工具输出，没有可提炼的内容。" = "This session has only tool output — nothing to distill.";
 "这一场没有可提炼的正文（只有工具输出）" = "No text to distill here (tool output only)";
+"这一条只是问你 / 告诉你，没有可执行的方案 —— 没有「同意」这个动作。回「先别动」可以把它搁置。" = "This one only asks you something — there is no plan to run, so there is nothing to approve. Reply 「先别动」 to shelve it.";
 "这一格没有自定义动作, 想按它的话用 press。" = "This cell declares no custom actions; use press if you only meant to click it.";
 "这一格要提交, 请先看它支持哪个动作; 一个都不支持就如实告诉用户," = "To submit this field, look at which actions it actually offers; if it offers none, tell the user plainly,";
 "这一档用的是**真鼠标**, 我不能在人手上抢 —— 稍等一下再说一次。" = "This mode uses the real mouse, and I will not take it out of your hand — try again in a moment.";
@@ -986,9 +1001,8 @@
 "这个会话还没说过话，侧问会带一个空上下文。" = "This session has no messages yet — the side chat will start empty.";
 "这个助理现在是停用状态，先在 MangoX 里把它打开。" = "This assistant is currently disabled — turn it on in MangoX first.";
 "这个助理还没写出账本 —— 等它跑一轮，或在会话里让它记一笔，五节就会出现在这里。" = "This assistant hasn't written its ledger yet — after one patrol run, or after you ask it in the chat to note something down, the five sections will show up here.";
-"这个单聊还没绑定助理。在 MangoX 的助理设置里选上它，就能直接说话了。" = "This DM is not bound to an assistant yet. Pick it in the assistant settings inside MangoX and you can talk right away.";
-"这个域名不像飞书 —— 确认后再保存也行（自建中转可以）" = "This domain does not look like Feishu — you can still save it (self-hosted relays are fine)";
 "这个对话建立时就钉住了工具表，看不到后来新增的 %@。新建一个会话就能用。" = "This conversation pinned its tool list when it started, so it never sees %@ added later. Start a new conversation to pick them up.";
+"这个机器人还没归给助理。在 MangoX 里把它绑给一个助理，就能直接说话了。" = "This bot is not assigned to any assistant yet. Assign it to one in MangoX and you can talk right here.";
 "这个构建不能注册登录项 —— 打开 App 才会巡检" = "This build cannot register a login item — checks only run while the app is open";
 "这个构建没有应用标识，不能注册登录项" = "This build has no application identifier, so a login item cannot be registered";
 "这个目录里没有可读的文档" = "No readable documents in this directory";
@@ -997,9 +1011,11 @@
 "这份快照没记窗口位置 ⇒ 判不了 %@ 是对着哪个窗口的 ⇒ 没点。" = "This snapshot did not record the window frame ⇒ cannot tell which window %@ is against ⇒ nothing was tapped.";
 "这份快照里没有 #%@(一共 %@ 项) ⇒ 没动。" = "This snapshot has no #%@ (it has %@ items) ⇒ nothing was done.";
 "这句话会进每轮 prompt 的索引 —— agent 靠它判断要不要来查这个目录。" = "This sentence goes into the index of every prompt — the agent uses it to decide whether to look into this directory.";
+"这张表只是**诊断** —— 它证明连接真的通了、谁跟哪个机器人说过话。绑定不在这里做：去「定时/助理」里选一个机器人（一个助理只挂一个）。" = "This list is diagnostics only — it proves the connection really works and shows who talked to which bot. Assignment happens in Scheduled / Assistants, not here, and each assistant takes a single bot.";
 "这是助理「%@」的工作会话：删掉它，助理会忘记与你的对话（账本还在，下一轮巡检照常）；助理本身不受影响。" = "This is the working session of assistant “%@”. Deleting it makes the assistant forget your conversation (the ledger stays, and its next patrol runs as usual); the assistant itself is not affected.";
 "这是单独一次，不会移动每日 dream 的时间窗口。" = "One-off run — it will not shift the daily dream window.";
 "这是密码框 ⇒ 我不往里写任何东西。" = "This is a password field ⇒ I will not write anything into it.";
+"这条是问你 / 告诉你，不用批。回「先别动」可以把它搁置。" = "This one is a question / notice — nothing to approve. Reply 「先别动」 to shelve it.";
 "这条请求的缓存命中率 = 命中 token ÷ (输入 + 命中)" = "Cache hit rate for this call = cached ÷ (input + cached)";
 "这篇在你编辑期间被外部改过 — 你的改动没有写盘" = "This note was changed externally while you were editing — your changes were not written";
 "这篇已经不在了 — 可能在 App 外被删掉或改名了" = "This note is gone — it may have been deleted or renamed outside the app";
@@ -1028,9 +1044,8 @@
 "通用" = "General";
 "通道开着（App 关掉就断）" = "Channel is up (quits with the app)";
 "通道断了（%@），点「重连」" = "Channel dropped (%@) — hit “Reconnect”";
-"通道没开（设置 → 集成 → 飞书对话）" = "Channel is off (Settings → Integrations → Feishu chat)";
+"通道没连上（设置 → 集成 → 飞书机器人 里能看灯）" = "The channel is not connected (check the light under Settings → Integrations → Feishu bots).";
 "那一页里没有 MangoX？点左下角「+」手动添加，或者点「申请」让我自己登记进去。" = "No MangoX on that page? Use the \"+\" button at the bottom left to add it, or hit \"Request\" and I will register myself.";
-"邮件收件人（留空 = 不发）" = "Email recipient (blank = do not send)";
 "邮箱地址" = "Email address";
 "邮箱地址不像一个地址" = "That does not look like an email address";
 "邮箱账号" = "Mailbox accounts";
@@ -1067,20 +1082,14 @@
 "需要时才查 %lld 条 · 不占预算" = "%lld on demand · off budget";
 "非只读命令" = "non-read-only command";
 "项目" = "Project";
-"项目 · 只读查看" = "Project · read-only";
 "项目操作" = "Project actions";
 "预算 %@ 字" = "budget %@ chars";
 "预览" = "Preview";
 "预设" = "Preset";
 "额外写入你发送的原文与回复开头 80 字。发给他人前请先看一眼" = "Also write what you sent and the first 80 characters of the reply. Re-read it before sharing.";
-"飞书地址要以 https:// 开头" = "The Feishu URL must start with https://";
-"飞书对话" = "Feishu chat";
-"飞书开着, 但还没有地址 —— 粘贴一条自定义机器人的 webhook" = "Feishu is on but has no URL yet — paste a custom-bot webhook";
-"飞书拒绝（code %@）: %@" = "Feishu refused (code %@): %@";
 "飞书机器人" = "Feishu bot";
 "首次运行前为空; agent 运行后会把关键进展写在这里, 也可手动编辑干预任务方向…" = "Empty before the first run; the agent writes key progress here and you can edit it by hand to steer the task…";
 "高" = "High";
 "高级" = "Advanced";
-"（不是合法 URL）" = "(not a valid URL)";
 "（只有图片）" = "(images only)";
 "（这一轮只有一条提议，已进 MangoX 的收件箱）" = "(This turn only produced a proposal — it is in the MangoX inbox.)";

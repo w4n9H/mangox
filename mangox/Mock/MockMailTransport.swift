@@ -2,6 +2,10 @@
 //  MockMailTransport.swift
 //  P10.2a 冒烟: 脚本化收件箱 + 记录 send / 标记已读 / 移 Trash (不连真网)。
 //
+//  ⚠️ 2026-11-18 晚起**没有消费者**：「触达」卡删除时连带删了邮件外发通道与它的冒烟
+//     （`T-WATCHNOTIFY` ⑤ 整段）。留着是因为邮箱**来源**（`WatchSources` 的 mail）还在，
+//     而它一旦要写冒烟就需要这个替身 —— 重写一遍不如留着。真要清理，和 mail source 一起清。
+//
 
 import Foundation
 

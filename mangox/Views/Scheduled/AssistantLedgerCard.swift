@@ -1,12 +1,19 @@
 //
-//  AssistantLedgerSheet.swift
-//  P19.2 S13 —— 助理台账（读账本、渲染五节 + brief）。
+//  AssistantLedgerCard.swift
+//  P19.2 S13 —— 助理台账（读账本、渲染五节 + brief）。**内联卡，不是 sheet。**
 //
-//  为什么是一个**只读**的 sheet 而不是编辑器: 账本的写者是**模型**（S11 起它自己 write），
-//  两个写者 = 两份真源。人要看的是"目标到哪了、有什么在等我"，不是"改一行字" ——
-//  真要改，去会话里说一句，那会走同一条写盘路径（围栏仍然只认那一份文件）。
+//  为什么是**只读**的: 账本的写者是**模型**（S11 起它自己 write），两个写者 = 两份真源。
+//  人要看的是"目标到哪了、有什么在等我"，不是"改一行字" —— 真要改，去会话里说一句，
+//  那会走同一条写盘路径。
 //
-//  ⚠️ 读法必须与 fire 那一刻**同源**: 路径来自 `SchedulerService.handoffPath`（调用方传进来），
+//  2026-11-18 晚（boss）: 从 sheet 改成**常驻卡** —— "不需要点击即可看到台账"。
+//  顶栏那颗「台账」按钮一并删掉: 有两个入口（点开的 + 常驻的）就会有两套滚动位置、
+//  两套折叠状态，而人只会问"这俩是不是同一份"。
+//
+//  ⚠️ **高度必须有上限**: 账本上限 16000 字，整篇铺出来会把编辑器顶到看不见模型配置。
+//     上限住 `Tune.scheduleLedgerCardMaxHeight`，卡内自滚。
+//
+//  ⚠️ 读法必须与 fire 那一刻**同源**: 路径来自 `SchedulerService.readHandoff`（调用方传进来），
 //     不是这里自己拼 —— 自己拼的话，S9 那套「新位置 / 旧位置回落」在这里是另一份实现，
 //     台账显示的可能根本不是模型正在写的那一份。
 //
@@ -16,13 +23,11 @@
 
 import SwiftUI
 
-struct AssistantLedgerSheet: View {
-    let title: String
+struct AssistantLedgerCard: View {
     /// 账本原文（读不到 / 还没写 ⇒ 空串）。
     let text: String
     /// 文件的修改时间（nil = 还没有这个文件）。
     let updatedAt: Date?
-    @Environment(\.dismiss) private var dismiss
 
     /// 归档默认**收起**: 它是"给人回看的记忆"，不是待办 —— 天天摊在眼前就成了噪音
     /// （与 `ScheduledView.showExecuted` 同一条取舍）。
@@ -32,9 +37,8 @@ struct AssistantLedgerSheet: View {
     private var isEmpty: Bool { text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
+        VStack(alignment: .leading, spacing: 8) {
             header
-            Divider().overlay(CodexTheme.divider)
             ScrollView {
                 VStack(alignment: .leading, spacing: 14) {
                     if isEmpty {
@@ -49,20 +53,31 @@ struct AssistantLedgerSheet: View {
                         archiveSection
                     }
                 }
-                .padding(16)
+                .padding(.vertical, 2)
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
+            // 内容短 ⇒ 卡就短；内容长 ⇒ 封顶后自滚。见文件头那条 —— 账本 16000 字不是摆设。
+            .frame(maxHeight: Tune.scheduleLedgerCardMaxHeight)
+            .scrollBounceBehavior(.basedOnSize)
         }
-        .frame(width: 560, height: 520)
-        .background(CodexTheme.bgChat)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        .background(CodexTheme.bgComposer)
+        .clipShape(RoundedRectangle(cornerRadius: CodexTheme.radiusLg))
+        .overlay(
+            RoundedRectangle(cornerRadius: CodexTheme.radiusLg)
+                .stroke(CodexTheme.border.opacity(0.45), lineWidth: 1)
+        )
     }
 
     private var header: some View {
-        HStack(spacing: 8) {
-            Text(title)
-                .font(CodexTheme.fontTitle)
-                .foregroundStyle(CodexTheme.textPrimary)
-                .lineLimit(1)
+        HStack(spacing: 6) {
+            Image(systemName: "book.closed")
+                .font(.system(size: 10))
+                .foregroundStyle(CodexTheme.textMuted)
+            Text("台账")
+                .font(CodexTheme.fontTiny)
+                .foregroundStyle(CodexTheme.textMuted)
             stageChip
             if !isEmpty {
                 Text(String(format: L("账本 %lld 字"), text.count))
@@ -75,13 +90,7 @@ struct AssistantLedgerSheet: View {
                     .foregroundStyle(CodexTheme.textTertiary)
             }
             Spacer()
-            Button(L("关闭")) { dismiss() }
-                .buttonStyle(.plain)
-                .font(CodexTheme.fontSmall)
-                .foregroundStyle(CodexTheme.textSecondary)
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 12)
     }
 
     /// 三态各自**说一句话**。空账本不算"完成"（`isComplete` 只在 `.done` 为真），

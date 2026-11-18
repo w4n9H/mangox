@@ -128,19 +128,25 @@ extension SmokeMain {
               "T-WATCHSRC ⑦注入段四件齐: 观察 / 契约 / 工作日志 / 只读声明")
         check(!sys.contains("保证 CI 是绿的"),
               "T-WATCHSRC ⑦目标**不进** system 段（同一句话两处下发 ⇒ 改了一处另一处还是旧的）")
-        // P19.2 S11 起这条**翻面了**: 巡检轮真的有一支笔，只许写账本那一份。
-        // 从前的断言是「必须说清不能写」；现在是「必须说清**只能写哪一份**、以及写别处会被拒」。
-        check(sys.contains(ledger) && sys.contains("只有一支笔"),
-              "T-WATCHSRC ⑦必须说清巡检轮**只能写账本那一份**（并给出绝对路径）")
-        check(sys.contains("写别处会被拒"),
-              "T-WATCHSRC ⑦必须说清写别处会被拒（否则它会以为「围栏只是个建议」）")
+        // 2026-11-18 **又翻回来一半**：围栏删了 ⇒ 普通活它可以直接干。
+        // 现在要钉的是**新的那条边界**：普通活直接干 / 重要操作写方案 / 要信息写账本。
+        // ⚠️ 这三句缺一句的后果都不是"它不干活"，而是"它按自己理解的那条线干" ——
+        //    而那正是"批了方案它还乱动"的来源。
+        check(sys.contains(ledger) && sys.contains("普通活直接干"),
+              "T-WATCHSRC ⑦必须说清巡检轮**普通活可以直接干**（并给出账本的绝对路径）")
+        check(sys.contains("重要操作先别动") && sys.contains("采纳并执行"),
+              "T-WATCHSRC ⑦必须说清重要操作要写成方案等人点「采纳并执行」（否则它会自己伸手）")
+        check(!sys.contains("只有一支笔") && !sys.contains("写别处会被拒"),
+              "T-WATCHSRC ⑦围栏那套话**不许留**（留着 = 它照着「我不能写外面」自我审查，而代码已经放行）")
         check(sys.contains("【账本格式】") && sys.contains("## 已完成（归档）"),
               "T-WATCHSRC ⑦账本五节的文件格式在注入里（App 不再代写，格式得它自己知道）")
         check(!sys.contains("工作日志："),
               "T-WATCHSRC ⑦回复契约里**没有**「工作日志」段了（否则模型还会把它塞进回复，"
               + "而 App 已经不写 —— 那一整段话就成了白花的 token）")
 
-        // —— ⑧ 端到端: 助理 fire ⇒ 只读面 + 注入段真的下发到 transport ——
+        // —— ⑧ 端到端: 助理 fire ⇒ 注入段真的下发到 transport ——
+        // ⚠️ 2026-11-18: 这一格原来还断言"下发只读面"。只读面整层删了（boss 定：助理按自己
+        //    选的档位拿权限），那半格随之作废；"绑同一场会话"那条判据在 `T-WATCHCHAT ①`。
         let mock = MockTransport()
         mock.scriptedReply = { _ in "结论：达成\n证据：无\n方案：无" }
         let store = ChatStore(transport: mock, dbPath: dir + "/p19src.db",
@@ -153,18 +159,16 @@ extension SmokeMain {
             check(false, "T-WATCHSRC ⑧前置: 助理任务已建"); report()
         }
         store.runScheduledFire(store.scheduledTasks[ai])
-        check(mock.lastAnalysisReadOnly,
-              "T-WATCHSRC ⑧助理 fire 下发**只读面**（false ⇒ 它会带着 bash/write 去「看一眼」）")
         check(mock.lastExtraSystemPrompt?.contains("【这一轮的观察】") == true,
               "T-WATCHSRC ⑧观察走 system 注入段（不在 user 消息里）")
         check(store.scheduledTasks[ai].lastRunAt != nil,
               "T-WATCHSRC ⑧跑过就推进 lastRunAt（不推进 ⇒ 漏跑清单会一直喊）")
 
-        // —— ⑨ 下一回合必须清回 false / nil ——
+        // —— ⑨ 下一回合必须清回 nil ——
         // 同一个 transport 上接着跑一次"人的手动回合"（`beginTurn` 默认值）。
         store.beginTurn(sid: UUID(), prompt: "你好", ephemeral: false, cwd: nil, unattended: false)
-        check(!mock.lastAnalysisReadOnly && mock.lastExtraSystemPrompt == nil,
-              "T-WATCHSRC ⑨普通回合把只读面与注入段**清回去**（不清 ⇒ 手动回合按巡检契约答 NO_FINDING）")
+        check(mock.lastExtraSystemPrompt == nil,
+              "T-WATCHSRC ⑨普通回合把注入段**清回去**（不清 ⇒ 手动回合按巡检契约答 NO_FINDING）")
 
         // —— ⑩ 原「空来源 ⇒ 不 spawn」已**整体迁走**（P19.2 S13）——
         // 那个夹具是「无项目 + 一条来源都没配」，而 S13 把这一类明确改成**照常跑**（"待命"档:

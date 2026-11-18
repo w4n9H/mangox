@@ -598,6 +598,10 @@ enum Tune {
     // 定时任务 (P3.6/P3.9)
     static let scheduleHistoryCharLimit: Int = 4000    // 持续模式注入的近期摘录截取上限
     static let scheduleLogEditorHeight: CGFloat = 360    // 展开后的"工作日志"编辑器**定高**(内部自滚); 13pt 正文约 20 行
+    /// 助理台账卡的高度上限（内联，2026-11-18 晚）。账本上限 16000 字 ⇒ **必须有上界**,
+    /// 否则一整篇铺出来会把模型配置顶到看不见。取 280 是为了"五节各露一两行" ——
+    /// 它要回答的是"有没有东西在等我"，完整读是展开滚动的事，不是这格的事。
+    static let scheduleLedgerCardMaxHeight: CGFloat = 280
 
     // P15.6 立了"dream 的会话摘要预算"这组数（取代"让模型自己去 bash 读 pi-sessions"—— 那条路没有上界）。
     // **P17 按 256k 上下文重拼**，三处有意改动：

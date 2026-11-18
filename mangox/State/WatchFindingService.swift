@@ -291,4 +291,74 @@ enum WatchFindingService {
             + (out.shouldNotify ? "" : "（冷却中，不通知）") + " ──"
         return out
     }
+    // MARK: - 「待你决定」→ findings（P19.4）
+
+    /// 这一类 finding 的 `evidence` 标记。**恒中文，不走 `L()`** ——
+    /// 它是**落库数据**（同 `Redline` 的拒绝理由），不是界面文案；
+    /// 而且本文件在 `gen_strings.py` 的 `EXCLUDE_FILES` 里 ⇒ 在这里写 `L()` 的 key
+    /// **永远进不了词表**，英文界面上它会静默回落中文，而三道 l10n 门全都看不见。
+    static let waitingEvidence = "账本 · 待你决定"
+
+    /// 「## 待你决定」里的一行 → 一条 findings 行时的**来源 id**。
+    ///
+    /// 为什么用固定值而不是任务的项目 id: 有目标、没项目的助理是合法配置（"待命"档），
+    /// 那一侧根本没有 `sourceId`。而指纹里必须有一个稳定分量 —— 用项目 id 会让"同一行在
+    /// 绑定/解绑项目之后变成两件事"，人被打扰两次。这个值与任何真实来源的 UUID 都不撞
+    /// （全 0 + 后缀 A1），一眼认得出是账本自己。
+    static let ledgerSourceId = UUID(uuidString: "00000000-0000-0000-0000-0000000000A1")!
+
+    /// 一行「待你决定」落成 findings 的结果。**全是纯数据**，写库与触达由调用方做。
+    struct WaitingOutcome: Equatable {
+        /// 这一轮**新问出去**的（已问过的不在这里）。
+        var added: [AgentFinding] = []
+        /// 账本里已经问过、这一轮不再打扰的条数。
+        var alreadyAsked: Int = 0
+        /// 写进日志会话的一行人话。空 = 这一轮没有可说的（没东西在等人决定）。
+        var summary: String = ""
+    }
+
+    /// 「## 待你决定」的那几行 → findings（新问的）。
+    ///
+    /// 为什么它必须变成一条 finding、而不是只躺在账本里:
+    ///   那一节的语义就是「要人做点什么」，而账本**没有任何触达** —— 没人会主动点开台账。
+    ///   落成 finding 之后，催（`WatchNagService.due`）、催的上限、系统通知、飞书私聊
+    ///   全都自动接上，不必为"提问"再开一条外发通道（那会多一份会漂的频控规则）。
+    ///
+    /// 为什么是 `info` + **无 plan**: 它不是"批准了就照做"的方案。收件箱里点不了「执行」，
+    /// 这正是对的 —— 问一句"要不要动 X"和"这是怎么动 X 的三步"是两件事。
+    ///
+    /// 去重判据 = **同任务 + 同指纹**（指纹用**整行文本**规范化后算）。
+    /// ⚠️ 所以"模型改写措辞"是有后果的: 改一个字就是新问题，人再被打扰一次。
+    ///    契约里因此明写「已经在这一节里的，原样保留那一行」。
+    static func waitingFindings(ledger: AssistantLedger, taskId: UUID, sessionId: UUID,
+                                existing: [AgentFinding], now: Date) -> WaitingOutcome {
+        var out = WaitingOutcome()
+        guard !ledger.waiting.isEmpty else { return out }
+        for line in ledger.waiting {
+            let fp = fingerprint(taskId: taskId, sourceId: ledgerSourceId, title: line)
+            let known = existing.contains { $0.taskId == taskId && $0.fingerprint == fp }
+                || out.added.contains { $0.fingerprint == fp }
+            if known { out.alreadyAsked += 1; continue }
+            out.added.append(AgentFinding(
+                id: UUID(), taskId: taskId, sourceId: ledgerSourceId, sessionId: sessionId,
+                title: waitingTitle(line), body: line, evidence: waitingEvidence,
+                plan: [], planRev: 1, severity: "info",
+                fingerprint: fp, status: .open, createdAt: now))
+        }
+        if !out.added.isEmpty {
+            // 一行一条 —— 飞书与系统通知都只装得下一行，所以点名的就是那几行本身。
+            out.summary = "── 在等你决定 " + out.added.map(\.title).joined(separator: "；") + " ──"
+        } else if out.alreadyAsked > 0 {
+            out.summary = "── \(out.alreadyAsked) 件仍在等你决定（已经问过，不重复打扰）──"
+        }
+        return out
+    }
+
+    /// 一行「待你决定」压成**一行标题**（飞书/系统通知共用）。
+    /// 只截长度、不改内容 —— 截断点选在 60 字，超过的部分留在 `body` 里（账本原件也在）。
+    static func waitingTitle(_ line: String, limit: Int = 60) -> String {
+        let s = normalize(line)
+        guard s.count > limit else { return s }
+        return String(s.prefix(limit)) + "…"
+    }
 }

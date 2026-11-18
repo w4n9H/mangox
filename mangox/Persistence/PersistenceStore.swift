@@ -232,6 +232,30 @@ final class PersistenceStore {
             created_at REAL NOT NULL
         )
         """)
+        // P19.2 S15b: 飞书机器人（一个自建应用 = 一个身份 = 一个机器人）。
+        //
+        // 「一个机器人只归一个助理」由 `assistant_id` 是**单值列**保证 —— 不靠保存时扫全表
+        // 去摘别人的绑定（那版做法的症状是"我明明绑给它了，它不回"，而且界面无解释）。
+        // 反过来也成立（2026-11-17 boss 定）：**一个助理只挂一个机器人**，由
+        // `ChatStore.assignRemoteBot` 顶掉旧的保证 —— 列只有一个值，加上这句才是 1:1。
+        //
+        // ⚠️ **app_secret 不在这张表里**（`feishu.bot.<id>.secret` 进钥匙串）。`app_id` 在这里:
+        // 它是标识不是凭据，而列表页要能不看钥匙串就把 N 行画出来（读钥匙串 = 无签名构建弹框）。
+        //
+        // ⚠️ `enabled` 是**死列**（2026-11-18）: 机器人没有自己的开关了，连接只看归属的助理
+        // 开没开 ⇒ 这一列既不读也不写。留着是因为「列只增不删」—— 删了旧版 App 打开新库会崩。
+        try db.run("""
+        CREATE TABLE IF NOT EXISTS remote_bots (
+            id           TEXT PRIMARY KEY,
+            name         TEXT NOT NULL DEFAULT '',
+            app_id       TEXT NOT NULL DEFAULT '',
+            enabled      INTEGER NOT NULL DEFAULT 1,
+            assistant_id TEXT,
+            last_chat_id TEXT,
+            last_chat_at REAL,
+            created_at   REAL NOT NULL
+        )
+        """)
         // P19: 收件档整体删除 ⇒ mailbox_sentinels / mailbox_tasks / mailbox_rejections **不再创建**。
         // 旧库里的这三张表与数据原样留着（列只增不删的同一条纪律: 降级回旧版仍能打开）。
         // 账号池表保留 —— P19.1 的邮件通道要接着用它。
@@ -257,6 +281,8 @@ final class PersistenceStore {
         addColumnIfMissing("scheduled_tasks", "notify", "TEXT")
         addColumnIfMissing("scheduled_tasks", "daily_token_budget", "INTEGER NOT NULL DEFAULT 0")
         // P19.2 S15: 飞书单聊绑定的 chat_id。**列只增不删**（旧版 App 打开新库会崩那一条）。
+        // ⚠️ S15b 起这一列**没人读了**（绑定改在 `remote_bots.assistant_id` 上）。留着是为了
+        // "旧版打开新库不崩"，以及迁移时一次性把它收成机器人行（见 `migrateLegacyRemoteBindings`）。
         addColumnIfMissing("scheduled_tasks", "remote_chat_id", "TEXT")
         // P10.4: 任务级执行配置 (JSON blob; 复用 SessionConfig)
         addColumnIfMissing("scheduled_tasks", "config", "TEXT")
@@ -346,6 +372,85 @@ final class PersistenceStore {
             PRIMARY KEY (task_id, day)
         )
         """)
+        // P19.2 S15b: 旧的「助理 × chat_id」绑定收成机器人行。**放在最后** —— 它要读
+        // `scheduled_tasks.remote_chat_id`（上面 260 行才补的列）与刚建好的 `remote_bots`。
+        migrateLegacyRemoteBindings()
+    }
+
+    /// 一次性: 把 S15 的 chat_id 绑定搬成一条机器人行（app_id 留空，见下）。
+    ///
+    /// 判据是 settings 里的**一次性标记**，不是"表空着" —— 用户把机器人全删掉再重启，
+    /// 表也是空的；靠"表空"判会让**删掉的机器人复活**。
+    ///
+    /// ⚠️ 这里**不读钥匙串**。`app_id` 也留空: 读钥匙串会在启动线程上弹授权框
+    /// （无签名构建每次重编都弹一次），表现是"App 启动卡住"，而且它发生在启动路径上，
+    /// 人连界面的影子都看不到。凭据留给设置页那个显式按钮（列表里那行显示「缺 app_id」，
+    /// 人一看就知道要补，见 `FeishuChannelSettings` 的「从旧版读取」）。
+    private func migrateLegacyRemoteBindings() {
+        let done = ((try? db.query("SELECT value FROM settings WHERE key = 'remote_bots_migrated'")) ?? []).isEmpty == false
+        guard !done else { return }
+        let rows = (try? db.query("""
+            SELECT id, name, remote_chat_id FROM scheduled_tasks
+            WHERE remote_chat_id IS NOT NULL AND remote_chat_id != ''
+            """)) ?? []
+        let now = Date().timeIntervalSince1970
+        for row in rows {
+            try? db.run("""
+                INSERT OR IGNORE INTO remote_bots
+                (id, name, app_id, assistant_id, last_chat_id, last_chat_at, created_at)
+                VALUES (?,?,'',?,?,?,?)
+                """, [.text(UUID().uuidString),
+                      .text(text(row, "name")),
+                      .text(text(row, "id")),
+                      .text(text(row, "remote_chat_id")),
+                      .real(now), .real(now)])
+        }
+        try? db.run("INSERT OR REPLACE INTO settings (key, value) VALUES ('remote_bots_migrated','1')")
+    }
+
+    // MARK: - 飞书机器人 (P19.2 S15b)
+
+    func loadRemoteBots() throws -> [RemoteBot] {
+        // ⚠️ `enabled` 列**不再读**（2026-11-18: 机器人没有自己的开关了，连接只看归属的助理）。
+        // 列留着不删（列只增不删：降级回旧版仍能打开），但也**不再写** ——
+        // 见 `upsertRemoteBot` 里那句说明。
+        let rows = try db.query("""
+            SELECT id, name, app_id, assistant_id, last_chat_id, last_chat_at, created_at
+            FROM remote_bots ORDER BY created_at ASC
+            """)
+        return rows.map { row in
+            RemoteBot(
+                id: UUID(uuidString: text(row, "id")) ?? UUID(),
+                name: text(row, "name"),
+                appId: text(row, "app_id"),
+                // 空串与 NULL 同义（手改库会留下空串）。
+                assistantId: optionalText(row, "assistant_id")
+                    .flatMap { $0.isEmpty ? nil : UUID(uuidString: $0) },
+                lastChatId: optionalText(row, "last_chat_id").flatMap { $0.isEmpty ? nil : $0 },
+                lastChatAt: optionalDate(row, "last_chat_at"),
+                createdAt: optionalDate(row, "created_at") ?? .distantPast)
+        }
+    }
+
+    func upsertRemoteBot(_ b: RemoteBot) throws {
+        // `enabled` 不写 ⇒ 新行拿到列默认值 1。这是**有意留着的死列**：删列会让旧版 App
+        // 打开新库时刷不出这一行（列只增不删），而留着它没人读也不会有第二种真源。
+        try db.run("""
+            INSERT OR REPLACE INTO remote_bots
+            (id, name, app_id, assistant_id, last_chat_id, last_chat_at, created_at)
+            VALUES (?,?,?,?,?,?,?)
+            """, [.text(b.id.uuidString),
+                  .text(b.name),
+                  .text(b.appId),
+                  b.assistantId.map { .text($0.uuidString) } ?? .null,
+                  b.lastChatId.map { .text($0) } ?? .null,
+                  b.lastChatAt.map { .real($0.timeIntervalSince1970) } ?? .null,
+                  .real(b.createdAt.timeIntervalSince1970)])
+    }
+
+    /// 删机器人。钥匙串那条 secret 由 `ChatStore.removeRemoteBot` 一起清（本层碰不到钥匙串）。
+    func deleteRemoteBot(id: UUID) throws {
+        try db.run("DELETE FROM remote_bots WHERE id = ?", [.text(id.uuidString)])
     }
 
     /// 旧库补列: 列已存在则跳过 ALTER (发一条也会成功, 但 SQLite 会往 stderr 吐 duplicate column)。
@@ -1154,7 +1259,7 @@ final class PersistenceStore {
 
     func loadScheduled() throws -> [ScheduledTask] {
         let rows = try db.query("""
-            SELECT id, name, prompt, cron, project_id, enabled, last_run_at, log_session_id, continuous, condition, unattended, completed_at, run_count, created_at, config, kind, sources, notify, daily_token_budget, remote_chat_id
+            SELECT id, name, prompt, cron, project_id, enabled, last_run_at, log_session_id, continuous, condition, unattended, completed_at, run_count, created_at, config, kind, sources, notify, daily_token_budget
             FROM scheduled_tasks ORDER BY created_at DESC
             """)
         return rows.map { row in
@@ -1194,9 +1299,7 @@ final class PersistenceStore {
                 notify: optionalText(row, "notify")
                     .flatMap { $0.data(using: .utf8) }
                     .flatMap { try? decoder.decode(NotifyOptions.self, from: $0) } ?? .default,
-                dailyTokenBudget: optionalInt(row, "daily_token_budget") ?? 0,
-                // P19.2 S15: 空串与 NULL 同义（手改库会留下空串）。
-                remoteChatId: optionalText(row, "remote_chat_id").flatMap { $0.isEmpty ? nil : $0 })
+                dailyTokenBudget: optionalInt(row, "daily_token_budget") ?? 0)
         }
     }
 
@@ -1210,10 +1313,13 @@ final class PersistenceStore {
         // 隐含规则来还原，而那是两个真源。恒写，读侧只需解码失败时兜底。
         let notifyJSON = (try? encoder.encode(t.notify))
             .flatMap { String(data: $0, encoding: .utf8) }
+        // P19.2 S15b: `remote_chat_id` **不再写** —— 绑定在 `remote_bots.assistant_id` 上。
+        // 列还在（旧版打开不崩），但 `INSERT OR REPLACE` 会整行重建 ⇒ 它自然落成 NULL。
+        // 这是有意的: 两个真源里活的那一个在 `remote_bots`，留着旧列同步只会让两边有机会不一致。
         try db.run("""
             INSERT OR REPLACE INTO scheduled_tasks
-            (id, name, prompt, cron, project_id, enabled, last_run_at, log_session_id, continuous, condition, unattended, completed_at, run_count, created_at, config, kind, sources, notify, daily_token_budget, remote_chat_id)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            (id, name, prompt, cron, project_id, enabled, last_run_at, log_session_id, continuous, condition, unattended, completed_at, run_count, created_at, config, kind, sources, notify, daily_token_budget)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             """, [.text(t.id.uuidString),
                   .text(t.name),
                   .text(t.prompt),
@@ -1233,8 +1339,7 @@ final class PersistenceStore {
                   t.isLegacyWaiting ? .null : .text(t.kind.rawValue),
                   sourcesJSON.map { .text($0) } ?? .null,
                   notifyJSON.map { .text($0) } ?? .null,
-                  .int(Int64(max(0, t.dailyTokenBudget))),
-                  t.remoteChatId.map { .text($0) } ?? .null])
+                  .int(Int64(max(0, t.dailyTokenBudget)))])
     }
 
     // MARK: - P19 S7 日 token 账本

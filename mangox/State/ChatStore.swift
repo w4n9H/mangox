@@ -432,6 +432,9 @@ final class ChatStore: ObservableObject {
     /// P19 S7: 邮箱账号（连接参数）。授权码在 `mailboxCredentials`（Keychain）。
     /// 本版只服务触达的邮件 sink —— 收信是 P19.1 的事。
     @Published var mailboxAccounts: [MailboxAccount] = []
+    /// P19.2 S15b: 飞书机器人（一个自建应用 = 一个身份）。**绑定挂在机器人上**
+    /// （`RemoteBot.assistantId`），不挂在助理上 —— 一个机器人只归一个助理由列形状保证。
+    @Published var remoteBots: [RemoteBot] = []
     var scheduledTasks: [ScheduledTask] {
         get { scheduler.scheduledTasks }
         set { scheduler.scheduledTasks = newValue }
@@ -701,6 +704,9 @@ final class ChatStore: ObservableObject {
             findings = (try? store.loadFindings()) ?? []
             findingActions = (try? store.loadFindingActions()) ?? []
             mailboxAccounts = (try? store.loadMailboxAccounts()) ?? []
+            // P19.2 S15b: 飞书机器人。**必须在 `remote.attach(self)` 之前**（788 行）——
+            // 服务要在接线那一刻就知道"该连哪几个"。
+            remoteBots = (try? store.loadRemoteBots()) ?? []
             // P19 S6: 上一进程中断的执行收回原状（`running` + 不常驻 = 永久卡死）
             scheduler.recoverInterruptedExecutions()
             // P7-M3: custom_models 一次性迁入 models 表 (幂等), 再加载自管真源
@@ -1879,7 +1885,8 @@ final class ChatStore: ObservableObject {
         pendingImages = []
         persistMessage(msg, sid: sid)
         autoTitleIfNeeded(sid: sid, text: trimmed)   // P6.4: 默认标题会话按首条消息自动命名
-        // 任务 fire 轮次保持 ephemeral (交接文件注入模板不得滚进持久 transcript)
+        // `ephemeral` 由调用方给（Cron fire 仍 true；2026-11-18 起助理 fire 是 false —— 见
+        // `SchedulerService.beginTurn` 那段注释：定时轮与对话轮走同一场会话）。
         beginTurn(sid: sid, prompt: trimmed.isEmpty ? L("请看图") : trimmed, ephemeral: ephemeral,
                   cwd: activeProjectPath, unattended: false, images: outgoing)
     }
@@ -1985,10 +1992,8 @@ final class ChatStore: ObservableObject {
                    approvalOverride: ApprovalMode? = nil,   // P10.2a-0: 邮箱哨兵 = .autoJudge
                    modelOverride: (provider: String, modelId: String, thinking: String?)? = nil,
                    dreamSpool: String? = nil,   // P15.3: 仅 dream fire 非 nil
-                   analysisReadOnly: Bool = false,   // P19: 仅助理巡检轮 true
                    extraSystemPrompt: String? = nil,   // P19: 巡检轮的观察 / 契约 / 交接文件
-                   executionGuard: ExecutionGuard? = nil,   // P19 S6: 仅执行轮非 nil
-                   ledgerPath: String? = nil) {   // P19.2 S10/S12: 巡检轮非 nil；对话轮在下面自己算出来
+                   executionGuard: ExecutionGuard? = nil) {   // P19 S6: 仅执行轮非 nil
         let t = transportFor(sid)
         Log.send("turn-begin", ["sid": String(sid.uuidString.prefix(8)),
                                 "eph": ephemeral ? "1" : "0",
@@ -2010,45 +2015,38 @@ final class ChatStore: ObservableObject {
         // **不是**档位也不是全局。⚠️ 这是**无条件赋值**（不是 `if let`）: 普通回合要把它清回 nil,
         // 否则任务日志会话里手动说一句话之后, 那份 transport 会一直挂着 dream 扩展与 env。
         t.updateDreamSpool(dreamSpool)
-        // P19: 分析段与注入段同属 per-turn，**同一条纪律 —— 无条件赋值**。
-        // 助理巡检轮之后, 同一个 transport 上还会跑人的手动回合; 只用 `if let` 赋值的话,
-        // 那次手动回合会**继承只读面与非空注入段**: 表现是"我在会话里问一句, 它却按巡检契约
-        // 答 NO_FINDING, 而且连写工具都没有" —— 与 dream spool 泄漏是同一类事故。
-        // P19 对话轮: 在**助理任务的日志会话**里手动说话 ⇒ 带助理上下文 + 只读面。
+        // P19: 注入段是 per-turn，**无条件赋值**。
+        // 巡检轮之后, 同一个 transport 上还会跑人的手动回合; 只用 `if let` 赋值的话,
+        // 那次手动回合会**继承巡检注入段**: 表现是"我在会话里问一句, 它却按巡检契约
+        // 答 NO_FINDING" —— 与 dream spool 泄漏是同一类事故。
+        // P19 对话轮: 在**助理任务的日志会话**里手动说话 ⇒ 带助理上下文。
         // 判据是 `ephemeral == false`（真加载历史 ⇒「那个再查查」才指代得上）加上
         // "这个会话是某助理的 logSessionId"。巡检轮不走这里（它显式传了注入段）。
-        var turnReadOnly = analysisReadOnly
+        //
+        // ⚠️ 2026-11-18: 这里原来还有一支 `turnReadOnly = true`（对话轮只读面）。
+        //    连同整个只读分析面一起删了 —— 工具面现在只有一条来源 = 档位。
         var turnExtra = extraSystemPrompt
-        // P19.2 S12: 对话轮也有**一支笔**（只许写账本），但围栏外**弹卡**而不拒 —— 人在场。
-        // 落点不在这里算: `beginDialogueTurn` 一处给出（lookup + 记一笔），否则「哪一轮能写」
-        // 与「哪一轮有账本」又会变成两份真源。
-        var turnLedger = ledgerPath
-        var turnLedgerMode: LedgerFence.Mode = .deny
         if !ephemeral, turnExtra == nil,
            let chat = scheduler.beginDialogueTurn(sid: sid) {
-            turnReadOnly = true
             turnExtra = chat.prompt
-            turnLedger = chat.ledgerPath
-            turnLedgerMode = .ask
         }
-        t.updateAnalysisReadOnly(turnReadOnly)
         t.updateExtraSystemPrompt(turnExtra)
         // P19 S6: 执行守卫 —— **同一条纪律，无条件赋值**。不清它的后果比上面两个更隐蔽:
         // 只读面漏了会看得出来（"它怎么不写文件"），而守卫漏了只表现为"某些命令莫名被拒"，
         // 而人根本不会想到"上一轮执行留下的红线还在"。
         t.updateExecutionGuard(executionGuard)
-        // P19.2 S10/S12: 账本落点与围栏模式 —— **同一条纪律，无条件赋值**。漏清的表现与执行守卫同款:
-        // 下一个普通回合里 `write` 仍然只把那个过期账本当免检对象，
-        // 人看到的是"新建文件忽然都要审批了"，而想不到是上一轮留下的路径。
-        // 模式与落点**一次赋值**: 分开两个 setter 会留下"新落点配旧模式"的窗口。
-        t.updateLedgerFence(turnLedger, mode: turnLedgerMode)
         // 无人值守 fire 关审批 (弹卡 = 任务死锁); 其余跟随全局开关。
         // P10.2a-0: approvalOverride 优先 —— 邮箱哨兵走 .autoJudge (白名单放行 + 危险命令拒且不阻塞),
         // 它是 per-turn 下发, 会被全局 askApproval 开关覆盖, 故每回合 send 前重设。
         if let approvalOverride {
             t.updateApprovalMode(approvalOverride)
         } else {
-            t.updateApprovalPolicy(askApproval: unattended ? false : askApproval)
+            // 助理这条线**恒不弹卡**（2026-11-18 boss 定）：巡检轮本来 `unattended` ⇒ false，
+            // 对话轮 / 执行轮靠这一句。判据是"这场会话是某个助理的日志会话"，不是配置项 ——
+            // 否则人在输入框一开审批流，飞书那边的对话轮就开始追问，而助理根本没有人坐在旁边。
+            // 边界改成人那一侧的两级审批：方案级（采纳并执行）+ 重要操作级（写进方案）。
+            let assistantSession = scheduler.isAssistantLogSession(sid)
+            t.updateApprovalPolicy(askApproval: (unattended || assistantSession) ? false : askApproval)
         }
         if let modeOverride { t.updateMode(modeOverride) }
         // P10.4: 任务级模型期望 (transport 实例级, 全局零污染; spawn 快照在本轮生效)
@@ -2483,15 +2481,6 @@ final class ChatStore: ObservableObject {
         }
     }
 
-    /// 这条任务的飞书 webhook 配过没。**只判存在、不读内容**（真源在钥匙串，界面不回显）。
-    func hasWebhookURL(taskId: UUID) -> Bool {
-        (scheduler.notifySecrets.webhookURL(taskId: taskId)?.isEmpty == false)
-    }
-
-    func setWebhookURL(_ url: String?, taskId: UUID) {
-        try? scheduler.notifySecrets.setWebhookURL(url, taskId: taskId)
-    }
-
     /// 这条任务今天已经烧了多少 token（编辑器里显示"今日已用"）。
     func tokenSpentToday(_ taskId: UUID) -> Int {
         scheduler.tokenSpentToday(taskId)
@@ -2530,13 +2519,130 @@ final class ChatStore: ObservableObject {
         reloadFindings()
     }
 
+    // MARK: - P19.2 S15b 飞书机器人
+
+    /// 新增机器人。**不自动归给任何助理** —— 先让它连上（设置页能看到灯变绿、能收到消息），
+    /// 再去助理那边勾它。顺序反过来会让人先面对一个"配了却不工作的东西"。
+    func addRemoteBot(_ bot: RemoteBot) {
+        remoteBots.append(bot)
+        try? persistence?.upsertRemoteBot(bot)
+        remote.syncBots(remoteBots)
+    }
+
+    /// 改机器人（名字 / app_id / 归属都走这里）。**没有开关** —— 机器人没有自己的开关
+    /// （2026-11-18），它连不连看归属的助理开没开。
+    ///
+    /// 归属变化的落地判据只在这一个函数里: **一个机器人只归一个助理**是列形状给的，
+    /// 所以"改归"就是写这个字段，没有"先摘掉别人"的第二步（那一步正是 S15 静默失败的来源）。
+    func updateRemoteBot(_ bot: RemoteBot) {
+        guard let idx = remoteBots.firstIndex(where: { $0.id == bot.id }) else { return }
+        remoteBots[idx] = bot
+        try? persistence?.upsertRemoteBot(bot)
+        remote.syncBots(remoteBots)
+    }
+
+    /// 删机器人 = **连带清桥上的客户端 + 连带清钥匙串那条 secret**。
+    ///
+    /// 留着 secret 就是一份"没有主人的凭据"（同删邮箱账号那条判据）。绑定不用单独清 ——
+    /// 绑定就长在被删的这一行上。
+    func removeRemoteBot(_ id: UUID) {
+        remoteBots.removeAll { $0.id == id }
+        try? persistence?.deleteRemoteBot(id: id)
+        remote.forgetSecret(for: id)
+        remote.syncBots(remoteBots)
+    }
+
+    /// 把机器人归给某个助理（`nil` = 解绑）。
+    ///
+    /// ⚠️ **一个助理名下只能有一个机器人**（2026-11-17 boss 定，与"一个机器人只归一个助理"
+    /// 是同一条关系的两端）。这条在这里落地而**不是只靠界面单选** —— 界面上是单选，
+    /// 库里手改一下就能长出两个，而两个机器人的话会进同一场会话，界面上看不出问题。
+    func assignRemoteBot(_ botId: UUID, to assistantId: UUID?) {
+        var touched = false
+        if let i = remoteBots.firstIndex(where: { $0.id == botId }),
+           remoteBots[i].assistantId != assistantId {
+            remoteBots[i].assistantId = assistantId
+            try? persistence?.upsertRemoteBot(remoteBots[i])
+            touched = true
+        }
+        // 顶掉同名的另一个（只在"归"的时候要顶；解绑不牵连别人）。
+        if let assistantId {
+            for j in 0..<remoteBots.count
+            where remoteBots[j].id != botId && remoteBots[j].assistantId == assistantId {
+                remoteBots[j].assistantId = nil
+                try? persistence?.upsertRemoteBot(remoteBots[j])
+                touched = true
+            }
+        }
+        // ⚠️ 2026-11-18 起归属**进了**连接判据（`isLive` = 归给的助理存在且开着），
+        // 所以这一步可能重起桥：改归到一个开着的助理 ⇒ 它开始连；改归 nil ⇒ 断开。
+        // 签名重算只在真变了的时候发生（`syncBots` 自己比签名）。
+        if touched { remote.syncBots(remoteBots) }
+    }
+
+    /// 助理被删时，把归它的机器人全部解绑（**成对删除**的同一条判据: 指针不能悬空）。
+    /// 机器人本身留着 —— 凭据和身份还在，重新归给另一个助理就能用。
+    func unassignRemoteBots(from assistantId: UUID) {
+        for bot in remoteBots where bot.assistantId == assistantId {
+            assignRemoteBot(bot.id, to: nil)
+        }
+    }
+
+    /// 记一笔"这个机器人最近被谁找过"（诊断）。**每次收到消息都要写** —— 它就是
+    /// "机器人到底通不通"的唯一证据。
+    ///
+    /// 它还是**结论推送的落点**（`lastChatId` = 推给谁）。所以写完必须把值同步给
+    /// `RemoteChannelService` 那份副本 —— 否则"人刚跟它说完一句、这一轮的结论要推回去"
+    /// 会撞上「还没有人跟它说过话」：**刚说过话却推不出去**，零信号。
+    /// 但走的是 `noteChat` 而不是 `syncBots`：后者要重算签名（每个机器人一次钥匙串读），
+    /// 而这条路径每条消息都会经过。分工见 `RemoteChannelService.noteChat` 的注释。
+    func touchRemoteBotChat(_ botId: UUID, chatId: String) {
+        guard let idx = remoteBots.firstIndex(where: { $0.id == botId }) else { return }
+        remoteBots[idx].lastChatId = chatId
+        remoteBots[idx].lastChatAt = Date()
+        try? persistence?.upsertRemoteBot(remoteBots[idx])
+        // ⚠️ 不走 `syncBots`：那条要重算签名（每个机器人一次钥匙串读），而每收一条消息都会
+        // 走到这里。`lastChatId` 既不影响"连不连"也不在签名里 —— 它只决定**结论往哪推**。
+        // 但**必须**同步给 service 那份副本：`pushFinding` 读的是它（漏同步 ⇒ 人刚说完话，
+        // 结论却报「还没有人跟它说过话」）。两条路的分工见 `noteChat` 的注释。
+        remote.noteChat(botId: botId, chatId: chatId)
+    }
+
+    /// 某个机器人的 secret 在不在钥匙串里（**只判存在，不读出来** —— 读出来就等于
+    /// 把它摆进界面与截图的射程，同 webhook 那条）。
+    func hasRemoteBotSecret(_ botId: UUID) -> Bool {
+        remote.hasSecret(for: botId)
+    }
+
+    func setRemoteBotSecret(_ secret: String?, for botId: UUID) -> Bool {
+        let ok = remote.setSecret(secret, for: botId)
+        if ok { remote.syncBots(remoteBots) }
+        return ok
+    }
+
     /// 删除任务; deleteSessions = 连带删除日志会话 (开放问题 12: 默认保留, 用户可选删)。
     func deleteScheduled(id: UUID, deleteSessions: Bool = false) {
         scheduler.deleteScheduled(id: id, deleteSessions: deleteSessions)
+        // 归给这个助理的机器人全部解绑（指针不能悬空）。放在 scheduler 之后:
+        // 那一步才是"任务真的被删掉了"的判据（dream 受保护时会提前 return）。
+        if !scheduledTasks.contains(where: { $0.id == id }) { unassignRemoteBots(from: id) }
     }
 
+    /// 任务/助理的开关。
+    ///
+    /// ⚠️ 助理这一个开关**同时管它的飞书入口**（2026-11-18 boss: 设置里那个机器人开关是多余的）。
+    /// 所以拨完必须 `syncBots`：签名按"谁真能跑"算，助理一关，它的机器人就从清单里消失 ⇒
+    /// 整条桥按新清单重起（全关了就停）。⚠️ 代价: 飞书那边**输入框会变灰**，
+    /// 不再有"先打开我"那句 —— 那句的前提本来是"连接照旧连着"。
+    /// ⚠️ 2026-11-18：助理这盏开关现在**同时也管机器人**（`RemoteBot.enabled` 已删）。
+    /// 连接判据 = 它归给的助理存在且 `enabled` ⇒ 关助理必须重起桥，所以这里要 syncBots。
+    /// 代价：助理关掉时长连接会断 ⇒ 飞书那边输入框变灰（不再有"先打开我"那句，
+    /// 那句的前提正是"连接照旧连着"）。
+    /// ⚠️ 只在**这条专门入口**同步，不进 `updateScheduled` —— 后者在回合路径上会被高频
+    /// 调用（落 logSessionId / lastRunAt），而每个机器人一次签名重算 = 一次钥匙串读。
     func toggleScheduled(id: UUID) {
         scheduler.toggleScheduled(id: id)
+        remote.syncBots(remoteBots)
     }
 
     /// 到点投递 (P3.9): 全链路在 SchedulerService, ChatStore 转发 (冒烟直访入口)。

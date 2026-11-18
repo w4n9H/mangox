@@ -49,7 +49,7 @@ extension SmokeMain {
                   + (Redline.denyReason(forCommand: cmd) ?? "放行"))
         }
 
-        // MARK: ② 写围栏（工具那条路）
+        // MARK: ② 写入边界（2026-11-18: 围栏删了，只剩红线）
 
         let proj = dir + "/proj"
         try? FileManager.default.createDirectory(atPath: proj, withIntermediateDirectories: true)
@@ -57,21 +57,23 @@ extension SmokeMain {
               "T-WATCHEXEC ②项目内写入放行（不然执行轮连自己项目都改不了）")
         check(Redline.denyReason(forWrite: "a.txt", projectPath: proj) == nil,
               "T-WATCHEXEC ②相对路径按项目根解 ⇒ 放行（执行轮的 cwd 就是项目根）")
-        check(Redline.denyReason(forWrite: "../elsewhere.txt", projectPath: proj) != nil,
-              "T-WATCHEXEC ②`../` 逃出项目必须拒 —— 这是围栏最容易被绕开的一种写法")
-        check(Redline.denyReason(forWrite: "/tmp/other.txt", projectPath: proj) != nil,
-              "T-WATCHEXEC ②项目外绝对路径拒")
+        // ⚠️ 这两条**翻了面**（围栏删了）：项目外现在**放行**。助理跑在专属机器上，
+        //    "项目外"不是一个可判的概念。留一条反方向断言，免得有人把围栏顺手加回来。
+        check(Redline.denyReason(forWrite: "../elsewhere.txt", projectPath: proj) == nil,
+              "T-WATCHEXEC ②项目外写入**放行**（围栏已删 —— 助理跑在专属机器上，没有「项目外」）")
+        check(Redline.denyReason(forWrite: "/tmp/other.txt", projectPath: proj) == nil,
+              "T-WATCHEXEC ②项目外绝对路径**放行**（同上）")
         check(Redline.denyReason(forWrite: "/usr/local/bin/x", projectPath: proj) != nil,
               "T-WATCHEXEC ②系统目录恒拒（即便人授权过这一份方案）")
         check(Redline.denyReason(forWrite: "~/.ssh/authorized_keys", projectPath: proj) != nil,
               "T-WATCHEXEC ②凭据目录恒拒")
 
-        // MARK: ③ 写围栏（bash 重定向那条路 —— 围栏只管 write 工具就是漏了一半）
+        // MARK: ③ 重定向那条路（红线仍然要看得见 `>` 往哪写）
 
         check(Redline.denyReason(forCommand: "echo x > /etc/hosts", projectPath: proj) != nil,
               "T-WATCHEXEC ③`>` 重定向到系统目录必须拒（命令里一个红线词都没有）")
-        check(Redline.denyReason(forCommand: "echo x >> ../out.txt", projectPath: proj) != nil,
-              "T-WATCHEXEC ③`>>` 也要认（只认 `>` 等于留一个字母的口子）")
+        check(Redline.denyReason(forCommand: "echo x >> /etc/hosts", projectPath: proj) != nil,
+              "T-WATCHEXEC ③`>>` 也要认（只认 `>` 等于留一个字母的口子；围栏删了只剩红线，就换成系统目录那条）")
         check(Redline.denyReason(forCommand: "swift build > build.log 2>&1",
                                  projectPath: proj) == nil,
               "T-WATCHEXEC ③项目内重定向放行, 且 `2>&1` 不算文件目标（认错就会全线误伤）")

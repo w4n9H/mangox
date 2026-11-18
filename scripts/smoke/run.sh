@@ -539,6 +539,37 @@ case "$TAP_BRANCH" in
         exit 1
         ;;
 esac
+# ③z 助理台账常驻 + 触达卡已删（2026-11-18 晚 boss 定）:
+#
+#   三条都只能扫源码 —— 它们是**界面结构**，冒烟的断言看不见视图树：
+#   ① 「触达」卡删掉之后不许长回来（那张卡配的是"怎么叫人"，而飞书推不推由绑没绑决定、
+#      系统通知由全局开关管、预算挪进了模型卡 ⇒ 它没有存在的理由了）。
+#   ② 台账必须**不用点就看得见**：`AssistantLedgerCard(` 得真被视图调用，
+#      而且不许退回 sheet（`showLedger` 一回来就是"又要点一下"）。
+#   ③ 高度**必须有上限**：账本上限 16000 字，整篇铺出来会把模型配置顶到看不见。
+#      判据不是"有没有 ScrollView"，而是"有没有引用那个 Tune 常量"。
+if has_code mangox/Views/Scheduled/ScheduledView.swift 'notifyCard'; then
+    echo "FAIL - 「触达」卡长回来了 (2026-11-18 晚整张删除; 邮件外发通道也跟着删了)" >&2
+    exit 1
+fi
+if ! has_code mangox/Views/Scheduled/ScheduledView.swift 'AssistantLedgerCard\('; then
+    echo "FAIL - 台账卡不在编辑器里 (常驻是它的全部意义: 不许退回\"点一下才看得见\")" >&2
+    exit 1
+fi
+if has_code mangox/Views/Scheduled/ScheduledView.swift 'showLedger'; then
+    echo "FAIL - 台账又变成点开才看得见了 (showLedger 已删; 常驻卡占的是原来「触达」那一格)" >&2
+    exit 1
+fi
+if ! has_code mangox/Views/Scheduled/AssistantLedgerCard.swift 'Tune\.scheduleLedgerCardMaxHeight'; then
+    echo "FAIL - 台账卡没了高度上限 (账本上限 16000 字, 铺开会把模型配置顶到看不见)" >&2
+    exit 1
+fi
+# 邮件外发通道紧随「触达」一起删: 配置入口没了还留着投递路径 = "我看不见它, 但它还在发信"。
+# ⚠️ 底层 `MailTransport` / `CurlMailTransport` **不在此列** —— 设置页的"测试连接"还在用。
+if has_code mangox/State/SchedulerService.swift 'sendEmail|mailTransportFactory'; then
+    echo "FAIL - 邮件外发的投递路径又出现了 (触达卡删了 ⇒ 它没有配置入口, 留着就是静默发信)" >&2
+    exit 1
+fi
 # 第五档的解码分支: 同样是扫源码(它只编进 helper)。
 #   ① `submit` **缺省必须是 false** —— 写 `?? true` 等于"默认发送", 而发送撤不回;
 #   ② 不许在解码层为 `text` 编默认值 —— 空文本要由 server 拒并说清"要写什么"。
