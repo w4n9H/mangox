@@ -55,7 +55,7 @@ mangox/Views/Scheduled/ScheduledView.swift|prompt 与 cron 为必填
 mangox/Views/Scheduled/ScheduledView.swift|cron 无效
 mangox/Views/Scheduled/ScheduledView.swift|助理要绑定一个项目 —— 它是本版唯一可用的来源
 mangox/Views/Scheduled/ScheduledView.swift|保存
-mangox/Views/Scheduled/ScheduledView.swift|助理：到点只读巡检，产出结论等你批准（`prompt` 写目标，不是动作）
+mangox/Views/Scheduled/ScheduledView.swift|助理：到点看一轮，产出带编号的方案等你批准（`prompt` 写目标，不是动作）
 mangox/Views/Scheduled/ScheduledView.swift|Cron 定时：到点执行 `prompt` 里写好的动作
 mangox/Views/Scheduled/ScheduledView.swift|到点要达成的目标（不是动作）——例：保证 CI 是绿的；红了就查清原因给我方案…
 mangox/Views/Scheduled/ScheduledView.swift|到点投递给 Agent 的 prompt…
