@@ -7,7 +7,7 @@
    **本文件由 scripts/l10n/gen_strings.py --write 生成, 别手改** ——
    译文改 scripts/l10n/en_values.py 的 VALUES, 再跑 --write。
 
-   条数: 1083
+   条数: 1082
 */
 
 " (值:\"%@\")" = " (value: %@)";
@@ -369,7 +369,7 @@
 "助理是关着的 —— 打开它才会推" = "The assistant is paused — turn it on and findings will be pushed.";
 "助理结论的邮件通知借它发出。授权码存钥匙串, 不落数据库; 第一个能发的账号就是发件人。" = "Used to send email notifications for assistant findings. The auth code lives in the keychain, not the database; the first sendable account is the sender.";
 "助理（目标式）" = "Assistant (goal-based)";
-"助理：到点只读巡检，产出结论等你批准（`prompt` 写目标，不是动作）" = "Assistant: read-only check when due, conclusions wait for your approval (`prompt` states the goal, not the actions)";
+"助理：到点看一轮，产出带编号的方案等你批准（`prompt` 写目标，不是动作）" = "Assistant: takes a look when due and writes a numbered plan that waits for your approval (`prompt` states the goal, not the actions)";
 "单条消息最多 %lld 张图片, 超出请拆条发送" = "Up to %lld images per message — split into several messages if you need more";
 "博查 API Key" = "Bocha API key";
 "占用 %lld 个保留 key" = "holds %lld reserved key(s)";
@@ -403,7 +403,6 @@
 "只有菜单里才有的功能, 在这一格上这条路走不通, 那就如实告诉用户。" = "Anything that exists only in a menu cannot be reached through this cell -- say so honestly.";
 "只给了回车、没给要写的字 ⇒ 没按。回车在不少 App 里就是「发出去 / 确定」," = "Only a Return and no text ⇒ nothing was pressed. In many apps Return means \"send\" or \"confirm\",";
 "只能看图" = "Picture only";
-"只读" = "read-only";
 "只读命令静默放行, 其余弹审批卡等待点击。" = "Read-only commands pass silently; anything else raises an approval card and waits for a click.";
 "只读命令静默放行, 危险命令自动拒绝并记下原因 (回执告知) — 远程驱动用。" = "Read-only commands pass silently; dangerous ones are refused automatically with the reason recorded (and sent back in the receipt) — for remote-driven work.";
 "只读显示本轮真正发出去的注入块 —— 门禁绿 ≠ 改对了" = "Read-only view of the injection block actually sent this turn — a green gate does not mean it is right";
@@ -680,7 +679,7 @@
 "新建条目" = "New entry";
 "新建笔记" = "New note";
 "新建项目（选择目录）…" = "New project (choose a directory)…";
-"新建：Cron 定时（动作写死）或 助理（目标式，只读巡检）" = "New: Cron schedule (fixed actions) or Assistant (goal-based, read-only checks)";
+"新建：Cron 定时（动作写死）或 助理（目标式，产方案等人批准）" = "New: Cron schedule (fixed actions) or Assistant (goal-based, plans wait for approval)";
 "方案 %lld 步" = "plan · %lld steps";
 "无人值守" = "Unattended";
 "无人值守 · 恒开" = "Unattended · always on";

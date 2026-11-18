@@ -163,6 +163,34 @@ extension SmokeMain {
         check(fatPlan.handoff == nil && fatPlan.summary.contains("超过上限"),
               "T-WATCHFIND ⑩超长工作日志 => 不写盘并在日志里说明（截断会切掉「下一步」）")
 
+        // —— ⑪ 收窄读取（只取本任务 / 只取某状态）——
+        // 2026-11-18 review: 崩溃自愈只要 `running` 那几行、两处指纹去重只要**本任务**的旧行，
+        // 而三处原来都全表解码（body / evidence / plan 三段 JSON 逐行解）—— 按天巡检跑一年
+        // 是上千行，每轮解一遍只为挑出 3 行。收窄是**可选参数**，所以判据得判三半：
+        // ① 该来的没漏 ② 不该来的没混进来 ③ 不传参仍是全量（没有偷偷改默认语义）。
+        let otherTask = UUID()
+        var mineRunning = first
+        mineRunning.id = UUID()
+        mineRunning.fingerprint = "fp-mine-running"
+        mineRunning.status = .running
+        var theirs = first
+        theirs.id = UUID()
+        theirs.taskId = otherTask
+        theirs.fingerprint = "fp-theirs"
+        theirs.status = .running
+        try? store.persistence?.upsertFinding(mineRunning)
+        try? store.persistence?.upsertFinding(theirs)
+
+        let byTask = (try? store.persistence?.loadFindings(taskId: task.id)) ?? []
+        check(byTask.count == 2 && byTask.allSatisfy { $0.taskId == task.id },
+              "T-WATCHFIND ⑪按任务读只回本任务的两条（实际 \(byTask.count) 条；少认一条会让指纹去重失效 ⇒ 同一件事天天重报）")
+        let byStatus = (try? store.persistence?.loadFindings(status: .running)) ?? []
+        check(byStatus.count == 2 && byStatus.allSatisfy { $0.status == .running },
+              "T-WATCHFIND ⑪按状态读只回 running 的两条（实际 \(byStatus.count) 条；崩溃自愈漏一条 = 那条永久卡死）")
+        let everything = (try? store.persistence?.loadFindings()) ?? []
+        check(everything.count == 3,
+              "T-WATCHFIND ⑪不传参仍是全量（收窄是可选参数, 不是新默认 —— 实际 \(everything.count) 条）")
+
         store.scheduler.stopScheduler()
     }
 }

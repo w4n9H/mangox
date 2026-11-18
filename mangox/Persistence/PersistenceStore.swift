@@ -1362,19 +1362,59 @@ final class PersistenceStore {
             """, [.text(taskId.uuidString), .text(day), .int(Int64(tokens))])
     }
 
-    func deleteScheduled(id: UUID) throws {
-        try db.run("DELETE FROM scheduled_tasks WHERE id = ?", [.text(id.uuidString)])
+    /// 删任务 —— **连同它的数据**。返回被删 findings 的执行快照目录（供上层删盘）。
+    ///
+    /// ⚠️ 2026-11-18 之前这里只删一行 `scheduled_tasks`。三张带 `task_id` 的表
+    /// （`agent_findings` / `agent_finding_actions` / `agent_token_daily`）于是留下**悬空外键**：
+    /// 实测这一台机器上，删掉两个助理之后 `agent_token_daily` 里还有 2 条账挂着已经不存在的
+    /// `task_id`，收件箱里的结论也会显示成「未知任务」。它们不报错，只会在哪天有人统计
+    /// "这个助理花了多少 / 它提过什么" 时给出**假数**。
+    ///
+    /// **回收判据必须与「谁真持有这些东西」同源**：`task_id` 就是持有者，
+    /// 所以删除半径 = 所有 `WHERE task_id = ?` 的表；少认一张就等于把垃圾留在库里。
+    ///
+    /// ⚠️ `agent_finding_actions` 的外键是 `finding_id` 而不是 `task_id` —— 它必须**先**删，
+    /// 否则子查询那一步已经把 findings 删了，actions 就再也找不到自己的父行。
+    ///
+    /// ⚠️ 快照目录（`~/.mangox/undo/<findingId>/`）只能**先查后删**：删完 findings 就查不到
+    /// 那些路径了，盘上留下永远没人认领的 tar。DB 层不碰文件系统，所以它只负责把路径带出来。
+    @discardableResult
+    func deleteScheduled(id: UUID) throws -> [String] {
+        let tid = DBValue.text(id.uuidString)
+        let undos = try db.query(
+            "SELECT undo_path FROM agent_findings WHERE task_id = ? AND undo_path IS NOT NULL",
+            [tid]).compactMap { optionalText($0, "undo_path") }
+        try db.run("""
+            DELETE FROM agent_finding_actions
+            WHERE finding_id IN (SELECT id FROM agent_findings WHERE task_id = ?)
+            """, [tid])
+        try db.run("DELETE FROM agent_findings WHERE task_id = ?", [tid])
+        try db.run("DELETE FROM agent_token_daily WHERE task_id = ?", [tid])
+        try db.run("DELETE FROM scheduled_tasks WHERE id = ?", [tid])
+        return undos
     }
 
     // MARK: - 助理结论 (P19 findings)
 
-    func loadFindings() throws -> [AgentFinding] {
+    /// 读结论。两个**收窄参数**都只是往 WHERE 里加条件，语义与"读全量再在内存里 filter"逐行等价。
+    ///
+    /// ⚠️ 为什么要给参数（2026-11-18 review）：收尾那一轮只要**同一个任务**的旧行做指纹去重，
+    /// 崩溃自愈那一处只要 `status == running` 的几行 —— 而它们原来都走全量解码
+    /// （`body` / `evidence` / `plan` 三段 JSON 逐行解）。按天巡检跑一年是上千行，
+    /// 每轮把这上千行解一遍只为挑出 3 行，是纯白烧。**不加归档/删除**：保留期是产品决定，
+    /// 而"只读需要的行"不是。
+    func loadFindings(taskId: UUID? = nil, status: FindingStatus? = nil) throws -> [AgentFinding] {
+        var where_: [String] = []
+        var args: [DBValue] = []
+        if let taskId { where_.append("task_id = ?"); args.append(.text(taskId.uuidString)) }
+        if let status { where_.append("status = ?"); args.append(.text(status.rawValue)) }
+        let filter = where_.isEmpty ? "" : " WHERE " + where_.joined(separator: " AND ")
         let rows = try db.query("""
             SELECT id, task_id, source_id, session_id, title, body, evidence, plan, plan_rev,
                    severity, fingerprint, status, undo_path, tokens, cost_usd, created_at, decided_at,
                    nag_count, last_nagged_at
-            FROM agent_findings ORDER BY created_at DESC
-            """)
+            FROM agent_findings\(filter) ORDER BY created_at DESC
+            """, args)
         return rows.compactMap { row in
             // 坏行**跳过而不是抛**: 一行 JSON 坏了不该让整个收件箱读不出来
             // （同 `scheduled_tasks.sources` 那条）。

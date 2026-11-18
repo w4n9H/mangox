@@ -2449,14 +2449,18 @@ final class ChatStore: ObservableObject {
         (mailboxAuth(accountId)?.isEmpty == false)
     }
 
-    func addMailboxAccount(_ account: MailboxAccount) {
-        mailboxAccounts.append(account)
-        try? persistence?.upsertMailboxAccount(account)
-    }
-
-    func updateMailboxAccount(_ account: MailboxAccount) {
-        guard let idx = mailboxAccounts.firstIndex(where: { $0.id == account.id }) else { return }
-        mailboxAccounts[idx] = account
+    /// 新增 / 修改账号**同一个入口**（`upsert` 语义）。
+    ///
+    /// ⚠️ 2026-11-18 review: 原来这里是 `addMailboxAccount` + `updateMailboxAccount` 两个函数，
+    /// 而后者**零调用** —— 于是"改一台已有的邮箱"在界面上根本不存在（只能删了重建），
+    /// 而持久化那一句两边一模一样（都是 `upsertMailboxAccount`）。合成一个之后，
+    /// 将来加编辑入口不需要先想起"原来还有个 update"。
+    func saveMailboxAccount(_ account: MailboxAccount) {
+        if let idx = mailboxAccounts.firstIndex(where: { $0.id == account.id }) {
+            mailboxAccounts[idx] = account
+        } else {
+            mailboxAccounts.append(account)
+        }
         try? persistence?.upsertMailboxAccount(account)
     }
 
@@ -2505,12 +2509,15 @@ final class ChatStore: ObservableObject {
         }
     }
 
-    /// P19 S6: 整轮回滚。返回 nil = 成功。
-    func rollbackFinding(_ findingId: UUID) -> String? {
-        let why = scheduler.rollbackFinding(findingId)
-        if let why { setTurnLimitNotice(why, isError: true) }
-        else { setTurnLimitNotice(L("已回滚到执行前的快照"), isError: false) }
-        return why
+    /// P19 S6: 整轮回滚。**异步**（解压 tar 不占主线程，见 `SchedulerService.rollbackFinding`）。
+    /// 结果走横幅：失败说人话，成功说"已回滚"。没有返回值 —— 调用方（收件箱那个按钮）
+    /// 不需要同步等一个几十秒的 I/O。
+    func rollbackFinding(_ findingId: UUID) {
+        scheduler.rollbackFinding(findingId) { [weak self] why in
+            guard let self else { return }
+            if let why { self.setTurnLimitNotice(why, isError: true) }
+            else { self.setTurnLimitNotice(L("已回滚到执行前的快照"), isError: false) }
+        }
     }
 
     /// P19: 人拍板（忽略 / 采纳）。`decided_at` 只在**人**这一侧写 —— 模型自己改状态不算决定。

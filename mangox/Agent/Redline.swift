@@ -154,7 +154,8 @@ enum Redline {
 
 /// 执行回合的守卫参数 —— per-turn 下发给 transport，审批桥据此在**弹卡之前**先过红线。
 struct ExecutionGuard: Equatable {
-    /// 任务绑定的项目目录（写围栏的边界）。
+    /// 任务绑定的项目目录。**围栏删掉之后它只剩一个用途**: 相对路径的基准
+    /// （执行轮的 cwd 就是项目根，`> out.txt` 要解到这儿）。
     let projectPath: String?
     /// 已授权的步骤号。动作对不上就记 drift 并中止。
     let allowedSteps: [Int]

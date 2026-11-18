@@ -47,6 +47,15 @@ struct ScheduledView: View {
     @State private var draftLog: String = ""
     @State private var handoffUpdatedAt: Date?
     @State private var showWorkLog: Bool = false
+    /// 台账卡的**已解析**快照（P19.2 S13）。
+    ///
+    /// ⚠️ 为什么要有这两个 @State（2026-11-18 review）: 原来 `ledgerCard` 每次 body 求值都
+    /// `readHandoff`（一次 `contentsOfFile` + 一次 `attributesOfItem`），而它长在编辑器里 ——
+    /// 编辑器的 `draftName/draftPrompt/...` 全是 @State ⇒ **每敲一个字符读一次盘**，
+    /// 拿到原文之后卡里还要再 `parse` 六遍。现在读盘与解析都只发生在
+    /// "打开/切换任务"与"这个任务又跑过一轮"这两个时点（`refreshLedger`）。
+    @State private var ledgerParsed: AssistantLedger = .init()
+    @State private var ledgerUpdatedAt: Date?
     // P10.4 任务级执行配置 (nil 草稿 = 跟随全局默认; fire 时只动日志会话 transport)
     @State private var draftUseCustomConfig: Bool = false
     @State private var draftProvider: String = ""
@@ -146,7 +155,7 @@ struct ScheduledView: View {
                 .menuStyle(.borderlessButton)
                 .menuIndicator(.hidden)
                 .fixedSize()
-                .help("新建：Cron 定时（动作写死）或 助理（目标式，只读巡检）")
+                .help("新建：Cron 定时（动作写死）或 助理（目标式，产方案等人批准）")
             }
             .padding(.horizontal, 10)
             .padding(.top, 14)
@@ -439,8 +448,9 @@ struct ScheduledView: View {
                 .lineLimit(1)
             Spacer(minLength: 2)
             // 「回滚」= 把整轮快照解回去。**不改结论**（状态回 open）: 人回滚 = 承认这次没解决。
+            // 解压在后台做（大项目几秒起步），结果走顶部横幅 —— 这里不等返回值。
             Button(LK("回滚")) {
-                _ = store.rollbackFinding(f.id)
+                store.rollbackFinding(f.id)
             }
             .buttonStyle(.plain)
             .font(CodexTheme.fontTiny)
@@ -786,7 +796,7 @@ struct ScheduledView: View {
             }
         }
         .help(draftKind == .assistant
-              ? "助理：到点只读巡检，产出结论等你批准（`prompt` 写目标，不是动作）"
+              ? "助理：到点看一轮，产出带编号的方案等你批准（`prompt` 写目标，不是动作）"
               : "Cron 定时：到点执行 `prompt` 里写好的动作")
     }
 
@@ -796,15 +806,6 @@ struct ScheduledView: View {
                 .font(.system(size: 10))
             Text(draftKind == .assistant ? LK("助理") : LK("Cron 定时"))
                 .font(CodexTheme.fontSmall)
-            if draftKind == .assistant {
-                Text(LK("只读"))
-                    .font(.system(size: 9, weight: .semibold))
-                    .padding(.horizontal, 4)
-                    .padding(.vertical, 1)
-                    .background(CodexTheme.info.opacity(0.16))
-                    .foregroundStyle(CodexTheme.info)
-                    .clipShape(RoundedRectangle(cornerRadius: 3))
-            }
             if editingId == nil {
                 Image(systemName: "chevron.down").font(.system(size: 8))
                     .foregroundStyle(CodexTheme.textMuted)
@@ -892,8 +893,25 @@ struct ScheduledView: View {
     private var ledgerCard: some View {
         // 读法与 fire 同源（`readHandoff` 里含 S9 的新旧位置回落）——
         // 这里若自己拼路径，显示的就不是模型正在写的那一份。
-        let h = editingTask().flatMap { store.scheduler.readHandoff(for: $0) }
-        return AssistantLedgerCard(text: h?.content ?? "", updatedAt: h?.updatedAt)
+        // ⚠️ 读盘与解析**不在 body 里**（见 `ledgerParsed` 的声明处）。
+        // `lastRunAt` 变了 = 这个助理又跑过一轮 ⇒ 账本可能刚被改写，刷一次。
+        AssistantLedgerCard(ledger: ledgerParsed, updatedAt: ledgerUpdatedAt)
+            .onChange(of: editingTask()?.lastRunAt) { _, _ in refreshLedger() }
+    }
+
+    /// 重新读一次账本并解析（打开编辑器 / 手动刷新 / 这个任务刚跑过）。
+    /// 返回原文 —— 工作日志卡（Cron 档）与台账卡（助理档）**同源**，一次读盘供两处用。
+    @discardableResult
+    private func refreshLedger() -> (content: String, updatedAt: Date?)? {
+        guard let t = editingTask() else {
+            ledgerParsed = .init()
+            ledgerUpdatedAt = nil
+            return nil
+        }
+        let h = store.scheduler.readHandoff(for: t)
+        ledgerParsed = AssistantLedger.parse(h?.content ?? "")
+        ledgerUpdatedAt = h?.updatedAt
+        return h
     }
 
     // MARK: - P19.2 S15b 入口（飞书机器人）
@@ -1670,13 +1688,10 @@ struct ScheduledView: View {
     }
 
     private func loadHandoff() {
-        guard let t = editingTask(), let h = store.readHandoff(for: t) else {
-            draftLog = ""
-            handoffUpdatedAt = nil
-            return
-        }
-        draftLog = h.content
-        handoffUpdatedAt = h.updatedAt
+        // 顺带刷新台账卡的已解析快照 —— 两边读的是同一份文件（`refreshLedger` 里那一次读盘）。
+        let h = refreshLedger()
+        draftLog = h?.content ?? ""
+        handoffUpdatedAt = h?.updatedAt
     }
 
     private func saveHandoff() {
@@ -1722,6 +1737,9 @@ struct ScheduledView: View {
         let h = store.readHandoff(for: task)
         draftLog = h?.content ?? ""
         handoffUpdatedAt = h?.updatedAt
+        // 台账卡的同一份读盘结果（`refreshLedger` 只在"打开/切换/刚跑过"时被调，不在 body 里）
+        ledgerParsed = AssistantLedger.parse(h?.content ?? "")
+        ledgerUpdatedAt = h?.updatedAt
         showWorkLog = false
     }
 

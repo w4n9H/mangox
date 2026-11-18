@@ -5,9 +5,12 @@
 //  那种状态不会当场报错 —— 它表现成"它忽然不认得我了"，而界面上一个字都不变。
 //
 //  四组（每组一个独立的失败模式，不是同一件事的四种写法）:
-//    甲 **删助理 ⇒ 三样一起走**（任务行 / 日志会话 / 账本）。账本要**两份都查**：
-//       新位置与 S9 之前的旧位置 —— `readHandoff` 会回落，只删新的等于没删。
+//    甲 **删助理 ⇒ 六样一起走**（任务行 / 日志会话 / 账本 / jsonl / 库里的三张表 / 快照目录）。
+//       账本要**两份都查**：新位置与 S9 之前的旧位置 —— `readHandoff` 会回落，只删新的等于没删。
 //       而且 `deleteSessions: false` 也照样删（那个参数对助理失效）。
+//       ⚠️ 后三样是 2026-11-18 补的（boss 报"删助理时 jsonl 不会被删"）：它们的形状
+//       **全都不报错** —— 会话行没了文件还躺着（反查不到 = 永久孤儿）、悬空 `task_id`
+//       只在收件箱里显示成「未知任务」、`undo/` 目录成了一包没人能回滚的 tar。
 //    乙 **删会话 ⇒ 只清指针**：`logSessionId` 变 nil（且**落库**）、助理还在、
 //       账本还在。理由: 账本是文件，丢的只是对话历史 —— 杀掉一条在看守的线
 //       来防一次失忆，惩罚远大于伤害。
@@ -21,6 +24,13 @@
 //    · `deleteConversation` 里去掉 `detachAssistantSession` 调用 ⇒ **2 红**：乙① + 乙①b；
 //    · `detachAssistantSession` 只改内存不落库 ⇒ **1 红**：乙①b。
 //      ⚠️ 后两条**必须分别下**：只去掉调用会同时盖住"落库"那一格，看不出后者是不是活的。
+//
+//  反例（2026-11-18 **实测**，删除半径那三样各下一次，逐个认领）:
+//    · `deleteConversation(sid)` 去掉 `deleteTranscript: true` ⇒ **1 红**：甲⑤；
+//    · DB 层三条 DELETE 全去掉 ⇒ **2 红**：甲⑥ + 甲⑥b；
+//    · **只**去掉 token 那条 DELETE ⇒ **1 红**：甲⑥b（⇒ 甲⑥b 是独立的活门，
+//      不是甲⑥ 的复述 —— 这正是把它单列的原因）；
+//    · 快照目录那一行改成 `_ = d`（读了不删，避开未使用告警）⇒ **1 红**：甲⑦。
 //
 
 import Foundation
@@ -64,6 +74,46 @@ extension SmokeMain {
         check(fm.fileExists(atPath: newLedger) && fm.fileExists(atPath: oldLedger),
               "T-LIFE 甲前置: 账本新旧两份都在（旧的那份才是回落的靶子）")
 
+        // ── 甲⑤~⑦ 的**前提**：删除半径的后半（jsonl / 库里的三张表 / 快照目录） ──────
+        // 这三样在旧的删除路径上**一个都没人管**（2026-11-18 实测）：会话行没了但
+        // `pi-sessions/<sid>.jsonl` 还躺着（这台机器攒了 3 个，谁也认领不到）、
+        // findings / actions / token 日账留下悬空 `task_id`（收件箱显示「未知任务」）、
+        // `undo/<findingId>/` 成了永远没人能回滚的一包 tar。
+        //
+        // ⚠️ **先造后删**：只断言"删完没了"的话，"前提根本没造出来"照样全绿。
+        // ⚠️ transcript 根与快照根都是**进程级**重定向（守卫 25/27）—— 不重定向就是拿
+        //   用户真实的 `~/.mangox/pi-sessions`、`~/.mangox/undo` 当夹具。
+        let piRoot = dir + "/pi-sessions"
+        try? fm.createDirectory(atPath: piRoot, withIntermediateDirectories: true)
+        let piRootBackup = PiRpcTransport.sessionDirectoryOverride
+        PiRpcTransport.sessionDirectoryOverride = piRoot
+        let jsonlPath = PiRpcTransport.sessionFilePath(for: aSid)
+        try? "{\"role\":\"user\"}\n".write(toFile: jsonlPath, atomically: true, encoding: .utf8)
+
+        let undoRoot = dir + "/undo"
+        WatchExecService.undoRootOverride = undoRoot
+        let findingId = UUID()
+        let undoDir = undoRoot + "/" + findingId.uuidString
+        try? fm.createDirectory(atPath: undoDir, withIntermediateDirectories: true)
+        try? store.persistence?.upsertFinding(AgentFinding(
+            id: findingId, taskId: aTask.id, sourceId: UUID(), sessionId: aSid,
+            title: "CI 红了", body: "第 12 步失败",
+            plan: [WatchPlanStep(n: 1, text: "重跑")],
+            fingerprint: "fp-\(findingId.uuidString)",
+            undoPath: undoDir, createdAt: .now))
+        try? store.persistence?.upsertFindingAction(FindingAction(
+            findingId: findingId, step: 1, kind: "bash", target: nil,
+            result: "allowed", output: "ok", at: .now))
+        let tokenDay = "2026-11-18"
+        try? store.persistence?.addTokenUsage(taskId: aTask.id, day: tokenDay, tokens: 42)
+        let seedsOK = fm.fileExists(atPath: jsonlPath)
+            && fm.fileExists(atPath: undoDir)
+            && ((try? store.persistence?.loadFindings().count) ?? 0) == 1
+            && ((try? store.persistence?.loadFindingActions().count) ?? 0) == 1
+            && ((try? store.persistence?.tokenUsage(taskId: aTask.id, day: tokenDay)) ?? 0) == 42
+        check(seedsOK,
+              "T-LIFE 甲⑤~⑦ 前置: jsonl / findings+actions / token 日账 / undo 目录 四样都造出来了")
+
         // **传 false** —— 助理这个参数应当被忽略
         store.deleteScheduled(id: aTask.id, deleteSessions: false)
         check(!store.scheduledTasks.contains { $0.id == aTask.id },
@@ -74,6 +124,25 @@ extension SmokeMain {
               "T-LIFE 甲③ 账本文件（新位置）删了")
         check(!fm.fileExists(atPath: oldLedger),
               "T-LIFE 甲④ 账本文件（**旧位置**）也删了 —— 只删新位置的话 `readHandoff` 的回落会把旧账本复活")
+        check(!fm.fileExists(atPath: jsonlPath),
+              "T-LIFE 甲⑤ 会话的 jsonl 跟着删了 —— 漏这一格的形状是「会话行没了、文件还躺着」，"
+              + "反查不到会话行 = 永久孤儿（实测这台机器攒了 3 个）")
+        let fLeft = ((try? store.persistence?.loadFindings()) ?? []).filter { $0.taskId == aTask.id }
+        let aLeft = ((try? store.persistence?.loadFindingActions()) ?? [])
+            .filter { $0.findingId == findingId }
+        check(fLeft.isEmpty && aLeft.isEmpty,
+              "T-LIFE 甲⑥ 结论与执行落痕（findings / finding_actions）跟着删了 —— 悬空 task_id 不报错，"
+              + "只在收件箱里显示成「未知任务」")
+        // 单列一格：token 日账是**另一张表**，与 findings 不同源（前者记花销、后者记结论）
+        // ⇒ 合并断言会让"少认一张表"这半个 bug 藏在另一格的红里。
+        check(((try? store.persistence?.tokenUsage(taskId: aTask.id, day: tokenDay)) ?? -1) == 0,
+              "T-LIFE 甲⑥b token 日账跟着删了（每天一张行；少认一列 = 库里留垃圾，"
+              + "而它只在有人统计「这个助理花了多少」时给出假数）")
+        check(!fm.fileExists(atPath: undoDir),
+              "T-LIFE 甲⑦ 执行快照目录删了 —— 那条 finding 刚被删 ⇒ 再也没有「回滚」这个动作，"
+              + "留着只是一包没人认领的 tar")
+        PiRpcTransport.sessionDirectoryOverride = piRootBackup
+        WatchExecService.undoRootOverride = nil
 
         // ══ 乙 删会话 ⇒ 只清指针，不删助理 ═══════════════════════════════════
         let mock2 = MockTransport()

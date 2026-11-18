@@ -4914,7 +4914,7 @@ struct SmokeMain {
                 // 把那一行**从表里真抹掉**（走 persistence, 绕过守卫 —— 模拟老库 / 将来某 bug),
                 // 再补种必须回来, 且只有一条。退回"一次性标记"的写法 ⇒ 这条立刻红。
                 dmRun.scheduler.scheduledTasks.removeAll { SchedulerService.isDreamTask($0) }
-                try? dmRun.persistence?.deleteScheduled(id: dmTask.id)
+                _ = try? dmRun.persistence?.deleteScheduled(id: dmTask.id)
                 check(dmRun.scheduledTasks.filter { SchedulerService.isDreamTask($0) }.isEmpty,
                       "P15.3 补种 前置: 那一行已被抹掉（这一步不经守卫, 模拟的是「表里没有」）")
                 dmRun.scheduler.seedDreamTaskIfNeeded()
@@ -5748,6 +5748,13 @@ struct SmokeMain {
         //       红线挪到 toolCards 守卫之后 ⇒ ⑤ 红（无卡的调用直接 Allow）;
         //       "没声明步骤"改成放行 ⇒ ⑦ 红; 收尾把 unclear 记成 resolved ⇒ ⑨b 红。
         await caseWatchExec()
+
+        // ---- T-SNAPSHOT: 执行快照（不覆盖 / 取最新 / 上限 / 7 天清理） ----
+        // 反例: 快照名改回固定 `snapshot.tar.gz` ⇒ ① 红（第二次盖掉第一次）；
+        //       `restore` 改取最小编号 ⇒ ② 红；去掉 `pruneOldArchives` ⇒ ③ 红；
+        //       `archiveNumber` 不认无编号的老名字 ⇒ ④ 红；`purgeExpired` 的阈值改成
+        //       `>= 365 天` ⇒ ⑤ 红。
+        await caseExecSnapshot()
 
         // ---- T-WATCHNOTIFY: P19 S7 触达常驻（预算闸 / sink 脱敏 / 通知直达 / 登录项） ----
         // 反例: 账本改成覆盖 ⇒ ① 红; 预算闸 `return` 改成放行 ⇒ ② 红;

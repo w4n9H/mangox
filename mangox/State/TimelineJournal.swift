@@ -77,12 +77,6 @@ enum TimelineJournal {
     static let minInterval: TimeInterval = 3
     private static var lastWriteAt: [UUID: Date] = [:]
 
-    /// 清掉节流表。**只给冒烟用** —— 否则第二个用例会被上一个用例的时间戳挡住，
-    /// 表现是"断言说没写、其实是被跳过了"，而那看起来正好像一个真 bug。
-    static func resetThrottle() {
-        lastWriteAt.removeAll()
-    }
-
     // MARK: - 写
 
     /// 把一场会话在**这一天**的状态写进它所属根的流水。

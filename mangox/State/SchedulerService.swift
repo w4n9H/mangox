@@ -19,6 +19,8 @@ final class SchedulerService: ObservableObject {
     @Published var missedFires: [MissedFire] = []
     private var schedulerTimer: Timer?
     private var lastSchedulerMinute: Int = 0
+    /// 上次清理过期快照的**日键**（`yyyy-MM-dd`）。空 = 本进程还没清过 ⇒ 启动后第一次 tick 清一遍。
+    private var lastUndoPurgeDay: String = ""
     /// P17: 防 App Nap 的常驻断言。**必须强持有** —— 头文件明说对象一旦被释放断言就自动结束,
     /// 存成局部变量等于没加。`private(set)` 是为了让冒烟能断言"加上了 / 交还了"。
     private(set) var napAssertion: NSObjectProtocol?
@@ -91,11 +93,24 @@ final class SchedulerService: ObservableObject {
         // S12 在这里留过一行痕（"这场会话从此是普通会话"）。成对删除之后那条路径**永不执行**
         // ⇒ 整条删掉，不留 `if`：一个永远不会进来的分支只会给下次改回"可选"留下后门。
         scheduledTasks.removeAll { $0.id == id }
-        try? store?.persistence?.deleteScheduled(id: id)
+        // 删任务行**连同它的数据**（findings / actions / token 日账），并把执行快照目录带出来。
+        // ⚠️ 以前这一句只删一行 `scheduled_tasks` ⇒ 悬空外键 + 收件箱里的「未知任务」。
+        var undoDirs: [String] = []
+        if let p = store?.persistence, let dirs = try? p.deleteScheduled(id: id) { undoDirs = dirs }
         if paired || deleteSessions {
-            for sid in sessionIds { store?.deleteConversation(sid) }
+            // ⚠️ `deleteTranscript: true`（2026-11-18）：**删会话连它的 jsonl 一起删**。
+            // 以前这里是默认值 `false` ⇒ 会话行没了、`pi-sessions/<sid>.jsonl` 还躺着，
+            // 而它已经谁也认领不到（反查不到会话行 = 永久孤儿）。实测这台机器上攒了 3 个。
+            // 走 `deleteConversation` 而不是自己拼路径：删除半径**只有那一处定义**
+            // （删会话 / 删项目共用），在这里开第二份就是让它慢慢漂。
+            for sid in sessionIds { store?.deleteConversation(sid, deleteTranscript: true) }
         }
-        if paired { removeAssistantLedger(for: task) }
+        if paired {
+            removeAssistantLedger(for: task)
+            // 快照目录（`~/.mangox/undo/<findingId>/`）: 人点「回滚」才有意义，而那条 finding
+            // 刚被删掉 ⇒ 留着就是永远没人认领的 tar。先把路径取出来再删盘（见 DB 层注释）。
+            for d in undoDirs { try? FileManager.default.removeItem(atPath: d) }
+        }
     }
 
     /// 助理的账本**两份都可能存在**：新位置（`.mangox/assistant`）与 S9 之前的旧位置
@@ -648,6 +663,22 @@ final class SchedulerService: ObservableObject {
         // （`WatchNagService.due` 是纯函数）。放在 fire 之后: 同一分钟里先跑该跑的巡检，
         // 再催历史遗留 —— 而"催"不 spawn、不烧 token，与预算闸和并发闸都不相交。
         nagWaitingFindings(now: now)
+        // 执行快照的过期清理（`undoRetentionDays` = 7 天）。
+        //
+        // ⚠️ 2026-11-18 review: 这个函数**从写下来那天起零调用** —— 于是时间线上那句
+        //    「快照留在 …，7 天内可从收件箱回滚」是**半句假话**（实际永久保留，只有删助理才清）。
+        //    一个"写了清理器但没人调"的坑比没有清理器更坏: 文档与判据都以为它在跑。
+        //
+        // 按**日**一次而不是每跳: 目录数是"有几个 finding"（几十到几百），每分钟 stat 一遍
+        // 不值当。放后台: 它只删盘，不碰任何 @Published 状态。
+        let today = Self.dayKey(now)
+        if today != lastUndoPurgeDay {
+            lastUndoPurgeDay = today
+            DispatchQueue.global(qos: .utility).async {
+                let removed = WatchExecService.purgeExpired()
+                if removed > 0 { Log.event("undo-purge", "removed", "\(removed)") }
+            }
+        }
     }
 
     /// 扫一遍还开着的结论，把"该催的"催一次（判据全在 `WatchNagService.due`，这里只执行）。
@@ -895,7 +926,7 @@ final class SchedulerService: ObservableObject {
     /// 而下游解析只会在某一天发现"结论没解析出来"，零红灯。
     ///
     /// ⚠️ P19.2 S11: **「工作日志」段从这里搬走了** —— 账本不再由 App 从回复里解析后写盘，
-    /// 改由模型自己 `write` 那一份文件（落点由账本围栏限定）。所以这里的回复只剩三段，
+    /// 改由模型自己 `write` 那一份文件（落点由注入段里那个绝对路径给定 —— 围栏已删，见 D8）。所以这里的回复只剩三段，
     /// 而五节的**文件格式**搬到 `watchLedgerContract`（见下）。两份东西分开的理由:
     /// 回复是"这一轮判断了什么"（给人看、给解析器落 finding），账本是"目标到哪了"（给
     /// 下一轮的自己看）。混在一个段落里时，任何一处格式改动都会同时影响两件事。
@@ -1053,7 +1084,7 @@ final class SchedulerService: ObservableObject {
     ///
     /// 为什么不是只返回注入段: P19.2 S12 起对话轮有**一支笔**（只许写账本），
     /// 而「笔往哪写」与「注入里承诺的那个路径」**必须是同一个字符串** —— 分成两次反查，
-    /// 迟早出现"prompt 里说的是 A、围栏认的是 B"，而那种偏差只表现为"它说它写了，文件没变"。
+    /// 迟早出现"prompt 里说的是 A、账本落到 B"，而那种偏差只表现为"它说它写了，文件没变"。
     struct AssistantChatTurn: Equatable {
         let taskId: UUID
         let prompt: String
@@ -1196,7 +1227,7 @@ final class SchedulerService: ObservableObject {
         let text = lastAssistantText(in: store, sid: sid)
         guard let block = WatchFindingService.proposalBlock(in: text) else { return }
         let report = WatchFindingService.parse(block)
-        let existing = (try? p.loadFindings()) ?? []
+        let existing = (try? p.loadFindings(taskId: task.id)) ?? []   // 只认本任务（同 ②）
         // `allowedExternalIds = []`: 对话轮不采集观察 ⇒ 任何 `[n]` 引用都只能是编造的。
         // `sourceId = 任务的项目`: 与巡检轮「项目隐式来源」同一条口径（`task.projectId` 就是来源 id）。
         let plan = WatchFindingService.plan(report: report, task: task, sessionId: sid,
@@ -1442,7 +1473,9 @@ final class SchedulerService: ObservableObject {
     @discardableResult
     func recoverInterruptedExecutions() -> Int {
         guard let store, let p = store.persistence else { return 0 }
-        let stuck = ((try? p.loadFindings()) ?? []).filter { $0.status == .running }
+        // 只取 running 那几行：这里原来读全表再 filter，而它跑在**每次启动**上。
+        // 状态收窄在 SQL 里做，语义与"读全量再筛"逐行等价（`loadFindings` 的注释）。
+        let stuck = (try? p.loadFindings(status: .running)) ?? []
         guard !stuck.isEmpty else { return 0 }
         for f in stuck {
             try? p.setFindingStatus(id: f.id, status: .open, at: nil)
@@ -1457,28 +1490,62 @@ final class SchedulerService: ObservableObject {
 
     /// 整轮回滚（§03 L3）。**只还原文件，不改方案** —— 状态回 `open`：人回滚 = 承认
     /// 这次没解决（改回 `resolved` 就等于把问题从收件箱里藏起来了）。
-    /// 返回 nil = 成功；否则是人话的失败原因。
-    func rollbackFinding(_ findingId: UUID) -> String? {
+    ///
+    /// ⚠️ **后台解压、主线程回写**（2026-11-18 review 修）。原来这里是 @MainActor 上同步跑
+    /// `tar -xzf` + `waitUntilExit`，而**同一条链的另一半**（`startExecution` 的快照）特意
+    /// 放了后台、注释还写着"卡主线程 = 点了没反应" —— 同一件事的两半各写一种做法。
+    /// 大项目回滚时界面会冻住几秒到几十秒，而人只会以为"点了没反应"，再点一次。
+    ///
+    /// ⚠️ `rollingBack` 挡连点：两个 tar 同时往同一目录解 = 互相覆盖（比不响应更糟）。
+    /// 它是**能力层**的守卫，不是把按钮置灰 —— 置灰只是可见性。
+    ///
+    /// 签名从 `-> String?` 改成完成回调：解压的耗时不该让调用方同步等。
+    /// 回调参数 = nil 表示成功，否则是人话的失败原因。
+    func rollbackFinding(_ findingId: UUID, completion: @escaping (String?) -> Void) {
+        guard !rollingBack.contains(findingId) else {
+            completion("这一条正在回滚，等一下")
+            return
+        }
         guard let store, let p = store.persistence,
               let f = store.findings.first(where: { $0.id == findingId }) else {
-            return "找不到这条结论"
+            completion("找不到这条结论")
+            return
         }
-        guard let undo = f.undoPath, !undo.isEmpty else { return "这条结论没有快照，回滚不了" }
-        do {
-            guard try WatchExecService.restore(findingId: findingId) else {
-                return "快照还原失败（快照目录 \(undo)）"
+        guard let undo = f.undoPath, !undo.isEmpty else {
+            completion("这条结论没有快照，回滚不了")
+            return
+        }
+        rollingBack.insert(findingId)
+        // 只把 tar 挪到后台；库与 @Published 全部回主线程做（与 `startExecution` 同一个形状）。
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            var reason: String?
+            do {
+                if try WatchExecService.restore(findingId: findingId) == false {
+                    reason = "快照还原失败（快照目录 \(undo)）"
+                }
+            } catch {
+                reason = "快照还原失败：\(error)"
             }
-        } catch {
-            return "快照还原失败：\(error)"
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.rollingBack.remove(findingId)
+                if let reason {
+                    completion(reason)
+                    return
+                }
+                try? p.setFindingStatus(id: findingId, status: .open, at: nil)
+                try? p.upsertFindingAction(FindingAction(findingId: findingId, step: 0, kind: "rollback",
+                                                         target: undo, result: "restored",
+                                                         output: nil, at: Date()))
+                store.reloadFindings()
+                store.reloadFindingActions()
+                completion(nil)
+            }
         }
-        try? p.setFindingStatus(id: findingId, status: .open, at: nil)
-        try? p.upsertFindingAction(FindingAction(findingId: findingId, step: 0, kind: "rollback",
-                                                 target: undo, result: "restored",
-                                                 output: nil, at: Date()))
-        store.reloadFindings()
-        store.reloadFindingActions()
-        return nil
     }
+
+    /// 正在回滚的 finding（能力层的连点守卫，见 `rollbackFinding`）。
+    private var rollingBack: Set<UUID> = []
 
     /// 时间线那一段的时:分。**恒中文、恒本地时区**（同 `recordFireSkip`）——
     /// 它是日志正文，不是界面文案，不进词表。
@@ -1936,7 +2003,9 @@ final class SchedulerService: ObservableObject {
               let task = scheduledTasks.first(where: { $0.id == ctx.taskId }) else { return }
         let text = lastAssistantText(in: store, sid: sid)
         let report = WatchFindingService.parse(text)
-        let existing = (try? p.loadFindings()) ?? []
+        // **按任务收窄**：下面两处（同指纹去重、`lastNotifyAt`）本来就只认 `task.id`，
+        // 读全表等于把别的助理上千行 JSON 解一遍再丢掉。跨任务的信息这里一个都不需要。
+        let existing = (try? p.loadFindings(taskId: task.id)) ?? []
         // "上次提给人是多久前" 用这个任务最近一条结论的时间近似。**够用且无状态** ——
         // 真正的通知时刻要多存一列, 而它只在这条冷却判据里用得上（§04 冷却按任务）。
         let lastNotifyAt = existing.filter { $0.taskId == task.id }.map(\.createdAt).max()
@@ -1949,7 +2018,7 @@ final class SchedulerService: ObservableObject {
         // ── 账本写盘: **App 不写了**（P19.2 S11 翻面；2026-11-16 的「由 App 写」已退役）──
         //
         // 历史: S11 之前巡检轮没有写工具，让它自己写是做不到的事，所以内容进输出契约、
-        // 落盘归 App。S11 给了它一支笔（`write` 来自档位 + 账本围栏），于是这里只把
+        // 落盘归 App。S11 给了它一支笔（`write` 来自档位），于是这里只把
         // 回复里的「工作日志」段**有意忽略**。
         //
         // 为什么必须退役而不是留着: 两个写者 = 两份真源。模型这一轮刚写完的账本，
@@ -1970,7 +2039,7 @@ final class SchedulerService: ObservableObject {
         }
         // ── 「## 待你决定」→ findings（P19.4）────────────────────────────────
         // 为什么这一节必须落地成 findings: 无人值守下 fire 恒 `unattended` ⇒ 审批卡**根本不发**
-        // （`beginTurn` 里 `askApproval: false`），而巡检轮的围栏模式是 `deny` ⇒ 围栏外一律拒。
+        // （`beginTurn` 里 `askApproval: false`；围栏那一层 2026-11-18 也整层删了，见 D8）。
         // 所以"重要操作等人确认 / 缺材料问人"这两件事在 fire 轮**没有任何出路** ——
         // 而模型能表达它们的唯一地方就是账本这一节，账本却**没有触达**：人永远不会知道。
         //
@@ -2046,13 +2115,22 @@ final class SchedulerService: ObservableObject {
 
     /// 回合落定后记一笔 token 账 —— 预算闸的**事实来源**。
     ///
-    /// 只记**定时任务日志会话**的回合：人自己开的会话（包括助理的对话轮）不该吃任务的预算，
-    /// 否则"我去问它两句"会把今天的巡检名额吃掉。
+    /// 只记**任务自己发起的回合**（巡检轮 / 执行轮）。人自己问的话不吃任务的预算 ——
+    /// 否则"我去问它两句"会把今天的巡检名额吃掉，而时间线上冒出一句「日预算已满」，
+    /// 人根本联想不到是自己聊天聊掉的。
+    ///
+    /// ⚠️ 2026-11-18 review 修：原来只有 `logSessionId == sid` 一条判据，而 D8 之后
+    /// 「会话 = 助理 = 机器人」—— 助理的对话轮**就是**那条会话 ⇒ 上面那句承诺根本没兑现
+    /// （注释写着"包括助理的对话轮"，代码做不到）。现在补上：对话轮在 `beginDialogueTurn`
+    /// 里登记、在 `finishDialogueTurnIfNeeded` 里认领，而本函数**排在两者之间**
+    /// （`ChatStore` 的 `.streamEnded`：先记账、后 finish*）⇒ 此刻字典里还有它。
+    ///
     /// 按 `turnStart` 过滤而**不是**整场会话求和：日志会话装着几十次 fire，全求和等于
     /// 第二次 fire 就爆预算。
     func recordScheduledUsage(sid: UUID, turnStart: Date?, projection: [ChatMessage]) {
-        guard let turnStart, let p = store?.persistence,
-              let task = scheduledTasks.first(where: { $0.logSessionId == sid }) else { return }
+        guard let turnStart, let p = store?.persistence else { return }
+        guard dialogueTurns[sid] == nil else { return }   // 这一轮是人在跟它说话，不算任务的账
+        guard let task = scheduledTasks.first(where: { $0.logSessionId == sid }) else { return }
         let tokens = projection.reduce(0) { acc, m in
             guard m.role == .assistant, let u = m.usage, m.timestamp >= turnStart else { return acc }
             return acc + u.totalTokens

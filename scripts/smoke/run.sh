@@ -570,6 +570,35 @@ if has_code mangox/State/SchedulerService.swift 'sendEmail|mailTransportFactory'
     echo "FAIL - 邮件外发的投递路径又出现了 (触达卡删了 ⇒ 它没有配置入口, 留着就是静默发信)" >&2
     exit 1
 fi
+# 执行快照的三条结构约束（2026-11-18 review）—— 界面/状态机上都看不出来，只能扫源码：
+#   ① 归档名不许写死成 `snapshot.tar.gz`（同名覆盖 = 第二次执行盖掉第一次的原始状态）；
+#   ② 7 天清理必须**真有人调**（`purgeExpired` 曾经零调用，而时间线上在承诺"7 天内可回滚"）；
+#   ③ 回滚不许在主线程同步解压（`restore` 旁边必须有 `DispatchQueue.global`）。
+if ! has_code mangox/State/WatchExecService.swift 'let archive = nextArchivePath\(in: dir\)'; then
+    echo "FAIL - 快照又写回固定文件名了 (同名覆盖 ⇒ 第二次执行盖掉第一次那份原始状态，不可逆)" >&2
+    exit 1
+fi
+if ! has_code mangox/State/SchedulerService.swift 'WatchExecService\.purgeExpired'; then
+    echo "FAIL - 过期快照没人清 (purgeExpired 零调用 ⇒ undo 目录只增不减，而文案写着 7 天)" >&2
+    exit 1
+fi
+# ③ 要判**两半**：光有 `completion` 签名不算数 —— 函数体里照样可以同步调
+#   `WatchExecService.restore`（签名不变、冻屏照旧）⇒ 必须把函数体抠出来看有没有真挪到后台。
+ROLLBACK_BODY="$(awk '/^    func rollbackFinding\(/{f=1} f{print} f && /^    }$/{exit}' mangox/State/SchedulerService.swift)"
+case "$ROLLBACK_BODY" in
+    *'completion: @escaping'*) ;;
+    *)
+        echo "FAIL - 回滚又变回同步返回了 (解压 tar 在主线程 ⇒ 大项目回滚时界面冻住，人以为没反应)" >&2
+        exit 1
+        ;;
+esac
+case "$ROLLBACK_BODY" in
+    *'DispatchQueue.global'*) ;;
+    *)
+        echo "FAIL - 回滚的 tar 解压又回到主线程了 (签名有 completion，但 restore 是同步调的 ⇒ 照样冻屏)" >&2
+        exit 1
+        ;;
+esac
 # 第五档的解码分支: 同样是扫源码(它只编进 helper)。
 #   ① `submit` **缺省必须是 false** —— 写 `?? true` 等于"默认发送", 而发送撤不回;
 #   ② 不许在解码层为 `text` 编默认值 —— 空文本要由 server 拒并说清"要写什么"。

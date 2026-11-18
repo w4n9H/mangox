@@ -76,6 +76,18 @@ struct AssistantLedger: Equatable {
 
     // MARK: - 派生量
 
+    /// 原文长度（`parse` 填）。0 也可能是"还没解析过"，别拿它当唯一判据。
+    var charCount: Int = 0
+
+    /// 有没有任何可显示的东西（全空 ⇒ 台账卡显示"还没有账本"那两句话）。
+    ///
+    /// ⚠️ 不能只看 `stage == .empty`: 一篇**只有目标**的账本 `stage` 也是 `.empty`
+    /// （`stage` 只认 items / tracking），而它明明有内容、卡片该把目标显示出来。
+    var hasContent: Bool {
+        !goal.isEmpty || !items.isEmpty || !tracking.isEmpty
+            || !waiting.isEmpty || !archived.isEmpty
+    }
+
     var stage: LedgerStage {
         if items.isEmpty && tracking.isEmpty { return .empty }
         if !items.isEmpty && items.allSatisfy({ $0.mark == .done }) && tracking.isEmpty { return .done }
@@ -171,6 +183,11 @@ struct AssistantLedger: Equatable {
     static func parse(_ text: String) -> AssistantLedger {
         var out = AssistantLedger()
         let normalized = text.replacingOccurrences(of: "\r\n", with: "\n")
+        // 原文长度由解析顺带带出来（视图要用它显示「账本 N 字」与判空）。
+        // ⚠️ 之所以挂在解析结果上: 台账卡是**每次 body 求值都要用**这几个值的地方，
+        //    而 `parse` 是 O(n)。原来视图里 `ledger` 是计算属性 ⇒ 一次 body 解析 6 遍
+        //    （2026-11-18 review）。解析只做一次、结果带着长度，视图就无从重复。
+        out.charCount = normalized.count
         var current: String?
 
         for raw in normalized.split(separator: "\n", omittingEmptySubsequences: false) {

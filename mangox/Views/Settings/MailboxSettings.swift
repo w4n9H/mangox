@@ -257,7 +257,7 @@ private struct MailboxAccountBlock: View {
             formError = L("缺 SMTP 主机 —— 没有它发不了信（选了自定义就要手填）")
             return
         }
-        store.addMailboxAccount(account)
+        store.saveMailboxAccount(account)
         // 凭据写钥匙串。**写失败要说出来** —— 静默失败的表现是"配置好了, 但邮件从不发出"。
         store.setMailboxAuth(authInput, accountId: account.id)
         guard store.hasMailboxAccountAuth(account.id) else {

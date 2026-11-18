@@ -70,6 +70,34 @@ extension SmokeMain {
         check(blocked.contains("日预算已满"),
               "T-WATCHNOTIFY ①已用 15 / 上限 15 ⇒ 必须拦住并说清原因（实际「\(blocked)」）")
 
+        // MARK: - ①b 对话轮**不吃**任务预算（D8 之后「会话 = 助理 = 机器人」）
+
+        // ⚠️ 2026-11-18 review: 原来判据只有 `logSessionId == sid`，而助理的对话轮
+        // **就是**那条会话 ⇒ 注释写着"包括助理的对话轮不该吃预算"，代码根本做不到：
+        // 人在飞书问两句，今天的巡检就"日预算已满"。
+        // 现在的判据 = "这一轮是不是走对话轮进来的"（`dialogueTurns` 里有它），
+        // 而记账发生在 `finishDialogueTurnIfNeeded` 认领之前 ⇒ 此刻还在。
+        // 两半都要判：只判"对话轮不记"的话，一个什么都不记的实现也全绿。
+        let usageTaskId = UUID()
+        let usageSid = UUID()
+        var usageTask = ScheduledTask(id: usageTaskId, name: "口径试探", prompt: "x", cron: "0 0 1 1 *")
+        usageTask.kind = .assistant
+        usageTask.logSessionId = usageSid
+        store.scheduler.scheduledTasks.append(usageTask)
+        var usageMsg = ChatMessage(role: .assistant, content: .text("ok"))
+        usageMsg.usage = MessageUsage(totalTokens: 120)
+        let usageDay = SchedulerService.dayKey(Date())
+        let usageStart = Date().addingTimeInterval(-30)
+        _ = store.scheduler.beginDialogueTurn(sid: usageSid)     // 登记成对话轮
+        store.scheduler.recordScheduledUsage(sid: usageSid, turnStart: usageStart, projection: [usageMsg])
+        let dialogueSpent = (try? p.tokenUsage(taskId: usageTaskId, day: usageDay)) ?? -1
+        store.scheduler.finishDialogueTurnIfNeeded(sid: usageSid)   // 认领 ⇒ 回到"巡检轮"口径
+        store.scheduler.recordScheduledUsage(sid: usageSid, turnStart: usageStart, projection: [usageMsg])
+        let fireSpent = (try? p.tokenUsage(taskId: usageTaskId, day: usageDay)) ?? -1
+        check(dialogueSpent == 0 && fireSpent == 120,
+              "T-WATCHNOTIFY ①b 对话轮不吃任务预算、巡检轮照记（实际 \(dialogueSpent) → \(fireSpent)）"
+              + " —— 只判前半的话，「什么都不记」也能全绿")
+
         // MARK: - ② 预算闸端到端：超预算 ⇒ 不开回合 + 落痕
 
         let projDir = dir + "/repo"

@@ -24,8 +24,12 @@
 import SwiftUI
 
 struct AssistantLedgerCard: View {
-    /// 账本原文（读不到 / 还没写 ⇒ 空串）。
-    let text: String
+    /// **已解析**的账本。⚠️ 这里刻意收解析结果而不是原文 —— 2026-11-18 review 实测：
+    /// 原来 `ledger` 是 `AssistantLedger.parse(text)` 的计算属性，而 body 里 `goal / items /
+    /// stage / tracking / waiting / archived` 各访问一次 ⇒ **一次 body 解析 6 遍全文**
+    /// （上限 16000 字，而台账卡长在编辑器里 —— 每敲一个字符就重来一遍）。
+    /// 解析是 O(n) 且结果纯函数确定，让它跟着输入走一次就够。
+    let ledger: AssistantLedger
     /// 文件的修改时间（nil = 还没有这个文件）。
     let updatedAt: Date?
 
@@ -33,8 +37,7 @@ struct AssistantLedgerCard: View {
     /// （与 `ScheduledView.showExecuted` 同一条取舍）。
     @State private var archiveOpen = false
 
-    private var ledger: AssistantLedger { AssistantLedger.parse(text) }
-    private var isEmpty: Bool { text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+    private var isEmpty: Bool { !ledger.hasContent }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -80,7 +83,7 @@ struct AssistantLedgerCard: View {
                 .foregroundStyle(CodexTheme.textMuted)
             stageChip
             if !isEmpty {
-                Text(String(format: L("账本 %lld 字"), text.count))
+                Text(String(format: L("账本 %lld 字"), ledger.charCount))
                     .font(CodexTheme.fontTiny)
                     .foregroundStyle(CodexTheme.textTertiary)
             }
