@@ -135,6 +135,19 @@ extension SmokeMain {
         f = tapFacts(); f.topWindowNumber = 91
         check(ComputerTapRule.refusal(f)?.contains("弹层") == true,
               "T-TAP 同 App 的另一个窗口盖在上面(弹层) ⇒ 拒 (同 pid 同 owner, 只比进程会放行)")
+        // ⚠️ 这一条钉的是 2026-11-19 改的那半边: 截图有**两种口径**, 只有"屏幕区域"那张图里
+        //    才有盖在上面的同 App 浮窗(WPS 的「新建」就是这种东西: AX 层压根没有它)。放开只认
+        //    区域图 —— 单窗口图里没有浮窗却放行, 就又回到本条要防的事(照着没有浮窗的图去点浮窗)。
+        //    两个方向合成一条断言: 它们本来就是**同一条判据的两面**, 分开写等于把"放宽条件"这件
+        //    事拆成两半各测一次; 失败文案里带两个实际值, 红了能直接看出是哪一面塌了。
+        var screenShot = tapFacts(); screenShot.topWindowNumber = 91
+        screenShot.snapshotImageScope = .screen
+        var windowShot = screenShot; windowShot.snapshotImageScope = .window
+        let screenPass = ComputerTapRule.refusal(screenShot) == nil
+        let windowPass = ComputerTapRule.refusal(windowShot) == nil
+        check(screenPass && !windowPass,
+              "T-TAP 放宽只认「屏幕区域」那种图 (区域图 ⇒ 放行, 单窗口图 ⇒ 照旧拒。实际"
+              + " 区域图放行=\(screenPass) / 单窗口图放行=\(windowPass))")
         f = tapFacts(); f.snapshotWindowNumber = 0
         check(ComputerTapRule.refusal(f) == nil,
               "T-TAP 读的时候没认出窗口号 ⇒ 这一条退化成只比 frame, 如实少判一道(不假装判过)")

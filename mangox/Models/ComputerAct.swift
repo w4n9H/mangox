@@ -479,6 +479,14 @@ enum ComputerTapRule {
         var snapshotWindowNumber: Int
         var topWindowNumber: Int
         var topWindowPid: Int32
+        /// 上一次 read 给的是**哪一种图**(`nil` = 没出图)。⑫ 靠它区分"看着图点"与"盲点"。
+        ///
+        /// ⚠️ 2026-11-19 加这个字段的直接原因: WPS 的「新建」是一个**独立浮窗**(CG 层有、
+        ///    AX 层没有), 三条路全断 …… 改法不是放开 ⑫, 而是让**图里有它**(截图口径多了一种
+        ///    "拍窗口在屏幕上占的那块"), 于是"同 App 的另一个窗口"不再等于"看不见"。
+        ///    ⇒ ⑫ 只剩两种该拒的情形: **手里没图**, 以及**图是单窗口口径**(那是窗口自己的表面,
+        ///    浮窗本来就不在里面)。三态而不是布尔, 理由见 `ComputerShotRule.ImageScope`。
+        var snapshotImageScope: ComputerShotRule.ImageScope? = nil
         /// 这一点底下能读到的文字(读不到就是空串)。
         var textUnderPoint: String
     }
@@ -564,9 +572,15 @@ enum ComputerTapRule {
                 + "要么窗口被挪走了, 要么这个点是照着另一张图算的。"
         }
         // ⑫ 有没有弹层盖在上面(同 pid 同 owner, 只比进程会放行)
-        if f.snapshotWindowNumber != 0, f.topWindowNumber != f.snapshotWindowNumber {
+        //    ⚠️ **只有区域图才放行**(2026-11-19): 截图有两种口径(`ComputerShotRule.ImageScope`),
+        //    单窗口那一档取的是窗口**自己的表面**, 浮窗本来就不在图里 ⇒ 那时放行等于回到本条
+        //    要防的事(照着没有浮窗的图去点浮窗的位置)。所以判据不是"有没有图", 而是"图里有没有它"。
+        //    (跨 App 由 ⑪ 拦, 与口径无关。)
+        if f.snapshotWindowNumber != 0, f.topWindowNumber != f.snapshotWindowNumber,
+           f.snapshotImageScope != .screen {
             return "\(f.point.short) 上盖着「\(f.appName)」的另一个窗口(弹层 / 对话框) ⇒ 没点。"
-                + "先处理弹层, 或者重新 read 一次按新的来。"
+                + "先处理弹层; 要看清楚就带图再读一次(口径缺省「screen」, 它会连着弹层一起拍)。"
+                + "⚠️ 只拍窗口表面(imageScope「window」)时图里没有这个弹层。"
         }
         // ⑬ 底下写着什么
         if let word = taintedHit(f.textUnderPoint) {

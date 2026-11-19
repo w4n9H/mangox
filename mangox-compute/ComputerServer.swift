@@ -80,6 +80,10 @@ final class ComputerServer {
         /// ⚠️ 认不出来时记 0 而不是猜一个: `tap` 那道闸在 0 时**退化成只比 frame**, 并如实
         ///    少判一道(见 `ComputerTapRule.refusal` ⑫), 不假装判过。
         let windowNumber: Int
+        /// 这次读给的图是**哪一种口径**（`nil` = 没出图）。`tap` 的 ⑫ 靠它区分三种情况：
+        /// 没图（盲点）/ 单窗口图（浮窗不在图里）/ 区域图（浮窗在图里 ⇒ 才放行）。
+        /// ⚠️ 三态而不是布尔: 见 `ComputerShotRule.ImageScope` 上那两段（2026-11-19）。
+        var imageScope: ComputerShotRule.ImageScope? = nil
     }
 
     private var cache: [String: Cached] = [:]
@@ -271,7 +275,7 @@ final class ComputerServer {
             return .pong(trusted: AXIsProcessTrusted(),
                          screenRecording: ComputerShot.screenRecordingGranted())
 
-        case .read(let app, let includeImage):
+        case .read(let app, let includeImage, let scope):
             guard AXIsProcessTrusted() else {
                 return .failure("辅助功能权限还没授予 ⇒ 读不到界面。请在 系统设置 › 隐私与安全性 › 辅助功能 里勾上 MangoX。")
             }
@@ -357,12 +361,12 @@ final class ComputerServer {
                                                 + lackOfControlsNote(app: t.name, nodes: snap.rows.count)
                                                 + "\n\n" + snap.rendered(limit: lineLimit), seq),
                                   seq: seq, bundle: t.bundle, pid: t.pid,
-                                  root: tree, includeImage: includeImage)
+                                  root: tree, includeImage: includeImage, scope: scope)
             }
             return finishRead(text: withSeq(partialNote + rereadNote + shellNote
                                             + snap.rendered(limit: lineLimit), seq), seq: seq,
                               bundle: t.bundle, pid: t.pid, root: tree,
-                              includeImage: includeImage)
+                              includeImage: includeImage, scope: scope)
 
         case .act(let app, let opRaw, let index, let seq, let text, let direction, let point):
             return handleAct(app: app, opRaw: opRaw, index: index, seq: seq,
@@ -390,14 +394,15 @@ final class ComputerServer {
     ///   ② 不拍的原因要**说清并给出下一步**, 且不许暗示"再试一次就好": "没开图片"要去设置页,
     ///      "没有屏幕录制权限"要去系统设置, 这两条都不是重试能解的。
     private func finishRead(text: String, seq: Int, bundle: String, pid: pid_t,
-                            root: AXNode, includeImage: Bool) -> ComputerResponse {
+                            root: AXNode, includeImage: Bool,
+                            scope: ComputerShotRule.ImageScope) -> ComputerResponse {
         guard includeImage else { return .success(text: text, seq: seq) }
         guard ComputerShotRule.allowed(bundle: bundle, raw: imageRaw) else {
             return .success(text: text + "\n\n（这个 App 没开「视觉」⇒ 这次没有截图。"
                             + "要图的话请在 设置 › 集成 › 电脑操作 里给它勾上「视觉」, 默认是关的。）",
                             seq: seq)
         }
-        switch ComputerShot.capture(pid: pid, root: root, bundle: bundle) {
+        switch ComputerShot.capture(pid: pid, root: root, bundle: bundle, scope: scope) {
         case .failure(let why):
             // ⚠️ 取 `.message` 而不是直接插值 `why`: `String(describing:)` 会把结构体整个
             //    打成 `ShotFailure(message: "…")` —— 那句机器话会原样进模型上下文。
@@ -414,20 +419,31 @@ final class ComputerServer {
             //    一模一样, 零报错。
             //    ⚠️ 比例**不许写死 1:1**: 0.2.11 起大窗长边封顶 1536 ⇒ 图被等比缩小过, 而那句
             //    1:1 照样会说谎。这里一律报**图自己的像素尺寸**, 1:1 只在两边真相等时才说。
-            var note = "（附了一张 \(shot.png.count / 1024) KB 的截图, 是这个窗口的原样画面。"
-            if let f = root.frame {
-                let oneToOne = shot.width == f.w && shot.height == f.h
-                note += "图 \(shot.width)×\(shot.height) 像素; "
-                note += oneToOne
-                    ? "与窗口 1:1"
-                    : "窗口是 \(f.w)×\(f.h) 逻辑点(大窗长边封顶 1536 ⇒ 图被等比缩小过)"
-                note += "; 窗口左上角在屏幕 (\(f.x),\(f.y))。"
-                note += tapEnabled
-                    ? (oneToOne ? "要按图上的位置点: 屏幕坐标 = 窗口左上角 + 图内像素, 用 computer_tap。"
-                                : "要按图上的位置点: 屏幕坐标 = 窗口左上角 + 图内像素 × (窗口宽 ÷ 图宽), 用 computer_tap。")
-                    : "要按图上的位置点, 得先在 设置 › 集成 › 电脑操作 里打开「按坐标点击」那一档。"
-            }
+            // ⚠️ 口径必须**说在图前面**: 同 App 的浮窗只出现在 `.screen` 那张图里。模型要是把
+            //    单窗口图当成"屏幕那块"来看, 就会拿一个浮窗的位置去点一个浮窗不存在的地方。
+            let what = scope == .screen
+                ? "这个窗口在屏幕上占的那块画面(盖在它上面的浮窗 / 弹层也拍进去了)"
+                : "这个窗口自己的表面(不含盖在它上面的浮窗 —— 要看浮窗请把 imageScope 写成「screen」)"
+            var note = "（附了一张 \(shot.png.count / 1024) KB 的截图, 是\(what)。"
+            // ⚠️ 几何基准一律取**图自己拍的那块**(`shot.frame`), 不取 AX 的窗口外框(2026-11-19):
+            //    截图口径改成"屏幕上的那块区域"之后, 窗口拖到屏幕边上会被**裁**, 那时图的左上角
+            //    不再是窗口左上角; 而 AX 框与 SCWindow 框本来就差一两像素(阴影 / 圆角)。
+            //    照抄窗口外框 ⇒ 模型算出来的每个点整体偏, 而偏了的点击与正常点击分不出来。
+            let f = shot.frame
+            let oneToOne = shot.width == f.w && shot.height == f.h
+            note += "图 \(shot.width)×\(shot.height) 像素; "
+            // ⚠️ 说的是"画面"不是"窗口": 区域口径可能被屏幕裁过, 那时两者不是一回事(见上一条)。
+            note += oneToOne
+                ? "与画面 1:1"
+                : "画面是 \(f.w)×\(f.h) 逻辑点(大窗长边封顶 1536 ⇒ 图被等比缩小过)"
+            note += "; 画面左上角在屏幕 (\(f.x),\(f.y))。"
+            note += tapEnabled
+                ? (oneToOne ? "要按图上的位置点: 屏幕坐标 = 画面左上角 + 图内像素, 用 computer_tap。"
+                            : "要按图上的位置点: 屏幕坐标 = 画面左上角 + 图内像素 × (画面宽 ÷ 图宽), 用 computer_tap。")
+                : "要按图上的位置点, 得先在 设置 › 集成 › 电脑操作 里打开「按坐标点击」那一档。"
             note += "）"
+            // 图**真的出成功了**才记这一笔: ⑫ 只认"手里有哪种图", 不是"要过图"。
+            if var c = cache[bundle] { c.imageScope = scope; cache[bundle] = c }
             return .success(text: text + "\n\n" + note,
                             seq: seq,
                             image: ComputerImage(mimeType: "image/png",
@@ -620,6 +636,7 @@ final class ComputerServer {
             snapshotWindowNumber: cached.windowNumber,
             topWindowNumber: top?.number ?? 0,
             topWindowPid: top?.pid ?? -1,
+            snapshotImageScope: cached.imageScope,
             textUnderPoint: under)
         if let why = ComputerTapRule.refusal(facts) { return .failure(why) }
         return hidClick(at: cg, name: t.name, bundle: t.bundle, underPoint: under)

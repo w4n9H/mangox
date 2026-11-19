@@ -1335,6 +1335,14 @@ final class PiRpcTransport: AgentTransport {
                     "the app. A picture carries no row numbers, so it never replaces a read: ask for one when",
                     "the outline is thin or is the only way to see what is there -- and remember it costs",
                     "context. When there is no picture the text says why; do not retry it in a loop.",
+                    "",
+                    "`imageScope` picks what goes into that picture. The default, `screen`, is the area",
+                    "the window occupies on the display, so panels, sheets and menus drawn over it are in",
+                    "the picture -- use it before computer_tap, since a tap lands on whatever is really on",
+                    "top. `window` is the window's own surface only: it still shows the content while",
+                    "another app covers it or while it hangs off the edge of the display, but a floating",
+                    "panel of the same app will NOT be in that picture, and computer_tap will refuse a",
+                    "point that another window of that app is covering.",
                 ].join("\n"),
                 parameters: Type.Object({
                     app: Type.Optional(Type.String({
@@ -1343,6 +1351,13 @@ final class PiRpcTransport: AgentTransport {
                     includeImage: Type.Optional(Type.Boolean({
                         description: "Also return a screenshot of the window (only if the user"
                             + " turned vision on for this app).",
+                    })),
+                    imageScope: Type.Optional(Type.String({
+                        enum: ["screen", "window"],
+                        description: "Which part of the display to capture. `screen` (default)"
+                            + " = the area the window occupies, overlays included; `window`"
+                            + " = the window's own surface only (visible even when covered or"
+                            + " off-screen, but same-app floating panels are left out).",
                     })),
                 }, { additionalProperties: false }),
 
@@ -1361,6 +1376,8 @@ final class PiRpcTransport: AgentTransport {
                             op: "read",
                             app: params.app || "",
                             includeImage: params.includeImage === true,
+                            imageScope: params.imageScope === undefined
+                                ? "" : String(params.imageScope),
                         });
                     } catch (error) {
                         // A transport failure is a failure, not an answer.

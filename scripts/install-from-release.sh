@@ -86,7 +86,10 @@ case "$INPUT" in
         fi
         ;;
     *.zip)
-        [[ -n "$OUTPUT" ]] || OUTPUT="$(cd "$(dirname "$INPUT")" && pwd)/MangoX"
+        # 默认装到 ~/Applications（2026-11-19 boss 定：「只需要认 ~/Applications/MangoX.app」）。
+        # 原来是"zip 同级建个 MangoX 目录"，等于默认把 App 放进 ~/Downloads —— 那是随时会被
+        # 当临时文件清掉的地方, 而且和"装好了"这件事看起来毫无区别。
+        [[ -n "$OUTPUT" ]] || OUTPUT="$HOME/Applications"
         mkdir -p "$OUTPUT"
         log "  解包到: $OUTPUT"
         # ⚠️ 必须先解到**空的临时目录**再定位 bundle, 不能解进 $OUTPUT 之后用
@@ -177,6 +180,56 @@ if [[ ${#MISSING[@]} -gt 0 ]]; then
     warn "  MangoX 只是对话引擎的 GUI —— 推理靠 pi CLI (node 脚本), 没它 App 会显示"
     warn "  「引擎不可用」横幅, 不会假装在回复。装:  https://github.com/earendil-works/pi"
     warn "  App 本身仍可启动 (设置页、模型管理、知识库都不依赖 pi), 所以不阻断安装。"
+fi
+
+# ── 同名副本 (LaunchServices 只按"注册顺序"挑一个, 不看版本) ──────────
+# 这是 2026-11-19 真踩到的: 上一版残留装在 /Applications, 新包装进 ~/Applications,
+# 两个 bundle id 都是 moofs.mangox ⇒ 启动台 / Spotlight / `open -b` 命中的是
+# **旧的那个**, 只有 `open <全路径>` 才新。表现就是"我明明装了新版, 启动台还是旧的",
+# 而脚本一句都不说 —— 它验的是"这份装的对不对", 不是"系统此刻会开哪一个"。
+#
+# 判据用 mdfind (Spotlight 索引) 而不是全盘 find: 后者扫 /System/Volumes 要几十秒;
+# 索引没覆盖的目录(刚解压的临时盘 / 关掉索引的卷)本来也不会出现在启动台里。
+# ⚠️ 只**报告不删**: 删 App 是不可逆动作, 而且那个旧副本可能在用(running / 别的人装的)。
+#    `open -b` 会挑哪一个, 脚本判不出来 —— 所以只点名, 把选择留给人。
+step "同名副本 (启动台会挑哪一个)"
+BUNDLE_ID_ALL="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' \
+                 "$DST_APP/Contents/Info.plist" 2>/dev/null || true)"
+COPIES=()
+if [[ -n "$BUNDLE_ID_ALL" ]]; then
+    while IFS= read -r hit; do
+        [[ -n "$hit" ]] || continue
+        [[ "$(cd "$hit" 2>/dev/null && pwd -P)" == "$(cd "$DST_APP" && pwd -P)" ]] && continue
+        # 只认真正装着的那几份: 废纸篓 / /private/tmp 里的残留不参与 Dock 命中,
+        # 但列出来反而让人以为要清 —— 它们不影响"启动台开哪个"。
+        case "$hit" in
+            */.Trash/*|/private/tmp/*|/private/var/folders/*) continue ;;
+            # 构建产物不是"装着的一份": 它不在 App 目录里, 启动台/Spotlight 不会把它当入口。
+            # 两种形态都要跳 —— derivedData 的 `.../Build/Products/…` 与仓库内 `-target` 产的
+            # `build/Debug/…`（后者大小写是**小写** build, 只写 `Build/Products` 会漏）。
+            */build/*|*/Build/*) continue ;;
+        esac
+        # 只认同一个 bundle id 的: 同名的 .app 可能是另一个 App（改过 id 的 fork / 调试包）。
+        [[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' \
+             "$hit/Contents/Info.plist" 2>/dev/null || true)" == "$BUNDLE_ID_ALL" ]] || continue
+        COPIES+=("$hit")
+    # ⚠️ 按 **bundle id** 查, 不按文件名查 —— 2026-11-19 实测 `mdfind -name` 的两种写法
+    #    在这里都**查不到**真货: 带引号只命中三个同缀的构建中间文件, 不带引号结果一样;
+    #    而 `kMDItemCFBundleIdentifier` 一次就把两份都列了出来。按名字查还天生对大小写敏感
+    #    （真机上装的是 `mangox.app`, 磁盘上是 `MangoX.app`）。
+    # ⚠️ 这个错的可怕之处: **不报错、退码 0、输出只有几行无关文件** ——
+    #    长得跟"机器上确实只有一份"一模一样, 而真相是"我根本没查到"。
+    done < <(mdfind "kMDItemCFBundleIdentifier == '$BUNDLE_ID_ALL'" 2>/dev/null || true)
+fi
+if [[ ${#COPIES[@]} -gt 0 ]]; then
+    warn "机器上还有 ${#COPIES[@]} 份同款 App —— **启动台 / Spotlight 会挑其中一份, 不看版本**:"
+    for c in "${COPIES[@]}"; do
+        v="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' \
+             "$c/Contents/Info.plist" 2>/dev/null || echo '?')"
+        warn "    $c  (v$v)"
+    done
+    warn "  只该留一份, 装在 ~/Applications（本脚本的默认位置）; 或者永远用全路径打开:"
+    warn "    open \"$DST_APP\""
 fi
 
 # ── 启动验证 ───────────────────────────────────────────────

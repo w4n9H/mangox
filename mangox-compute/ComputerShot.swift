@@ -44,9 +44,16 @@ enum ComputerShot {
         let png: Data
         let width: Int
         let height: Int
+        /// **这张图拍的是屏幕上哪一块**(逻辑点, 全局左上原点)。
+        ///
+        /// ⚠️ 为什么要带回来: 坐标是"图内像素 + 窗口左上角"算出来的, 而窗口一旦被裁到屏幕内
+        ///    (拖到屏幕边上), 图的左上角**不再是窗口左上角**。回执若照抄窗口外框, 模型算出来的
+        ///    每个点都会整体偏移 —— 而偏移后的点击与正常点击长得一模一样, 零报错。
+        let frame: AXRect
     }
 
-    static func capture(pid: pid_t, root: AXNode, bundle: String)
+    static func capture(pid: pid_t, root: AXNode, bundle: String,
+                        scope: ComputerShotRule.ImageScope)
         -> Result<Shot, ComputerShotRule.ShotFailure> {
         guard let window = root.frame else {
             return .failure(ComputerShotRule.ShotFailure(
@@ -62,12 +69,15 @@ enum ComputerShot {
         // ⚠️ 输出尺寸**不能**用 AX 的窗口框: 截图尺寸由 SCK 那边的 `SCWindow.frame` 决定,
         //    两者差一个标题栏的话, 我按 AX 框设宽度 ⇒ SCK 会**非等比缩放**把图塞进这个尺寸
         //    ⇒ 整个画面变形。尺寸一律以 `SCWindow.frame` 为准。
-        switch shoot(windowID: wid) {
+        switch shoot(windowID: wid, scope: scope) {
         case .failure(let why):
             return .failure(why)
-        case .success(let image):
+        case .success(let got):
+            // ⚠️ 尺寸取 `got.image` 自己的 `width/height`, 不是窗口框: 见本结构体上那段。
+            let image = got.image
             return encode(image).map {
-                Shot(png: $0, width: image.width, height: image.height)
+                Shot(png: $0, width: image.width, height: image.height,
+                     frame: got.crop)
             }
         }
     }
@@ -125,10 +135,20 @@ enum ComputerShot {
     ///    用户只能重启 App。客户端 10s 会超时, 所以它看到的是"截图超时", 而**之后每一次读
     ///    同样超时**, 永远回不来。无超时的等 = 把一次故障变成一次永久故障。
     ///
-    /// ⚠️ 只截**那一个窗口**(`desktopIndependentWindow`), 不是整个屏幕: 桌面、别的窗口、
-    ///    壁纸都不在过滤器里。窗口被别的窗口挡住也照样拍得到 —— 取的是它自己的表面。
-    private static func shoot(windowID: CGWindowID)
-        -> Result<CGImage, ComputerShotRule.ShotFailure> {
+    /// ⚠️ 两种口径（`ComputerShotRule.ImageScope`，2026-11-19 boss 定「让模型可选」）：
+    ///
+    ///    · **`.screen`（缺省）拍这个窗口在屏幕上占的那块区域** —— 一句话：拍完这张图，就等于
+    ///      人站在屏幕前看那一眼。同 App 的浮窗 / 弹层盖在上面时**它在图里**（WPS 的「新建」正是
+    ///      这种东西：CG 窗口层有它、AX 页树里一个字都没有）。
+    ///      ⚠️ 代价，明着记：**被别的 App 挡住的窗口拍不到了** —— 拍到的是挡住它的那个。
+    ///      这不是退步：`tap` 走 `.cghidEventTap` **真鼠标事件**，落在这一点上的是谁就点谁 ⇒
+    ///      图里显示谁，点下去就点到谁。"看得到但点不到"才是最坏的那种一致（以为看的是 A，
+    ///      点中了 B），而它零报错。跨 App 的遮挡另有第 ⑪ 道闸拦着。
+    ///    · **`.window` 只取窗口自己的表面**（`desktopIndependentWindow`）—— 被别的 App 挡住、
+    ///      或者拖着出屏一半时，**仍然拍得到正文**，这是区域口径结构上做不到的。
+    ///      ⚠️ 代价：同 App 的浮窗**不在图里** ⇒ 第 ⑫ 道闸不对它放宽（`ComputerTapRule`）。
+    private static func shoot(windowID: CGWindowID, scope: ComputerShotRule.ImageScope)
+        -> Result<(image: CGImage, crop: AXRect), ComputerShotRule.ShotFailure> {
         let sem = DispatchSemaphore(value: 0)
         let box = Box()
         Task.detached(priority: .userInitiated) {
@@ -142,18 +162,50 @@ enum ComputerShot {
                     box.result = .failure("窗口在屏幕列表里消失了(刚关掉或被最小化) ⇒ 拍不了。")
                     return
                 }
-                let filter = SCContentFilter(desktopIndependentWindow: win)
-                let size = ComputerShotRule.captureSize(window: axRect(win.frame))
+                let filter: SCContentFilter
+                let size: (width: Int, height: Int)
+                /// 图实际拍的那块（逻辑点）。`.window` 就是窗口外框；`.screen` 可能被屏幕裁过。
+                let crop: CGRect
+                /// 只有 `.screen` 要: 相对**这块屏幕**左上角的取景框（见下面的减原点）。
+                var source: CGRect?
+                switch scope {
+                case .window:
+                    // 阴影不属于窗口内容, 留着会给四周加几十像素透明边 ⇒ 图看着像"窗口漂在一个
+                    // 透明底上"。单窗口过滤器里这条是必须的, 不是美观问题。
+                    filter = SCContentFilter(desktopIndependentWindow: win)
+                    size = ComputerShotRule.captureSize(window: axRect(win.frame))
+                    crop = win.frame
+                case .screen:
+                    guard let display = display(of: win.frame, in: content.displays) else {
+                        box.result = .failure("这个窗口不在这块屏幕上(可能刚被拖走) ⇒ 拍不了。")
+                        return
+                    }
+                    // 裁到屏幕内: 窗口拖到屏幕边上时, 超出的那部分**屏幕上没有像素**。
+                    // ⚠️ 裁了就必须把裁完的那块回报给调用方(`Shot.frame`), 否则模型按窗口外框
+                    //    换算, 每个点都整体偏 —— 见 `Shot.frame` 那条。
+                    let visible = win.frame.intersection(display.frame)
+                    guard visible.width >= 1, visible.height >= 1 else {
+                        box.result = .failure("这个窗口几乎整个在屏幕外(只露了一条边) ⇒ 拍不了。")
+                        return
+                    }
+                    filter = SCContentFilter(display: display, excludingWindows: [])
+                    size = ComputerShotRule.captureSize(window: axRect(visible))
+                    crop = visible
+                    source = CGRect(x: visible.minX - display.frame.minX,
+                                    y: visible.minY - display.frame.minY,
+                                    width: visible.width, height: visible.height)
+                }
                 let config = SCStreamConfiguration()
+                // ⚠️ 只有 `.screen` 才设取景框: 单窗口过滤器里 `sourceRect` 是**相对窗口**的,
+                //    喂全局坐标会取到窗口外面去(而失败的样子是"图是对的, 只是内容不对")。
+                if let source { config.sourceRect = source }
+                if scope == .window { config.ignoreShadowsSingleWindow = true }
                 config.width = size.width
                 config.height = size.height
                 config.showsCursor = false
-                // 阴影不属于窗口内容, 留着会给四周加几十像素透明边 ⇒ 图看着像"窗口漂在一个
-                // 透明底上"。单窗口过滤器里这条是必须的, 不是美观问题。
-                config.ignoreShadowsSingleWindow = true
                 let image = try await SCScreenshotManager.captureImage(
                     contentFilter: filter, configuration: config)
-                box.result = .success(image)
+                box.result = .success((image, Self.axRect(crop)))
             } catch {
                 // 没权限时 SCK 抛的就是这句("用户拒绝了…捕捉的TCC") ⇒ 换成带指引的人话。
                 box.result = .failure(ComputerShotRule.ShotFailure(screenRecordingGranted()
@@ -183,6 +235,22 @@ enum ComputerShot {
         return box.result ?? .failure("截图没有返回结果(内部错误) ⇒ 这次没有图。")
     }
 
+    /// 窗口落在**哪块屏幕**上 —— 取交集面积最大的那块。
+    ///
+    /// ⚠️ 窗口横跨两块屏时只能挑一块(一个 `SCContentFilter` 只认一块 display), 挑"占得多的那块"
+    ///    而不是"第一块": 挑错的话拍出来的是隔壁屏上的一块桌面, 而它长得和"窗口内容没渲染"
+    ///    一模一样 —— 模型会以为那个 App 是空白的。
+    private static func display(of frame: CGRect, in displays: [SCDisplay]) -> SCDisplay? {
+        var best: (display: SCDisplay, area: CGFloat)?
+        for d in displays {
+            let hit = frame.intersection(d.frame)
+            guard !hit.isNull, !hit.isEmpty else { continue }
+            let area = hit.width * hit.height
+            if best == nil || area > best!.area { best = (d, area) }
+        }
+        return best?.display
+    }
+
     /// `CGRect` → `AXRect`(四舍五入)。只用在"算输出尺寸"这一处。
     private static func axRect(_ r: CGRect) -> AXRect {
         AXRect(x: Int(r.origin.x.rounded()), y: Int(r.origin.y.rounded()),
@@ -191,7 +259,7 @@ enum ComputerShot {
 
     /// `Result` 的容器 —— 跨线程传回一个值, 只写一次再读一次。
     private final class Box: @unchecked Sendable {
-        var result: Result<CGImage, ComputerShotRule.ShotFailure>?
+        var result: Result<(image: CGImage, crop: AXRect), ComputerShotRule.ShotFailure>?
     }
 
     /// 编成 PNG。

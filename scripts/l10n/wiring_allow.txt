@@ -266,7 +266,8 @@ mangox/Models/ComputerAct.swift|%@ 不在「%@」的窗口 %@ 里 ⇒ 没点。
 mangox/Models/ComputerAct.swift|%@ 落在**别的 App** 的窗口上(不是「%@」) ⇒ 没点。
 mangox/Models/ComputerAct.swift|要么窗口被挪走了, 要么这个点是照着另一张图算的。
 mangox/Models/ComputerAct.swift|%@ 上盖着「%@」的另一个窗口(弹层 / 对话框) ⇒ 没点。
-mangox/Models/ComputerAct.swift|先处理弹层, 或者重新 read 一次按新的来。
+mangox/Models/ComputerAct.swift|先处理弹层; 要看清楚就带图再读一次(口径缺省「screen」, 它会连着弹层一起拍)。
+mangox/Models/ComputerAct.swift|⚠️ 只拍窗口表面(imageScope「window」)时图里没有这个弹层。
 mangox/Models/ComputerAct.swift|%@ 底下写着「%@」 ⇒ 没点。
 mangox/Models/ComputerAct.swift|按坐标点这一档认不出控件语义, 这类词一律不替你点 —— 这一步你自己点。
 

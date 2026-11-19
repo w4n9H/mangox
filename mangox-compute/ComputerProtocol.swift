@@ -16,7 +16,14 @@ enum ComputerRequest: Decodable {
     ///
     /// ⚠️ **参数是 `app` 不是 `pid`**: 模型只说得出 App 名字, 说不出此刻的 pid;
     ///    定位(pid)由本机做 —— 见 `ComputerTarget.pick`。空串 = 当前前台 App。
-    case read(app: String, includeImage: Bool)
+    ///
+    /// 🔺 2026-11-19 加 `scope`（截图口径, 只在 `includeImage` 为真时有意义）:
+    ///    有的浮窗 / 弹层 CG 层有、AX 树里一个字都没有, 只有"拍屏幕上那块区域"才看得见;
+    ///    而窗口被别的 App 挡住、或拖出屏幕一半时, 又只有"只取窗口自己的表面"拍得到正文。
+    ///    两件事结构上互相补不上 ⇒ 交给模型按当下的处境选, 缺省 `.screen`（眼见即所得）。
+    ///    ⚠️ 认不出的值落回 `.screen` 而不是报错: 见 `ComputerShotRule.ImageScope.parse`
+    ///    （这个方向偏保守的那一侧, 理由写在那儿）。
+    case read(app: String, includeImage: Bool, scope: ComputerShotRule.ImageScope)
     /// 动一下界面(批 2b)。
     ///
     /// ⚠️ `op` 收的是**原始字符串**, 不是 `ComputerAction`: 认不出来的 op 要能带着原字
@@ -79,6 +86,10 @@ enum ComputerRequest: Decodable {
 
     private enum CodingKeys: String, CodingKey {
         case op, app, includeImage, index, seq, text, direction, point, url
+        /// 截图口径（`screen` / `window`, 2026-11-19）。⚠️ 线上键名是 `imageScope`
+        /// 而**不是** `scope`: 与 `includeImage` 同一个前缀, 两端各写一次时要能一眼对上
+        /// ——`strokes` 那次漂移（扩展发 `strokes`、这里读 `keys`）就是这么来的。
+        case imageScope
         /// 打字那一档要不要补一次回车(第五档)。**布尔, 缺省 false** —— 见 `case type` 上那段。
         case submit
         /// 动作本身(`press` / `setValue` / `focus` / `scroll`)。⚠️ 不能复用 `op` ——
@@ -101,7 +112,9 @@ enum ComputerRequest: Decodable {
         case "ping": self = .ping
         case "read":
             self = .read(app: try c.decodeIfPresent(String.self, forKey: .app) ?? "",
-                         includeImage: try c.decodeIfPresent(Bool.self, forKey: .includeImage) ?? false)
+                         includeImage: try c.decodeIfPresent(Bool.self, forKey: .includeImage) ?? false,
+                         scope: ComputerShotRule.ImageScope.parse(
+                            try c.decodeIfPresent(String.self, forKey: .imageScope)))
         case "act":
             self = .act(app: try c.decodeIfPresent(String.self, forKey: .app) ?? "",
                         op: try c.decodeIfPresent(String.self, forKey: .action) ?? "",

@@ -7,7 +7,7 @@
    **本文件由 scripts/l10n/gen_strings.py --write 生成, 别手改** ——
    译文改 scripts/l10n/en_values.py 的 VALUES, 再跑 --write。
 
-   条数: 1105
+   条数: 1106
 */
 
 " (值:\"%@\")" = " (value: %@)";
@@ -152,6 +152,7 @@
 "… 其余改动省略" = "… remaining changes omitted";
 "… 还有 %lld 条" = "… %lld more";
 "… 还有 %lld 项未显示 (渲染上限 %@ 项: 我一直只能给出 %@ 行, 重读也一样 —— 要看到后面那些, 先按编号把占地方的那块收起来)" = "… %lld more not shown (render cap %@ items: I can only ever give you %@ lines, re-reading is the same — to reach the rest, collapse the part that takes up room by its number)";
+"⚠️ 只拍窗口表面(imageScope「window」)时图里没有这个弹层。" = "A window-only image (imageScope \"window\") does not contain that sheet.";
 "⚠️ 当前热键被其他 App 占用 (注册失败), 请换一个组合键" = "⚠️ Another app already owns this hotkey (registration failed); pick a different combination.";
 "⚠️ 未找到 pi CLI, 无法发送。请确认已安装 pi 并重启 MangoX (或检查 pi 安装路径)。" = "⚠️ pi CLI not found, cannot send. Make sure pi is installed and restart MangoX (or check its install path).";
 "⚠️ 本地库写入失败 (%@), 数据可能未保存" = "⚠️ Writing to the local database failed (%@); data may not be saved.";
@@ -304,7 +305,7 @@
 "允许锁屏运行" = "Allow running while locked";
 "先 computer_open 把它切上来, 再点。" = "Bring it forward with computer_open first, then tap.";
 "先 computer_open 把它切上来。" = "Bring it forward with computer_open first.";
-"先处理弹层, 或者重新 read 一次按新的来。" = "Deal with the sheet first, or read again and work from the new picture.";
+"先处理弹层; 要看清楚就带图再读一次(口径缺省「screen」, 它会连着弹层一起拍)。" = "Deal with the sheet first; to see it, read again with an image (the default scope is screen, which captures the sheet too).";
 "先点进输入框(或者用 computer_act 的 focus)再写。" = "Click into a text field first (or use computer_act with focus), then write.";
 "先给它一条读法：勾「可读」或「视觉」—— 没有编号就没有能点的东西" = "Give it a way to read first: tick \"Read\" or \"Vision\" - without row numbers there is nothing to act on";
 "免手册（界面极简，量一次就穷尽）：%@" = "No manual needed (tiny UI, one measurement covers it): %@";
