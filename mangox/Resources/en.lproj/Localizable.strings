@@ -7,7 +7,7 @@
    **本文件由 scripts/l10n/gen_strings.py --write 生成, 别手改** ——
    译文改 scripts/l10n/en_values.py 的 VALUES, 再跑 --write。
 
-   条数: 1106
+   条数: 1117
 */
 
 " (值:\"%@\")" = " (value: %@)";
@@ -197,6 +197,7 @@
 "「模拟键盘输入」这一档关着 ⇒ 没写。" = "\"Keyboard input\" is off ⇒ nothing was typed.";
 "一" = "Mon";
 "一个机器人也连不了（没填 app_id 或没填 app_secret）" = "No bot can connect (app_id or app_secret missing)";
+"一轮最多发 %ld 件，多的没发（%@）" = "At most %ld files per turn, so the rest were not sent (%@).";
 "三" = "Wed";
 "上一个回合还在跑，等它结束再发。" = "The previous turn is still running — wait for it to finish before sending another.";
 "上一场 dream 还在跑，等它结束再试" = "Another dream is still running — try again when it finishes";
@@ -419,6 +420,7 @@
 "只有结论" = "conclusion only";
 "只有菜单里才有的功能, 在这一格上这条路走不通, 那就如实告诉用户。" = "Anything that exists only in a menu cannot be reached through this cell -- say so honestly.";
 "只给了回车、没给要写的字 ⇒ 没按。回车在不少 App 里就是「发出去 / 确定」," = "Only a Return and no text ⇒ nothing was pressed. In many apps Return means \"send\" or \"confirm\",";
+"只能发 Documents 或 Downloads 里的文件（这个不在: %@）" = "Only files under Documents or Downloads can be sent (this one is not: %@).";
 "只能看图" = "Picture only";
 "只读命令静默放行, 其余弹审批卡等待点击。" = "Read-only commands pass silently; anything else raises an approval card and waits for a click.";
 "只读命令静默放行, 危险命令自动拒绝并记下原因 (回执告知) — 远程驱动用。" = "Read-only commands pass silently; dangerous ones are refused automatically with the reason recorded (and sent back in the receipt) — for remote-driven work.";
@@ -477,6 +479,7 @@
 "外部来源（邮件）本版未接入 —— 它的只读采集要等「不置已读」验证通过。" = "External sources (mail) are not wired up yet — read-only collection waits for a proven \"never marks as read\" path.";
 "外链图片不在应用内加载" = "Remote images are not loaded in the app";
 "大小" = "Size";
+"太大了（%ld MB，上限 %ld MB）: %@" = "Too big (%ld MB, the limit is %ld MB): %@";
 "太长 · 改用复制" = "Too long · copy text";
 "好" = "OK";
 "好的,先记下「%@」的需求,我会在下一轮把上下文喂给模型,再回执计划。" = "Got it. Noting the \"%@\" request; I will feed the context to the model on the next turn and reply with a plan.";
@@ -682,6 +685,7 @@
 "整场" = "Entire session";
 "整篇拿走 —— markdown 预览里的选中是逐块的, 没有一次选完整篇的选法" = "Take the whole thing — selection in the markdown preview is per block, so there is no way to select it all in one go";
 "文件" = "File";
+"文件不存在: %@" = "No such file: %@";
 "文件将从托管区移除, 此操作不可撤销。" = "The file will be removed from the managed area; this cannot be undone.";
 "文件类型构成 (共 %lld 个已识别文件)" = "File types (out of %lld recognized files)";
 "文件还在磁盘上 — 用文本编辑器另存为 UTF-8 即可" = "The files are still on disk — re-save them as UTF-8 in a text editor";
@@ -719,6 +723,7 @@
 "旧类型已停用，不能保存" = "Legacy type is disabled and cannot be saved";
 "时" = "Hour";
 "昨天" = "Yesterday";
+"是空文件（飞书不收空文件）: %@" = "The file is empty (Feishu rejects empty files): %@";
 "显示 %lld / 折省略 %lld · %lld 字" = "showing %lld / folded %lld · %lld chars";
 "暂无事件" = "No events yet";
 "暂无任务\n点右上角 + 新建" = "No tasks yet\nUse + in the top right to create one";
@@ -743,6 +748,7 @@
 "有些应用写不进字（微信没有可用的输入框控件）。开着：我能把一段文字敲进当前的输入框。" = "Some apps cannot be typed into at all (WeChat exposes no usable text field). On: I can type a piece of text into the focused field.";
 "有些应用只看得见画面、认不出控件（比如微信）。开着：我能照着画面上的位置点下去。" = "Some apps only show a picture and expose no controls (WeChat, for one). On: I can click where the picture says to.";
 "有任务在跑时不让电脑休眠，跑完自动恢复；没任务时照常休眠" = "Keeps the computer awake while a task is running and lets it sleep again afterwards";
+"有文件没能发出去：" = "Some files could not be sent:";
 "服务商" = "Provider";
 "服务商帮助" = "Provider help";
 "服务端未返回该邮件 (UID 已不存在或被移走)" = "The server returned no such message (the UID no longer exists or was moved)";
@@ -942,6 +948,7 @@
 "要写的内容有 %lld 个字, 超过 %@ 的上限 ⇒ 没写。" = "The text is %lld characters, over the %@ limit ⇒ nothing was written.";
 "要动列表里的某一条, 就点名**那一行**自己。" = "To act on one item in a list, name **that row** itself.";
 "要按 %lld 下，超过这一档的上限 %@ ⇒ 没按。" = "That is %lld keystrokes, over the %@ limit of this mode ⇒ nothing was pressed.";
+"要给绝对路径（收到的是「%@」）" = "Needs an absolute path (got \"%@\").";
 "要让它能动, 请在 设置 › 集成 › 电脑操作 里给它开「可操作」。" = "To let it act, tick Act for it under Settings › Integrations › Computer use.";
 "视觉" = "Vision";
 "解析失败: %@" = "Parsing failed: %@";
@@ -965,6 +972,7 @@
 "请看图" = "See the image";
 "读" = "Read";
 "读不到了" = "unreadable";
+"读不到它的大小（没有权限？）: %@" = "Cannot read its size (missing permission?): %@";
 "读不动" = "Can't read";
 "读与操作哪些应用" = "Which apps can be read or acted on";
 "读任何 App 的界面都靠它。没有它, 读界面会直接报错。" = "Reading any app's interface depends on it. Without it, a read fails outright.";
@@ -981,6 +989,7 @@
 "跟随系统" = "Follow system";
 "跟随系统 = 由 macOS 的浅色/深色设置决定; 切换立即生效, 影响全 App (含迷你台)" = "Follow system = decided by macOS light/dark; switching applies immediately across the app (task bar included)";
 "跟随系统 = 由 macOS 的语言设置决定; 切换立即生效, 影响全 App (含迷你台与快速捕获)。系统级文案 (菜单栏 / 系统弹窗) 仍随系统语言, 重启后完全一致。" = "Follow system = decided by the macOS language setting; switching applies immediately across the app (task bar and quick capture included). System-level text (menu bar, system dialogs) still follows the system language and matches after a restart.";
+"路径是空的" = "The path is empty.";
 "轨迹" = "Trace";
 "轮次" = "Turns";
 "辅助功能" = "Accessibility";
@@ -1034,11 +1043,13 @@
 "这份快照里没有 #%@(一共 %@ 项) ⇒ 没动。" = "This snapshot has no #%@ (it has %@ items) ⇒ nothing was done.";
 "这句话会进每轮 prompt 的索引 —— agent 靠它判断要不要来查这个目录。" = "This sentence goes into the index of every prompt — the agent uses it to decide whether to look into this directory.";
 "这张表只是**诊断** —— 它证明连接真的通了、谁跟哪个机器人说过话。绑定不在这里做：去「定时/助理」里选一个机器人（一个助理只挂一个）。" = "This list is diagnostics only — it proves the connection really works and shows who talked to which bot. Assignment happens in Scheduled / Assistants, not here, and each assistant takes a single bot.";
+"这是个目录，不是文件: %@" = "That is a folder, not a file: %@";
 "这是助理「%@」的工作会话：删掉它，助理会忘记与你的对话（账本还在，下一轮巡检照常）；助理本身不受影响。" = "This is the working session of assistant “%@”. Deleting it makes the assistant forget your conversation (the ledger stays, and its next patrol runs as usual); the assistant itself is not affected.";
 "这是单独一次，不会移动每日 dream 的时间窗口。" = "One-off run — it will not shift the daily dream window.";
 "这是密码框 ⇒ 我不往里写任何东西。" = "This is a password field ⇒ I will not write anything into it.";
 "这条是问你 / 告诉你，不用批。回「先别动」可以把它搁置。" = "This one is a question / notice — nothing to approve. Reply 「先别动」 to shelve it.";
 "这条请求的缓存命中率 = 命中 token ÷ (输入 + 命中)" = "Cache hit rate for this call = cached ÷ (input + cached)";
+"这看着是凭据文件，不发（%@）" = "That looks like a credentials file, so it was not sent (%@).";
 "这篇在你编辑期间被外部改过 — 你的改动没有写盘" = "This note was changed externally while you were editing — your changes were not written";
 "这篇已经不在了 — 可能在 App 外被删掉或改名了" = "This note is gone — it may have been deleted or renamed outside the app";
 "这里有未保存的修改, 我不能替你决定保存还是丢弃 ⇒ 我点了「取消」, 等你来处理。" = "There are unsaved changes and I cannot decide for you whether to keep or discard them, so I clicked Cancel and left it to you.";

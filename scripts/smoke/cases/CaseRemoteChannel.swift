@@ -258,6 +258,76 @@ extension SmokeMain {
         check(afterDup == 1,
               "T-REMOTE ⑤同一条 message_id 重推 ⇒ 不再投第二遍（飞书在网络抖动时会重推）")
 
+        // ══ ⑧ S15c 发附件（白名单 / 上限 / 排队 → 交给桥） ═════════════════════════
+        // 判据全落在 `RemoteAttachments`（纯函数 + 一个真 spool 文件），**不碰网络**。
+        // 根目录用夹具冒充 Documents / Downloads —— 真去读用户目录既慢，也不该有写权限。
+        let roots = [dir + "/Documents", dir + "/Downloads"]
+        for r in roots {
+            try? FileManager.default.createDirectory(atPath: r, withIntermediateDirectories: true)
+        }
+        let small = roots[0] + "/周报.txt"
+        try? "这份是周报。".write(toFile: small, atomically: true, encoding: .utf8)
+
+        // 三条白名单判据并成一条: 目录外 / 前缀相近的兄弟目录 / 用 `..` 穿越。
+        // ⚠️ 第二条必须有 —— 只比 `hasPrefix(root)` 的实现会把 `Documents_backup` 放过去。
+        func rejected(_ p: String, cap: Int = RemoteAttachments.maxBytes) -> Bool {
+            if case .rejected = RemoteAttachments.decide(path: p, name: "", roots: roots, maxBytes: cap) {
+                return true
+            }
+            return false
+        }
+        check(rejected(dir + "/Desktop/x.txt") && rejected(roots[0] + "_backup/x.txt")
+              && rejected(roots[0] + "/../.ssh/id_rsa"),
+              "T-REMOTE ⑧只发 Documents/Downloads 里的文件（目录外 / `Documents_backup` / `..` 穿越 三路都拒）")
+
+        // 大小两条并一条（同一段判据: 空文件与超限都是"这份不能发"）。
+        let emptyFile = roots[0] + "/空.txt"
+        FileManager.default.createFile(atPath: emptyFile, contents: Data())
+        check(rejected(emptyFile) && rejected(small, cap: 4)
+              && RemoteAttachments.maxBytes == 30 * 1024 * 1024,
+              "T-REMOTE ⑧空文件与超 30 MB 都拒（30 MB 是实测的: 22.0 通 / 33.0 回 code 234006）")
+
+        // 排队: 5 行 = 4 个文件 + 1 个重复 ⇒ 发 3 件、留一句"多的没发"、spool 读完即删。
+        RemoteAttachments.spoolRootOverride = dir + "/attach-spool"
+        try? FileManager.default.createDirectory(atPath: dir + "/attach-spool",
+                                                 withIntermediateDirectories: true)
+        let spool = RemoteAttachments.spoolPath(sid: sid)
+        let batch = ["a", "b", "c", "d"].map { roots[0] + "/\($0).txt" }
+        for p in batch { try? "x".write(toFile: p, atomically: true, encoding: .utf8) }
+        func spoolLine(_ p: String) -> String { #"{"path":"\#(p)","name":""}"# }
+        try? ([batch[0], batch[1], batch[0], batch[2], batch[3]].map(spoolLine)
+              .joined(separator: "\n") + "\n")
+            .write(toFile: spool, atomically: true, encoding: .utf8)
+        let drained = RemoteAttachments.drain(sid: sid, roots: roots)
+        check(drained.files.count == 3 && drained.notes.contains { $0.contains("最多发 3") }
+              && !FileManager.default.fileExists(atPath: spool),
+              "T-REMOTE ⑧一轮最多 3 件、同一路径只算一次、读完即删（留着等于让**下一轮**把旧文件发出去）")
+
+        // 接线: 飞书轮 ⇒ transport 拿到 spool；回合落定 ⇒ 排队的附件真的交给桥。
+        // ⚠️ spool 在 `scriptedReply` 里写 —— 那是回合**前半段**，与模型调工具的时刻同一位。
+        // ⚠️ 根表必须一起重定向: `deliverAttachments` 不传 roots（生产调用点），不重定向的话
+        //    夹具文件会被判成"不在白名单里"—— 而那看起来像功能坏了。
+        RemoteAttachments.rootsOverride = roots
+        mock.scriptedReply = { _ in
+            try? (spoolLine(small) + "\n").write(toFile: spool, atomically: true, encoding: .utf8)
+            return "文件发你了。"
+        }
+        store.remote.ingest(RemoteInbound(botId: botId.uuidString, chatId: chatId,
+                                         messageId: "om_attach", text: "把周报发我"))
+        _ = await waitUntil { store.runningTurns.isEmpty }
+        check(mock.lastAttachSpool == spool,
+              "T-REMOTE ⑧飞书轮 ⇒ transport 拿到附件 spool（工具才挂得上；普通会话是 nil）")
+        check(fake.sentFiles.count == 1 && fake.sentFiles.first?.file.path == small,
+              "T-REMOTE ⑧回合落定 ⇒ 排队的附件真的交给桥（删掉 `deliverAttachments` 这格就红）")
+        // 收尾之后的手动回合必须把它**清回 nil** —— 挂着不清 = 之后每一轮都能往外发文件。
+        _ = store.sendExternal(sid: sid, text: "在电脑上再说一句")
+        _ = await waitUntil { store.runningTurns.isEmpty }
+        check(mock.lastAttachSpool == nil,
+              "T-REMOTE ⑧飞书轮之后的手动回合 ⇒ spool 清回 nil（同 dream spool: 不清就会粘在实例上）")
+        RemoteAttachments.spoolRootOverride = nil
+        RemoteAttachments.rootsOverride = nil
+        mock.scriptedReply = { _ in "我看了一眼，CI 这次是绿的。" }
+
         // ── 桥重起的判据：只该由"谁在跑"的签名变化触发 ──────────────────────
         // 这三格是 S15b 的状态机骨架。改名重连会让长连接每改一次名字就断一次；
         // 换 secret 不重连会用旧身份一直连（改了凭据却没生效，最难查）。
@@ -352,5 +422,41 @@ extension SmokeMain {
               "T-REMOTE ⑦同一助理改归第二个机器人 ⇒ 第一个被顶掉（把界面改成多选、或手改库，这格就红）")
         check(store.remoteBots.first { $0.id == botB }?.assistantId == second,
               "T-REMOTE ⑦第二个机器人归上了（顶掉旧的不等于没归上新的）")
+
+        // ══ ⑨ 这一轮没产出正文 ⇒ 队列照样清空（S15c） ═══════════════════════════
+        // ⚠️ 必须用**一场全新的会话**: `lastAssistantText` 取的是会话里最后一条 assistant 文本，
+        //    所以"这一轮回复为空"在跑过几轮的会话里根本走不到那个分支（拿到的是上一轮的话）。
+        //    这条判的是"旧文件会不会在下一轮被发出去" —— 实现时真踩到过这个洞。
+        RemoteAttachments.spoolRootOverride = dir + "/attach-spool"
+        RemoteAttachments.rootsOverride = [dir + "/Documents", dir + "/Downloads"]
+        store.addScheduled(name: "只发文件不说话", prompt: "x", cron: "0 0 1 1 *",
+                           projectId: nil, kind: .assistant)
+        guard let quietId = store.scheduledTasks.first(where: { $0.name == "只发文件不说话" })?.id else {
+            check(false, "T-REMOTE ⑨前置: 助理已建"); return
+        }
+        let quietBot = UUID()
+        store.addRemoteBot(RemoteBot(id: quietBot, name: "哑号", appId: "cli_ffffffffffff"))
+        store.assignRemoteBot(quietBot, to: quietId)
+        _ = store.setRemoteBotSecret("s", for: quietBot)
+        mock.scriptedReply = { _ in
+            // sid 在 beginTurn 之前就绑好了 ⇒ 闭包里现查得到（不拿外部变量猜时序）
+            if let q = store.scheduledTasks.first(where: { $0.id == quietId })?.logSessionId {
+                try? (spoolLine(small) + "\n")
+                    .write(toFile: RemoteAttachments.spoolPath(sid: q), atomically: true, encoding: .utf8)
+            }
+            return ""
+        }
+        store.remote.ingest(RemoteInbound(botId: quietBot.uuidString, chatId: "oc_quiet",
+                                         messageId: "om_quiet", text: "把周报发我"))
+        _ = await waitUntil { store.runningTurns.isEmpty }
+        let quietSid = store.scheduledTasks.first(where: { $0.id == quietId })?.logSessionId
+        if let quietSid {
+            check(!FileManager.default.fileExists(atPath: RemoteAttachments.spoolPath(sid: quietSid)),
+                  "T-REMOTE ⑨这一轮没产出正文 ⇒ 队列照样清空（留着它会在同一会话的下一轮被发出去）")
+        } else {
+            check(false, "T-REMOTE ⑨前置: 这场会话建出来了")
+        }
+        RemoteAttachments.spoolRootOverride = nil
+        RemoteAttachments.rootsOverride = nil
     }
 }

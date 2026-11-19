@@ -12,9 +12,14 @@
 //    ⚠️ 出去的 `msg_type` 是**归一化后的**: 飞书事件里的原字段叫 `message_type`
 //      （`msg_type` 只是发消息接口那边的参数名）。两边名字不一样，对齐是桥的职责之一。
 //             {"type":"send_result","bot":"<id>","ok":true,"message_id":"om_.."} / {"ok":false,"msg":"..."}
+//             {"type":"send_result","bot":"<id>","ok":false,"msg":"..","file":{"ok":false,"msg":"..","kind":"file"}}
+//    ⚠️ 带附件的那一帧里 `file` 是**子对象**（`ok`/`msg` 仍描述整帧）—— 失败原因分三段:
+//      读文件 / 上传素材（`code=99991672` 没开权限、`234006` 超 30MB）/ 发消息。
 //             {"type":"error","msg":"..."}
 //   App → 桥  {"type":"send","bot":"<id>","chat_id":"oc_..","text":"..."}
+//             {"type":"send","bot":"<id>","chat_id":"oc_..","text":"..","file":{"path":"/Users/..","name":".."}}
 //             {"type":"stop"}
+//   ⚠️ 附件**只给本地绝对路径**，不给二进制: 桥自己读盘（同 TCC 归属），协议保持一行 JSON。
 //
 // 一个进程管 N 个机器人（`FS_BOTS` 是个 JSON 数组）。实测同一进程里两个 `WSClient`
 // 都能 ready 并共存 ⇒ 不需要"一个机器人一个进程"（那会把单实例锁、孤儿回收、诊断行
@@ -138,6 +143,119 @@ async function sendText(bot, chatId, text) {
   return { ok: j.code === 0, code: j.code, msg: j.msg, message_id: j.data && j.data.message_id };
 }
 
+// ── 发附件（图片 `im/v1/images` / 文件 `im/v1/files` → 拿 key → 发消息）────
+//
+// 三段是飞书规定的，少一段都不行: 上传素材拿 key，再用 `msg_type=image|file` 发。
+// ⚠️ 两个接口要的 `*_type` 是**两套词表**, 别混:
+//   · 图片 `image_type`: 只有 `message` 能用。实测 `avatar` 也返回 200，但 key 前缀是
+//     `v3_...` 而不是 `img_v3_...` —— 拿它发消息会失败。**选错不会在上传那一刻报错。**
+//   · 文件 `file_type`: opus/mp4/pdf/doc/xls/ppt/stream。
+//
+// ⚠️ `file_type` 的映射实测过（2026-11-19）: `.docx` 配 `doc` 和 `stream` **都返回 200**。
+//   所以"上传成功"证明不了选对了 —— 差别在接收端: 具体类型（doc/ppt/xls/pdf）飞书能直接
+//   预览，`stream` 只是一坨附件。既然两条都通，就选具体类型。（这也推翻了原来那条猜测
+//   "doc 只认老扩展名会失败"。）
+const IMAGE_MSG_TYPE = 'message';
+
+/** 扩展名 → file_type。认不出来的走 `stream`（飞书对它的接受面最宽）。 */
+function fileTypeFor(name) {
+  const ext = (String(name).split('.').pop() || '').toLowerCase();
+  switch (ext) {
+    case 'pdf': return 'pdf';
+    case 'doc': case 'docx': return 'doc';
+    case 'xls': case 'xlsx': case 'csv': return 'xls';
+    case 'ppt': case 'pptx': return 'ppt';
+    case 'mp4': return 'mp4';
+    case 'opus': return 'opus';
+    default: return 'stream';
+  }
+}
+
+/** 图片扩展名（决定走哪个上传接口，不是决定 file_type）。 */
+function isImageName(name) {
+  return /\.(png|jpe?g|gif|bmp|webp|tiff?)$/i.test(String(name));
+}
+
+async function uploadImage(bot, bytes, name) {
+  const t = await accessToken(bot);
+  const fd = new FormData();
+  fd.append('image_type', IMAGE_MSG_TYPE);
+  fd.append('image', new Blob([bytes]), name);
+  const r = await fetch(`${BASE}/open-apis/im/v1/images`, {
+    method: 'POST', headers: { Authorization: `Bearer ${t}` }, body: fd,
+  });
+  const j = await r.json();
+  return { ok: j.code === 0, code: j.code, msg: j.msg, image_key: j.data && j.data.image_key };
+}
+
+async function uploadFile(bot, bytes, name) {
+  const t = await accessToken(bot);
+  const fd = new FormData();
+  fd.append('file_type', fileTypeFor(name));
+  fd.append('file_name', name);
+  fd.append('file', new Blob([bytes]), name);
+  const r = await fetch(`${BASE}/open-apis/im/v1/files`, {
+    method: 'POST', headers: { Authorization: `Bearer ${t}` }, body: fd,
+  });
+  const j = await r.json();
+  return { ok: j.code === 0, code: j.code, msg: j.msg, file_key: j.data && j.data.file_key };
+}
+
+/**
+ * 发一个附件。`spec` = `{ path, name? }`。
+ *
+ * ⚠️ **读文件放在这里、而不是在 App 侧先读好再传** —— 桥跟 App 是同一棵进程树的子进程，
+ *    TCC 归属相同；但让 App 把整个文件读进内存再用 stdin 传，会把 NDJSON 协议变成
+ *    一条"要拼大小"的二进制通道。桥自己读，协议保持一行 JSON。
+ *
+ * ⚠️ 读不到（不存在 / 没权限 / 是个目录）必须给**不同的话**：这三种在接收端都表现为
+ *    "没收到文件"，而原因差得远 —— 用户能动手解决的只有前两种。
+ */
+async function sendAttachment(bot, chatId, spec) {
+  const path = spec && spec.path;
+  if (!path) return { ok: false, msg: 'no path' };
+  let bytes;
+  try {
+    const st = fs.statSync(path);
+    if (st.isDirectory()) return { ok: false, msg: `是个目录，不是文件: ${path}` };
+    bytes = fs.readFileSync(path);
+  } catch (e) {
+    const code = (e && e.code) || '';
+    const why = code === 'ENOENT' ? '文件不存在'
+      : (code === 'EPERM' || code === 'EACCES') ? '没有权限读它（系统可能没给这个目录授权）'
+      : `读不了（${code || e}）`;
+    return { ok: false, msg: `${why}: ${path}` };
+  }
+  const name = spec.name || path.split('/').pop();
+  const image = isImageName(name);
+  const up = image ? await uploadImage(bot, bytes, name) : await uploadFile(bot, bytes, name);
+  if (!up.ok) {
+    // 99991672 = 应用没开"上传素材"权限。**这条要单独认出来**: 它是配置问题，
+    // 换哪个文件都失败，而文案里带申请链接（飞书自己给的），照着点就能修。
+    const hint = up.code === 99991672
+      ? ' —— 这个机器人没开通「上传素材」权限，去开放平台加 im:resource:upload（或 im:resource）后发布版本'
+      : (up.code === 234006 ? ' —— 文件超过 30 MB' : '');
+    return { ok: false, code: up.code, msg: (up.msg || 'upload failed') + hint, kind: image ? 'image' : 'file' };
+  }
+  const t = await accessToken(bot);
+  const content = image ? { image_key: up.image_key } : { file_key: up.file_key };
+  const r = await fetch(`${BASE}/open-apis/im/v1/messages?receive_id_type=chat_id`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${t}` },
+    body: JSON.stringify({
+      receive_id: chatId,
+      msg_type: image ? 'image' : 'file',
+      content: JSON.stringify(content),
+    }),
+  });
+  const j = await r.json();
+  return {
+    ok: j.code === 0, code: j.code, msg: j.msg,
+    kind: image ? 'image' : 'file',
+    message_id: j.data && j.data.message_id,
+  };
+}
+
 // ── 每帧都要说清是哪个机器人 ──────────────────────────────────────────
 function status(bot, connected, note) {
   emit({ type: 'status', bot: bot.id, connected, note });
@@ -245,7 +363,30 @@ readline.createInterface({ input: process.stdin }).on('line', async (line) => {
       return;
     }
     try {
-      emit(Object.assign({ type: 'send_result', bot: bot.id }, await sendText(bot, cmd.chat_id, cmd.text || '')));
+      // 一帧可以同时带文本和附件（先文本后附件 —— 人读起来是"说明在上面、文件在下面"）。
+      // ⚠️ 两段各自可能成/败，但只**回一帧** `send_result`: 协议面越窄越好排查，
+      //    而附件那一段的细节放在 `file` 子对象里，不改变原有的 `ok`/`msg` 语义。
+      let textRes = null;
+      let fileRes = null;
+      let ok = true;
+      let msg = '';
+      if (cmd.text) {
+        textRes = await sendText(bot, cmd.chat_id, cmd.text);
+        if (!textRes.ok) { ok = false; msg = textRes.msg || 'send failed'; }
+      }
+      // 文本没发出去就不再发附件: 附件没有上下文，收到一坨文件比没收到更让人困惑。
+      if (ok && cmd.file) {
+        fileRes = await sendAttachment(bot, cmd.chat_id, cmd.file);
+        if (!fileRes.ok) { ok = false; msg = fileRes.msg || 'attachment failed'; }
+      }
+      emit({
+        type: 'send_result',
+        bot: bot.id,
+        ok,
+        msg,
+        message_id: (textRes && textRes.message_id) || (fileRes && fileRes.message_id),
+        file: fileRes ? { ok: fileRes.ok, msg: fileRes.msg || '', kind: fileRes.kind, message_id: fileRes.message_id } : null,
+      });
     } catch (e) {
       emit({ type: 'send_result', bot: bot.id, ok: false, msg: String((e && e.message) || e) });
     }

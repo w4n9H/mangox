@@ -2016,6 +2016,12 @@ final class ChatStore: ObservableObject {
         // **不是**档位也不是全局。⚠️ 这是**无条件赋值**（不是 `if let`）: 普通回合要把它清回 nil,
         // 否则任务日志会话里手动说一句话之后, 那份 transport 会一直挂着 dream 扩展与 env。
         t.updateDreamSpool(dreamSpool)
+        // S15c: 飞书轮才挂「发附件」工具 —— 判据在 `RemoteChannelService`（那个 sid 在不在
+        // `remoteTurns` / `execReplies` 里, 那两张表只有飞书真的来了话才写入）。
+        // ⚠️ 同样是**无条件赋值**: 飞书轮之后同一个 transport 还会跑人的手动回合,
+        //    不清的话那一轮也能调 `feishu_attach` —— 而它写的 spool 没有任何轮次会去读,
+        //    表现是"助理说发了、人什么都没收到"。
+        t.updateAttachSpool(remote.attachSpoolForTurn(sid: sid))
         // P19: 注入段是 per-turn，**无条件赋值**。
         // 巡检轮之后, 同一个 transport 上还会跑人的手动回合; 只用 `if let` 赋值的话,
         // 那次手动回合会**继承巡检注入段**: 表现是"我在会话里问一句, 它却按巡检契约

@@ -126,6 +126,12 @@ protocol AgentTransport: AnyObject {
     /// 档位菜单里 ⇒ 主会话也能挂上 dream 扩展）也不做成全局（那会污染别的会话）。
     /// 它同时是 dream 的**第二道闸门**: 只有这一份 transport 知道 spool 在哪。
     func updateDreamSpool(_ spool: String?)
+    /// S15c: 下发「飞书发附件」的 spool 落点 (nil = 这一回合不是飞书轮)。
+    ///
+    /// **per-turn 实例级**, 与 `updateDreamSpool` 同一层但**不是同一件事**: 那个是任务语义,
+    /// 这个是"人是从飞书私聊发起的"。判据在 `RemoteChannelService`（那个 sid 在不在
+    /// `remoteTurns` / `execReplies` 里）, 所以定时巡检 / fire 永远拿不到它。
+    func updateAttachSpool(_ spool: String?)
     /// P19: 这一回合的 system 注入段（nil = 不注入）。走 `--append-system-prompt`，
     /// **不进 user prompt**（实测: 落成 `role=system` 的 addendum 段，下次 spawn 被替换、
     /// 不累积 —— 见 docs/P19 §02）。spawn 期定格 ⇒ `spawnedExtraSystem` 变了要重启进程。
@@ -266,6 +272,8 @@ extension AgentTransport {
     /// ⚠️ MockTransport **覆盖**了它并记下最后一次的值 —— 空实现会让"普通回合有没有把它清回 nil"
     /// 变成不可断言的一件事, 而那正是 `ChatStore.beginTurn` 里那个无条件赋值要防的错。
     func updateDreamSpool(_ spool: String?) {}
+    /// S15c: 飞书附件 spool 下发 (Mock 无进程 ⇒ 默认空实现; MockTransport 覆盖并记录)。
+    func updateAttachSpool(_ spool: String?) {}
     /// P10.2a-0: 裁决档下发 (Mock 无审批桥, 空实现)。
     func updateApprovalMode(_ mode: ApprovalMode) {}
     /// P10.2b: 拦截记录 (Mock 无审批桥 → 恒空; 冒烟用 MockTransport.autoJudgeBlocks 注入)。

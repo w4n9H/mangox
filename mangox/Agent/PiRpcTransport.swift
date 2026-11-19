@@ -141,6 +141,20 @@ final class PiRpcTransport: AgentTransport {
     /// 免得又冒出一个"从别处顺手改一下"的调用点 —— 双闸门靠的就是"只有这里能改"。
     func updateDreamSpool(_ spool: String?) { dreamSpool = spool }
 
+    /// S15c: 这一份 transport 是不是**正在跑一个飞书轮** —— 非 nil = 是, 值就是那轮的 spool。
+    ///
+    /// ⚠️ 与 `dreamSpool` 是同一层、**不是**同一件事: 那个是"跑一次 dream"的任务语义,
+    ///    这个是"这一轮人是从飞书私聊发起的"。做成一个变量会让两者互相覆盖（dream 的
+    ///    收尾清 nil 会把飞书轮的工具也摘掉）。
+    /// ⚠️ 谁设它: `ChatStore.beginTurn` → `RemoteChannelService.attachSpoolForTurn` ——
+    ///    判据是 `remoteTurns` / `execReplies` 里有没有这个 sid（那两张表只在飞书
+    ///    真的来了话时写入）。**普通会话无条件写 nil**，所以工具不会粘在实例上。
+    private var attachSpool: String?
+    private var spawnedAttachSpool: String?
+
+    /// 协议侧入口 (S15c)。同 `updateDreamSpool`: 一条路径进、一条路径出。
+    func updateAttachSpool(_ spool: String?) { attachSpool = spool }
+
     /// P19: 巡检轮 / 执行轮的**系统级注入**（交接文件 + 输出契约 + Observation 快照）。
     ///
     /// ⚠️ 走 `--append-system-prompt` 而不是塞进 user prompt, 理由是**转录污染**:
@@ -312,12 +326,14 @@ final class PiRpcTransport: AgentTransport {
     static func extensionArguments(hostedExtensionPath: String,
                                    codemodeExtensionPath: String?,
                                    dreamExtensionPath: String? = nil,
+                                   attachExtensionPath: String? = nil,
                                    computerExtensionPath: String? = nil,
                                    enabled: [String]) -> [String] {
         var args = ["--no-extensions", "--extension", builtinLlamaExtension,
                     "--extension", hostedExtensionPath]
         if let codemode = codemodeExtensionPath { args += ["--extension", codemode] }
         if let dream = dreamExtensionPath { args += ["--extension", dream] }
+        if let attach = attachExtensionPath { args += ["--extension", attach] }
         if let computer = computerExtensionPath { args += ["--extension", computer] }
         for path in enabled { args += ["--extension", path] }
         return args
@@ -784,6 +800,157 @@ final class PiRpcTransport: AgentTransport {
         let dir = NSHomeDirectory() + "/.mangox/extensions"
         let path = dir + "/mangox-dream.ts"
         let source = Self.dreamExtensionSource
+        try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+        let existing = try? String(contentsOfFile: path, encoding: .utf8)
+        if existing != source {
+            try? source.write(toFile: path, atomically: true, encoding: .utf8)
+        }
+        return path
+    }
+
+    // MARK: - S15c 飞书发附件 (自建扩展, 只写 spool)
+
+    /// env 名 —— **契约 token**: 逐字进子进程 env, `MANGOX_FEISHU_ATTACH` 那侧读的就是它。
+    ///
+    /// 值是**一个 JSON 对象**（不是单个路径，同 dream 那种单值 env 不一样）:
+    /// `{"spool":"/…/x.jsonl","roots":["/…/Documents","/…/Downloads"],"max_mb":30}`。
+    ///
+    /// 为什么把根表也放进来: 工具要在**这一轮里**就告诉模型"这条路径不行"（否则 App 在
+    /// 回合结束时才拒，模型已经没机会改）。而根表**由 App 算、经 env 下发** —— 不是
+    /// 在 TS 里再抄一份常量，所以它仍然只有一个真源。
+    nonisolated static let attachEnvKey = "MANGOX_FEISHU_ATTACH"
+
+    /// 扩展注册出来的工具名（面板展开用；与源码同源同改，同 `dreamToolNames` 那条守）。
+    nonisolated static let attachToolNames: [String] = ["feishu_attach"]
+
+    /// 自建「发附件」扩展 —— **模型侧唯一的入口**。
+    ///
+    /// ⚠️ 这个扩展是哑的: 读 env / 判路径 / 追加一行。**不联网、不碰凭据、不知道 chat_id**。
+    ///    真正的发送在 `RemoteChannelService.finishRemoteTurn`，那里才有"这一轮是从哪个
+    ///    私聊来的"这个信息（`remoteTurns` 只在飞书私聊真的来了话时写入）。
+    ///
+    /// ⚠️ **双闸门**（同 dream）: 挂载闸门 = 只有飞书轮的 spawn 才 `--extension` 它；
+    ///    激活闸门 = 只有那次 spawn 设 env。别的会话两个都没有 ⇒ 模型连这个工具都看不到。
+    ///
+    /// ⚠️ 这里做的检查**只为了让模型能在本轮内改好**，不是最终裁决 —— 最终裁决在
+    ///    `RemoteAttachments.decide`（规格化符号链接、凭据判据、精确大小），它跑在 App 里。
+    ///    所以这里可以"从宽": 放过去的由 App 再拒，代价只是一句日志；反过来（从宽拒了
+    ///    本来能发的）才是功能损失。
+    static let attachExtensionSource: String = #"""
+        // Auto-deployed by MangoX (S15c). Queues ONE local file to be sent to the user on
+        // Feishu when this turn ends.
+        //
+        // Deliberately dumb: parse MANGOX_FEISHU_ATTACH, sanity-check the path, append a
+        // line. No network, no credentials, no chat id -- the app owns all three, and only
+        // a turn that actually came in from a Feishu DM gets this extension mounted.
+        //
+        // The checks here exist so the model can fix a bad path WITHIN this turn: the app
+        // re-checks everything when the turn ends, and by then the model cannot retry.
+        import { appendFileSync, mkdirSync, existsSync, statSync } from "node:fs";
+        import { dirname } from "node:path";
+        import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+        import { Type } from "typebox";
+
+        const ENV = "MANGOX_FEISHU_ATTACH";
+
+        function config() {
+            try {
+                const raw = process.env[ENV];
+                if (!raw) return null;
+                const c = JSON.parse(raw);
+                if (!c || !c.spool) return null;
+                return c;
+            } catch {
+                return null;
+            }
+        }
+
+        function reject(text) {
+            return { content: [{ type: "text", text: text }], details: undefined };
+        }
+
+        export default function (pi: ExtensionAPI) {
+            pi.registerTool({
+                name: "feishu_attach",
+                label: "Send file to Feishu",
+                description: [
+                    "Queue ONE local file to be sent to the user on Feishu. This does NOT send",
+                    "anything right now: it goes out when this turn ends. The file must already",
+                    "exist on this Mac and must live under the user's Documents or Downloads",
+                    "folder. At most 3 files per turn.",
+                    "",
+                    "Use this when the user asked you to give them a file (a document, a picture,",
+                    "a report you just wrote). Do NOT use it to announce things -- say it in your",
+                    "reply text instead.",
+                    "",
+                    "Absolute path only. Files over 30 MB are refused by Feishu.",
+                ].join("\n"),
+                parameters: Type.Object({
+                    path: Type.String({ description: "Absolute path of an existing file under ~/Documents or ~/Downloads." }),
+                    name: Type.Optional(Type.String({ description: "Filename the user should see. Defaults to the file's own name." })),
+                }),
+
+                async execute(_toolCallId, params, _signal, _onUpdate, _ctx) {
+                    const c = config();
+                    if (!c) return reject("feishu_attach is not enabled in this session.");
+                    const raw = (params.path || "").trim();
+                    if (!raw) return reject("Rejected: path is empty.");
+                    if (raw[0] !== "/") return reject("Rejected: needs an ABSOLUTE path (got \"" + raw + "\").");
+                    const roots = Array.isArray(c.roots) ? c.roots : [];
+                    const inside = roots.some(function (r) { return raw.startsWith(r + "/"); });
+                    if (!inside) {
+                        return reject("Rejected: only files under " + roots.join(" or ")
+                            + " can be sent. If the file lives somewhere else, copy it there first "
+                            + "(the user chose this rule).");
+                    }
+                    if (!existsSync(raw)) return reject("Rejected: no such file: " + raw);
+                    let st;
+                    try { st = statSync(raw); } catch (e) { return reject("Rejected: cannot read it: " + String(e)); }
+                    if (st.isDirectory()) return reject("Rejected: that is a directory, not a file: " + raw);
+                    const maxMb = Number(c.max_mb) || 30;
+                    if (st.size === 0) return reject("Rejected: the file is empty.");
+                    if (st.size > maxMb * 1024 * 1024) {
+                        return reject("Rejected: " + (st.size / 1048576).toFixed(1) + " MB is over the "
+                            + maxMb + " MB Feishu limit.");
+                    }
+                    const name = (params.name || raw.split("/").pop() || "").trim();
+                    try {
+                        mkdirSync(dirname(c.spool), { recursive: true });
+                        appendFileSync(c.spool, JSON.stringify({ path: raw, name: name }) + "\n");
+                    } catch (e) {
+                        return reject("Failed to queue it: " + String(e));
+                    }
+                    return {
+                        content: [{
+                            type: "text",
+                            text: "Queued " + name + " (" + (st.size / 1024).toFixed(0) + " KB). It goes out "
+                                + "when this turn ends; mention it in your reply so the user knows what arrived.",
+                        }],
+                        details: undefined,
+                    };
+                },
+            });
+        }
+        """#
+
+    /// 组装 `attachEnvKey` 的值。**根表与上限取自 `RemoteAttachments`** —— 工具侧只消费，
+    /// 不复制常量（不然改了白名单要记着改两处，而漏改的表现是"设置页说能发、工具说不能"）。
+    static func attachEnvValue(spool: String) -> String? {
+        let payload: [String: Any] = [
+            "spool": spool,
+            "roots": RemoteAttachments.allowedRoots(),
+            "max_mb": RemoteAttachments.maxBytes / 1024 / 1024,
+        ]
+        guard let data = try? JSONSerialization.data(withJSONObject: payload) else { return nil }
+        return String(data: data, encoding: .utf8)
+    }
+
+    /// 写到 `~/.mangox/extensions/mangox-feishu-attach.ts`, 返回路径。
+    /// **只有飞书轮的 spawn 才调它**（同 `ensureDreamExtensionFile` 的调用时机纪律）。
+    static func ensureAttachExtensionFile() -> String {
+        let dir = NSHomeDirectory() + "/.mangox/extensions"
+        let path = dir + "/mangox-feishu-attach.ts"
+        let source = Self.attachExtensionSource
         try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
         let existing = try? String(contentsOfFile: path, encoding: .utf8)
         if existing != source {
@@ -2143,12 +2310,14 @@ final class PiRpcTransport: AgentTransport {
         // 这个分支不是为了第一次 fire（那次 process 本来就是 nil）—— 是为了
         // 用户点开任务日志会话说了句话（普通回合, `dreamSpool` 被置回 nil）之后再点「立即运行」。
         if process != nil, spawnedCwd != target || spawnedDreamSpool != dreamSpool
+            || spawnedAttachSpool != attachSpool
             || spawnedExtraSystem != extraSystemPrompt
             || spawnedExecProject != executionGuard?.projectPath {
             // 诊断日志: 进程**复用**是常态, 重启是例外 —— 后者会丢进程内对话记忆,
             // 排查时"这一轮为什么没记忆"要能一眼看出是这里拆的。
             Log.process("teardown", ["cwdChanged": spawnedCwd != target ? "1" : "0",
                                      "dreamChanged": spawnedDreamSpool != dreamSpool ? "1" : "0",
+                                     "attachChanged": spawnedAttachSpool != attachSpool ? "1" : "0",
                                      "injectChanged": spawnedExtraSystem != extraSystemPrompt ? "1" : "0",
                                      "fenceChanged": spawnedExecProject != executionGuard?.projectPath ? "1" : "0"])
             teardownProcess()
@@ -2189,6 +2358,10 @@ final class PiRpcTransport: AgentTransport {
         // `SchedulerService` 在 fire 前设、fire 收尾时清。三老档与普通会话上它是 nil
         // ⇒ 扩展段逐字节不变（同 codemode 那条"是'不存在', 不是'挂了但没生效'"）。
         let dreamExtPath = dreamSpool != nil ? Self.ensureDreamExtensionFile() : nil
+        // S15c: 飞书发附件扩展**只在飞书轮挂** —— `attachSpool` 由 `ChatStore.beginTurn` 经
+        // `RemoteChannelService` 判"这个 sid 是不是飞书来的"后下发，普通会话是 nil
+        // ⇒ 扩展段逐字节不变（同 dream / codemode 那条"是'不存在', 不是'挂了但没生效'"）。
+        let attachExtPath = attachSpool != nil ? Self.ensureAttachExtensionFile() : nil
         // P10.1b: 搜索扩展**保底落地**（文件本来由 `ChatStore.scanExtensions` 写好了, 这里只防
         // "列表里有它、文件却不在"——删过 / 换过托管目录 / 首次 spawn 抢在扫掠之前）。
         // 判据 = 它在**启用列表**里（那已经是"用户开着 + 有 key"的交集, 见 `ChatStore.scanExtensions`）
@@ -2243,6 +2416,7 @@ final class PiRpcTransport: AgentTransport {
             hostedExtensionPath: extPath,
             codemodeExtensionPath: codemodeExtPath,
             dreamExtensionPath: dreamExtPath,
+            attachExtensionPath: attachExtPath,
             computerExtensionPath: computerExtPath,
             enabled: desiredMode.mountsBusinessExtensions ? desiredExtensions : [])
         if let fork = desiredForkSource {
@@ -2353,6 +2527,13 @@ final class PiRpcTransport: AgentTransport {
             if p.environment == nil { p.environment = ProcessInfo.processInfo.environment }
             p.environment?[Self.dreamSpoolEnvKey] = spool
         }
+        // S15c: 飞书发附件 = 双闸门的第二道（挂载那道在上面 `attachExtPath`）。
+        // 值是 JSON: spool 路径 + **App 算出来的**根表与上限 —— 工具侧的做法是"用 App
+        // 给的值做一次预检"，不是自己再抄一份常量（抄了就是第二真源）。
+        if let spool = attachSpool, let value = Self.attachEnvValue(spool: spool) {
+            if p.environment == nil { p.environment = ProcessInfo.processInfo.environment }
+            p.environment?[Self.attachEnvKey] = value
+        }
         // P19 S6: 执行轮的写围栏 env（扩展侧那一半，见 `approvalExtensionSource`）。
         //
         // ⚠️ 守卫 26 同款: 上面几段都可能没给 `p.environment` 赋值（nil = 继承父环境），
@@ -2419,6 +2600,7 @@ final class PiRpcTransport: AgentTransport {
                                 "gen": "\(spawnGeneration + 1)"])
         spawnedCwd = cwd
         spawnedDreamSpool = dreamSpool
+        spawnedAttachSpool = attachSpool
         spawnedExtraSystem = extraSystemPrompt
         spawnedExecProject = executionGuard?.projectPath
         self.outPipe = outPipe

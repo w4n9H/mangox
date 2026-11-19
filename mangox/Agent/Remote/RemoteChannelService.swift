@@ -475,13 +475,54 @@ final class RemoteChannelService: ObservableObject {
     func finishRemoteTurn(sid: UUID) {
         guard let turn = remoteTurns.removeValue(forKey: sid) else { return }
         guard let store else { return }
+        // ⚠️ spool **无条件**消费掉，哪怕这一轮什么正文都没有 —— 留着它，同一个会话的**下一轮**
+        //    会把这个旧文件发出去，而那一轮人问的是别的事。这与 `drain` 的"读即删"同源:
+        //    队列只认"这一轮"，没有"下次再试"。
+        let queued = RemoteAttachments.drain(sid: sid)
         let text = store.lastAssistantText(sid: sid)
         guard !text.isEmpty else {
             // 一句话都没有（进程崩 / 被停）—— 沉默比"编一句失败"更让人困惑。
+            if !queued.files.isEmpty {
+                Log.event("feishu-attach-dropped", ["count": "\(queued.files.count)", "why": "empty-text"])
+            }
             noticeChat(turn, L("这一轮没有产出（可能被中断了），回 MangoX 里看现场。"), force: true)
             return
         }
         link?.send(botId: turn.botId, chatId: turn.chatId, text: RemoteReply.compose(text))
+        deliverAttachments(queued, turn: turn)
+    }
+
+    /// S15c: 这一轮要不要挂「发附件」工具（工具名 `feishu_attach`）。
+    ///
+    /// ⚠️ 判据就是"这一轮是不是从飞书私聊来的" —— **复用这两张已经在用的表**，不新造一张
+    ///    "谁允许发文件"的名单。多一张表就多一处会忘记清的入口，而"忘了清"这个错的方向
+    ///    恰好是最坏的: 之后每一轮都能往外发文件。
+    ///
+    /// ⚠️ 已知空洞（有意留着，见 `approveOnFeishu`）: 从飞书**批准执行**的那一轮里
+    ///    `execReplies` 是在回合已经开跑之后才写入的 ⇒ 那一轮拿不到这个工具。
+    ///    影响只是"执行轮不能顺手发文件"，而"我要文件"这个场景走的是普通私聊（`deliver`）。
+    func attachSpoolForTurn(sid: UUID) -> String? {
+        guard remoteTurns[sid] != nil || execReplies[sid] != nil else { return nil }
+        return RemoteAttachments.spoolPath(sid: sid)
+    }
+
+    /// 把这一轮排队的附件发出去。**文本已经发完了才调这里**。
+    ///
+    /// ⚠️ 顺序是"文本 → 附件": 人先看到"给你，"，再看到文件。反过来的话文件先弹出、
+    ///    说明后到，中间那几秒他不知道这是什么。
+    /// ⚠️ 拒绝理由必须**说出来**（`force: true`）: 人刚说"把那个发我"，而助理一个字都不提
+    ///    —— 他会以为消息丢了，然后再要一次，然后还是什么都没来。
+    private func deliverAttachments(_ queued: (files: [RemoteAttachment], notes: [String]),
+                                    turn: (chatId: String, botId: String)) {
+        for file in queued.files {
+            link?.send(botId: turn.botId, chatId: turn.chatId, text: "", file: file)
+        }
+        guard !queued.notes.isEmpty else { return }
+        noticeChat(turn, RemoteReply.compose(L("有文件没能发出去：") + "\n"
+                                             + queued.notes.joined(separator: "\n")),
+                   force: true)
+        Log.event("feishu-attach-rejected", ["count": "\(queued.notes.count)",
+                                             "note": queued.notes.first ?? ""])
     }
 
     /// 在飞书上批一条结论：起执行轮，并把结果回推到这个私聊（人不一定回 App 看时间线）。
@@ -508,7 +549,11 @@ final class RemoteChannelService: ObservableObject {
     /// "没收到"与"没发"必须长得不一样。
     func reportExecFinished(sid: UUID, line: String) {
         guard let turn = execReplies.removeValue(forKey: sid) else { return }
+        // 同 `finishRemoteTurn`: 队列无条件消费（执行轮拿不到工具，这里通常是空的 ——
+        // 但"通常是"不能当判据，残留一份就是下一轮的旧文件）。
+        let queued = RemoteAttachments.drain(sid: sid)
         link?.send(botId: turn.botId, chatId: turn.chatId, text: line)
+        deliverAttachments(queued, turn: turn)
     }
 
     /// 投递失败（引擎没起来 / 并发到顶）—— 回合**没开始**，但仍要回一句。

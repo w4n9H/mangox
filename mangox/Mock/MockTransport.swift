@@ -59,6 +59,17 @@ final class MockTransport: AgentTransport {
         dreamSpoolUpdates += 1
     }
 
+    /// S15c smoke 断言用: 最近一次飞书附件 spool 下发。判据同 `lastDreamSpool` ——
+    /// **"普通回合被清回 nil"必须能观察到**（挂着不清 = 之后每一轮都能调 `feishu_attach`，
+    /// 而落点是早就结束的那一轮）。
+    private(set) var lastAttachSpool: String?
+    private(set) var attachSpoolUpdates: Int = 0
+
+    func updateAttachSpool(_ spool: String?) {
+        lastAttachSpool = spool
+        attachSpoolUpdates += 1
+    }
+
     /// P10.1b: 记录下发的搜索 key —— 冒烟靠它断言"配置变更有没有真的推到 transport"。
     func updateWebSearchKey(_ key: String?) {
         lastWebSearchKey = key

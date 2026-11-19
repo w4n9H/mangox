@@ -1378,4 +1378,17 @@ VALUES = {
     '没执行起来：%@': "Couldn't start: %@",
     '现在没有等你批的事。直接说话就是跟我聊。': 'Nothing is waiting for your approval. Just talk to me.',
     '这一条只是问你 / 告诉你，没有可执行的方案 —— 没有「同意」这个动作。回「先别动」可以把它搁置。': 'This one only asks you something — there is no plan to run, so there is nothing to approve. Reply 「先别动」 to shelve it.',
+
+    # S15c 发附件（校验拒绝的原因 —— 这些会原样回到模型手里，也会出现在飞书回执里）
+    '路径是空的': 'The path is empty.',
+    '要给绝对路径（收到的是「%@」）': 'Needs an absolute path (got "%@").',
+    '只能发 Documents 或 Downloads 里的文件（这个不在: %@）': 'Only files under Documents or Downloads can be sent (this one is not: %@).',
+    '这看着是凭据文件，不发（%@）': 'That looks like a credentials file, so it was not sent (%@).',
+    '文件不存在: %@': 'No such file: %@',
+    '这是个目录，不是文件: %@': 'That is a folder, not a file: %@',
+    '读不到它的大小（没有权限？）: %@': 'Cannot read its size (missing permission?): %@',
+    '是空文件（飞书不收空文件）: %@': 'The file is empty (Feishu rejects empty files): %@',
+    '太大了（%ld MB，上限 %ld MB）: %@': 'Too big (%ld MB, the limit is %ld MB): %@',
+    '一轮最多发 %ld 件，多的没发（%@）': 'At most %ld files per turn, so the rest were not sent (%@).',
+    '有文件没能发出去：': 'Some files could not be sent:',
 }

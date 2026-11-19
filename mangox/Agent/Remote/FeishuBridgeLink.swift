@@ -82,7 +82,18 @@ protocol RemoteLink: AnyObject {
     func start(bots: [RemoteLinkBot]) throws
     func stop()
     /// 出口跟着消息走: 同一个 `chat_id` 只有那个收到消息的机器人有资格回。
-    func send(botId: String, chatId: String, text: String)
+    ///
+    /// `file` 非 nil ⇒ 桥先发文本、再上传并发送这个附件（`bridge.mjs` 的 `send` 帧）。
+    /// 附件**只给路径**，二进制由桥自己读（同 TCC 归属，协议保持一行 JSON）。
+    func send(botId: String, chatId: String, text: String, file: RemoteAttachment?)
+}
+
+extension RemoteLink {
+    /// 只发文本。协议里不能写默认参数值，所以用这个扩展兜住"绝大多数只发文本"的调用点
+    /// —— 少一个参数就多一处能传错的机会。
+    func send(botId: String, chatId: String, text: String) {
+        send(botId: botId, chatId: chatId, text: text, file: nil)
+    }
 }
 
 // MARK: - 真实现
@@ -209,9 +220,12 @@ final class FeishuBridgeLink: RemoteLink {
         buffer.reset()
     }
 
-    func send(botId: String, chatId: String, text: String) {
+    func send(botId: String, chatId: String, text: String, file: RemoteAttachment?) {
         guard let pipe = stdinPipe else { return }
-        let payload: [String: Any] = ["type": "send", "bot": botId, "chat_id": chatId, "text": text]
+        var payload: [String: Any] = ["type": "send", "bot": botId, "chat_id": chatId, "text": text]
+        if let file {
+            payload["file"] = ["path": file.path, "name": file.name]
+        }
         guard let data = try? JSONSerialization.data(withJSONObject: payload),
               var line = String(data: data, encoding: .utf8) else { return }
         line += "\n"
@@ -272,6 +286,8 @@ final class FakeRemoteLink: RemoteLink {
     /// 每次 start 收到的机器人清单（"整条重起"这条判据的唯一证据）。
     private(set) var startedBots: [[RemoteLinkBot]] = []
     private(set) var sent: [(botId: String, chatId: String, text: String)] = []
+    /// 发出去的附件（与 `sent` **分开记**: 文本那侧的断言一条都不该被附件改动）。
+    private(set) var sentFiles: [(botId: String, chatId: String, file: RemoteAttachment)] = []
     var startError: Error?
 
     func start(bots: [RemoteLinkBot]) throws {
@@ -282,8 +298,9 @@ final class FakeRemoteLink: RemoteLink {
 
     func stop() { stopped += 1 }
 
-    func send(botId: String, chatId: String, text: String) {
+    func send(botId: String, chatId: String, text: String, file: RemoteAttachment?) {
         sent.append((botId, chatId, text))
+        if let file { sentFiles.append((botId, chatId, file)) }
     }
 
     /// 模拟桥推进来一帧。
