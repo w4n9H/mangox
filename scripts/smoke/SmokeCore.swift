@@ -26,9 +26,43 @@ extension SmokeMain {
         return path
     }
 
+    /// 剖析开关：`MANGOX_SMOKE_PROFILE=1` 时，**慢断言**会在行尾带上耗时。
+    ///
+    /// ⚠️ 为什么默认关: 常态是微秒级, 每条都标反而看不清; 更要紧的是**输出必须与不开时逐字节
+    ///    相同** —— 这个框架自己也被门禁断言（条数、报告格式），多打一个字都可能让别的判据红。
+    /// 用途: 一次 CI 7 分钟, 一直没人知道花在哪。开它跑一次就知道（2026-11-19: 2706 条合计
+    /// 107s ⇒ 平均 39ms/条, 而纯函数断言本该是微秒级 ⇒ 慢的是一小撮"重断言", 不是条数）。
+    private static let profileOn = ProcessInfo.processInfo.environment["MANGOX_SMOKE_PROFILE"] == "1"
+    /// 上一条断言打完的时刻。等待类断言（`waitUntil` / `Task.sleep`）的时间会算在**下一条**头上
+    /// —— 这是有意的: 那条等待本来就是它的一部分。
+    private static var lastTick = Date()
+
+    /// 断言总数 —— 条数棘轮的输入（见 `report()`）。
+    private static var checkCount = 0
+
+    /// 条数上限：**只减不增**。
+    ///
+    /// ⚠️ 为什么要有它（2026-11-19 boss 立规矩）：条数已经证明**不是** CI 时间的主因 ——
+    ///    2707 条里 2647 条合计只占 5 秒，真正的耗时是 2 条重断言（47 秒）和 `swiftc` 编译（126 秒）。
+    ///    但这个数字决定的是**维护成本**：每一条都要有人读、有人改、有人在它红了的时候判断
+    ///    "是我改坏了还是判据过期了"。它会一路涨，是因为"顺手加两条"从来不疼。
+    /// ⇒ 疼一下：超了就是红的，想加就得先合并掉别处。
+    /// ⚠️ 下调**不必**同步改这里（棘轮只管上限）；但每次大改之后应当顺手把它压到实测值上，
+    ///    否则省下的额度会立刻被下一个人吃掉（"上限放哪儿就涨到哪儿"）。
+    static let checkCeiling = 2707
+
     @MainActor
     static func check(_ cond: Bool, _ what: String) {
-        print((cond ? "PASS" : "FAIL") + " - " + what)
+        checkCount += 1
+        var line = (cond ? "PASS" : "FAIL") + " - " + what
+        if profileOn {
+            let now = Date()
+            let ms = Int(now.timeIntervalSince(lastTick) * 1000)
+            lastTick = now
+            // 只标 ≥100ms 的: 比这更小的排队抖动能把日志冲成噪音, 而"慢了"的量级是秒。
+            if ms >= 100 { line += "  [\(ms)ms]" }
+        }
+        print(line)
         if !cond { failures.append(what) }
     }
 
@@ -57,6 +91,13 @@ extension SmokeMain {
         if casesRemaining > 0 {
             failures.append("还有 \(casesRemaining) 个用例没跑 —— 某个 case 结尾调了 report() "
                             + "（report = 收尾 + exit，不许当用例结尾；见 scripts/smoke/cases/AllCases.swift）")
+        }
+        // 条数棘轮。**不进 `check`** —— 棘轮自己若算一条, 上限就永远差一, 而"差一"最容易被人
+        // 顺手改成 +1。这里直接追加到 failures, 与 casesRemaining 同一条路。
+        if checkCount > checkCeiling {
+            failures.append("冒烟条数 \(checkCount) 超上限 \(checkCeiling) —— 这个数**只减不增**。"
+                            + " 新判据先扩已有那条(同源事实并进一条); 确需新增, 先把别处的合并掉。"
+                            + " 规则见 scripts/smoke/run.sh 文件头「冒烟新增规则」。")
         }
         print(failures.isEmpty ? "\nALL PASS" : "\nFAILURES: \(failures.count)")
         failures.forEach { print(" - " + $0) }

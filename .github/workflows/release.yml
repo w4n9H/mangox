@@ -49,6 +49,29 @@ jobs:
   # matrix 只留一条 include 是**故意**的, 不是漏删: `matrix.arch` 是架构的单一真源
   # (编译的 ARCHS / 产物名 / artifact 名 / 两道架构断言全从它取)。要重出 Intel 包,
   # 加回一条 `- arch: x86_64 / runner: macos-15-intel` 即可, 其余一处不用改。
+  # ── 语义冒烟 (与 build **并行**) ──────────────────────────
+  # 为什么单开一个 job (2026-11-19): 冒烟那一步独占 424s —— 它是 `swiftc` 一次调用
+  # **全量编译 221 个文件**(151 App + 70 冒烟)再跑 2707 条断言, 其中编译 126s、断言 57s。
+  # 它和 xcodebuild 之间**没有数据依赖**(一个 swiftc 直接编、一个走 xcodebuild), 串在同一个
+  # job 里就是 424+126 相加; 拆开取 max ⇒ 墙钟少等约两分钟。
+  #
+  # ⚠️ 代价如实记: 两台 runner 各编译一遍, **机器时间反而变多**。对 public 仓库无所谓
+  #    (Actions 对公开仓库免费), 换的是墙钟。若哪天仓库转私有, 这两步要合并回一个 job
+  #    并共享编译产物 —— 否则每分钟计费翻倍。
+  #
+  # ⚠️ `publish` 的 needs 必须**同时**列出 build 与 smoke: 只等 build 的话, 冒烟红了
+  #    而包照发 —— 那道门等于没接进发布链路。
+  smoke:
+    name: smoke (arm64)
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      # scripts/smoke/run.sh 按 uname -m 推导 target (arm64 / x86_64 宿主都能跑);
+      # 它只用 swiftc + SDK, 不需要完整 Xcode, 也不参与签名。
+      - name: 语义冒烟门禁
+        run: scripts/smoke/run.sh
+
   build:
     name: build (${{ matrix.arch }})
     runs-on: ${{ matrix.runner }}
@@ -114,11 +137,6 @@ jobs:
             echo "::error::版本不一致 —— 先把 $PROJECT 里 MARKETING_VERSION 改成 $want 并提交, 再打 tag"
             exit 1
           fi
-
-      # 1351 项语义冒烟。scripts/smoke/run.sh 按 uname -m 推导 target (arm64 / x86_64
-      # 宿主都能跑); 它只用 swiftc + SDK, 不需要完整 Xcode, 也不参与签名。
-      - name: 语义冒烟门禁
-        run: scripts/smoke/run.sh
 
       # -scheme 走版本库里的共享 scheme (mangox.xcodeproj/xcshareddata/xcschemes/mangox.xcscheme),
       # 而不是靠 Xcode 从同名 target 推断 —— 推断是隐式的, 哪天 target 改名或出现同名冲突
@@ -316,7 +334,7 @@ jobs:
   # ── 发版 (单 job, 等所有架构都绿) ─────────────────────────
   publish:
     name: publish release
-    needs: build
+    needs: [build, smoke]       # 两条都要绿: 冒烟红了不许发包
     runs-on: ubuntu-latest      # 只是拼 zip + 调 gh, 不需要 macOS
     if: github.ref_type == 'tag'
     steps:

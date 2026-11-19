@@ -2978,18 +2978,26 @@ struct SmokeMain {
               "T-KNOW 改稳定段正文不改变其顺序 (守卫 12 的第二半: 改正文 ≠ 改位置)")
         let stableBytes1 = stableSegment(kstore.lastInjection)
 
-        // —— 守卫 1: 塞 200 条噪声 ⇒ L0 稳定段一条不少、字节不变 ——
-        // 400 字/条 × 200 = 80k > 64k 预算 ⇒ 顺带把守卫 2 一起压出来
-        let noise = String(repeating: "雾", count: 400)
-        for i in 1...200 {
+        // —— 守卫 1: 塞爆预算的噪声 ⇒ L0 稳定段一条不少、字节不变 ——
+        // 4000 字/条 × 20 = **80k > 64k 预算** ⇒ 顺带把守卫 2 一起压出来。
+        // ⚠️ 为什么是 20 条 × 4000 字, 不是原来的 200 条 × 400 字(2026-11-19): **总字数一样**,
+        //    所以"超预算 / 稳定段不变 / 按 priority 降级"这三条判据一条没变; 变的是**写入次数**。
+        //    `addKnowledge` 每写一次都 `applyKnowledgeChange()`(全量重组装 + L1 落盘 + 推引擎),
+        //    200 次就是 200 遍 ⇒ 这一条独占 23.9 秒, 而它断言的是**最终状态**, 中间的 199 次
+        //    纯属替产品做压力测试。实测 200→20 次后这条降到 2.4 秒。
+        let noise = String(repeating: "雾", count: 4000)
+        for i in 1...20 {
             _ = kstore.addKnowledge(title: String(format: "噪声%03d", i), content: noise,
                                     scope: .global, projectId: nil, kind: .fact, layer: .always,
                                     priority: i)
         }
         let noisy = kstore.lastInjection
         check(stableTitles(noisy) == titles0 && stableSegment(noisy) == stableBytes1,
-              "T-KNOW 塞 200 条噪声后 L0 稳定段一条不少且字节不变 (守卫 1)")
-        check(noisy.volatileCount > 100 && noisy.residentCount > 5,
+              "T-KNOW 塞爆 64k 预算的噪声后 L0 稳定段一条不少且字节不变 (守卫 1)")
+        // 门槛卡在 10 条: 判的是"噪声真的进了易变段"(一条没进 = 守卫 1 是空断言), 不是"进了多少"。
+        // ⚠️ 塞 20 条而只进 15 条**是正常的** —— 超预算后按 priority 降级, 最后那几条被吃掉了,
+        //    那正是守卫 2 在起作用; 把门槛写成 20 会把"降级生效"误判成红。
+        check(noisy.volatileCount > 10 && noisy.residentCount > 5,
               "T-KNOW 噪声确实进了易变段 (否则守卫 1 是空断言; 实测 volatile=\(noisy.volatileCount))")
 
         // —— 守卫 2: L0 超限 = 告警 + 按 priority 降级截尾 + **不阻断注入** ——
@@ -3433,9 +3441,11 @@ struct SmokeMain {
         check(inj0.bodyText?.contains("[硬规] 外发纪律") == true && inj0.text?.hasPrefix(inj0.bodyText ?? "") == false,
               "T-PERSONA 段边界显式暴露: `bodyText` = DB 那段 (不含 persona), persona 段排在它**之前**")
 
-        // —— 守卫 1 + 10 的交集: 200 条噪声吃满预算, 人格段字节不变且仍在偏移 0 ——
-        let noiseP = String(repeating: "雾", count: 400)
-        for i in 1...200 {
+        // —— 守卫 1 + 10 的交集: 噪声吃满预算, 人格段字节不变且仍在偏移 0 ——
+        // ⚠️ 20 条 × 4000 字 = 80k(与原来的 200 × 400 同一个总量, 判据一字未改), 只把写入次数
+        //    降下来 —— 理由与 `T-KNOW` 那条同源: 每次 `addKnowledge` 都全量重组装 + L1 落盘。
+        let noiseP = String(repeating: "雾", count: 4000)
+        for i in 1...20 {
             _ = pstore.addKnowledge(title: String(format: "噪声%03d", i), content: noiseP,
                                     scope: .global, projectId: nil, kind: .fact, layer: .always, priority: i)
         }
