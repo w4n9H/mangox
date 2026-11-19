@@ -45,8 +45,9 @@ extension SmokeMain {
         func doc(_ sections: String) -> String {
             "**通则**：编号会变，先 read 再 act。\n" + sections
         }
-        func section(_ title: String, _ bundle: String, _ version: String, _ body: String) -> String {
-            "\n## \(title) · \(bundle) · \(version)\n\n" + body + "\n"
+        // 节头形状 = 「名字 · bundle」(不带版本号, 见 `SopInjection.render` 的注释)
+        func section(_ title: String, _ bundle: String, _ body: String) -> String {
+            "\n## \(title) · \(bundle)\n\n" + body + "\n"
         }
 
         // ① 名单空 ⇒ 整段不出现（computer use 没开/没勾时, 一个字节都不该多）
@@ -63,10 +64,10 @@ extension SmokeMain {
         // 一个正常的样本: 四节（正文写够长度, 后面预算判据才有确定边界）
         let filler = String(repeating: "细节。", count: 100)
         let sample = doc(
-            section("备忘录", "com.apple.Notes", "4.11", "### 找\nfolder 在 outline。\n" + filler)
-            + section("日历", "com.apple.iCal", "14.0", "### 找\n日历名住值里。\n" + filler)
-            + section("提醒事项", "com.apple.reminders", "7.0", "### 找\n列表名住 cell 的 title。\n" + filler)
-            + section("Chrome", "com.google.Chrome", "130", "### 找\n地址栏。\n" + filler))
+            section("备忘录", "com.apple.Notes", "### 找\nfolder 在 outline。\n" + filler)
+            + section("日历", "com.apple.iCal", "### 找\n日历名住值里。\n" + filler)
+            + section("提醒事项", "com.apple.reminders", "### 找\n列表名住 cell 的 title。\n" + filler)
+            + section("Chrome", "com.google.Chrome", "### 找\n地址栏。\n" + filler))
 
         // ② 只注入名单内的, 顺序 = **手册里的顺序**（写的人把常用的放前面, 这个顺序
         //    本身就是优先级; 换成 bundle 排序的话, 超预算时掉哪一节是随机的）
@@ -79,8 +80,10 @@ extension SmokeMain {
 
         // ③ 节头必须写清**当前能不能点**: 它决定模型敢不敢 act
         let seg = two.text ?? ""
-        check(seg.contains("备忘录 · com.apple.Notes · 可操作 · v4.11"),
-              "T-SOP 节头写「可操作」+ 版本")
+        // 钉**整行**（连末尾 ` ---`）—— 这样"多写一段东西"(版本号 / 备注)也会红,
+        // 而不是"含这几个字就算过"。
+        check(seg.contains("--- 备忘录 · com.apple.Notes · 可操作 ---"),
+              "T-SOP 节头 = 「名字 · bundle · 权限」, 不许再带版本号")
         check(seg.contains("日历 · com.apple.iCal · 只读"),
               "T-SOP 只有读权限的节头写「只读」 (写错 ⇒ 模型会去点一个点不动的东西)")
 
@@ -137,7 +140,6 @@ extension SmokeMain {
         let oneOfPair = SopInjection.block(bundles: ["com.apple.Safari"], actBundles: [],
                                            manual: doc(section("浏览器",
                                                                "com.apple.Safari · com.google.Chrome",
-                                                               "26.0.1 / 130",
                                                                "### 打开网址\n1. 带 url 打开。\n2. read 一次：标题变 = 成。")),
                                            now: now)
         check(oneOfPair.injected == ["com.apple.Safari"]
@@ -147,7 +149,7 @@ extension SmokeMain {
         let twice = SopInjection.block(bundles: ["com.apple.Notes", "com.apple.iCal"],
                                        actBundles: ["com.apple.iCal"],
                                        manual: doc(section("两个",
-                                                           "com.apple.Notes · com.apple.iCal", "1 / 2",
+                                                           "com.apple.Notes · com.apple.iCal",
                                                            "### 甲\n1. 一步。\n2. 另一步。")),
                                        now: now)
         check(twice.injected == ["com.apple.Notes", "com.apple.iCal"],
@@ -173,7 +175,7 @@ extension SmokeMain {
 
         // ⑨ 陈旧: 超过 30 天要**明说可能已经变了**, 但**不许**因此不注入
         //    P15 判据「陈旧 ≠ 错误」: 日期管陈旧, 探针管正确, 两条不许合述。
-        let one = doc(section("备忘录", "com.apple.Notes", "4.11", "### 找\nfolder 在 outline。"))
+        let one = doc(section("备忘录", "com.apple.Notes", "### 找\nfolder 在 outline。"))
         let stale = SopInjection.block(bundles: ["com.apple.Notes"], actBundles: [], manual: one,
                                        verifiedOn: "2026-09-01", now: now)
         check((stale.text ?? "").contains("可能已经变了") && stale.injected == ["com.apple.Notes"],
@@ -211,6 +213,18 @@ extension SmokeMain {
               + " (手册多出来的节永远不会被注入 = 死内容; 少一节 = 那个 App 没有手册。"
               + " 实际: \(bundles.sorted()))")
 
+        // 2026-11-19: 设置页那一列的判据 = `supported(installed:)` —— 第三方**装了才列**。
+        // 加一个 App 时最容易漏的就是这一步: 手册与 `thirdParty` 都加了, 而设置页仍然没有它
+        // （或者反过来: 没装也列一行, 勾上之后永远读不到东西 —— 那是"给用户一个假开关"）。
+        let listedAll = ComputerSettings.supported(installed: SopInjection.covered)
+        let listedNone = ComputerSettings.supported(installed: [])
+        check(listedAll.contains("com.kingsoft.wpsoffice.mac")
+              && !listedNone.contains("com.kingsoft.wpsoffice.mac")
+              && listedNone.contains("com.apple.Notes"),
+              "T-SOP 设置列表: 第三方装了才列 / 内置恒列 (实际 装了 \(listedAll.count) 行, "
+              + "没装 \(listedNone.count) 行; WPS 在装了的那份里 = "
+              + "\(listedAll.contains("com.kingsoft.wpsoffice.mac")))")
+
         // 同一个 App 出现在两节 = 后一节永远不会被注入（`block` 里的 `seen` 会挡掉）。
         // ⚠️ 这一条在"一节挂多个 bundle"之后才有意义: 节数已经不能代表 App 数了。
         let dup = Dictionary(grouping: manual.sections.flatMap(\.bundles), by: { $0 })
@@ -222,8 +236,7 @@ extension SmokeMain {
         check(!manual.preamble.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
               "T-SOP 手册要有通则 (编号会变 / act 回执只给 diff 这两条对每个 App 都成立, 只写一次)")
 
-        // 单节字数 + 结构: 每节必须写成**场景清单**（一行一个场景）, 且必须有版本
-        // —— 版本决定模型该不该照着做; 没有版本号 = 无法判断这节是不是上一个系统版本的界面。
+        // 单节字数 + 结构: 每节必须写成**场景清单**（一行一个场景）。
         //
         // ⚠️ 这条判据换过三次, 每一次都是"结构换了、判据跟着换":
         //    · 0.2.5 要求每节含 `### 找`（知识按「找 / 做 / 成 / 别」四类切）—— 那个结构不是 SOP,
@@ -260,17 +273,25 @@ extension SmokeMain {
         check(echoHits.isEmpty,
               "T-SOP 节里不许重复通则的句式 (扫描 \(echoes); 节该写\"这个 App 特殊在哪\", 不是把"
               + "通法再抄一遍 —— 那份由通则付一次就够。实际命中: \(echoHits))")
-        let noVersion = manual.sections.filter { $0.version.isEmpty }
-            .map { $0.bundles.joined(separator: "+") }
-        check(noVersion.isEmpty,
-              "T-SOP 每节都要写 App 版本 (没有版本 ⇒ 无法判断这节是不是旧系统界面。实际缺: \(noVersion))")
+        // 节头**不许**写 App 版本（2026-11-19 boss:「搞得好像锁死了一样, 容易引起模型误会」）。
+        // 那行是给**模型**读的: 写 `v4.11` 它理解成"这份手册钉在 4.11、系统一升级就作废" ——
+        // 而它既核不了当前版本（读界面读不出版本号）, 也不该因为一次升级丢掉整节。
+        // 版本只对我们维护者有用（"这条坑是哪一版量的"）⇒ 记在 `SopInjection.thirdParty` 的注释里。
+        // 判据 = 节头里**第一段之后**的每一段都必须是 bundle id; 冒出一段 "4.11" 就红。
+        let heads = SopManual.text.components(separatedBy: "\n").filter { $0.hasPrefix("## ") }
+        let strayHeads = heads
+            .map { $0.dropFirst(3).components(separatedBy: "·")
+                     .map { $0.trimmingCharacters(in: .whitespaces) } }
+            .filter { segs in segs.dropFirst().contains { !SopInjection.isBundleID($0) } }
+        check(!heads.isEmpty && strayHeads.isEmpty,
+              "T-SOP 节头只写「名字 · bundle」, 不许带版本号 (写 \(strayHeads))")
 
         // 整份上限: 一个是"全都装得下"的绝对量级, 一个是运行时预算 —— 两条都要成立,
         // 否则 `block` 会在真机上**静默截尾**, 而这里是唯一能提前发现它的地方。
-        // ⚠️ 3741 与运行时的 4400 不是同一个数（后者含段头）; 两个都压在实测值上
-        //    （实测 3643 / 4378）, 理由见 `SopManual` 文件头 ①: 留大额余量 = 提前发膨胀许可。
-        check(SopManual.text.count <= 3741 && SopManual.text.count <= Tune.sopTotalCharLimit,
-              "T-SOP 整份 ≤3741 字且在预算 \(Tune.sopTotalCharLimit) 内 (实际 \(SopManual.text.count) 字)")
+        // ⚠️ 4047 与运行时的 4670 不是同一个数（后者含段头）; 两个都压在实测值上
+        //    （实测 3947 / 4610 —— 都是"加一条就红"的紧度）, 理由见 `SopManual` 文件头 ①。
+        check(SopManual.text.count <= 4047 && SopManual.text.count <= Tune.sopTotalCharLimit,
+              "T-SOP 整份 ≤4047 字且在预算 \(Tune.sopTotalCharLimit) 内 (实际 \(SopManual.text.count) 字)")
 
         // 不许写具体编号: 编号每次 read 都变, 写死即过期数据（而且是**看起来最精确的**过期数据）
         check(SopManual.text.range(of: "#\\s*\\d", options: .regularExpression) == nil,
@@ -291,6 +312,16 @@ extension SmokeMain {
               + "手册本体 \(SopManual.text.count) + 段头 \(widest.chars - SopManual.text.count))")
         check(widest.chars > SopManual.text.count,
               "T-SOP 段头真的是段头 (总字数必须大于手册本体, 否则上面那条比的是空集)")
+
+        // ⚠️ 2026-11-19: 通则里那条「图里有、编号里没有」是**唯一**教模型在自绘界面上怎么定位的
+        //    规矩（WPS 实测: 功能区整块不在 AX 树里, 只能拿"读得到的邻近元素当锚 + 量偏移";
+        //    而点空 / 点偏回执都看不出来 ⇒ 每点一次必须带图核对, 连错两次就停）。
+        //    ⚠️ 判据**只能**到"这段字在不在注入面里"这一层 —— 文案没有行为判据。这是 SOP 路线的
+        //    固有代价，不许说成"已验证有效"；它挡的是"文件里有、模型看不见"（被解析器当节头吞掉 /
+        //    被预算从后往前裁掉），而那两种失效冒烟本来是全绿的。
+        let widestText = widest.text ?? ""
+        check(widestText.contains("图里有、编号里没有") && widestText.contains("当锚"),
+              "T-SOP 视觉定位那条通则必须真进注入面 (实际 \(widestText.count) 字里没找到这条)")
 
         // 验证日期不许造假: 必须能解析, 且不在未来。
         // ⚠️ 两处刻意松, 都是为了不给**时区**判红(实测 `TZ=America/New_York`, 2026-11-05 03:00Z):

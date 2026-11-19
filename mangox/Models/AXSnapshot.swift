@@ -280,6 +280,16 @@ struct AXSnapshot: Equatable {
         "scrollarea", "table", "outline", "list", "row", "cell", "webarea", "browser",
     ])
 
+    /// 这个角色算不算"承载内容" —— 给**动作面**用（`ComputerPointRule.missKind` 要判断
+    /// "坐标底下这块区域里到底有没有格子"）。
+    ///
+    /// ⚠️ 开这个口而不是把 `contentRoles` 公开：那张表是"窗口空不空"的判据，改了它就改了
+    ///    那条判据；这里要的是**同一个定义的第二处读者**（自绘画布 vs 被截断的容器），
+    ///    所以只开放"问一句", 不开放"改表"。
+    static func isContentRole(_ role: String) -> Bool {
+        contentRoles.contains(cleanRoleName(role))
+    }
+
     /// 窗口**两个方向**都不小于这个值才做判断 —— 排除窄条与对话框。
     ///
     /// ⚠️ 取 `min(w, h)` 而不是 `max`: "确定/取消"那种弹窗常有 300×120, 用 max 会把它们
@@ -376,6 +386,19 @@ struct AXSnapshot: Equatable {
         guard let f = root.frame, min(f.w, f.h) >= readableMinSide else { return false }
         guard hasFramedContent(root: root) else { return false }
         return contentCoverage(root: root) < rereadBelowCoverage
+    }
+
+    /// 重读预算**用尽之后**仍然低覆盖 ⇒ 这份快照读到的只是窗口外壳。
+    ///
+    /// ⚠️ 与 `worthRereading` 共用同一条几何判据，但**时机与说法都不同**：
+    ///    读之前问 `worthRereading`（"可能只是没建好，再等一会儿"）；
+    ///    重读到上限之后再问 `looksShellOnly`（"再读也没用了，正文根本不在 AX 里"）。
+    ///    两者混着用，回执就会在"再读一次"和"读也没用"之间反复横跳，而模型两种都会照做。
+    ///
+    /// ⚠️ 命中之后**不许把话说死**：一块真的空白文档覆盖率同样是 0~1%
+    ///    （2026-11-19 WPS 实测：七个字的文档 1%、表格 3%），两者在树上同构。
+    static func looksShellOnly(root: AXNode) -> Bool {
+        worthRereading(root: root)
     }
 
     /// 树里有没有**报得出坐标**的内容角色。

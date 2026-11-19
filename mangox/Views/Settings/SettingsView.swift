@@ -829,6 +829,8 @@ struct SettingsView: View {
             tapRow
             Divider().overlay(CodexTheme.divider)
             typeRow
+            Divider().overlay(CodexTheme.divider)
+            keysRow
         }
     }
 
@@ -977,6 +979,38 @@ struct SettingsView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             Toggle("", isOn: Binding(get: { computer.typeEnabled },
                                      set: { computer.typeEnabled = $0 }))
+                .toggleStyle(.switch)
+                .controlSize(.small)
+                .labelsHidden()
+                .fixedSize()
+        }
+    }
+
+    /// 第六档(2026-11-19): 允许发方向键 / 修饰键组合。
+    ///
+    /// ⚠️ 第三次**单独一行、单独一个开关**, 理由与上面两行同一层但更硬: 前两档的后果都能当场
+    ///    看见(点歪了、写错了), 而按键**没有作用域** —— 一次 `Cmd+A` 选中的是全篇, 不管光标
+    ///    原来在哪; 后面跟一个删除键, 整篇就没了, 而这一路上没有任何一步会再问。
+    ///    (2026-11-19 在 WPS 上真发生过: 本来只想选中一段, 结果清空了正文。)
+    /// ⚠️ 副标题只写代价, 好处(选一段字、用菜单快捷键)是它存在的理由。
+    private var keysRow: some View {
+        HStack(alignment: .center, spacing: 10) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("允许发送组合按键")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(CodexTheme.textPrimary)
+                Text("有些事只能靠键盘：选中一段字（按住 Shift 再按方向键）、用菜单快捷键、移动光标。")
+                    .font(.system(size: 11))
+                    .foregroundStyle(CodexTheme.textMuted)
+                    .fixedSize(horizontal: false, vertical: true)
+                Text("代价：按键没有作用域 —— 一下「全选」选中的是整篇，再一下删除键就没了，中途不会再问你；这时候你敲的键也会进那个应用。")
+                    .font(.system(size: 11))
+                    .foregroundStyle(CodexTheme.toolRunning)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            Toggle("", isOn: Binding(get: { computer.keysEnabled },
+                                     set: { computer.keysEnabled = $0 }))
                 .toggleStyle(.switch)
                 .controlSize(.small)
                 .labelsHidden()

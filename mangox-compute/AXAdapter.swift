@@ -757,6 +757,35 @@ enum AXAdapter {
         return roleName(of: raw as! AXUIElement)
     }
 
+    /// 这个元素**子树里**有没有内容角色。给 `ComputerPointRule.missKind` 用（2026-11-19）。
+    ///
+    /// ⚠️ 要回答的是"坐标底下这块区域到底有没有格子"，它区分两件**下一步完全不同**的事：
+    ///    · 有 ⇒ 那是被截断 / 没进快照的容器，重读一次就有编号（`.container`）；
+    ///    · 没有 ⇒ 那是自绘画布（WPS 的正文、游戏），重读一百次也没有（`.canvas`）。
+    /// ⚠️ 只看**有没有**，不看多少：一块画布上可能零星挂着几个无名按钮（WPS 的滚动条就是），
+    ///    拿"数量"判会把画布误判成容器。内容**角色**才是那条线（`AXSnapshot.isContentRole`）。
+    /// ⚠️ 深度设 24 且总节点数有上限：这是个**失败路径**上的判断，不能让它在怪树上跑飞。
+    static func hasContentBelow(_ el: AXUIElement, depth: Int = 0, budget: Int = 800) -> Bool {
+        guard depth < 24, budget > 0 else { return false }
+        var left = budget
+        func walk(_ e: AXUIElement, _ d: Int) -> Bool {
+            guard d < 24, left > 0 else { return false }
+            left -= 1
+            if AXSnapshot.isContentRole(roleName(of: e)) { return true }
+            var raw: CFTypeRef?
+            guard AXUIElementCopyAttributeValue(e, kAXChildrenAttribute as CFString, &raw) == .success,
+                  let kids = raw as? [AXUIElement] else { return false }
+            for k in kids where walk(k, d + 1) { return true }
+            return false
+        }
+        // 从**子节点**开始：这个元素自己是容器（调用方已经判过角色），它算内容角色也没用。
+        var raw: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(el, kAXChildrenAttribute as CFString, &raw) == .success,
+              let kids = raw as? [AXUIElement] else { return false }
+        for k in kids where walk(k, depth + 1) { return true }
+        return false
+    }
+
     /// AX 的受保护内容标记(`AXProtectedContent`)。取不到就当**不是**受保护 ——
     /// 这条判据的兜底是角色名(`ComputerRedline.isPasswordRole`), 两条任一生效即遮。
     ///

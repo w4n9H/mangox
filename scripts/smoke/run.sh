@@ -406,8 +406,8 @@ if ! has_code mangox-compute/ComputerServer.swift '\.post\(tap: \.cghidEventTap\
     exit 1
 fi
 TAP_POST_N="$(count_code mangox-compute/ComputerServer.swift '\.post\(')"
-if [ "$TAP_POST_N" != "6" ]; then
-    echo "FAIL - helper 里发合成事件的处数是 ${TAP_POST_N}, 应该是 6 (鼠标 down/up + 字符 down/up + 回车 down/up)" >&2
+if [ "$TAP_POST_N" != "8" ]; then
+    echo "FAIL - helper 里发合成事件的处数是 ${TAP_POST_N}, 应该是 8 (鼠标 down/up + 字符 down/up + 回车 down/up + 导航键 down/up)" >&2
     exit 1
 fi
 TAP_HIDCALL_N="$(count_code mangox-compute/ComputerServer.swift 'hidClick\(at')"
@@ -471,6 +471,69 @@ if ! has_code mangox-compute/ComputerServer.swift 'virtualKey: 36'; then
     echo "FAIL - 提交那一下不再按 return(36)" >&2
     exit 1
 fi
+# ⚠️ 2026-11-19 第六档(`computer_keys`)把"发事件"扩到了**导航键与修饰键组合**。同一套围栏,
+#    但这一档比前两档更需要盯住**键码表本身**: `tap` 错位看得见(点在哪儿摆着), `type` 错了
+#    还能比对 Unicode 串, 而按键发错的**唯一**症状是"界面确实动了, 但不是你要的那一下" ——
+#    回执照样写着成功, 没有任何计数会红。
+KEYS_HIDCALL_N="$(count_code mangox-compute/ComputerServer.swift 'hidKeys\(')"
+if [ "$KEYS_HIDCALL_N" != "2" ]; then
+    echo "FAIL - hidKeys 出现 ${KEYS_HIDCALL_N} 次(定义 + 调用应为 2) ⇒ 按键那个窄口又多开了一处" >&2
+    exit 1
+fi
+KEYS_RULE_LINE="$(awk '/ComputerKeysRule\.refusal\(/ { print NR; exit }' mangox-compute/ComputerServer.swift)"
+KEYS_CALL_LINE="$(awk '/return hidKeys\(/ { print NR; exit }' mangox-compute/ComputerServer.swift)"
+if [ -z "$KEYS_RULE_LINE" ] || [ -z "$KEYS_CALL_LINE" ] || [ "$KEYS_RULE_LINE" -ge "$KEYS_CALL_LINE" ]; then
+    echo "FAIL - 按键的判据与执行顺序不对 (rule@${KEYS_RULE_LINE:-?} keys@${KEYS_CALL_LINE:-?})" >&2
+    echo "       判据必须排在 hidKeys 之前 —— 反了就是'先按了再问能不能按', 而按键没有作用域" >&2
+    exit 1
+fi
+# 键码是**字面量**, 而最容易被"顺手整理"搞错的就是左右与上下这两对(它们在表里相邻):
+# 左右 123/124、上下 126/125 —— 上下**不是** 125/126。发错的那一下没有任何回执能看出来。
+for pair in 'case .left: return 123' 'case .right: return 124' \
+            'case .up: return 126' 'case .down: return 125'; do
+    if ! has_code mangox-compute/ComputerServer.swift "$pair"; then
+        echo "FAIL - 键码表里 \`$pair\` 那一行不见了或被改成了别的数" >&2
+        echo "       方向键错位的症状是'按了一下, 界面也确实动了, 但动的不是那个方向'" >&2
+        exit 1
+    fi
+done
+# 修饰键**只能**走 flags 位, 不许单独按一下再放开: 中途被打断就留下一个卡住的 shift,
+# 之后那个 App 里所有人打的字都是大写 —— 而回执里一个字都不会提。
+if has_code mangox-compute/ComputerServer.swift 'virtualKey: 5[569]|virtualKey: 60'; then
+    echo "FAIL - hidKeys 在单独按修饰键(55/56/59/60) ⇒ 卡住的 shift 会让之后每个字都变大写" >&2
+    exit 1
+fi
+if ! has_code mangox-compute/ComputerServer.swift '\.flags = f'; then
+    echo "FAIL - 修饰键不再挂在事件的 flags 上 ⇒ shift+right 退化成 right(选中范围不变, 而回执说'选好了')" >&2
+    exit 1
+fi
+# 解码那一半只活在 helper 里(冒烟编不到 target): 少了 `case "keys"`, 扩展发来的请求会掉进
+# `default` ⇒ 模型看到的是"不认识的 op", 而三处工具声明全都对得上, 一条红灯都没有。
+if ! has_code mangox-compute/ComputerProtocol.swift 'case "keys":'; then
+    echo "FAIL - ComputerProtocol 不再解码 op=keys ⇒ computer_keys 每次调用都回'不认识的 op'" >&2
+    exit 1
+fi
+# ⚠️ 这一档的**线上字段名**是 `strokes`, 两端各写一次(内嵌 TS 发 / helper 解) ⇒ 这是本轮
+#    唯一一处"两边都编译得过、却一次都按不成"的缝。2026-11-19 实测真漂过一次: 扩展发
+#    `strokes`、解码读 `keys` ⇒ helper 拿到空数组, 回执是「没给要按的键」, 一次都没发出去。
+if ! has_code mangox-compute/ComputerProtocol.swift 'forKey: \.strokes'; then
+    echo "FAIL - helper 解 keys 请求时不读 \`strokes\` 字段 ⇒ 与扩展发出去的键名对不上" >&2
+    exit 1
+fi
+if ! has_code mangox/Agent/PiRpcTransport.swift 'strokes: params\.strokes'; then
+    echo "FAIL - 内嵌 TS 发 keys 请求时不带 \`strokes\` 字段 ⇒ helper 只会看到空数组" >&2
+    exit 1
+fi
+if ! has_code mangox-compute/ComputerServer.swift 'case \.keys\('; then
+    echo "FAIL - ComputerServer 的 op 分派里没有 .keys 一支 (解码了但没人接 = 一种更安静的失效)" >&2
+    exit 1
+fi
+# 落库口子的接线只在 `ChatStore` 里能看见: 少了这一行, 开关点得动、当次会话也生效,
+# **重启之后回到默认(关)** —— 而设置页那一下看起来完全正常。
+if ! has_code mangox/State/ChatStore.swift 'ComputerSettings\.keysKey'; then
+    echo "FAIL - ChatStore 没把 keyboard 那一档接进 restore ⇒ 重启后开关静默回落到默认关" >&2
+    exit 1
+fi
 # ③y 模拟输入与"人在不在"的账(2026-11-11 代码评审抓出来两条):
 #
 #   ① **我们自己发的键鼠事件必须盖记号**。`hidClick` / `hidType` 走 `.cghidEventTap`,
@@ -484,8 +547,8 @@ fi
 #      而 `hidClick` / `hidType` 原来把 seq 原样返回 ⇒ 界面刚变过, `seq` 判据却照样放行,
 #      模型能拿旧编号接着 act, 按到语义已经变了的那一格。
 TAG_N="$(count_code mangox-compute/ComputerServer.swift 'HumanInputTap\.stampSelfInjected\(')"
-if [ "$TAG_N" != "6" ]; then
-    echo "FAIL - 给自注入事件盖记号的是 ${TAG_N} 处 (应为 6 = 点按两发 + 成段写字两发 + 回车两发)" >&2
+if [ "$TAG_N" != "8" ]; then
+    echo "FAIL - 给自注入事件盖记号的是 ${TAG_N} 处 (应为 8 = 点按两发 + 成段写字两发 + 回车两发 + 导航键两发)" >&2
     echo "       漏掉的那一发会被自己的只读监听记成人类输入 ⇒ 下一步 400ms 内被拒, 而话术怪到人头上" >&2
     exit 1
 fi
@@ -498,8 +561,8 @@ if ! has_code mangox-compute/HumanInputTap.swift 'getIntegerValueField\(\.eventS
     exit 1
 fi
 INVALIDATE_N="$(count_code mangox-compute/ComputerServer.swift 'invalidateSnapshot\(')"
-if [ "$INVALIDATE_N" != "3" ]; then
-    echo "FAIL - invalidateSnapshot 出现 ${INVALIDATE_N} 次 (定义 + 点按 + 写字应为 3)" >&2
+if [ "$INVALIDATE_N" != "4" ]; then
+    echo "FAIL - invalidateSnapshot 出现 ${INVALIDATE_N} 次 (定义 + 点按 + 写字 + 按键应为 4)" >&2
     echo "       动过界面不作废旧快照 ⇒ 模型能拿旧编号接着 act, 而 UI 已经变了" >&2
     exit 1
 fi

@@ -7,7 +7,7 @@
    **本文件由 scripts/l10n/gen_strings.py --write 生成, 别手改** ——
    译文改 scripts/l10n/en_values.py 的 VALUES, 再跑 --write。
 
-   条数: 1082
+   条数: 1105
 */
 
 " (值:\"%@\")" = " (value: %@)";
@@ -16,10 +16,14 @@
 " ⇒ 没动。重新读一次再决定。" = " ⇒ nothing was done. Read again before deciding.";
 " 不是能「确认」的输入框 ⇒ 没动。confirm 只提交你刚写进输入框的值," = " is not a field that can be confirmed ⇒ nothing was done. confirm only submits the text you just wrote into a field,";
 " 你说的「%@」不是 ⇒ 没动。快照里这一格的值就是能写回去的样子。" = " what you gave (\"%@\") is not one ⇒ nothing done. The value shown for this cell in the snapshot is the shape it accepts back.";
+" 先点进能写字的控件，再按。" = " Click into a control you can write in first, then press.";
+" 分几次按，每按几下回来看一眼 —— 这一档没有撤销，按过头就回不去了。" = " Send them in several calls and look between them — there is no undo here, and pressing past the mark cannot be walked back.";
 " 分段写(或者让人自己粘贴)比一次塞进去安全 —— 塞进去之后想改也没法改。" = " Writing it in pieces (or letting the person paste it) is safer than stuffing it in at once -- once it is in, there is no way to revise it.";
 " 别反复换节点试。" = " rather than trying one row after another.";
 " 别换个编号接着试。" = " rather than trying another row number.";
 " 只是要按一下的话用 press。" = " Use press if you only meant to click it.";
+" 只用方向 / Home / End / Tab 这类「只移动」的键不受这条限制。" = " Keys that only move — arrows, Home, End, Tab — are not subject to this rule.";
+" 在列表 / 画布上按这些键会变成**别的动作**（跳转 / 删除 / 触发）。" = "pressing these on a list or a canvas turns into **something else entirely** (jump, delete, trigger).";
 " 字)" = " chars)";
 " 它不是万能的「确认」键 —— 要按某个按钮请用 press。" = " it is not a universal \"OK\" key — to press a button, use press.";
 " 它只有「打开」这条路 —— 想打开/跳到它, 改用 open。" = " That element only takes open — to open or jump to it, use open.";
@@ -29,6 +33,7 @@
 " 想按它的话用 press。" = " To press it instead, use press.";
 " 未选" = " none";
 " 电脑" = " Computer";
+" 等 %lld 下" = " and %lld more";
 " 要分多段就分几次写。" = " Send several lines in separate calls.";
 " 要开就在 设置 › 集成 › 电脑操作 里打开。" = " turn it on in Settings › Integrations › Computer control.";
 " 这一档不替你单按它 —— 要发就先把内容写上。" = " and this mode will not press it on its own -- write the content first if you mean to send.";
@@ -160,6 +165,7 @@
 "✗ %@" = "✗ %@";
 "「%@」上没有含「%@」的动作 —— %@ ⇒ 没动。" = "\"%@\": no action matching \"%@\" -- %@ ⇒ nothing done.";
 "「%@」不在前台 ⇒ 没写。" = "\"%@\" is not in front ⇒ nothing was typed.";
+"「%@」不在前台 ⇒ 没按。" = "\"%@\" is not in front ⇒ nothing was pressed.";
 "「%@」不在前台 ⇒ 没点。" = "\"%@\" is not in front ⇒ nothing was tapped.";
 "「%@」不在开放名单里 ⇒ 我不动它。" = "%@ is not on the open list ⇒ I will not touch it.";
 "「%@」不接受聚焦(系统说这个控件的焦点不可设) ⇒ 没动。" = "%@ will not take focus (the system says its focus attribute is not settable) ⇒ nothing was done.";
@@ -169,19 +175,24 @@
 "「%@」是 %@," = "%@ is %@,";
 "「%@」是 %@, " = "%@ is %@, ";
 "「%@」是口令/系统类应用 ⇒ 我永远不操作它, 只读。" = "%@ is a password manager or a system app ⇒ it stays read-only, always.";
+"「%@」此刻**答不出焦点在哪儿**（它的界面不暴露这一层），" = "\"%@\" **cannot say where the focus is** right now (its interface does not expose that layer),";
 "「%@」此刻的焦点在「%@」上, 不是能写字的输入框 ⇒ 没写。" = "\"%@\" has focus on \"%@\" right now, which is not a text field ⇒ nothing was typed.";
+"「%@」此刻的焦点在「%@」上，不是能写字的输入框 ——" = "\"%@\" has focus on \"%@\" right now, which is not a text field — ";
 "「%@」没有「确认」这个动作 —— %@ ⇒ 没动。" = "%@ has no confirm action — %@ ⇒ nothing was done.";
 "「%@」没有菜单可开 —— %@ ⇒ 没动。" = "\"%@\": no menu to open -- %@ ⇒ nothing done.";
 "「%@」的窗口挪过: 原来 %@, 现在 %@ ⇒ 没点。" = "\"%@\" window moved: it was %@, now it is %@ ⇒ nothing was tapped.";
 "「%@」还没勾「可操作」⇒ 没写。看得到不等于动得。" = "\"%@\" is not marked as able to act (Can act) ⇒ nothing was typed. Being visible is not the same as being actionable.";
 "「%@」还没勾「可操作」⇒ 没动它。到「设置 → 电脑操作」里给这个 App 勾上" = "%@ is not marked actable ⇒ I did not touch it. Tick it under Settings → Computer actions.";
+"「%@」还没勾「可操作」⇒ 没按。看得到不等于动得。" = "\"%@\" is not marked as able to act (Can act) ⇒ nothing was pressed. Being visible is not the same as being actionable.";
 "「%@」还没勾「可操作」⇒ 没点。看得到不等于动得。" = "\"%@\" is not marked \"Can act\" ⇒ nothing was tapped. Being visible is not the same as being actionable.";
 "「%@」还没勾「可读」⇒ 没打开它。到「设置 → 电脑操作」里给这个 App 勾上" = "%@ is not marked readable ⇒ I did not open it. Tick it under Settings → Computer actions.";
 "「%@」这一格要的是日期时间(例: 2026-11-04 17:30)," = "\"%@\": this cell takes a date-time (e.g. 2026-11-04 17:30),";
 "「%@」重启过了 ⇒ 你手上那份快照说的不是这个窗口, 没点。重新 read 一次。" = "\"%@\" was restarted ⇒ the snapshot you hold is not this window, so nothing was tapped. Read again.";
 "「%@」重启过了 ⇒ 你手上那份快照说的不是这个窗口, 焦点落在哪儿也不知道, 没写。" = "\"%@\" was restarted ⇒ the snapshot you hold is not this window, and there is no telling where the focus sits ⇒ nothing was typed.";
+"「%@」重启过了 ⇒ 你手上那份快照说的不是这个窗口，焦点落在哪儿也不知道，没按。" = "\"%@\" was restarted ⇒ the snapshot you hold is not this window, and there is no telling where the focus sits, so nothing was pressed.";
 "「%@」附近没有可写的滚动条(它自己和上面几层都没有) ⇒ 滚不动。" = "There is no writable scroll bar around %@ (not on it, nor a few levels above it) ⇒ it cannot be scrolled.";
 "「按坐标点击」这一档关着 ⇒ 没点。" = "\"Click by position\" is off ⇒ nothing was tapped.";
+"「模拟按键」这一档关着 ⇒ 没按。" = "\"Key presses\" is off ⇒ nothing was pressed.";
 "「模拟键盘输入」这一档关着 ⇒ 没写。" = "\"Keyboard input\" is off ⇒ nothing was typed.";
 "一" = "Mon";
 "一个机器人也连不了（没填 app_id 或没填 app_secret）" = "No bot can connect (app_id or app_secret missing)";
@@ -235,6 +246,7 @@
 "人格目录不在 — 本轮 prompt 里没有「我」" = "The persona folder is not there — there is no “me” in this round’s prompt";
 "人格目录里没有可载入的 .md — 本轮 prompt 里没有「我」" = "No loadable .md in the persona folder — there is no “me” in this round’s prompt";
 "人正在打字时我不往他那行里插字 —— 稍等一下再说一次。" = "I will not type into the line someone is already typing in -- try again in a moment.";
+"人正在用键盘时我不抢 —— 稍等一下再说一次。" = "I will not take the keyboard away from someone using it — try again in a moment.";
 "仅 read / bash / write / edit 四个内置工具, 不挂业务扩展 — 轻装跑定时任务与快速问答。" = "Only the four built-in tools (read / bash / write / edit) and no business extensions — a lean setup for scheduled tasks and quick questions.";
 "仅作用于本任务运行 (日志会话), 不改变你当前会话的模型与档位。" = "Applies only to this task's run (its log session); your current session's model and mode are untouched.";
 "仅显示前 80 条, 继续输入缩小范围" = "Showing the first 80 — keep typing to narrow it down";
@@ -249,6 +261,7 @@
 "付款" = "Payment";
 "代价：写错地方撤不回；写完之后按一次回车，在不少应用里就等于「发送」—— 那一下也不会再问你。" = "Cost: text that lands in the wrong place cannot be taken back, and pressing Return afterwards means \"send\" in many apps — that step will not ask you again.";
 "代价：可能点到别的地方，而且没有撤销；点的那一下你的光标会动。" = "Cost: it can land somewhere else and there is no undo; the cursor moves for that click.";
+"代价：按键没有作用域 —— 一下「全选」选中的是整篇，再一下删除键就没了，中途不会再问你；这时候你敲的键也会进那个应用。" = "Cost: keys have no scope — one \"select all\" takes the whole document and one Delete removes it, with nothing asking in between; anything you type meanwhile goes into that app too.";
 "任务" = "Task";
 "任务删除后停止调度。工作日志文件始终保留; 日志会话可选删除。" = "Deleting a task stops scheduling. The work log file is always kept; the log session is optional.";
 "任务台" = "Task bar";
@@ -261,11 +274,13 @@
 "位置" = "Location";
 "低" = "Low";
 "你 %@ 毫秒前刚动过键鼠 ⇒ 没写。" = "You touched the keyboard or mouse %@ ms ago ⇒ nothing was typed.";
+"你 %@ 毫秒前刚动过键鼠 ⇒ 没按。" = "You touched the keyboard or mouse %@ ms ago ⇒ nothing was pressed.";
 "你 %@ 毫秒前刚动过键鼠 ⇒ 没点。" = "You touched the keyboard or mouse %@ ms ago ⇒ nothing was tapped.";
 "你写的" = "You wrote it";
 "你手动压缩了上下文 · %lld → %lld tokens" = "You compacted the context · %lld → %lld tokens";
 "你是谁" = "Who You Are";
 "你此刻正按着鼠标键 ⇒ 没写。松开之后再说一次。" = "You are holding a mouse button right now ⇒ nothing was typed. Ask again after you let go.";
+"你此刻正按着鼠标键 ⇒ 没按。松开之后再说一次。" = "You are holding a mouse button right now ⇒ nothing was pressed. Ask again after you let go.";
 "你此刻正按着鼠标键(可能在拖拽) ⇒ 没点。松开之后再说一次。" = "You are holding a mouse button right now (dragging, most likely) ⇒ nothing was tapped. Ask again after you let go.";
 "例：工作号" = "e.g. Work account";
 "侧问 · %@" = "Side · %@";
@@ -283,6 +298,7 @@
 "停止 (⌘.)" = "Stop (⌘.)";
 "停止该任务" = "Stop this task";
 "允许" = "Allow";
+"允许发送组合按键" = "Allow sending key combinations";
 "允许按坐标点击" = "Allow clicking by position";
 "允许模拟键盘输入" = "Allow simulated keyboard input";
 "允许锁屏运行" = "Allow running while locked";
@@ -477,6 +493,7 @@
 "它锁住这些 key，DB 条目里不能再用:" = "It locks these keys, which DB items can no longer use:";
 "它默认关是因为写进去的字可能被下一拍回车发出去、而发出去撤不回 ——" = "It is off by default because what gets typed can go out on the next Return, and sending cannot be undone —";
 "它默认关是因为可能点错、而且点错了没有撤销 ——" = "It is off by default because it can land in the wrong place and there is no undo —";
+"它默认关是因为方向键会改选中范围、删除键会删东西，而这两件事没有撤销 ——" = "It is off by default because arrow keys change the selection and Delete removes things, and neither can be undone —";
 "完成" = "Done";
 "完成状态" = "Completion";
 "完整模式" = "Full mode";
@@ -721,6 +738,7 @@
 "最近来找过机器人的会话" = "Recent sessions that reached a bot";
 "最高" = "Max";
 "有些 App(尤其网页内容)不把滚动条交给系统 —— 那就趁早告诉用户这一页我一次读不完," = "Some apps — web content in particular — never hand a scroll bar to the system, so tell the user early that this page cannot be read in one go,";
+"有些事只能靠键盘：选中一段字（按住 Shift 再按方向键）、用菜单快捷键、移动光标。" = "Some things only work from the keyboard: selecting a piece of text (hold Shift and press an arrow), using a menu shortcut, moving the caret.";
 "有些应用写不进字（微信没有可用的输入框控件）。开着：我能把一段文字敲进当前的输入框。" = "Some apps cannot be typed into at all (WeChat exposes no usable text field). On: I can type a piece of text into the focused field.";
 "有些应用只看得见画面、认不出控件（比如微信）。开着：我能照着画面上的位置点下去。" = "Some apps only show a picture and expose no controls (WeChat, for one). On: I can click where the picture says to.";
 "有任务在跑时不让电脑休眠，跑完自动恢复；没任务时照常休眠" = "Keeps the computer awake while a task is running and lets it sleep again afterwards";
@@ -796,6 +814,7 @@
 "没有机器人（设置 → 集成 → 飞书机器人）" = "No bots yet (Settings → Integrations → Feishu bots)";
 "没绑机器人 —— 在助理的「入口 · 飞书」里选一个" = "No bot is bound — pick one under Inbound · Feishu in the assistant.";
 "没给要写的字 ⇒ 没写。" = "No text to write ⇒ nothing was typed.";
+"没给要按的键 ⇒ 没按。" = "No keys to press ⇒ nothing was pressed.";
 "没选 —— 只能在 MangoX 里用它" = "Nothing selected — usable only inside MangoX";
 "注入块在 spawn 期生效; 点此重启引擎立刻生效" = "The injection block takes effect at spawn; restart the engine to apply it now";
 "注入块已是最新" = "Injected block is up to date";
@@ -894,6 +913,7 @@
 "网页版邮箱「设置 → 客户端设置」开启 IMAP/SMTP, 生成客户端专用密码 —— 用它当密码, 不是登录密码" = "In the web mailbox, open Settings → Client settings, enable IMAP/SMTP and generate a client-specific password — use that as the password, not your login password";
 "网页版邮箱「设置 → 账户」开启 IMAP/SMTP 服务, 短信验证后得到授权码 —— 用它当密码, 不是登录密码" = "In the web mailbox, open Settings → Account, enable IMAP/SMTP and verify by SMS to get the app password — use that as the password, not your login password";
 "老档位 · 行为不变" = "Older modes · unchanged";
+"而这类键按下去没有撤销 —— 没有焦点证据就不动。" = " and these keys cannot be taken back once pressed — with no evidence about the focus, nothing is pressed.";
 "耗时" = "Duration";
 "联网搜索 (博查 API Key)" = "Web search (Bocha API key)";
 "联网搜索扩展没配博查 API Key —— 挂上它也只会每次调用都回「未启用」, 所以不挂。在 设置 → 联网搜索 里填一个 Key 并保存, 它就会挂上。" = "The web search extension has no Bocha API key set - mounting it would only make every call answer not enabled, so it stays unmounted. Enter a key under Settings - Web search and save; it gets mounted right away.";
@@ -920,6 +940,7 @@
 "要写的内容是空的 ⇒ 没动。清空某一栏请你自己来。" = "The text to write is empty ⇒ nothing was done. Clearing a field is your call.";
 "要写的内容有 %lld 个字, 超过 %@ 的上限 ⇒ 没写。" = "The text is %lld characters, over the %@ limit ⇒ nothing was written.";
 "要动列表里的某一条, 就点名**那一行**自己。" = "To act on one item in a list, name **that row** itself.";
+"要按 %lld 下，超过这一档的上限 %@ ⇒ 没按。" = "That is %lld keystrokes, over the %@ limit of this mode ⇒ nothing was pressed.";
 "要让它能动, 请在 设置 › 集成 › 电脑操作 里给它开「可操作」。" = "To let it act, tick Act for it under Settings › Integrations › Computer use.";
 "视觉" = "Vision";
 "解析失败: %@" = "Parsing failed: %@";
@@ -984,6 +1005,7 @@
 "还没有打开文件" = "No file open";
 "还没有机器人。飞书自建应用就是你跟助理说话的那个「账号」 —— 一个机器人只归一个助理。" = "No bots yet. A Feishu custom app is the account you talk to, and one bot belongs to exactly one assistant.";
 "还没有账本" = "No ledger yet";
+"这一串里有会改内容 / 提交的键（%@%@）⇒ 没按。" = "This sequence contains keys that change content or submit (%@%@) ⇒ nothing was pressed.";
 "这一场只有工具输出，没有可提炼的内容。" = "This session has only tool output — nothing to distill.";
 "这一场没有可提炼的正文（只有工具输出）" = "No text to distill here (tool output only)";
 "这一条只是问你 / 告诉你，没有可执行的方案 —— 没有「同意」这个动作。回「先别动」可以把它搁置。" = "This one only asks you something — there is no plan to run, so there is nothing to approve. Reply 「先别动」 to shelve it.";
@@ -1069,6 +1091,7 @@
 "重连" = "Reconnect";
 "错误" = "Error";
 "键盘事件会落到**此刻在前台的那个 App** 的焦点里, 不是你指定的这个。" = "Keystrokes land in whatever app is **in front right now**, not in the one you named.";
+"键盘事件会落到**此刻在前台的那个 App** 的焦点里，不是你指定的这个。" = "Keystrokes land in the focus of **whatever app is in front right now**, not in the one you named.";
 "长行折行显示" = "Fold long lines";
 "间隔" = "Interval";
 "阿里云邮箱" = "Alibaba Cloud Mail";

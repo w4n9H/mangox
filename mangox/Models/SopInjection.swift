@@ -37,7 +37,7 @@ enum SopInjection {
     static let token = "[SOP]"
 
     /// 手册正文住在 `SopManual.text`（**格式契约与五条硬约束写在那个文件头**, 这里不重复）。
-    /// 本文件只认它的**形状**: 通则（第一个 `## ` 之前）+ 若干个 `## 名字 · bundle [· bundle…] · 版本` 节。
+    /// 本文件只认它的**形状**: 通则（第一个 `## ` 之前）+ 若干个 `## 名字 · bundle [· bundle…]` 节。
     /// `## ` 这一级就是**注入边界**（节头里出现的 `com.xxx` 就是这一节注入给谁）; 一个 bundle 都
     /// 认不出的节整节丢弃。一个节可以挂多个 bundle（浏览器那节）, 命中任何一个就整节注入。
     /// ⚠️ 手册是**代码**（不是用户可改的文件）⇒ 唯一会漂的是"白名单加了 App 但手册没加节",
@@ -112,6 +112,17 @@ enum SopInjection {
         //    `WeComCEF/138.0.53`, 成本在 CEF 的跨进程往返, 不在节点数 ⇒ 长会话逼近
         //    `AXAdapter.readTimeout`(12 秒) 的风险**没验过**。
         "com.tencent.WeWorkMac",
+        // WPS 2026-11-19 实测（真源码探针, 12.1.29182）: **外壳 AX / 正文视觉**。
+        // 首页 39 行 / **覆盖率 100%**（文件名可读）；docx **39 行 / 1%**、xlsx 58 / 3%
+        // —— 正文一个字都不在树里。主二进制链 `QtWidgetsKso.framework`（Qt5 自绘），
+        // `strings` 里 `AXManualAccessibility` / `force-renderer-accessibility` / `Chromium` / `CEF`
+        // **全是 0 次** ⇒ 不是懒加载、没有开关可解。`AXEnhancedUserInterface` 返回 -25208、
+        // `AXManualAccessibility` 返回 -25205（必然失败, 不是权限问题）。
+        // ⚠️ 功能区整块也不在树里: 只有 `宋体 (正文)` / 字号 / `100%` / `缩小` / `放大` / 滑块
+        //    那几个可读, **「字体颜色」连个无名 `AXButton` 都没有** ⇒ 它同时是
+        //    "只能用锚点偏移点"的第一个真实样本（通则那条「图里有、编号里没有」就是它逼出来的）。
+        // ⚠️ 渲染上限**不用加**: 39 行 < 120, 与微信同一条理由（写一行等于写个没有读者的默认值）。
+        "com.kingsoft.wpsoffice.mac",
     ]
 
     /// 手册**真正覆盖**的全部 App（**注入**判据）—— 内置 ∪ 第三方。
@@ -133,10 +144,8 @@ enum SopInjection {
     struct Section: Equatable {
         /// 顺序 = 节头里的书写顺序（多 bundle 时版本也按这个顺序写）。
         let bundles: [String]
-        /// 显示名（`## 备忘录 · com.apple.Notes · 4.11` 里的第一段）。
+        /// 显示名（`## 备忘录 · com.apple.Notes` 里的第一段）。
         let title: String
-        /// 写手册时那个 App 的版本。空串 = 没写。多 bundle 时按 ` / ` 隔开、顺序同上。
-        let version: String
         let body: String
     }
 
@@ -283,15 +292,22 @@ enum SopInjection {
         return out
     }
 
-    /// 一节在提示词里的样子。节头带**当前**权限与版本 —— 这两件事模型必须能在用之前看到:
-    /// 前者决定它能不能点, 后者决定它该不该照着做。
+    /// 一节在提示词里的样子。节头带**当前权限** —— 它决定模型敢不敢 act。
     /// （日期只按**整份**算一次: 见 `SopManual.verifiedOn` 的注释, 逐节记日期会诱导模型去信"某节更新"。）
     ///
     /// ⚠️ 权限**按 App 各写一次**, 不写"这一节可操作": 合成节里 Safari 可点而 Chrome 只读是
     ///    完全可能的（两个名单各自独立）, 一个节级徽章会对着其中一个说谎 —— 于是模型要么去点
     ///    点不动的东西, 要么放着一堆能点的行不敢动。
-    ///     单 bundle: `备忘录 · com.apple.Notes · 可操作 · v4.11`（与旧格式逐字节相同）
-    ///     多 bundle: `浏览器 · com.apple.Safari(可操作) · com.google.Chrome(只读) · v26.0.1 / 130`
+    ///     单 bundle: `备忘录 · com.apple.Notes · 可操作`
+    ///     多 bundle: `浏览器 · com.apple.Safari(可操作) · com.google.Chrome(只读)`
+    ///
+    /// ⚠️ **节头不写 App 版本**（2026-11-19 boss: 「搞得好像锁死了一样, 容易引起模型误会」）。
+    ///    原来的格式是 `## 名字 · bundle · 版本` ⇒ 注入成 `--- 备忘录 · com.apple.Notes · 可操作 · v4.11 ---`。
+    ///    问题是那行**是给模型读的**: 写 `v4.11` 它理解成"这份手册钉在 4.11、系统一升级就作废" ——
+    ///    而它既核不了当前版本（读界面读不出版本号）, 也不该因为一次系统升级丢掉整节。
+    ///    版本对**我们维护者**只有一个用处: 记"这条坑是哪一版量的" ⇒ 那写在
+    ///    `SopInjection.thirdParty` 的注释里（`12.1.29182` 那些）, 不进注入面。
+    ///    冒烟 `T-SOP 节头不许带版本号` 守着: 写回去当场红。
     static func render(_ sec: Section, actBundles: [String], hit: [String]) -> String {
         let act = Set(actBundles)
         let who: [String]
@@ -300,8 +316,7 @@ enum SopInjection {
         } else {
             who = hit.map { act.contains($0) ? "\($0)(可操作)" : "\($0)(只读)" }
         }
-        var meta = [sec.title] + who
-        if !sec.version.isEmpty { meta.append("v\(sec.version)") }
+        let meta = [sec.title] + who
         return "\n\n--- " + meta.joined(separator: " · ") + " ---\n" + sec.body
     }
 
@@ -312,7 +327,7 @@ enum SopInjection {
         var sections: [Section] = []
     }
 
-    /// 一段手册正文 = **通则**（第一个 `## ` 之前）+ 若干个 `## 名字 · bundle [· bundle…] · 版本` 小节。
+    /// 一段手册正文 = **通则**（第一个 `## ` 之前）+ 若干个 `## 名字 · bundle [· bundle…]` 小节。
     ///
     /// 只认 `## ` 这一级: 节内用 `### 任务` 这一级随便写, 不会被切开。
     /// ⚠️ 这里**不认识** frontmatter（`---` 那块）: 手册是代码常量之后, 验证日期是 `SopManual.verifiedOn`
@@ -337,17 +352,15 @@ enum SopInjection {
             let bundles = head.split(whereSeparator: { " ··—-\t".contains($0) })
                 .map(String.init).filter(isBundleID)
             guard !bundles.isEmpty else { return }
-            // 名字与版本 = 标题里**不是 bundle** 的那几段: 第一段是名字, 最后一段是版本。
-            // 中间夹着几个 bundle 就跳过几个, 所以 `名字 · a · b · v` 与 `名字 · a · v` 同一套规则。
+            // 名字 = 标题里**不是 bundle** 的第一段（节头只有这三样: 名字 + 若干 bundle,
+            // 版本号 2026-11-19 已从节头删掉, 理由见 `render`）。
+            // 中间夹着几个 bundle 就跳过几个, 所以 `名字 · a` 与 `名字 · a · b` 同一套规则。
             let rest = head.split(separator: "·").map { $0.trimmingCharacters(in: .whitespaces) }
                 .filter { !isBundleID($0) }
             let title = rest.first ?? bundles[0]
-            let version = rest.count >= 2
-                ? rest[rest.count - 1].replacingOccurrences(of: "v", with: "")
-                : ""
             let body = c.body.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
             guard !body.isEmpty else { return }
-            doc.sections.append(Section(bundles: bundles, title: title, version: version, body: body))
+            doc.sections.append(Section(bundles: bundles, title: title, body: body))
         }
         for line in lines[firstSection...] {
             if line.hasPrefix("## ") {

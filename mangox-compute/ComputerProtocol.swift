@@ -53,6 +53,17 @@ enum ComputerRequest: Decodable {
     /// ⚠️ `submit` **缺省是 `false`, 解码层也不填 true**: 回车在不少 App 里等于"发出去 / 确定",
     ///    而这两件事都撤不回。只写不交是安全的那一半, 要交就得显式要。
     case type(app: String, text: String, submit: Bool, seq: Int)
+    /// 按一串键，可选修饰键 —— 第六档（2026-11-19）。
+    ///
+    /// ⚠️ 为什么不并进 `type`：那条是"往焦点里**写内容**"，这一条是"**按一下**"。
+    ///    方向键不改内容，`⌘A` 选中全文，`Delete` 删东西，回车会发出去 —— 风险不在一条线上，
+    ///    合起来就没法分别设门（同 `tap` 与 `type` 各自一档的理由）。
+    ///
+    /// ⚠️ 键名收成**字符串数组**（`["shift+right","right"]`）而不是结构化对象：
+    ///    解析与拒绝的理由都在 `ComputerKeyStroke.parse` + `ComputerKeysRule` 一侧，
+    ///    协议层只搬字节 —— 在这里做校验，模型看到的就是一句机器话，而不是"哪个键名不认识"。
+    /// ⚠️ `seq` 必填，与 `type` 同族：键盘事件发给"当前焦点"，App 重启过之后焦点归谁没人知道。
+    case keys(app: String, strokes: [String], seq: Int)
     /// 打开(或切到前台)一个 App —— P18 批 2d。
     /// ⚠️ 为什么不复用 `act`: 打开一个 App **不动它里面的任何东西**, 与"在 Dock 上点一下图标"
     ///    同一件事; 而"进去之后能做什么"仍然由操作面那道门管(`actBundles`)。两件事两个 op,
@@ -73,6 +84,14 @@ enum ComputerRequest: Decodable {
         /// 动作本身(`press` / `setValue` / `focus` / `scroll`)。⚠️ 不能复用 `op` ——
         /// 那个位置装的是信封类型(`act`), 两个语义塞进一个键, 读代码的人分不清哪个是哪个。
         case action
+        /// 按键那一档的键名数组（第六档）。⚠️ 不复用 `text` —— 那个位置是"要写进去的字",
+        /// 而这里是"要按哪些键"; 混用一个键, 一条把 `keys` 当 `text` 发的请求会被
+        /// **静默当成"按一个叫 right+shift 的键"**, 而不是报错。
+        /// ⚠️ 线上键名是 `strokes`（**不是** `keys`）: `keys` 已经是这一档的 op 名,
+        ///    再用它当字段名就成了 `{"op":"keys","keys":[…]}` —— 两端各写一次必然漂,
+        ///    而漂了之后 helper 看到的是**空数组**, 回执说「没给要按的键」。
+        ///    2026-11-19 实测正是这样（扩展发 `strokes`、这里读 `keys`）⇒ 一次都没按成。
+        case strokes
     }
 
     init(from decoder: Decoder) throws {
@@ -106,6 +125,12 @@ enum ComputerRequest: Decodable {
             self = .type(app: try c.decodeIfPresent(String.self, forKey: .app) ?? "",
                          text: try c.decodeIfPresent(String.self, forKey: .text) ?? "",
                          submit: try c.decodeIfPresent(Bool.self, forKey: .submit) ?? false,
+                         seq: try c.decodeIfPresent(Int.self, forKey: .seq) ?? -1)
+        case "keys":
+            // 空数组 / 认不出的键名都交给 server 拒（并说清是哪个键不认识）：
+            // 解码层抛一句 `dataCorrupted`，模型只会当成故障重试。
+            self = .keys(app: try c.decodeIfPresent(String.self, forKey: .app) ?? "",
+                         strokes: try c.decodeIfPresent([String].self, forKey: .strokes) ?? [],
                          seq: try c.decodeIfPresent(Int.self, forKey: .seq) ?? -1)
         case "open":
             // 空 `app` 交给 server 拒(并说清"打开哪个")+ 解码阶段回一句机器话,

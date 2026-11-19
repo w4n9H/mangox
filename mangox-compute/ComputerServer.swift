@@ -57,6 +57,13 @@ final class ComputerServer {
     /// ⚠️ 同族: 只在启动时读一次 env ⇒ 改了要重启 helper(App 侧 `Scope` 算进比较, 会自动重启)。
     let typeEnabled: Bool
 
+    /// 全局档: 允许"按一串键"（第六档，2026-11-19）。**缺省 = 关**。
+    ///
+    /// ⚠️ 与 `type` 又是两个键、两个开关：`type` 能把一段字**写**进去，这一档能把选中的东西**删**掉。
+    ///    合成一个开关，用户点"允许模拟键盘"就等于同时授权了"允许删内容"。
+    /// ⚠️ 同族：只在启动时读一次 env ⇒ 改了要重启 helper（App 侧 `Scope` 算进比较，会自动重启）。
+    let keysEnabled: Bool
+
     /// 上一次读的快照 + 编号到元素的表。**按 bundle 存**, 不是全局一个:
     /// 读 Safari 不该让 Finder 的编号失效(同时读两个 App 是常态)。
     struct Cached {
@@ -103,6 +110,8 @@ final class ComputerServer {
         self.tapEnabled = env[ComputerTapRule.envKey] == "1"
         // 第五档: 同款"要就写 1, 不要就删掉"。
         self.typeEnabled = env[ComputerTypeRule.envKey] == "1"
+        // 第六档: 同款。
+        self.keysEnabled = env[ComputerKeysRule.envKey] == "1"
     }
 
     static let allowedBundlesEnvKey = "MANGOX_COMPUTE_ALLOWED_BUNDLES"
@@ -326,6 +335,15 @@ final class ComputerServer {
             let rereadNote = reread > 0 && !AXSnapshot.worthRereading(root: tree)
                 ? "（第一次读到的只有窗口外壳 —— 页面还没建好。这份是隔了一会儿重读的结果, 读了 \(reread + 1) 次。）\n\n"
                 : ""
+            // 重读到上限之后**仍然**只有外壳 ⇒ 这次真的要说出来（2026-11-19）。
+            // ⚠️ 与上面那条**互斥**：那条是"重读救回来了"，这条是"重读也没救了"。
+            //    `lacksReadableControls` 管的是"一个内容角色都没有"（微信），管不了 WPS ——
+            //    它的工具栏有一堆 statictext，那道门是**通过**的，而正文一个字都没有。
+            let shellNote = AXSnapshot.looksShellOnly(root: tree)
+                ? shellOnlyNote(app: t.name,
+                                coverage: AXSnapshot.contentCoverage(root: tree),
+                                includeImage: includeImage) + "\n\n"
+                : ""
             // ⚠️ 「窗口是空的」与「这个 App 不暴露界面」在快照上长得**一模一样**(都近乎空),
             //    但模型该做的事不同: 前者报告"这里什么都没有", 后者换 App 或要求截图。
             //    不区分 ⇒ 模型会把微信那 3 个按钮当成"这个窗口的全部内容"(2026-10-28 实测: 微信
@@ -341,7 +359,7 @@ final class ComputerServer {
                                   seq: seq, bundle: t.bundle, pid: t.pid,
                                   root: tree, includeImage: includeImage)
             }
-            return finishRead(text: withSeq(partialNote + rereadNote
+            return finishRead(text: withSeq(partialNote + rereadNote + shellNote
                                             + snap.rendered(limit: lineLimit), seq), seq: seq,
                               bundle: t.bundle, pid: t.pid, root: tree,
                               includeImage: includeImage)
@@ -358,6 +376,9 @@ final class ComputerServer {
 
         case .type(let app, let text, let submit, let seq):
             return handleType(app: app, text: text, submit: submit, seq: seq)
+
+        case .keys(let app, let raw, let seq):
+            return handleKeys(app: app, rawStrokes: raw, seq: seq)
         }
     }
 
@@ -644,7 +665,13 @@ final class ComputerServer {
         let newSeq = invalidateSnapshot(bundle: bundle)
         var note = "在 \(ComputerPoint(x: point.x, y: point.y).short) 点了一下「\(name)」。"
             + "\n— 这一下是**按坐标**点的, 不是按控件: 我只保证点到了那个位置, "
-            + "不代表界面上真的发生了你想要的。要确认就再 read 一次。"
+            + "不代表界面上真的发生了你想要的。"
+            // ⚠️ 这句是**命令式**、不是提醒(2026-11-19): 点空了、点偏了, 回执看不出来 ——
+            //    实测在 WPS 上连着点偏三次, 每次回执都说"点了一下", 直到读存档 XML 才发现。
+            //    所以规矩必须写在这里(动作现场), 而不是只写在系统提示的通则里:
+            //    模型对"刚收到的那条回执"的注意力和对"第 108 行手册"的注意力不是一回事。
+            + "**点完必须带 includeImage 再 read 一次核对** —— "
+            + "点空了、点偏了, 这条回执都看不出来; 连着两次对不上就停下, 如实说哪一步没成。"
         note += underPoint.isEmpty
             ? "\n— 这一点底下我没读到任何文字, 所以看不出它是不是付款 / 删除那种键。"
             : "\n— 这一点底下读到的是「\(underPoint.prefix(40))」。"
@@ -829,6 +856,141 @@ final class ComputerServer {
         return .success(text: note, seq: newSeq)
     }
 
+    /// `keys` 的入口（第六档，2026-11-19）。判据全在 `ComputerKeysRule`（纯函数，冒烟造得出反例），
+    /// 这里只取事实 + 执行。
+    ///
+    /// ⚠️ 与 `handleType` 同形不同门：不要坐标、不判窗口几何（键落进"当前焦点"），
+    ///    但要判**焦点归谁** —— 而且**危险键在焦点读不到时是拒，不是放行**（见 `ComputerKeysRule`）。
+    private func handleKeys(app: String, rawStrokes: [String], seq: Int) -> ComputerResponse {
+        guard AXIsProcessTrusted() else {
+            return .failure("辅助功能权限还没授予 ⇒ 按不了键。"
+                            + "请在 系统设置 › 隐私与安全性 › 辅助功能 里勾上 MangoX。")
+        }
+        let candidates = candidatesInScope()
+        guard !candidates.isEmpty else { return .failure(emptyScopeNote(verb: "按")) }
+        guard let t = resolve(query: app, in: candidates) else {
+            return .failure(refusal(query: app, available: candidates, verb: "按"))
+        }
+        // 键名解析放在**取事实之前**：写错了键名不该先付一次读焦点的 AX 往返。
+        var strokes: [ComputerKeyStroke] = []
+        for raw in rawStrokes {
+            guard let s = ComputerKeyStroke.parse(raw) else {
+                let known = ComputerKeyStroke.Key.allCases.map(\.rawValue).joined(separator: " / ")
+                return .failure("「\(raw)」我认不出是哪个键 ⇒ 一下都没按。"
+                                + "能按的是 \(known)（可加 shift / option / command / control 前缀，"
+                                + "如 shift+right）。字母数字不在这张表里 —— 要写字用 computer_type。")
+            }
+            strokes.append(s)
+        }
+        guard let cached = cache[t.bundle] else {
+            return .failure("还没读过「\(t.name)」⇒ 我不知道此刻焦点该在谁那儿 ⇒ 没按。"
+                            + "先 computer_read 一次。")
+        }
+        guard seq == cached.seq else {
+            return .failure("你手上是第 \(seq) 份快照，而「\(t.name)」最新的是第 \(cached.seq) 份 "
+                            + "⇒ 没按。中间界面动过，光标可能已经不在你算的那个位置了 —— "
+                            + "重新 read 一次。")
+        }
+
+        let now = ProcessInfo.processInfo.systemUptime
+        let installed = HumanInputTap.shared.isInstalled
+        let since: Int? = !installed ? nil
+            : HumanInputTap.shared.lastHumanInputAt.map { Int(((now - $0) * 1000).rounded()) }
+                ?? Int.max
+        // ⚠️ 焦点角色**只在这一串里有危险键时才去读**：纯导航键不需要它，
+        //    而读一次是跨进程往返（WPS 那种 App 还答不出个所以然）。
+        let focused: String? = strokes.contains { $0.safety == .destructive }
+            ? AXAdapter.focusedRole(pid: t.pid) : nil
+        let facts = ComputerKeysRule.Facts(
+            keysEnabled: keysEnabled,
+            appActable: actBundles.contains(t.bundle),
+            appName: t.name,
+            snapshotPid: cached.pid,
+            currentPid: t.pid,
+            isFrontmost: Self.isFrontmost(bundle: t.bundle, pid: t.pid),
+            leftButtonDown: CGEventSource.buttonState(.combinedSessionState, button: .left),
+            rightButtonDown: CGEventSource.buttonState(.combinedSessionState, button: .right),
+            sinceHumanInputMs: since,
+            strokes: strokes,
+            focusedRole: focused)
+        if let why = ComputerKeysRule.refusal(facts) { return .failure(why) }
+        return hidKeys(strokes, name: t.name, bundle: t.bundle, monitored: installed)
+    }
+
+    /// 真把这一串键按出去。与 `hidType` 同一层（HID 投递 + 盖自己的记号 + 作废旧编号）。
+    ///
+    /// 四件事：
+    ///   ① **每一下都是独立的 down + up**，中间留 8ms —— 连发太快时 App 会把两下并成一下
+    ///      （"按两下右方向键"变成"按一下"），而这个错误没有任何回执能看出来。
+    ///   ② 修饰键走 `flags`，**不单独按修饰键**：单独按住 shift 再放开，中间若被打断就留下一个
+    ///      "卡住的 shift"，之后所有人打的字都是大写。
+    ///   ③ 每一发都盖"这是我发的"（否则被自己的只读监听记成人类输入，接管检测随后的 6 秒全拒）。
+    ///   ④ 作废旧快照：**键动过界面**，`seq` 承诺的那份界面已经不成立了。
+    private func hidKeys(_ strokes: [ComputerKeyStroke], name: String, bundle: String,
+                         monitored: Bool) -> ComputerResponse {
+        let src = CGEventSource(stateID: .hidSystemState)
+
+        func code(for key: ComputerKeyStroke.Key) -> CGKeyCode? {
+            switch key {
+            case .left: return 123
+            case .right: return 124
+            case .up: return 126
+            case .down: return 125
+            case .home: return 115
+            case .end: return 119
+            case .pageup: return 116
+            case .pagedown: return 121
+            case .tab: return 48
+            case .esc: return 53
+            case .space: return 49
+            case .delete: return 117
+            case .backspace: return 51
+            case .enter: return 36
+            }
+        }
+        func flags(_ m: Set<ComputerKeyStroke.Modifier>) -> CGEventFlags {
+            var f: CGEventFlags = []
+            if m.contains(.shift) { f.insert(.maskShift) }
+            if m.contains(.option) { f.insert(.maskAlternate) }
+            if m.contains(.control) { f.insert(.maskControl) }
+            if m.contains(.command) { f.insert(.maskCommand) }
+            return f
+        }
+
+        var sent = 0
+        for stroke in strokes {
+            guard let c = code(for: stroke.key),
+                  let down = CGEvent(keyboardEventSource: src, virtualKey: c, keyDown: true),
+                  let up = CGEvent(keyboardEventSource: src, virtualKey: c, keyDown: false) else {
+                break
+            }
+            let f = flags(stroke.modifiers)
+            down.flags = f
+            up.flags = f
+            HumanInputTap.stampSelfInjected(down)
+            HumanInputTap.stampSelfInjected(up)
+            down.post(tap: .cghidEventTap)
+            usleep(8_000)
+            up.post(tap: .cghidEventTap)
+            usleep(8_000)
+            sent += 1
+        }
+
+        let newSeq = invalidateSnapshot(bundle: bundle)
+        let listed = strokes.map(\.display).joined(separator: " → ")
+        var note = sent == strokes.count
+            ? "往「\(name)」的当前焦点按了 \(sent) 下：\(listed)。"
+            : "这一串共 \(strokes.count) 下，**只发出去 \(sent) 下**（\(listed)）—— 后半段没按。"
+        note += "\n— 回执只证明键发出去了，**不证明界面按你的意思动了**："
+            + "选中范围变没变、光标跳到哪儿，要再 read 一次（或看图）才知道。"
+        note += "\n— 界面刚被动过 ⇒ 那份快照和里面的编号全部作废（新 seq=\(newSeq)）。"
+            + " 要接着动就先 computer_read 一次。"
+        if !monitored {
+            note += "\n— ⚠️ 接管检测没装上 ⇒ 我无法确认你手上是不是正在按键盘，这次是盲按的。"
+        }
+        return .success(text: note, seq: newSeq)
+    }
+
     /// act 的入口: **先让路, 再干活, 最后补一句能力缺口**。
     private func handleAct(app: String, opRaw: String, index: Int, seq: Int,
                            text: String, directionRaw: String,
@@ -914,7 +1076,10 @@ final class ComputerServer {
                 let head = "\(point.short) 底下是 " + (role.isEmpty ? "一个读不出角色的元素" : role)
                 // ⚠️ 三类分开说 —— 它们的**下一步完全不同**, 合成一句就是骗人:
                 //    见 `ComputerPointRule.missKind` 的头注释。
-                switch ComputerPointRule.missKind(role: role) {
+                // ⚠️ `hasContentBelow` 只在容器那一支才付得起（一次向下遍历）——
+                //    自绘画布与"被截断的容器"在角色上长得一样，唯一的区别就是**里面有没有格子**。
+                switch ComputerPointRule.missKind(role: role,
+                                                  hasContentBelow: AXAdapter.hasContentBelow(hit)) {
                 case .wholeApp:
                     return .failure(head + " ⇒ 没动。"
                                     + "这个 App 把整块界面一起交给系统, 里面没有更细的格子 —— "
@@ -926,6 +1091,13 @@ final class ComputerServer {
                 case .container:
                     return .failure(head + ", 容器那一层不在这份快照里(快照只列格子) ⇒ 没动。"
                                     + "再读一次也不会多出编号; 要按的是它**里面**那一格, 从快照里挑编号。")
+                case .canvas:
+                    return .failure(head + ", 这块区域底下**没有更细的格子** ⇒ 没动。"
+                                    + "自绘的正文不把里面的东西交给系统"
+                                    + "(WPS 的文字/表格正文、画布、游戏、部分 Electron) —— "
+                                    + "再读一百次也不会有编号, 别重读。"
+                                    + "要看内容就 read 时带 includeImage;"
+                                    + " 要按坐标动就用 computer_tap(它不经过元素这一层)。")
                 case .stale:
                     return .failure(head + ", 它不在这份快照里 ⇒ 没动。"
                                     + "多半是我读完之后界面变了: 重新读一次, 它就有编号了。")
@@ -1483,8 +1655,26 @@ final class ComputerServer {
         + " ② 窗口确实是空的(例如刚新建的白页)。先换一个 App 试, 或者问用户这个界面上本来应该有什么。"
     }
 
-    /// 作用域里**一个能用的 App 都没有**时的回执 —— 两种成因**必须分开说**。
+    /// 重读预算用尽后**仍然**只有外壳时的回执（2026-11-19，WPS 实测后补）。
     ///
+    /// ⚠️ 为什么需要单独一句：`lacksReadableControls` 判的是"树里**一个内容角色都没有**"
+    ///    （微信那种）。WPS 不是那种 —— 它的工具栏有一堆 `statictext`，那道判据**通过**，
+    ///    于是回执照旧只有工具栏那几十个按钮，而正文（用户真正要看的那一块）一个字都没有。
+    ///    实测量级：一篇只有七个字的文档覆盖率 **1%**、表格 **3%**。
+    /// ⇒ 这里的判据是"**面积**"而不是"有没有"：重读到上限之后覆盖率仍然低，就把这件事说出来。
+    /// ⚠️ 不把话说死（同 `lackOfControlsNote`）：真的空白文档覆盖率也低，两者在树上同构。
+    private func shellOnlyNote(app: String, coverage: Double, includeImage: Bool) -> String {
+        let pct = Int((coverage * 100).rounded())
+        var s = "⚠️ 读到的只有窗口外壳（内容控件只占窗口面积 \(pct)%）：正文很可能不在 AX 里 ——"
+            + " 自绘的画布就是这样（WPS 的文字/表格正文：工具栏能读能按, 正文读不到）。"
+        s += "两种可能：① 正文是自绘的；② 这份文档本来就是空的。"
+        s += includeImage
+            ? "这次带了截图, 以图为准。"
+            : "要看清就再说一次 read 并带 includeImage（图片是读的第二种表示）。"
+        return s
+    }
+
+    /// 作用域里**一个能用的 App 都没有**时的回执 —— 两种成因**必须分开说**。    ///
     /// ⚠️ 2026-10-29 boss 拿着截图问「我都配置这个了, 权限已经足够了」: 他名单勾好了, 只是
     ///    那个 App 当时没在运行, 而回执说的是"没有开放任何 App。(在设置里勾选)" ——
     ///    他勾了。**同一条回执在"事实"和"下一步"两处都错**, 比不说更糟: 人照着它去设置页,

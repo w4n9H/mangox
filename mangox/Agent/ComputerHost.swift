@@ -176,15 +176,22 @@ final class ComputerHost {
         /// ⚠️ 与 `tap` **分开两个字段**: 它们各自一个 env 键、各自一个开关。少一个字段的后果
         ///    与 `tap` 那次一模一样 —— 用户开了开关、设置页是开着的, 助手还按旧的办。
         var type: Bool
+        /// 第六档(2026-11-19): 允许"发导航键与修饰键组合"。同族 —— 只在启动时读一次 env。
+        ///
+        /// ⚠️ 与前五档**必须分开**: 它比 `tap`/`type` 都更危险 —— 键盘是**没有作用域**的,
+        ///    `Cmd+A` 之后接一个 `delete` 就清掉了整篇正文(2026-11-19 在 WPS 上真发生过)。
+        ///    所以它自己一个键、一个开关, 不许跟"打字"绑在一起升。
+        var keys: Bool
 
         init(read: [String], act: [String], image: [String] = [], takeover: Bool = false,
-             tap: Bool = false, type: Bool = false) {
+             tap: Bool = false, type: Bool = false, keys: Bool = false) {
             self.read = read.sorted()
             self.act = act.sorted()
             self.image = image.sorted()
             self.takeover = takeover
             self.tap = tap
             self.type = type
+            self.keys = keys
         }
     }
 
@@ -200,6 +207,7 @@ final class ComputerHost {
                takeover: Bool = false,
                tap: Bool = false,
                type: Bool = false,
+               keys: Bool = false,
                peerPid: pid_t = ProcessInfo.processInfo.processIdentifier,
                bundlePath: String = Bundle.main.bundlePath) -> String? {
         // ⚠️ 空名单 = 没开放 ⇒ 不起进程(也没开这一档的会话零成本: 不 spawn、不占 TCC)。
@@ -207,7 +215,8 @@ final class ComputerHost {
         // ⚠️ **复用之前先比名单**：helper 只在启动时读一次 env，进程活着不等于名单还是那一批。
         //    见 `Scope` 上那段（boss 报「我明明加了」就是这个）。
         let wanted = Self.Scope(read: allowedBundles, act: actBundles,
-                                image: imageBundles, takeover: takeover, tap: tap, type: type)
+                                image: imageBundles, takeover: takeover, tap: tap, type: type,
+                                keys: keys)
         if let socketPath, process?.isRunning == true, runningScope == wanted {
             return socketPath
         }
@@ -242,6 +251,8 @@ final class ComputerHost {
         env[ComputerTapRule.envKey] = tap ? "1" : nil
         // 第五档同款, 但**另一个键**: 两档两件事(点错看得见 / 打进去的字可能被回车发出去)。
         env[ComputerTypeRule.envKey] = type ? "1" : nil
+        // 第六档同款, 又一个键: 键盘**没有作用域**, 与"打字"混在一档就等于默认放开了清空正文。
+        env[ComputerKeysRule.envKey] = keys ? "1" : nil
         p.environment = env
 
         // ⚠️ **退出原因必须留一条记录**（2026-11-13 现场）: 老板报"12 秒读完之后 compute 进程
@@ -353,12 +364,16 @@ final class ComputerHost {
                             takeover: Bool = false,
                             tap: Bool = false,
                             type: Bool = false,
+                            keys: Bool = false,
                             peerPid: pid_t,
                             inherited: [String: String]) -> [String: String]? {
-        let keys = [sockEnvKey, allowedBundlesEnvKey, actBundlesEnvKey, imageBundlesEnvKey,
-                    peerPidEnvKey, parentPidEnvKey, takeoverEnvKey, ComputerTapRule.envKey,
-                    ComputerTypeRule.envKey]
-        if socketPath == nil, keys.allSatisfy({ inherited[$0] == nil }) { return nil }
+        // ⚠️ 名字不叫 `keys`: 上面那个参数已经占了。这份清单的责任是"由我们**完全接管**的键",
+        //    少一个的后果与少写一行 env 一样 —— 用户 export 过的值会从父进程漏进来,
+        //    于是"面板说没开"与"helper 其实开着"同时为真。
+        let managedKeys = [sockEnvKey, allowedBundlesEnvKey, actBundlesEnvKey, imageBundlesEnvKey,
+                           peerPidEnvKey, parentPidEnvKey, takeoverEnvKey, ComputerTapRule.envKey,
+                           ComputerTypeRule.envKey, ComputerKeysRule.envKey]
+        if socketPath == nil, managedKeys.allSatisfy({ inherited[$0] == nil }) { return nil }
         var env = existing ?? inherited
         env[sockEnvKey] = socketPath
         env[allowedBundlesEnvKey] = socketPath == nil ? nil : allowedBundles.joined(separator: ",")
@@ -373,6 +388,8 @@ final class ComputerHost {
         env[ComputerTapRule.envKey] = (socketPath != nil && tap) ? "1" : nil
         // 第五档同款, 同样的清理口径(没 socket 就一起清掉)。
         env[ComputerTypeRule.envKey] = (socketPath != nil && type) ? "1" : nil
+        // 第六档同款: 同一口径。
+        env[ComputerKeysRule.envKey] = (socketPath != nil && keys) ? "1" : nil
         return env
     }
 }

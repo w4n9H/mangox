@@ -63,6 +63,14 @@ final class ComputerSettings: ObservableObject {
     ///    与上面几条一样(老值静默改义), 但更糟: 用户想开"点一下"就顺带授权了"打字 + 回车"。
     static let typeKey = "computer_type"           // "1" / 缺失 = 关
 
+    /// 第六档: 允许"按一串键"（2026-11-19）。**默认关**。
+    ///
+    /// ⚠️ **又一个独立的键**，理由与上面两条同源、但这一条最硬：`type` 最坏是写错一行字，
+    ///    而这一档最坏是**把选中的东西删掉**（`Delete`）或**把内容发出去**（回车）。
+    ///    并进 `typeKey` 的后果是用户点"允许模拟键盘输入"就同时授权了这两件 —— 那不是他签的字。
+    /// ⚠️ 老的库里没有这个键 ⇒ 关（不写 `?? true`：缺失不等于"沿用旧的开"）。
+    static let keysKey = "computer_keys"           // "1" / 缺失 = 关
+
     // MARK: 状态
 
     /// 总开关。**默认关** —— 批 1 阶段没有作用域 UI 之前默认开 = 悄悄开一个面。
@@ -105,6 +113,11 @@ final class ComputerSettings: ObservableObject {
     ///
     /// ⚠️ 关掉它**不动** `tapEnabled`: 两件事两个开关(见 `typeKey` 上那段)。
     @Published var typeEnabled: Bool = false { didSet { persist() } }
+
+    /// 全局档: 允许"按一串键"（方向 / Home / End / Tab，以及带修饰键的组合）。**默认关**。
+    ///
+    /// ⚠️ 关掉它**不动** `typeEnabled`：两件事两个开关（见 `keysKey` 上那段）。
+    @Published var keysEnabled: Bool = false { didSet { persist() } }
 
     /// 候选表注入 —— **只给冒烟用**(真机上恒 nil)。
     ///
@@ -514,7 +527,8 @@ final class ComputerSettings: ObservableObject {
 
     func restore(enabledRaw: String?, bundlesRaw: String?, actRaw: String? = nil,
                  imageRaw: String? = nil, takeoverRaw: String? = nil,
-                 tapRaw: String? = nil, typeRaw: String? = nil) {
+                 tapRaw: String? = nil, typeRaw: String? = nil,
+                 keysRaw: String? = nil) {
         let d = Self.decode(enabledRaw: enabledRaw, bundlesRaw: bundlesRaw,
                             actRaw: actRaw, imageRaw: imageRaw)
         enabled = d.enabled
@@ -532,6 +546,9 @@ final class ComputerSettings: ObservableObject {
         tapEnabled = tapRaw == "1"
         // 第五档同款, 同样放最后(理由同上)。
         typeEnabled = typeRaw == "1"
+        // 第六档同款(2026-11-19)。⚠️ 必须**排在 `typeEnabled` 之后**: 它的 `didSet` 也会
+        // persist 一次, 排在前面就会把"还没置位的 type"写出去。
+        keysEnabled = keysRaw == "1"
     }
 
     /// 把模型给的 `app`(名字或 bundle id)落到 bundle 上 —— **认不出就 nil, 不猜**。
@@ -664,5 +681,6 @@ final class ComputerSettings: ObservableObject {
         onPersist(Self.takeoverKey, takeoverEnabled ? "1" : "0")
         onPersist(Self.tapKey, tapEnabled ? "1" : "0")
         onPersist(Self.typeKey, typeEnabled ? "1" : "0")
+        onPersist(Self.keysKey, keysEnabled ? "1" : "0")
     }
 }

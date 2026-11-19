@@ -1067,6 +1067,11 @@ VALUES = {
     '允许模拟键盘输入': 'Allow simulated keyboard input',
     '有些应用写不进字（微信没有可用的输入框控件）。开着：我能把一段文字敲进当前的输入框。': 'Some apps cannot be typed into at all (WeChat exposes no usable text field). On: I can type a piece of text into the focused field.',
     '代价：写错地方撤不回；写完之后按一次回车，在不少应用里就等于「发送」—— 那一下也不会再问你。': 'Cost: text that lands in the wrong place cannot be taken back, and pressing Return afterwards means "send" in many apps — that step will not ask you again.',
+    # 第六档(2026-11-19): 发方向键 / 修饰键组合。**第三次单独一行一个开关** —— 前两档的后果
+    # 都能当场看见(点歪了 / 写错了), 而按键**没有作用域**: 一次全选选中的是全篇。
+    '允许发送组合按键': 'Allow sending key combinations',
+    '有些事只能靠键盘：选中一段字（按住 Shift 再按方向键）、用菜单快捷键、移动光标。': 'Some things only work from the keyboard: selecting a piece of text (hold Shift and press an arrow), using a menu shortcut, moving the caret.',
+    '代价：按键没有作用域 —— 一下「全选」选中的是整篇，再一下删除键就没了，中途不会再问你；这时候你敲的键也会进那个应用。': 'Cost: keys have no scope — one "select all" takes the whole document and one Delete removes it, with nothing asking in between; anything you type meanwhile goes into that app too.',
     # 第四档的 13 道闸回执 —— 它们是**模型回执**, 但判据住在 `mangox/Models/ComputerAct.swift`
     # (两个 target 共用), 于是按本仓惯例照样进词表。⚠️ 片段式的那几条(以 `—— ` 结尾 /
     # 以 ` ⇒ ` 开头)翻译时**要和相邻片段接得上**, 它们是拼起来说的一句话。
@@ -1122,6 +1127,29 @@ VALUES = {
     '「%@」此刻的焦点在「%@」上, 不是能写字的输入框 ⇒ 没写。': '"%@" has focus on "%@" right now, which is not a text field ⇒ nothing was typed.',
     '先点进输入框(或者用 computer_act 的 focus)再写。': 'Click into a text field first (or use computer_act with focus), then write.',
     '往列表 / 表格里敲字符会变成「按键跳转」, 那是动作, 不是打字。': 'Typing into a list or a table turns into type-select, which is an action, not text entry.',
+    # 第六档(2026-11-19): `ComputerKeysRule` 的九道闸回执 + 设置页那一行 —— 与第四/五档同族
+    # (进**模型上下文**, 住在与 helper 共用的纯函数里)。⚠️ 以空格开头 / 以 `——` 结尾的那几条
+    # 是**拼起来说的一句话**, 翻译时要和相邻片段接得上。
+    '「模拟按键」这一档关着 ⇒ 没按。': '"Key presses" is off ⇒ nothing was pressed.',
+    '它默认关是因为方向键会改选中范围、删除键会删东西，而这两件事没有撤销 ——': 'It is off by default because arrow keys change the selection and Delete removes things, and neither can be undone —',
+    '「%@」还没勾「可操作」⇒ 没按。看得到不等于动得。': '"%@" is not marked as able to act (Can act) ⇒ nothing was pressed. Being visible is not the same as being actionable.',
+    '没给要按的键 ⇒ 没按。': 'No keys to press ⇒ nothing was pressed.',
+    '要按 %lld 下，超过这一档的上限 %@ ⇒ 没按。': 'That is %lld keystrokes, over the %@ limit of this mode ⇒ nothing was pressed.',
+    ' 分几次按，每按几下回来看一眼 —— 这一档没有撤销，按过头就回不去了。': ' Send them in several calls and look between them — there is no undo here, and pressing past the mark cannot be walked back.',
+    '「%@」重启过了 ⇒ 你手上那份快照说的不是这个窗口，焦点落在哪儿也不知道，没按。': '"%@" was restarted ⇒ the snapshot you hold is not this window, and there is no telling where the focus sits, so nothing was pressed.',
+    '「%@」不在前台 ⇒ 没按。': '"%@" is not in front ⇒ nothing was pressed.',
+    '键盘事件会落到**此刻在前台的那个 App** 的焦点里，不是你指定的这个。': 'Keystrokes land in the focus of **whatever app is in front right now**, not in the one you named.',
+    '你此刻正按着鼠标键 ⇒ 没按。松开之后再说一次。': 'You are holding a mouse button right now ⇒ nothing was pressed. Ask again after you let go.',
+    ' 等 %lld 下': ' and %lld more',
+    '这一串里有会改内容 / 提交的键（%@%@）⇒ 没按。': 'This sequence contains keys that change content or submit (%@%@) ⇒ nothing was pressed.',
+    '「%@」此刻**答不出焦点在哪儿**（它的界面不暴露这一层），': '"%@" **cannot say where the focus is** right now (its interface does not expose that layer),',
+    '而这类键按下去没有撤销 —— 没有焦点证据就不动。': ' and these keys cannot be taken back once pressed — with no evidence about the focus, nothing is pressed.',
+    ' 只用方向 / Home / End / Tab 这类「只移动」的键不受这条限制。': ' Keys that only move — arrows, Home, End, Tab — are not subject to this rule.',
+    '「%@」此刻的焦点在「%@」上，不是能写字的输入框 ——': '"%@" has focus on "%@" right now, which is not a text field — ',
+    ' 在列表 / 画布上按这些键会变成**别的动作**（跳转 / 删除 / 触发）。': 'pressing these on a list or a canvas turns into **something else entirely** (jump, delete, trigger).',
+    ' 先点进能写字的控件，再按。': ' Click into a control you can write in first, then press.',
+    '你 %@ 毫秒前刚动过键鼠 ⇒ 没按。': 'You touched the keyboard or mouse %@ ms ago ⇒ nothing was pressed.',
+    '人正在用键盘时我不抢 —— 稍等一下再说一次。': 'I will not take the keyboard away from someone using it — try again in a moment.',
     '申请': 'Request',
     ' 想按它的话用 press —— 但按它不等于打开它的菜单。': ' Use press if you only meant to click it -- but clicking is not opening its menu.',
     '「%@」没有菜单可开 —— %@ ⇒ 没动。': '"%@": no menu to open -- %@ ⇒ nothing done.',

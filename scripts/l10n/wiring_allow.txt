@@ -303,3 +303,31 @@ mangox/Models/ComputerAct.swift|人正在打字时我不往他那行里插字 �
 mangox/Models/ComputerAct.swift|「%@」此刻的焦点在「%@」上, 不是能写字的输入框 ⇒ 没写。
 mangox/Models/ComputerAct.swift|先点进输入框(或者用 computer_act 的 focus)再写。
 mangox/Models/ComputerAct.swift|往列表 / 表格里敲字符会变成「按键跳转」, 那是动作, 不是打字。
+
+# P18 第六档(2026-11-19): `ComputerKeysRule` 的九道闸回执 —— 与第四/五档同族: 进的是**模型
+# 上下文**, 住在与 helper 共用的纯函数里; 包 L() 会让"界面语言 = 英文"时给模型发英文回执,
+# 而模型判断"这个 App 的界面叫什么"依据的是中文界面。
+# ⚠️ 豁免的只是「必须接线」这一道, 译文仍在词表里(gen_strings 照收)。
+# ⚠️ 这里有**片段**(一句话拆成几个字面量拼), 以空格开头的那几条空格在 `|` 之后。
+# ⚠️ 「这一串里有会改内容 / 提交的键（%@%@）⇒ 没按。」在源码里出现两次(两种焦点证据都不成立),
+#    这里登记一次即可。
+mangox/Models/ComputerAct.swift|「模拟按键」这一档关着 ⇒ 没按。
+mangox/Models/ComputerAct.swift|它默认关是因为方向键会改选中范围、删除键会删东西，而这两件事没有撤销 ——
+mangox/Models/ComputerAct.swift|「%@」还没勾「可操作」⇒ 没按。看得到不等于动得。
+mangox/Models/ComputerAct.swift|没给要按的键 ⇒ 没按。
+mangox/Models/ComputerAct.swift|要按 %lld 下，超过这一档的上限 %@ ⇒ 没按。
+mangox/Models/ComputerAct.swift| 分几次按，每按几下回来看一眼 —— 这一档没有撤销，按过头就回不去了。
+mangox/Models/ComputerAct.swift|「%@」重启过了 ⇒ 你手上那份快照说的不是这个窗口，焦点落在哪儿也不知道，没按。
+mangox/Models/ComputerAct.swift|「%@」不在前台 ⇒ 没按。
+mangox/Models/ComputerAct.swift|键盘事件会落到**此刻在前台的那个 App** 的焦点里，不是你指定的这个。
+mangox/Models/ComputerAct.swift|你此刻正按着鼠标键 ⇒ 没按。松开之后再说一次。
+mangox/Models/ComputerAct.swift| 等 %lld 下
+mangox/Models/ComputerAct.swift|这一串里有会改内容 / 提交的键（%@%@）⇒ 没按。
+mangox/Models/ComputerAct.swift|「%@」此刻**答不出焦点在哪儿**（它的界面不暴露这一层），
+mangox/Models/ComputerAct.swift|而这类键按下去没有撤销 —— 没有焦点证据就不动。
+mangox/Models/ComputerAct.swift| 只用方向 / Home / End / Tab 这类「只移动」的键不受这条限制。
+mangox/Models/ComputerAct.swift|「%@」此刻的焦点在「%@」上，不是能写字的输入框 ——
+mangox/Models/ComputerAct.swift| 在列表 / 画布上按这些键会变成**别的动作**（跳转 / 删除 / 触发）。
+mangox/Models/ComputerAct.swift| 先点进能写字的控件，再按。
+mangox/Models/ComputerAct.swift|你 %@ 毫秒前刚动过键鼠 ⇒ 没按。
+mangox/Models/ComputerAct.swift|人正在用键盘时我不抢 —— 稍等一下再说一次。

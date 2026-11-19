@@ -1189,14 +1189,20 @@ final class PiRpcTransport: AgentTransport {
     /// 第五档(2026-11-10): 往当前焦点里写一段字(可选补一次回车)。**又一个独立工具** ——
     /// 与 `tap` 同理: 它前面没有元素、没有编号、也没有坐标, 只有"焦点"。
     nonisolated static let computerTypeToolName = "computer_type"
+    /// 第六档(2026-11-19): 发导航键 / 修饰键组合。**又一个独立工具**, 理由比前两个硬:
+    ///
+    /// ⚠️ 键盘**没有作用域** —— 一次 `Cmd+A` 选中的是全篇, 不管它是在哪一行按下;
+    ///    2026-11-19 在 WPS 上真发生过: `Cmd+A` 之后一个 `delete` 清掉了整篇正文。
+    ///    所以它既不能并进 `computer_type`(那个只写字符串、不按修饰键), 也不能默认开。
+    nonisolated static let computerKeysToolName = "computer_keys"
 
     /// P18: computer 扩展注册出来的工具名 —— 与 `computerExtensionSource` 同源同改
     /// (冒烟断言"每个名字都能在源码里找到 `name: "<名字>"`", 同 `webSearchToolNames` 那条守)。
     ///
-    /// ⚠️ **现在有五个工具**: 读一个、动一个、打开一个、按坐标点一个、往焦点里写一个。
+    /// ⚠️ **现在有六个工具**: 读一个、动一个、打开一个、按坐标点一个、往焦点里写一个、发键一个。
     nonisolated static let computerToolNames: [String] =
         [computerReadToolName, computerActToolName, computerOpenToolName,
-         computerTapToolName, computerTypeToolName]
+         computerTapToolName, computerTypeToolName, computerKeysToolName]
 
     nonisolated static let computerExtensionFileName = "mangox-computer.ts"
 
@@ -1608,6 +1614,71 @@ final class PiRpcTransport: AgentTransport {
                             app: params.app || "",
                             text: params.text,
                             submit: params.submit === true,
+                            seq: params.seq,
+                        });
+                    } catch (error) {
+                        throw new Error("could not reach the window reader: " + String(error));
+                    }
+                    if (!reply || typeof reply !== "object") {
+                        throw new Error("the window reader sent something that is not an object.");
+                    }
+                    if (reply.ok !== true) {
+                        return ok("Refused: " + (reply.error || "no reason given."));
+                    }
+                    return ok(typeof reply.text === "string"
+                        ? reply.text
+                        : "(the reader returned no text)");
+                },
+            });
+
+            pi.registerTool({
+                name: "computer_keys",
+                label: "Send navigation or modified keys",
+                description: [
+                    "Send a short burst of keystrokes to that app: arrows, Home/End, Page Up/Down, Tab, Esc,",
+                    "Space, Delete, Backspace, Return -- optionally with Shift, Option, Command or Control.",
+                    "This is how text gets selected character by character (shift+right), how a caret is moved",
+                    "to the start of a line (home), and how a menu shortcut is used when no row offers it.",
+                    "",
+                    "⚠️ Keys have no scope. There is no row and no coordinate, so nothing is resolved back to a",
+                    "control and none of the checks that guard `press` can run -- `command+a` selects the whole",
+                    "document no matter where the caret was. Combine it with `delete` and the document is gone,",
+                    "with no undo anywhere in this tool. Send one stroke at a time, read again between rounds,",
+                    "and never send a modified key or a destructive one unless you can say what currently has",
+                    "the focus.",
+                    "",
+                    "It is off by default and it uses the real keyboard, so anything typed at that moment goes",
+                    "into that app. Do not use it while the person may be working.",
+                    "",
+                    "A reply that says the keys went out only means they were posted -- not that the interface",
+                    "did what you wanted. Read again (or open the saved file) to find out.",
+                ].join("\n"),
+                parameters: Type.Object({
+                    app: Type.Optional(Type.String({
+                        description: "App name or bundle id. Omit to send keys to the frontmost app.",
+                    })),
+                    strokes: Type.Array(Type.String({
+                        description: "One stroke per entry, e.g. \"left\", \"shift+right\", \"command+a\".",
+                    }), {
+                        description: "1 to 24 strokes, sent in order.",
+                    }),
+                    seq: Type.Number({
+                        description: "The snapshot sequence from the most recent read.",
+                    }),
+                }, { additionalProperties: false }),
+
+                async execute(_toolCallId, params) {
+                    const sock = process.env[SOCK_ENV];
+                    if (!sock) {
+                        return ok("computer_keys is not enabled in this session: no "
+                            + SOCK_ENV + " was provided.");
+                    }
+                    let reply;
+                    try {
+                        reply = await ask(sock, {
+                            op: "keys",
+                            app: params.app || "",
+                            strokes: params.strokes,
                             seq: params.seq,
                         });
                     } catch (error) {
@@ -2131,7 +2202,8 @@ final class PiRpcTransport: AgentTransport {
             takeover: ComputerSettings.shared.shouldInstallTakeover(
                         expectsHuman: approvalMode.expectsHumanAtKeyboard),
             tap: ComputerSettings.shared.tapEnabled,
-            type: ComputerSettings.shared.typeEnabled)
+            type: ComputerSettings.shared.typeEnabled,
+            keys: ComputerSettings.shared.keysEnabled)
         let computerExtPath = computerSock != nil ? Self.ensureComputerExtensionFile() : nil
         var args = spec.scriptArgs + ["--mode", "rpc"]
         // P12.1b + P13: 扩展参数 (关自动发现 + 补回内置 provider + 挂托管扩展 + codemode 层)。
@@ -2289,6 +2361,7 @@ final class PiRpcTransport: AgentTransport {
                                                   expectsHuman: approvalMode.expectsHumanAtKeyboard),
                                               tap: ComputerSettings.shared.tapEnabled,
                                               type: ComputerSettings.shared.typeEnabled,
+                                              keys: ComputerSettings.shared.keysEnabled,
                                               peerPid: ProcessInfo.processInfo.processIdentifier,
                                               inherited: ProcessInfo.processInfo.environment) {
             p.environment = env
@@ -3313,6 +3386,13 @@ final class PiRpcTransport: AgentTransport {
                 return (app.isEmpty ? name : app,
                         (willSubmit ? "type + Enter (send): " : "type: ")
                             + "\"" + String(body.prefix(60)) + "\"")
+            }
+            // 第六档: 没有元素、没有坐标, 全部内容**就是那一串键**。不上卡就等于让人签一张
+            // 空白单子 —— 而这一档能一手把整篇正文删掉(见 `computerKeysToolName` 的注释)。
+            if name == Self.computerKeysToolName {
+                let list = (args["strokes"] as? [Any])?.compactMap { $0 as? String } ?? []
+                let joined = list.isEmpty ? "(none)" : list.joined(separator: " → ")
+                return (app.isEmpty ? name : app, "keys: " + String(joined.prefix(80)))
             }
             // setValue 的正文要看得见: 审批时"要往这个框里写什么"就是这个动作的全部内容。
             if let text = args["text"] as? String, !text.isEmpty {

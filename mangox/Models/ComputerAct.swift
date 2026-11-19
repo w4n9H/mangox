@@ -340,6 +340,15 @@ enum ComputerPointRule {
     ///    ④ `stale`: 按钮 / 文本这些真格子 ⇒ 唯一说得通的原因是**快照过期**, 重新读一次就有了。
     enum PointMissKind {
         case wholeApp
+        /// 窗口里**这一块**没有更细的格子（自绘的正文：WPS 的文字/表格画布、游戏、部分 Electron）。
+        ///
+        /// ⚠️ 与 `wholeApp` 的**下一步相同**（看截图 / 按坐标），但话不一样，所以必须是两类：
+        ///    `wholeApp` 是"这个 App 把整块界面一起交出去"（微信），人听了会想换 App；
+        ///    `canvas` 是"这个 App 别的都能操作，唯独这块画布不行"（WPS 2026-11-19 实测：
+        ///    工具栏能读、能按，正文一个字都没有）—— 换 App 是错的建议，改口径才是对的。
+        /// ⚠️ 2026-11-19 之前它被判成 `container`，回执会说「再读一次也不会多出编号」
+        ///    之外还加一句「从快照里挑编号」—— 对自绘画布是**空话**：里面根本没有编号可挑。
+        case canvas
         case outerChrome
         case container
         case stale
@@ -361,11 +370,22 @@ enum ComputerPointRule {
     ]
 
     /// - Parameter role: 现场读到的 `AXRole`。读不出角色时给空串。
-    static func missKind(role: String) -> PointMissKind {
+    /// - Parameter hasContentBelow: 这个元素**子树里**有没有内容角色（`role` 是容器时才用得上）。
+    ///
+    ///   ⚠️ 这一格是 2026-11-19 补的，起因是 WPS：坐标落在表格正文上，`CopyElementAtPosition`
+    ///   回的是**匿名 `AXGroup`**，于是被判成 `container`，回执让模型"从快照里挑编号" —— 而那块
+    ///   区域里**一个编号都没有**（自绘画布），模型只会反复重读。
+    ///   判据换成"往下看一眼"：子树里有 content 角色 ⇒ 真的是被截断的容器（重读有用）；
+    ///   一个都没有 ⇒ 这块区域没有格子（重读一百次也没用）。
+    ///   ⚠️ 默认 `true` 是**保守方向**：老调用点与 Mock 不改也维持旧行为（`.container`），
+    ///   而"多说一句重读"的代价是模型多读一次，"错说成自绘"的代价是它放弃一条能走的路。
+    static func missKind(role: String, hasContentBelow: Bool = true) -> PointMissKind {
         if role == "AXApplication" { return .wholeApp }
         if outerChromeRoles.contains(role) { return .outerChrome }
         // 读不出角色 ⇒ 当容器: 说"重读就有编号"比说"那是背景"更容易把人带错方向。
-        if role.isEmpty || containerRoles.contains(role) { return .container }
+        if role.isEmpty || containerRoles.contains(role) {
+            return hasContentBelow ? .container : .canvas
+        }
         return .stale
     }
 }
@@ -711,6 +731,197 @@ enum ComputerTypeRule {
         if let ms = f.sinceHumanInputMs, ms < humanQuietMs {
             return "你 \(ms) 毫秒前刚动过键鼠 ⇒ 没写。"
                 + "人正在打字时我不往他那行里插字 —— 稍等一下再说一次。"
+        }
+        return nil
+    }
+}
+
+/// 一次按键（第六档，2026-11-19）。
+///
+/// ⚠️ 为什么它不能并进 `type`: `type` 的语义是"往焦点里**写字**"，一个字符一个字符都是内容；
+///    这一档的语义是"**按一下键**"—— 方向键不改任何内容，而 `⌘A` 会选中全文、`Delete` 会删、
+///    回车会发出去。三件事的风险不是一条线，合成一个 op 就没法分别设门（同 `tap` 与 `type`
+///    各自一档的那条理由）。
+///
+/// ⚠️ 为什么**只收导航与编辑键、不收字母数字**：字母数字属于 `type` 的地盘。收窄的收益很具体 ——
+///    `⌘S` / `⌘W` / `⌘Q` 这类组合要靠字母才凑得出来，不收字母，它们就**结构上不存在**，
+///    不需要一张"哪些组合危险"的黑名单去追（而黑名单永远漏）。
+struct ComputerKeyStroke: Equatable {
+    /// 只有这些键。**顺序即白名单**（不在表里的解析不出，直接拒）。
+    enum Key: String, Equatable, CaseIterable {
+        case left, right, up, down
+        case home, end, pageup, pagedown
+        case tab, esc, space
+        case delete, backspace, enter
+    }
+
+    enum Modifier: String, Equatable, CaseIterable {
+        case shift, option, command, control
+    }
+
+    let key: Key
+    let modifiers: Set<Modifier>
+
+    init(_ key: Key, _ modifiers: Set<Modifier> = []) {
+        self.key = key
+        self.modifiers = modifiers
+    }
+
+    /// `"shift+right"` / `"right"` / `"cmd+home"` → 一次按键。认不出就 `nil`。
+    ///
+    /// ⚠️ 认不出必须是 `nil` 而不是"默认某个键"：写错了键名却照按，按下去的是**别的动作**，
+    ///    而回执还会说"按了"。这一档没有撤销。
+    static func parse(_ raw: String) -> ComputerKeyStroke? {
+        let parts = raw.split(separator: "+").map {
+            $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        }
+        guard let last = parts.last, let key = Key(rawValue: last) else { return nil }
+        var mods: Set<Modifier> = []
+        for p in parts.dropLast() {
+            // 别名只留最短的那写法：多一个别名就多一条"两种写法都行"的不一致。
+            guard let m = Modifier(rawValue: p) else { return nil }
+            mods.insert(m)
+        }
+        return ComputerKeyStroke(key, mods)
+    }
+
+    var display: String {
+        let order: [Modifier] = [.control, .option, .shift, .command]
+        let prefix = order.filter { modifiers.contains($0) }.map { $0.rawValue }
+        return (prefix + [key.rawValue]).joined(separator: "+")
+    }
+
+    /// 这一下会不会**改变内容或写出文件**。
+    ///
+    /// ⚠️ 分档不是洁癖，是这一档唯一的安全边界：
+    ///    · `navigate`：方向 / Home / End / PageUp / PageDown / Tab / Esc，以及它们的 `shift` 组合
+    ///      （shift 只改"选中范围"，不改内容）。**不需要任何焦点证据** —— 最坏结果是光标跑到别处，
+    ///      看得见、可复原。
+    ///    · `destructive`：带 `command` / `option` / `control` 的任意组合、`delete` / `backspace` /
+    ///      `enter` / `space`。这些要么删、要么提交、要么在列表里触发动作 —— 必须有"焦点落在
+    ///      能写字的控件上"这个证据才放行。
+    ///    ⚠️ `space` 归危险档是被实测推着改的：Finder 里空格是预览、在不少列表里是切换勾选、
+    ///      在文档里是写字 —— 三个副作用都不小，而它不属于"只是移动一下"。
+    var safety: Safety {
+        if !modifiers.subtracting([.shift]).isEmpty { return .destructive }
+        switch key {
+        case .delete, .backspace, .enter, .space: return .destructive
+        default: return .navigate
+        }
+    }
+
+    enum Safety: Equatable {
+        case navigate
+        case destructive
+    }
+}
+
+/// 按一串键（第六档，2026-11-19）。
+///
+/// ⚠️ 起因（boss 命题，2026-11-19 实测）: "把一段文字逐字改成赤橙黄绿青蓝紫"在当时的动作面上
+///    **结构上做不到** —— 选中某个字只能靠键盘（`⌘←` 行首 / `→` 若干次 / `⇧→` 选一个），
+///    而 `type` 只会写字、`press` 要编号、`tap` 只能点。WPS 的正文是自绘画布，一个编号都没有。
+///
+/// ⚠️ 与 `type` 的闸门**大同小异，两处必须不同**：
+///    ① 焦点证据：`type` 是"读得到就判、读不到放行"；这里是"**危险键**读不到就**拒**" ——
+///       因为 `type` 最坏写错一行字，而 `Delete` 最坏删掉选中的东西。
+///    ② 量：`type` 限 2000 字；这里限**按键次数**（一次 24 下足够"跳若干格再选一段"）。
+enum ComputerKeysRule {
+
+    /// 这一档的 env 键。**要就写 "1"，不要就删掉**（同 `MANGOX_COMPUTE_TAP` / `_TYPE`）。
+    ///
+    /// ⚠️ 单独一个键、单独一个开关：它管的事（按导航/编辑键）与 `type`（写字）不是一件事，
+    ///    与 `tap`（点坐标）也不是。开关的语义必须与它管的那件事同粒度。
+    static let envKey = "MANGOX_COMPUTE_KEYS"
+
+    /// 人最后一次动键鼠之后，至少消停这么久才允许按。
+    ///
+    /// ⚠️ 与 `tap` / `type` 同数不同由：这条防的是"人正在用方向键挑东西、我把光标抢走"。
+    static let humanQuietMs = 400
+
+    /// 一次请求最多多少个键。**防的不是攻击，是失控**：模型把"按住方向键到文档末尾"
+    /// 展开成两百下，界面会跑到别的地方去，而这一档没有撤销。
+    static let maxStrokes = 24
+
+    /// 一次 keys 的全部输入。**全是事实**（同 `ComputerTapRule.Facts` 的纪律）。
+    struct Facts {
+        /// 全局档（设置页那个「模拟按键」开关）。**默认关**。
+        var keysEnabled: Bool
+        var appActable: Bool
+        var appName: String
+        var snapshotPid: Int32
+        var currentPid: Int32
+        var isFrontmost: Bool
+        var leftButtonDown: Bool
+        var rightButtonDown: Bool
+        /// `nil` = 监听没装上（拿不到事实，不假装判过）。
+        var sinceHumanInputMs: Int?
+        var strokes: [ComputerKeyStroke]
+        /// 焦点落在哪个角色上。**`nil` = 这个 App 答不出来**（微信这类 AX 恒空）。
+        ///
+        /// ⚠️ 与 `ComputerTypeRule.Facts.focusedRole` 同一个格子、**相反的缺省方向**：
+        ///    那边 `nil` 放行（它唯一的真实用例是微信），这边 `nil` 只放行拿不出破坏力的键。
+        var focusedRole: String? = nil
+    }
+
+    /// 拒（`nil` = 可以按）。**顺序即代价序**：先判不要钱的，最后才碰进程表与监听。
+    static func refusal(_ f: Facts) -> String? {
+        // ① 档位
+        guard f.keysEnabled else {
+            return "「模拟按键」这一档关着 ⇒ 没按。"
+                + "它默认关是因为方向键会改选中范围、删除键会删东西，而这两件事没有撤销 ——"
+                + " 要开就在 设置 › 集成 › 电脑操作 里打开。"
+        }
+        // ② 这个 App 有没有被允许动
+        guard f.appActable else {
+            return "「\(f.appName)」还没勾「可操作」⇒ 没按。看得到不等于动得。"
+        }
+        // ③ 空的一串
+        guard !f.strokes.isEmpty else { return "没给要按的键 ⇒ 没按。" }
+        // ④ 量
+        guard f.strokes.count <= maxStrokes else {
+            return "要按 \(f.strokes.count) 下，超过这一档的上限 \(maxStrokes) ⇒ 没按。"
+                + " 分几次按，每按几下回来看一眼 —— 这一档没有撤销，按过头就回不去了。"
+        }
+        // ⑤ 同上一次读的是不是同一个进程
+        guard f.snapshotPid == f.currentPid else {
+            return "「\(f.appName)」重启过了 ⇒ 你手上那份快照说的不是这个窗口，焦点落在哪儿也不知道，没按。"
+                + "重新 read 一次。"
+        }
+        // ⑥ 前台：键盘事件发给谁，由系统当前的前台 App 决定
+        guard f.isFrontmost else {
+            return "「\(f.appName)」不在前台 ⇒ 没按。"
+                + "键盘事件会落到**此刻在前台的那个 App** 的焦点里，不是你指定的这个。"
+                + "先 computer_open 把它切上来。"
+        }
+        // ⑦ 手上按着键（可能在拖拽 / 多选）
+        guard !f.leftButtonDown, !f.rightButtonDown else {
+            return "你此刻正按着鼠标键 ⇒ 没按。松开之后再说一次。"
+        }
+        // ⑧ 危险键：必须有"焦点在能写字的控件上"这个证据
+        let risky = f.strokes.filter { $0.safety == .destructive }
+        if !risky.isEmpty {
+            let names = risky.prefix(3).map(\.display).joined(separator: "、")
+            let more = risky.count > 3 ? " 等 \(risky.count) 下" : ""
+            switch f.focusedRole {
+            case .none:
+                return "这一串里有会改内容 / 提交的键（\(names)\(more)）⇒ 没按。"
+                    + "「\(f.appName)」此刻**答不出焦点在哪儿**（它的界面不暴露这一层），"
+                    + "而这类键按下去没有撤销 —— 没有焦点证据就不动。"
+                    + " 只用方向 / Home / End / Tab 这类「只移动」的键不受这条限制。"
+            case .some(let role) where !ComputerTypeRule.editableRoles.contains(role):
+                return "这一串里有会改内容 / 提交的键（\(names)\(more)）⇒ 没按。"
+                    + "「\(f.appName)」此刻的焦点在「\(role)」上，不是能写字的输入框 ——"
+                    + " 在列表 / 画布上按这些键会变成**别的动作**（跳转 / 删除 / 触发）。"
+                    + " 先点进能写字的控件，再按。"
+            default:
+                break
+            }
+        }
+        // ⑨ 人刚动过键鼠
+        if let ms = f.sinceHumanInputMs, ms < humanQuietMs {
+            return "你 \(ms) 毫秒前刚动过键鼠 ⇒ 没按。"
+                + "人正在用键盘时我不抢 —— 稍等一下再说一次。"
         }
         return nil
     }
