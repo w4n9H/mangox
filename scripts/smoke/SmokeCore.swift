@@ -37,19 +37,20 @@ extension SmokeMain {
     /// —— 这是有意的: 那条等待本来就是它的一部分。
     private static var lastTick = Date()
 
-    /// 断言总数 —— 条数棘轮的输入（见 `report()`）。
+    /// 断言总数 —— 每次收尾都打出来（见 `report()`）。
     private static var checkCount = 0
 
-    /// 条数上限：**只减不增**。
+    /// 上一个记下的条数。**不是门**, 只是让"涨了"这件事在每次 CI 日志里露出来。
     ///
-    /// ⚠️ 为什么要有它（2026-11-19 boss 立规矩）：条数已经证明**不是** CI 时间的主因 ——
-    ///    2707 条里 2647 条合计只占 5 秒，真正的耗时是 2 条重断言（47 秒）和 `swiftc` 编译（126 秒）。
-    ///    但这个数字决定的是**维护成本**：每一条都要有人读、有人改、有人在它红了的时候判断
-    ///    "是我改坏了还是判据过期了"。它会一路涨，是因为"顺手加两条"从来不疼。
-    /// ⇒ 疼一下：超了就是红的，想加就得先合并掉别处。
-    /// ⚠️ 下调**不必**同步改这里（棘轮只管上限）；但每次大改之后应当顺手把它压到实测值上，
-    ///    否则省下的额度会立刻被下一个人吃掉（"上限放哪儿就涨到哪儿"）。
-    static let checkCeiling = 2707
+    /// ⚠️ 为什么不做成硬上限（2026-11-19 boss 明令）: 卡死条数会让**正当的新判据**也被迫先
+    ///    去别处凑数合并, 那种门最后一定被绕过（改常量就绿了）。他要的是**严格限制** ——
+    ///    规则 + 可见, 而不是红灯。
+    /// 规则: 加判据前先合并（见 `scripts/smoke/run.sh` 文件头七条）；合并省下来的空档,
+    ///    把这行改成实测值, 下次再涨就会被日志点名。
+    /// 说明: 条数**不是** CI 时间的主因 —— 2707 条里 2647 条合计只占 5 秒, 耗时在 2 条重
+    ///    断言与 `swiftc` 编译。这个数管的是**维护成本**（每条都要有人读、有人判断红了是
+    ///    改坏了还是判据过期了）。
+    private static let recordedCount = 2707
 
     @MainActor
     static func check(_ cond: Bool, _ what: String) {
@@ -92,13 +93,14 @@ extension SmokeMain {
             failures.append("还有 \(casesRemaining) 个用例没跑 —— 某个 case 结尾调了 report() "
                             + "（report = 收尾 + exit，不许当用例结尾；见 scripts/smoke/cases/AllCases.swift）")
         }
-        // 条数棘轮。**不进 `check`** —— 棘轮自己若算一条, 上限就永远差一, 而"差一"最容易被人
-        // 顺手改成 +1。这里直接追加到 failures, 与 casesRemaining 同一条路。
-        if checkCount > checkCeiling {
-            failures.append("冒烟条数 \(checkCount) 超上限 \(checkCeiling) —— 这个数**只减不增**。"
-                            + " 新判据先扩已有那条(同源事实并进一条); 确需新增, 先把别处的合并掉。"
-                            + " 规则见 scripts/smoke/run.sh 文件头「冒烟新增规则」。")
-        }
+        // 条数**只报不判**（2026-11-19 boss: 锁条数不至于, 严格限制即可）。打到 "ALL PASS"
+        // 之前, 保持最后一行仍是结论; 涨了就当场点名, 让"顺手加两条"在日志里留下痕迹。
+        // ⚠️ 不许改成 failures.append —— 那是把"严格限制"做成"挡路", 而挡路的门会被绕过。
+        print("断言 \(checkCount) 条"
+              + (checkCount > recordedCount
+                 ? "（比上次记录 \(recordedCount) 多 \(checkCount - recordedCount) 条 —— 按规则先合并再新增;"
+                   + " 确认要留着就改 SmokeCore.recordedCount）"
+                 : ""))
         print(failures.isEmpty ? "\nALL PASS" : "\nFAILURES: \(failures.count)")
         failures.forEach { print(" - " + $0) }
         // 夹具清理 (2026-09-22): **只在全绿时清** —— 失败时留下现场供排查 (那正是最需要它的时刻)。
