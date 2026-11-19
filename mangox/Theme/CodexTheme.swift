@@ -575,10 +575,10 @@ enum Tune {
     ///
     /// ⚠️ `block` 的 `budget` 只卡**各节**, 段头（通则 / codemode 段 / 日期 / 点名句）不算在内;
     ///    所以"真注入量"不能由这里推出 —— 那一条由冒烟用真手册 + 真段头直接断言。
-    ///    ⚠️ 于是这个数现在**同时**当着两个口径（各节额度 4057 ≤ 4780 ✓、含段头总量 4720 ≤ 4780 ✓）,
+    ///    ⚠️ 于是这个数现在**同时**当着两个口径（各节额度 4322 ≤ 5050 ✓、含段头总量 5045 ≤ 5050 ✓）,
     ///    两个都过得去, 但它们不是一回事 —— 真要分开得等下一次改注入策略时一起做, 现在不动。
     /// 超出的**逐节跳过并点名**（要用时 read）, 不截断单节。
-    static let sopTotalCharLimit: Int        = 4780
+    static let sopTotalCharLimit: Int        = 5050
     static let distillMaterialCharLimit: Int = 12000   // 记忆提炼: 对话材料总量截断
     static let distillTimeoutSeconds: Double = 60      // 记忆提炼: 一次性 pi 轮超时
     /// P12.1a: 引擎启动后"一句话都没说"的容忍时长。pi spawn 后正常会立刻回

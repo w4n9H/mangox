@@ -1336,6 +1336,13 @@ final class PiRpcTransport: AgentTransport {
                     "the outline is thin or is the only way to see what is there -- and remember it costs",
                     "context. When there is no picture the text says why; do not retry it in a loop.",
                     "",
+                    "Leave the picture out when you only need **fresh numbers to act again**: after any tap,",
+                    "type or key the old outline is void and you must read once more, but that read is",
+                    "usually just bookkeeping. A picture you did not need stays in this conversation and is",
+                    "re-read on every later turn, so a blind screenshot is the most expensive kind. Take one",
+                    "when you have to *judge* something the text cannot say -- a colour, a position, whether",
+                    "the click landed.",
+                    "",
                     "`imageScope` picks what goes into that picture. The default, `screen`, is the area",
                     "the window occupies on the display, so panels, sheets and menus drawn over it are in",
                     "the picture -- use it before computer_tap, since a tap lands on whatever is really on",
@@ -1350,7 +1357,9 @@ final class PiRpcTransport: AgentTransport {
                     })),
                     includeImage: Type.Optional(Type.Boolean({
                         description: "Also return a screenshot of the window (only if the user"
-                            + " turned vision on for this app).",
+                            + " turned vision on for this app). Omit it when you only need fresh"
+                            + " numbers to keep acting -- an unneeded picture is re-read on every"
+                            + " later turn.",
                     })),
                     imageScope: Type.Optional(Type.String({
                         enum: ["screen", "window"],

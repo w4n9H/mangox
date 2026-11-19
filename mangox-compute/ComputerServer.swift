@@ -692,8 +692,9 @@ final class ComputerServer {
         note += underPoint.isEmpty
             ? "\n— 这一点底下我没读到任何文字, 所以看不出它是不是付款 / 删除那种键。"
             : "\n— 这一点底下读到的是「\(underPoint.prefix(40))」。"
-        note += "\n— 界面刚被动过 ⇒ 那份快照和里面的编号全部作废(新 seq=\(newSeq))。"
-            + " 要接着动就先 computer_read 一次。"
+        note += "\n— 界面刚被动过 ⇒ 那份快照和里面的编号全部作废(缓存已清, 新 seq=\(newSeq))。"
+            + " 要接着动必须先 computer_read 一次 —— **只为拿新编号就 `includeImage:false`**"
+            + " (带一张图, 后面每一轮都要重念它一遍); 要核对画面才带图。"
         if !HumanInputTap.shared.isInstalled {
             note += "\n— ⚠️ 接管检测没装上 ⇒ 我没法确认你手上有没有鼠标。"
         }
@@ -862,8 +863,9 @@ final class ComputerServer {
         } else {
             note += "\n— 没按回车。要交出去就再说一次并带上 submit。"
         }
-        note += "\n— 界面刚被动过 ⇒ 那份快照和里面的编号全部作废(新 seq=\(newSeq))。"
-            + " 要接着动就先 computer_read 一次。"
+        note += "\n— 界面刚被动过 ⇒ 那份快照和里面的编号全部作废(缓存已清, 新 seq=\(newSeq))。"
+            + " 要接着动必须先 computer_read 一次 —— **只为拿新编号就 `includeImage:false`**"
+            + " (带一张图, 后面每一轮都要重念它一遍); 要核对画面才带图。"
         if !focusKnown {
             note += "\n— ⚠️ 焦点落在哪一格我读不到(这个 App 不暴露它) ⇒ 我没法确认字真的进了输入框。"
         }
@@ -1000,8 +1002,9 @@ final class ComputerServer {
             : "这一串共 \(strokes.count) 下，**只发出去 \(sent) 下**（\(listed)）—— 后半段没按。"
         note += "\n— 回执只证明键发出去了，**不证明界面按你的意思动了**："
             + "选中范围变没变、光标跳到哪儿，要再 read 一次（或看图）才知道。"
-        note += "\n— 界面刚被动过 ⇒ 那份快照和里面的编号全部作废（新 seq=\(newSeq)）。"
-            + " 要接着动就先 computer_read 一次。"
+        note += "\n— 界面刚被动过 ⇒ 那份快照和里面的编号全部作废（缓存已清, 新 seq=\(newSeq)）。"
+            + " 要接着动必须先 computer_read 一次 —— **只为拿新编号就 `includeImage:false`**"
+            + " (带一张图, 后面每一轮都要重念它一遍); 要核对画面才带图。"
         if !monitored {
             note += "\n— ⚠️ 接管检测没装上 ⇒ 我无法确认你手上是不是正在按键盘，这次是盲按的。"
         }

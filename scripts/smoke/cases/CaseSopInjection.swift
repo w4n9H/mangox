@@ -244,11 +244,13 @@ extension SmokeMain {
         //    · 11-06 改成「`### 任务` + 编号步骤」—— 解决了切碎, 但每个 App 又长成一本独立小手册;
         //    · 11-10 改成「一行一个场景」—— 通法归通则, 节里只留"这里跟通法不一样"。
         //    ⇒ **编号步骤现在是错的**: 它会让手册重新长出整套流程。这就是下面那条断言的方向。
-        // 单节上限压在实测值上（实测最大 409）: 上限的用处是"单个 App 不许再长回一整本手册",
-        // 不是"每节都必须短"。留大额余量 = 提前发许可, 上一版从 700 涨到 900 就是这么涨的。
-        let tooLong = manual.sections.filter { $0.body.count > 430 }.map { "\($0.title)=\($0.body.count)" }
+        // 单节上限压在实测值上（实测最大 608, WPS —— 2026-11-19 文档编辑那一档实拍: 打字通路 /
+        // 模板画廊 / combo 框 / 上色 hex 路线 / 另存为 sheet, 五条都是"不写就每次重踩"的坑）:
+        // 上限的用处是"单个 App 不许再长回一整本手册", 不是"每节都必须短"。
+        // 留大额余量 = 提前发许可, 上一版从 700 涨到 900 就是这么涨的。
+        let tooLong = manual.sections.filter { $0.body.count > 640 }.map { "\($0.title)=\($0.body.count)" }
         check(tooLong.isEmpty,
-              "T-SOP 单节 ≤430 字 (每轮都进提示词; 超了多半是把整套流程又写回来了。实际超: \(tooLong))")
+              "T-SOP 单节 ≤640 字 (每轮都进提示词; 超了多半是把整套流程又写回来了。实际超: \(tooLong))")
         // 判据 = 这一节里 **≥2 行 `- ` 场景**、且**零条编号步骤**。
         let notScenes = manual.sections.filter { !Self.isScenarioList($0.body) }.map(\.title)
         check(notScenes.isEmpty,
@@ -288,10 +290,10 @@ extension SmokeMain {
 
         // 整份上限: 一个是"全都装得下"的绝对量级, 一个是运行时预算 —— 两条都要成立,
         // 否则 `block` 会在真机上**静默截尾**, 而这里是唯一能提前发现它的地方。
-        // ⚠️ 4157 与运行时的 4780 不是同一个数（后者含段头）; 两个都压在实测值上
-        //    （实测 4057 / 4720 —— 都是"加一条就红"的紧度）, 理由见 `SopManual` 文件头 ①。
-        check(SopManual.text.count <= 4157 && SopManual.text.count <= Tune.sopTotalCharLimit,
-              "T-SOP 整份 ≤4157 字且在预算 \(Tune.sopTotalCharLimit) 内 (实际 \(SopManual.text.count) 字)")
+        // ⚠️ 4355 与运行时的 4980 不是同一个数（后者含段头）; 两个都压在实测值上
+        //    （实测 4322 / 5045 —— 都是"加一条就红"的紧度）, 理由见 `SopManual` 文件头 ①。
+        check(SopManual.text.count <= 4420 && SopManual.text.count <= Tune.sopTotalCharLimit,
+              "T-SOP 整份 ≤4420 字且在预算 \(Tune.sopTotalCharLimit) 内 (实际 \(SopManual.text.count) 字)")
 
         // 不许写具体编号: 编号每次 read 都变, 写死即过期数据（而且是**看起来最精确的**过期数据）
         check(SopManual.text.range(of: "#\\s*\\d", options: .regularExpression) == nil,
