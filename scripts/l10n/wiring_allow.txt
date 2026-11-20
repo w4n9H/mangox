@@ -53,6 +53,7 @@ mangox/Agent/PiRpcTransport.swift|细节
 mangox/Views/Scheduled/ScheduledView.swift|旧类型已停用，不能保存
 mangox/Views/Scheduled/ScheduledView.swift|prompt 与 cron 为必填
 mangox/Views/Scheduled/ScheduledView.swift|cron 无效
+mangox/Views/Scheduled/ScheduledView.swift|模型与模式配置为必填
 mangox/Views/Scheduled/ScheduledView.swift|助理要绑定一个项目 —— 它是本版唯一可用的来源
 mangox/Views/Scheduled/ScheduledView.swift|保存
 mangox/Views/Scheduled/ScheduledView.swift|助理：到点看一轮，产出带编号的方案等你批准（`prompt` 写目标，不是动作）

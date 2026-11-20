@@ -2078,6 +2078,121 @@ struct SmokeMain {
             }
         }
 
+        // ---- T-OWN: 日志会话的执行配置由任务**单向拥有** (2026-11-20 boss 定) ----
+        //  ⚠️ 守的是一次实测事故: 同一场助理日志会话里, 巡检轮跑 `minimax`、人手动问的那轮
+        //     跑 `deepseek-v4-pro`。判据只能是**每条 assistant message 自己的 `model` 字段** ——
+        //     "转录里有没有 `model_change`" 会漏（运行时切模型 pi 不写新事件），我第一版就是
+        //     拿那条当证据，得出"全程都是 minimax"的错误结论。
+        //  三件事一起钉: ① 真源只认任务 ② 切会话时 pill 跟任务落位 ③ 拨 pill 不写穿。
+        print("== T-OWN: 日志会话配置归任务 ==")
+        let dirOwn = fixtureDir("town")
+        let mockOwn = MockTransport()
+        let storeOwn = ChatStore(transport: mockOwn, dbPath: dirOwn + "/t.db",
+                                 managedExtensionsDir: dirOwn + "/ext")
+        storeOwn.addScheduled(name: "T-OWN", prompt: "轻活", cron: "0 0 1 1 *", projectId: nil)
+        guard var taskOwn = storeOwn.scheduledTasks.first(where: { $0.name == "T-OWN" }) else {
+            check(false, "T-OWN 前置: 任务已建立")
+            return
+        }
+        taskOwn.config = SessionConfig(provider: "openai", modelId: "o4-mini",
+                                       thinkingLevel: ThinkingLevel.low.rawValue,
+                                       agentMode: AgentMode.standard.rawValue, askApproval: false)
+        storeOwn.updateScheduled(taskOwn)
+        guard let ownTask = storeOwn.scheduledTasks.first(where: { $0.name == "T-OWN" }) else {
+            check(false, "T-OWN 前置: 配置已落库")
+            return
+        }
+        storeOwn.runScheduledFire(ownTask)
+        _ = await waitUntil { storeOwn.runningTurns.isEmpty }
+        guard let ownLog = storeOwn.scheduledTasks.first(where: { $0.name == "T-OWN" })?.logSessionId else {
+            check(false, "T-OWN 前置: 日志会话已建立")
+            return
+        }
+        check(storeOwn.scheduler.owningConfig(for: ownLog)?.modelId == "o4-mini"
+              && storeOwn.scheduler.owningConfig(for: UUID()) == nil,
+              "T-OWN 真源: 日志会话取任务的配置, 普通会话取不到 (跟全局, 不是跟会话行)")
+        // ⓪ 建会话那一步就写任务配置 —— 不走 fire，直接建一个，看行。
+        //    ⚠️ 这一格必须**绕开 fire**: `runScheduledFire` 自己会给行写任务配置（:904），
+        //    那时代码里有没有"建会话即写行"都能绿 ⇒ 判据得落在 `ensureLogSession` 上。
+        storeOwn.addScheduled(name: "T-OWN-NULL", prompt: "轻活", cron: "0 0 1 1 *", projectId: nil)
+        if var bare = storeOwn.scheduledTasks.first(where: { $0.name == "T-OWN-NULL" }) {
+            bare.config = SessionConfig(provider: "openai", modelId: "o4-mini",
+                                        thinkingLevel: ThinkingLevel.low.rawValue,
+                                        agentMode: AgentMode.standard.rawValue, askApproval: false)
+            storeOwn.updateScheduled(bare)
+            let bareTask = storeOwn.scheduledTasks.first { $0.name == "T-OWN-NULL" }!
+            if let bareLog = storeOwn.scheduler.ensureLogSession(for: bareTask) {
+                check(storeOwn.persistenceDebug?.loadSessionConfig(id: bareLog)?.modelId == "o4-mini",
+                      "T-OWN 日志会话生下来就带任务配置 (不是 NULL 行 ⇒ 不会被 App 默认灌成 pi 的默认模型)")
+            } else {
+                check(false, "T-OWN 前置: 日志会话可建")
+            }
+        }
+        // ② 把会话行灌成脏值（模拟"用户拨过 pill 写穿"留下的残留），再选回日志会话 ——
+        //    pill 必须落回任务那个模型。⚠️ 这一格必须**先弄脏**：行本来就是对的（fire 写的 +
+        //    `updateScheduled` 同步的）时，这条断言在"不读任务配置"的实现下也照样绿。
+        storeOwn.persistenceDebug?.saveSessionConfig(
+            id: ownLog,
+            config: SessionConfig(provider: "deepseek", modelId: "deepseek-v4-flash",
+                                  thinkingLevel: ThinkingLevel.high.rawValue,
+                                  agentMode: AgentMode.full.rawValue, askApproval: true))
+        storeOwn.selectConversation(ownLog)
+        check(storeOwn.currentModelId == "o4-mini" && storeOwn.agentMode == .standard,
+              "T-OWN 选中日志会话 ⇒ 显示落回任务配置 (实际 \(storeOwn.currentModelId)/\(storeOwn.agentMode.rawValue))")
+        // ③ 拨走全局之后再"写穿": 日志会话那一行**一个字都不许动**。
+        //    ⚠️ 先把 ② 灌进去的脏值**抹回任务配置**再测 —— 否则"完全不写行"的实现也会红在脏值上，
+        //    看不出这条守的到底是哪件事：它守的是「`stampSessionConfig` 不许把全局写进任务会话」。
+        storeOwn.persistenceDebug?.saveSessionConfig(
+            id: ownLog,
+            config: SessionConfig(provider: "openai", modelId: "o4-mini",
+                                  thinkingLevel: ThinkingLevel.low.rawValue,
+                                  agentMode: AgentMode.standard.rawValue, askApproval: false))
+        storeOwn.applySessionConfig(SessionConfig(provider: "deepseek", modelId: "deepseek-v4-flash",
+                                                  thinkingLevel: ThinkingLevel.high.rawValue,
+                                                  agentMode: AgentMode.full.rawValue, askApproval: true))
+        storeOwn.stampSessionConfig()
+        check(storeOwn.persistenceDebug?.loadSessionConfig(id: ownLog)?.modelId == "o4-mini"
+              && storeOwn.persistenceDebug?.loadSessionConfig(id: ownLog)?.agentMode == AgentMode.standard.rawValue,
+              "T-OWN 写穿不污染日志会话行 (拨成 deepseek/full 之后, 行里仍是任务配置)")
+        // ④ 走**真实拨动路径**（composer 药丸 = `ModelStore.selectModel`），不是模拟"写穿"：
+        //    boss 的原话是「不管我有没有手动拨换过模型, 下一次跑永远按任务设置的那个来」⇒
+        //    判据必须是"拨了之后三处（全局 / 会话行 / transport）都不许动"，
+        //    光验"下一次 beginTurn 又设回去了"是不够的：中途那一下会让在跑的回合换模型。
+        storeOwn.selectConversation(ownLog)
+        // 行由自己摆正（不依赖上一条判据的收尾状态 —— 判据之间传染会让反例的"红在哪"失去意义）
+        storeOwn.persistenceDebug?.saveSessionConfig(
+            id: ownLog,
+            config: SessionConfig(provider: "openai", modelId: "o4-mini",
+                                  thinkingLevel: ThinkingLevel.low.rawValue,
+                                  agentMode: AgentMode.standard.rawValue, askApproval: false))
+        // 复位必须在**选中之后**: `selectConversation` 自己会把任务配置补推给 transport
+        // （那是正确行为），不复位的话下面读到的就是它。
+        mockOwn.resetDispatchProbe()
+        storeOwn.model.selectModel(ModelChoice(provider: "deepseek", modelId: "deepseek-v4-flash",
+                                               level: ThinkingLevel.xhigh))
+        check(storeOwn.currentModelId == "o4-mini"
+              && storeOwn.persistenceDebug?.loadSessionConfig(id: ownLog)?.modelId == "o4-mini"
+              && mockOwn.lastSetModel?.modelId != "deepseek-v4-flash",
+              "T-OWN 在日志会话里拨 pill 不生效 (全局/行/transport 都没跟到 deepseek; 实际 \(storeOwn.currentModelId)/\(mockOwn.lastSetModel?.modelId ?? "nil"))")
+        // ① 对话轮（人手动说话, 不带 modelOverride）也必须用任务配置。
+        //    ⚠️ 先复位探针: 上面 fire / select 都已经调过 setModel, 不复位的话这条断言读的是
+        //    它们的记录 ⇒ 把修复整段拆掉也照样绿（第一版实测如此）。
+        mockOwn.resetDispatchProbe()
+        storeOwn.beginTurn(sid: ownLog, prompt: "人问一句", ephemeral: false, cwd: nil, unattended: false)
+        check(mockOwn.lastSetModel?.modelId == "o4-mini" && mockOwn.lastThinking == ThinkingLevel.low.rawValue,
+              "T-OWN 对话轮取任务模型/级别 (实际 \(mockOwn.lastSetModel?.modelId ?? "nil")/\(mockOwn.lastThinking ?? "nil"))")
+        _ = await waitUntil { storeOwn.runningTurns.isEmpty }
+        // ⑤ 域层兜底: **绕过视图**直接建任务（模拟导入/批量编辑/将来别的调用方），
+        //    config 也不许是 nil —— 视图侧的必填只是可见性，`addScheduled` 才是公开写路径。
+        //    ⚠️ 判别力在"非 nil": 兜底取的就是当时的全局值，所以同时比一下全局（同源事实并一条）。
+        storeOwn.addScheduled(name: "T-OWN-DOMAIN", prompt: "轻活", cron: "0 0 1 1 *",
+                              projectId: nil, kind: .assistant)
+        let domTask = storeOwn.scheduledTasks.first { $0.name == "T-OWN-DOMAIN" }
+        check(domTask?.config != nil
+              && domTask?.config?.provider == storeOwn.currentProvider
+              && domTask?.config?.modelId == storeOwn.currentModelId,
+              "T-OWN 域层兜底: 绕过视图建的任务也带配置 (实际 \(domTask?.config?.modelId ?? "nil"))")
+
         // ---- T-PERF: 会话切换分段计时 (P10.3v2 切换延迟排查, 只打印不设阈值) ----
         print("== T-PERF: 会话切换分段计时 ==")
         let dirP = fixtureDir("tperf")

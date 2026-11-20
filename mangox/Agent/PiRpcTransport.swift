@@ -2507,6 +2507,16 @@ final class PiRpcTransport: AgentTransport {
             args += ["--model", model]
         }
         args += ["--thinking", desiredThinking.rawValue]
+        // 2026-11-20 boss 定: 每一轮向 pi **要的是哪个模型**落一行。
+        // ⚠️ 事故排查时没有这行，唯一的证据是 transcript 里每条 assistant message 的
+        //    `model` 字段 —— 而那条判据要自己先猜对（"转录里只有一条 `model_change`"
+        //    是**错的**判据: 运行时切模型 pi 不写新事件）。这一行与下面的 `pi-model`
+        //    成对读，就能直接看出"要的"和"pi 真用的"是不是同一个。
+        Log.event("spawn-model", [
+            "sid": desiredSessionId?.uuidString ?? "(ephemeral)",
+            "model": desiredModel ?? "pi-default",
+            "thinking": desiredThinking.rawValue,
+        ])
         let p = Process()
         p.executableURL = URL(fileURLWithPath: spec.executable)
         // P7-M3: 自管模型物化 — 有自管模型才注入 (覆盖整个配置目录, 与 ~/.pi/agent 互不相干);
@@ -3423,6 +3433,16 @@ final class PiRpcTransport: AgentTransport {
                let provider = model["provider"] as? String,
                let modelId = model["id"] as? String {
                 let level = data["thinkingLevel"] as? String ?? ""
+                // 2026-11-20: pi **实际**的模型/级别。与 `spawn-model` 成对读。
+                // ⚠️ 这里必须记，不能只靠 ChatStore 那条 delegate —— 那边
+                //    `guard transport === capabilityProbe` 会把**会话实例**的上报全丢掉
+                //    （结构如此：UI 上的那套是"我计划的"，不是"真跑的"）。
+                //    只想要"看到的模型"时它是对的；想查"对不上"时必须看这一行。
+                Log.event("pi-model", [
+                    "sid": desiredSessionId?.uuidString ?? "(ephemeral)",
+                    "model": "\(provider)/\(modelId)",
+                    "thinking": level.isEmpty ? "-" : level,
+                ])
                 delegate?.transport(self, didUpdateModelState: provider,
                                     modelId: modelId, thinkingLevel: level)
             }

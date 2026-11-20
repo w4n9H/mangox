@@ -55,8 +55,32 @@ final class SchedulerService: ObservableObject {
                               projectId: projectId, continuous: continuous)
         t.kind = kind
         t.sources = sources
+        t = normalizedConfig(t)
         scheduledTasks.append(t)
         try? store?.persistence?.upsertScheduled(t)
+    }
+
+    /// 2026-11-20 boss 定：「模型与模式配置」是 **cron / 助理的必须项**。
+    ///
+    /// 视图侧已经拦了（没选模型就存不了），这里是**域层兜底** —— 与 `deleteScheduled` /
+    /// dream 指令归一同一个理由: `updateScheduled` 是**公开写路径**，将来的批量编辑、
+    /// 导入配置、冒烟都会绕过视图。没有这一层，"config == nil 的任务"随时能被造出来，
+    /// 而它的行为是"每次跑时看全局"—— 那是 boss 明确不要的（全局会被"选个会话"改掉）。
+    ///
+    /// ⚠️ 两个例外都写在这一个地方:
+    ///   ① **dream 不钉** —— 它是出厂任务，配置历来跟随全局，不替它做决定。
+    ///   ② **全局值不完整时不填**（首启、pi 还没上报）—— 宁可留 nil 让视图继续拦，
+    ///      也不要造一个 `provider` 为空的配置（那会让 `beginTurn` 下发一个空模型）。
+    private func normalizedConfig(_ t: ScheduledTask) -> ScheduledTask {
+        guard t.config == nil, !Self.isDreamTask(t),
+              t.kind == .execute || t.kind == .assistant,
+              let store, !store.currentProvider.isEmpty, !store.currentModelId.isEmpty
+        else { return t }
+        var out = t
+        out.config = SessionConfig(provider: store.currentProvider, modelId: store.currentModelId,
+                                   thinkingLevel: store.thinkingLevel.rawValue,
+                                   agentMode: store.agentMode.rawValue, askApproval: false)
+        return out
     }
 
     func updateScheduled(_ t: ScheduledTask) {
@@ -71,8 +95,16 @@ final class SchedulerService: ObservableObject {
         // 兜底的不变式在 fire 侧: `buildScheduledPrompt` **根本不读** `t.prompt`（见 `dreamFirePrompt`）
         // —— 所以即使一行都不编辑, 旧文案也**永远没有效果**; 这里只是别让库里继续留着假副本。
         if Self.isDreamTask(t) { t.prompt = Self.dreamPrompt }
+        t = normalizedConfig(t)   // 2026-11-20: cron/助理 必须有确定配置（见该函数）
         scheduledTasks[idx] = t
         try? store?.persistence?.upsertScheduled(t)
+        // 2026-11-20: 日志会话的执行配置归任务 ⇒ 任务一改，那一行跟着改。
+        // 这一行是"这场会话的执行配置"的**持久事实**（任务被删掉后那场会话还在，读的就是它），
+        // 不跟着任务走就会变成一句过了期的话。注意它**不是** pill 的数据源 —— pill 走
+        // `selectConversation` → 任务配置，不经这一行。
+        if let logId = t.logSessionId, let cfg = t.config {
+            store?.persistence?.saveSessionConfig(id: logId, config: cfg)
+        }
     }
 
     /// 删除任务; deleteSessions = 连带删除日志会话 (开放问题 12: 默认保留, 用户可选删)。
@@ -1108,6 +1140,26 @@ final class SchedulerService: ObservableObject {
         scheduledTasks.contains { $0.isAssistant && $0.logSessionId == sid }
     }
 
+    /// 这场会话是哪个任务的**日志会话**？（`nil` = 普通会话 / 侧问 / 不是任何任务的日志）
+    ///
+    /// ⚠️ 2026-11-20 boss 定：**日志会话的执行配置由任务单向拥有**。
+    /// 起因是一次实测：同一场助理日志会话里，巡检轮跑 `minimax`，人手动问的那轮跑
+    /// `deepseek-v4-pro` —— 判据是每条 assistant message 自己的 `model` 字段（**不是**
+    /// "转录里有没有 `model_change`"：运行时切模型 pi 不记新事件，那个判据会把切换看成没发生）。
+    /// 两轮必须一致，所以"这场会话用哪个模型"只能有一个答案，而它在任务那一行。
+    func owningTask(for sid: UUID) -> ScheduledTask? {
+        // 1:1 是常态；万一两条任务引用了同一场会话，取**第一条有配置**的（否则"跟随全局"的那条
+        // 会把另一条钉死的配置顶掉）。没有配置的也算 owning —— 它表示"这场会话归某人管，
+        // 但配置跟随全局"，调用方据此**不读会话行**。
+        let owners = scheduledTasks.filter { $0.logSessionId == sid }
+        return owners.first(where: { $0.config != nil }) ?? owners.first
+    }
+
+    /// 日志会话的执行配置（`nil` = 不是日志会话，或任务还没配 —— dream 与"老库未重新保存过"）。
+    func owningConfig(for sid: UUID) -> SessionConfig? {
+        owningTask(for: sid)?.config
+    }
+
     /// 这场会话是不是某个**助理任务的对话轮**？（纯读，不落任何状态 —— 冒烟直接断言这个。）
     ///
     /// 为什么靠 `logSessionId` 反查、而不是给会话打一个"我是助理会话"的标记:
@@ -1640,6 +1692,17 @@ final class SchedulerService: ObservableObject {
         } else {
             store.chats.insert(item, at: 0)
             try? store.persistence?.insertChatSession(item)
+        }
+        // 2026-11-20: 建会话的同一刻把**任务配置**写进去。
+        // ⚠️ 不写的话它生下来是 **NULL 行**，而 NULL 行的语义是"应用 App 默认" ——
+        //    App 默认 = **pi 探测上报的默认模型**（`app_default_config`），与任务配置毫无关系。
+        //    于是只要有人点开这场会话，`selectConversation` 就会把那个默认值灌进全局，
+        //    再经 `applySessionConfig` 推给它的 transport ⇒ 对话轮跑成默认模型。
+        //    实测事故：助理日志会话里第 1 轮 minimax、第 2 轮 deepseek-v4-pro，而事后
+        //    `sessions.config` 那行被 stamp 成的内容与 `app_default_config` **逐字段相同**
+        //    —— 那就是默认值灌进来的指纹，不是谁选的。
+        if let cfg = task.config {
+            store.persistence?.saveSessionConfig(id: item.id, config: cfg)
         }
         return item.id
     }

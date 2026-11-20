@@ -7,7 +7,7 @@
    **本文件由 scripts/l10n/gen_strings.py --write 生成, 别手改** ——
    译文改 scripts/l10n/en_values.py 的 VALUES, 再跑 --write。
 
-   条数: 1128
+   条数: 1130
 */
 
 " (值:\"%@\")" = " (value: %@)";
@@ -602,6 +602,7 @@
 "待审批" = "Needs approval";
 "待审核 · 提炼候选" = "To review · distilled candidates";
 "待运行" = "Pending";
+"必填" = "Required";
 "快捷键 %@ 被其他 App 占用, 请在设置中更改捕获热键" = "The hotkey %@ is taken by another app — change the capture hotkey in settings";
 "快速捕获热键" = "Quick capture hotkey";
 "忽略" = "Ignore";
@@ -801,6 +802,8 @@
 "格式化" = "Format";
 "模型" = "Model";
 "模型与思考强度 (选中即期望, 下一回合生效)" = "Model and reasoning effort (a preference; applies to the next turn)";
+"模型与模式配置" = "Model and mode configuration";
+"模型与模式配置为必填" = "Model and mode configuration is required";
 "模型只保留 codemode 一个工具，其余全部经脚本内层调用 — 换一种调用范式，且会占用更多上下文。" = "Keeps codemode as the only tool the model sees; everything else is called from inside the script. A different calling paradigm, and it uses more context.";
 "模型由 MangoX 自管, spawn 时物化到 ~/.mangox/pi-config 供 pi 消费 (不碰 ~/.pi/agent)" = "MangoX owns the model list; it is materialized into ~/.mangox/pi-config at spawn time for pi to consume (your ~/.pi/agent is untouched)";
 "模式" = "Mode";
@@ -941,7 +944,6 @@
 "自定义 provider: 填 Base URL, 可选测试" = "Custom provider: fill in the base URL, testing is optional";
 "自定义…" = "Custom…";
 "自定义回答…" = "Custom answer…";
-"自定义模型与模式" = "Custom model and mode";
 "自建应用的 App Secret" = "App Secret of the self-built app";
 "节点上限" = "node cap";
 "草稿还没保存 —— 下面的索引预览显示的是已保存的那句" = "Draft not saved yet — the index preview below shows the saved sentence";

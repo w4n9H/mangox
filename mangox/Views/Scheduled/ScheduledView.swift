@@ -56,8 +56,7 @@ struct ScheduledView: View {
     /// "打开/切换任务"与"这个任务又跑过一轮"这两个时点（`refreshLedger`）。
     @State private var ledgerParsed: AssistantLedger = .init()
     @State private var ledgerUpdatedAt: Date?
-    // P10.4 任务级执行配置 (nil 草稿 = 跟随全局默认; fire 时只动日志会话 transport)
-    @State private var draftUseCustomConfig: Bool = false
+    // P10.4 任务级执行配置 (2026-11-20 起是**必须项**: cron/助理 一建就钉住, 不再有"跟随全局")
     @State private var draftProvider: String = ""
     @State private var draftModelId: String = ""
     @State private var draftThinking: String?
@@ -1078,34 +1077,46 @@ struct ScheduledView: View {
 
     // MARK: - P10.4 任务级执行配置 (模型/级别/模式; fire 只动日志会话 transport)
 
+    /// 任务级「模型与模式配置」。**cron / 助理的必须项**（2026-11-20 boss 定）：
+    /// 任务一建就钉住模型与档位，运行时不看全局 —— 所以这里不再有"跟随全局"这个选项。
+    ///
+    /// ⚠️ 这张卡**永远展开**（原来是个可勾选的「自定义模型与模式」开关）。理由就是 boss 那条
+    /// 不变式：「不管我有没有手动拨换过模型，下一次跑永远按任务里设置的那个来」——
+    /// 允许"不设置"，那条不变量就没有落点（`config == nil` 时 fire 用的是全局，而全局会被
+    /// 别处的一次选会话改掉）。
+    /// 守卫分两层：这里只是**可见性**（没填就存不了），真守卫在
+    /// `SchedulerService.addScheduled/updateScheduled`（绕过视图也长不出 `config == nil` 的任务）。
     private var configCard: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Button(action: { draftUseCustomConfig.toggle() }) {
-                HStack(spacing: 4) {
-                    Image(systemName: draftUseCustomConfig ? "checkmark.circle.fill" : "circle")
-                        .font(.system(size: 10))
-                        .foregroundStyle(draftUseCustomConfig ? CodexTheme.accent : CodexTheme.textMuted)
-                    Text("自定义模型与模式")
-                        .font(CodexTheme.fontSmall)
-                        .foregroundStyle(draftUseCustomConfig ? CodexTheme.textPrimary : CodexTheme.textTertiary)
+            HStack(spacing: 6) {
+                Image(systemName: "slider.horizontal.3")
+                    .font(.system(size: 10))
+                    .foregroundStyle(CodexTheme.textMuted)
+                Text("模型与模式配置")
+                    .font(CodexTheme.fontTiny)
+                    .foregroundStyle(CodexTheme.textMuted)
+                Spacer()
+                // 没填时把"为什么存不了"就地写出来（与 `remoteCard` 的"没有机器人"同一个手法:
+                // 拦截原因要长在**能修它的那个位置**，而不是只写在底栏的 help 里）。
+                if buildDraftConfig() == nil {
+                    Text("必填")
+                        .font(CodexTheme.fontTiny)
+                        .foregroundStyle(CodexTheme.blocked)
                 }
             }
-            .buttonStyle(.plain)
-            if draftUseCustomConfig {
-                HStack(spacing: 8) {
-                    taskModelPicker    // 模型 + 思考强度合一 (2026-09-24; 原 configModelPicker + configThinkingPicker)
-                    // ⚠️ `CodexPillMenu` 里是 `Menu(.borderlessButton)` —— **宽度是弹性的**。
-                    // HStack 里没有任何东西吸收余量时它会一路撑到卡片最右, 于是"模式"看着比"模型"
-                    // 宽出一大截 (2026-09-24 boss 截图实锤)。收窄靠 `fixedSize`, `Spacer` 兜住剩余量 ——
-                    // 与设置页里同款手法。
-                    configModePicker   // 模式**独立**保留 —— 它不是"模型链路"的一环
-                        .fixedSize()
-                    Spacer(minLength: 0)
-                }
-                Text("仅作用于本任务运行 (日志会话), 不改变你当前会话的模型与档位。")
-                    .font(CodexTheme.fontSmall)
-                    .foregroundStyle(CodexTheme.textTertiary)
+            HStack(spacing: 8) {
+                taskModelPicker    // 模型 + 思考强度合一 (2026-09-24; 原 configModelPicker + configThinkingPicker)
+                // ⚠️ `CodexPillMenu` 里是 `Menu(.borderlessButton)` —— **宽度是弹性的**。
+                // HStack 里没有任何东西吸收余量时它会一路撑到卡片最右, 于是"模式"看着比"模型"
+                // 宽出一大截 (2026-09-24 boss 截图实锤)。收窄靠 `fixedSize`, `Spacer` 兜住剩余量 ——
+                // 与设置页里同款手法。
+                configModePicker   // 模式**独立**保留 —— 它不是"模型链路"的一环
+                    .fixedSize()
+                Spacer(minLength: 0)
             }
+            Text("仅作用于本任务运行 (日志会话), 不改变你当前会话的模型与档位。")
+                .font(CodexTheme.fontSmall)
+                .foregroundStyle(CodexTheme.textTertiary)
             // 日预算（2026-11-18 晚从「触达」卡挪过来）: 它不是"怎么叫人"，是**花钱的上限** ——
             // 跟模型放一起语义才对（"用哪个模型、一天最多花多少"）。只对助理档显示: 巡检轮
             // 每轮都在烧 token，Cron 档的消耗由 cron 频率本身决定。
@@ -1166,9 +1177,9 @@ struct ScheduledView: View {
         }
     }
 
-    /// 滑轨/药丸的显示值。⚠️ `draftThinking == nil` (旧库、或"设置自定义"开关刚打开) 时
-    /// 按**当前全局档**落位 —— 控件表达不了"未指定"。**只有落过档才写回具体值**:
-    /// 没动过的任务保存后仍是 nil, 与 `SessionConfig.thinkingLevel` 的"不钉死"约定一致。
+    /// 滑轨/药丸的显示值。⚠️ `draftThinking == nil` (旧库、或新任务还没动过) 时
+    /// 按**当前全局档**落位 —— 控件表达不了"未指定"。2026-11-20 起保存时会把落位的这个值
+    /// **写成具体值**（`buildDraftConfig`），不再有"不钉死"的任务配置。
     private var taskChoice: ModelChoice {
         ModelChoice(provider: draftProvider, modelId: draftModelId,
                     level: draftThinking.flatMap(ThinkingLevel.init(rawValue:))
@@ -1498,6 +1509,7 @@ struct ScheduledView: View {
         case legacy     // 旧条件值守任务只读归档
         case prompt     // Cron: 指令必填
         case cron
+        case model      // 模型与模式配置必填 (2026-11-20)
     }
 
     private var saveBlocker: SaveBlocker? {
@@ -1512,6 +1524,9 @@ struct ScheduledView: View {
         if draftKind != .assistant,
            draftPrompt.trimmingCharacters(in: .whitespaces).isEmpty { return .prompt }
         if CronExpr.parse(effectiveCron) == nil { return .cron }
+        // 2026-11-20 boss 定: **cron / 助理的「模型与模式配置」是必须项**。
+        // 放最后判: 前面几条是"写错了"，这一条是"还没选" —— help 里说清是哪一种。
+        if buildDraftConfig() == nil { return .model }
         return nil
     }
 
@@ -1523,6 +1538,7 @@ struct ScheduledView: View {
         case .legacy: return "旧类型已停用，不能保存"
         case .prompt: return "prompt 与 cron 为必填"
         case .cron:   return "cron 无效"
+        case .model:  return "模型与模式配置为必填"
         case nil:     return "保存"
         }
     }
@@ -1720,15 +1736,14 @@ struct ScheduledView: View {
         draftBotId = store.remoteBots.first { $0.assistantId == task.id }?.id
         draftBudget = task.dailyTokenBudget > 0 ? String(task.dailyTokenBudget) : ""
         syncCronControls(task.cron)
-        // P10.4: 任务级配置回填 (nil = 跟随全局, 预填当前全局值供开启即用)
+        // P10.4: 任务级配置回填。**没有"跟随全局"这个状态了** —— 老库里的 nil 行回填成
+        // "当前全局值"只是把它的既有行为落成一个具体值（下一次保存即固化）。
         if let cfg = task.config {
-            draftUseCustomConfig = true
             draftProvider = cfg.provider
             draftModelId = cfg.modelId
             draftThinking = cfg.thinkingLevel
             draftMode = cfg.agentMode
         } else {
-            draftUseCustomConfig = false
             draftProvider = store.currentProvider
             draftModelId = store.currentModelId
             draftThinking = nil
@@ -1821,11 +1836,18 @@ struct ScheduledView: View {
         Int(draftBudget.trimmingCharacters(in: .whitespaces)) ?? 0
     }
 
-    /// P10.4: 草稿 → 任务级配置 (未开启自定义 = nil 跟随全局)
+    /// P10.4: 草稿 → 任务级配置。**cron / 助理必须给得出一个具体模型**（2026-11-20）——
+    /// 返回 nil 表示"没配全"，保存被 `SaveBlocker.model` 拦下；域层还会再兜一次。
+    ///
+    /// ⚠️ 思考强度**一律落成具体值**（草稿没动过就取当前全局档）。从前这里写 `nil` 表示"不钉死"，
+    /// 而 `beginTurn` 只在 `thinking != nil` 时才下发 ⇒ 级别会**留着上一轮的值**漂走。
+    /// 既然模型要钉死，级别也得钉死：同一场会话里两轮模型一致、级别不一致，一样是"对不上"。
+    /// 控件本来就显示当前全局档（`taskChoice` 的兜底），所以界面上看不出差别。
     private func buildDraftConfig() -> SessionConfig? {
-        guard draftUseCustomConfig, !draftProvider.isEmpty, !draftModelId.isEmpty else { return nil }
+        guard !draftProvider.isEmpty, !draftModelId.isEmpty else { return nil }
         return SessionConfig(provider: draftProvider, modelId: draftModelId,
-                             thinkingLevel: draftThinking, agentMode: draftMode, askApproval: false)
+                             thinkingLevel: draftThinking ?? store.model.thinkingLevel.rawValue,
+                             agentMode: draftMode, askApproval: false)
     }
 
     private func deleteEditing(deleteSessions: Bool) {

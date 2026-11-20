@@ -385,6 +385,13 @@ CREATE TABLE IF NOT EXISTS mailbox_rejections (      -- 决定 14: 静默处理�
 - **P10.3 联动**: fire 日志会话行 stamp 任务配置 → 之后点开该会话, 会话配置恢复逻辑自动呈现"这个定时任务用的什么模型"
 - **冒烟**: 带 config 的 task fire → mock transport 收到对应 setModel/updateMode; 无 config → 跟随全局 (现状不变)
 
+> **2026-11-20 修订（boss 定）**：上面那条「NULL = 跟随全局默认」对 **cron / 助理 作废** ——
+> 「模型与模式配置」成为**新建任务的必须项**（表单里那个「自定义模型与模式」开关删掉，卡片常展开），
+> 域层 `SchedulerService.normalizedConfig` 兜底（绕过视图也长不出 `config == nil`）。
+> 理由：允许"不设置"与「不管拨没拨过模型，下一轮永远按任务里配的模型跑」直接冲突 ——
+> 全局会被"选个会话"改掉。例外只剩 dream（出厂任务，配置历来跟随全局）。
+> 连带：`thinkingLevel` 一律落成具体值（从前 `nil` = 不钉死，会让级别留着上一轮的值漂走）。
+
 ### 4.3 门禁
 
 - 冒烟: task config roundtrip; fire 应用链路 (mock 断言 lastMode/setModel); 无 config 回落全局

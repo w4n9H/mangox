@@ -142,6 +142,28 @@ final class ModelStore: ObservableObject {
     /// (pi 侧各自动回读 get_state 同步 UI; P4.0.2 spawn 期参数随该会话下回合生效)。
     func selectModel(_ pick: ModelChoice) {
         guard let store else { return }
+        // ⚠️ 2026-11-20 boss 定: **定时任务 (cron / 助理) 的日志会话, 执行配置只认任务** ——
+        //    「不管我有没有手动拨换过模型, 下一次跑永远按任务里设置的那个来」。
+        //    所以在这场会话里拨 pill **整条不生效**（连全局都不动），直接被任务配置弹回。
+        //
+        //    ⚠️ 只做"改全局但不给这个 transport 下发"是**不够**的: 那会造出
+        //    「胶囊显示 A、实际跑 B」—— 那正是 2026-11-18 那次事故的形状（同一场会话里
+        //    巡检轮 minimax、对话轮 deepseek-v4-pro）。显示与实跑必须同源。
+        //    代价: 想改自己的默认模型必须切到普通会话再拨。可接受 —— 在任务日志会话里
+        //    拨模型本来就表达不了"我要它跑这个"。
+        if let sid = store.selectedConversationId,
+           let owned = store.scheduler.owningConfig(for: sid) {
+            if owned.provider != pick.provider || owned.modelId != pick.modelId
+                || owned.thinkingLevel != pick.level.rawValue {
+                Log.event("model-pill-refused", [
+                    "sid": sid.uuidString,
+                    "asked": "\(pick.provider)/\(pick.modelId)/\(pick.level.rawValue)",
+                    "owned": "\(owned.provider)/\(owned.modelId)/\(owned.thinkingLevel ?? "-")",
+                ])
+            }
+            store.applySessionConfig(owned)   // 弹回（等值短路 ⇒ 没偏差时零写入）
+            return
+        }
         store.currentProvider = pick.provider
         store.currentModelId = pick.modelId
         store.userThinkingLevelPinned = true   // 期望钉死: 探测上报不再回写级别

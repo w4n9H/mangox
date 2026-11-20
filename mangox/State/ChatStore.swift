@@ -700,6 +700,20 @@ final class ChatStore: ObservableObject {
             // P11.4: 知识库挂载记录 (用户挂的那批)。固定根(两个笔记根)不落库、由笔记目录现算。
             knowledge.knowledgeBases = (try? store.loadKnowledgeBases()) ?? []
             scheduledTasks = (try? store.loadScheduled()) ?? []
+            // 2026-11-20: 日志会话的配置行**对齐到任务**（幂等，正常启动零写入）。
+            //
+            // 为什么要在启动时治一次：加这条规则之前，那一行会被"用户拨 pill"写穿，老库里
+            // 可能留着别人的模型（实测: 一个助理日志会话里躺着与 `app_default_config`
+            // 逐字段相同的 `deepseek-v4-pro`，而任务配的是 minimax）。启动恢复
+            // （下面 `loadLastSession` 那一支）仍然按行恢复 ⇒ 不治的话一开机就显示假值。
+            // 这是**一次性迁移**, 不是常规路径: 现在没有任何路径会把全局写进这一行
+            // （`stampSessionConfig` 对日志会话直接返回），所以正常情况一次都不写。
+            for t in scheduledTasks {
+                guard let logId = t.logSessionId, let cfg = t.config else { continue }
+                if store.loadSessionConfig(id: logId) != cfg {
+                    store.saveSessionConfig(id: logId, config: cfg)
+                }
+            }
             // P19: 助理结论。启动即读 —— 收件箱是"待处理事项", 不能等打开定时页才加载。
             findings = (try? store.loadFindings()) ?? []
             findingActions = (try? store.loadFindingActions()) ?? []
@@ -1232,10 +1246,17 @@ final class ChatStore: ObservableObject {
     /// 配置快照写穿: 写当前选中会话行 + last_session_config。调用点 = 用户动作入口
     /// (selectModel / askApproval didSet / agentMode didSet / newConversation 落生)。
     /// 被动浏览 (selectConversation) 永不写行 — 防 NULL 会话被当前全局固化。
+    /// ⚠️ 例外 = **任务拥有的日志会话**: 那一行归任务, 这里直接返回（见下面那条）。
     func stampSessionConfig() {
         guard !suppressConfigStamp else { return }
         guard let target = selectedConversationId else { return }
         guard !currentProvider.isEmpty else { return }   // 探测未回填前无有效快照可记
+        // ⚠️ 2026-11-20 boss 定: **日志会话的执行配置由任务单向拥有** ⇒ 日志会话这一行**不由这里写**。
+        //    那一行的所有权全在 `SchedulerService`: 建会话时写 (`ensureLogSession`)、任务改配置时
+        //    同步 (`updateScheduled`)，外加 `ChatStore` 启动时对齐一次（治老库）。在这里再写一遍是
+        //    **同一个值的第四条写路径** —— 它不改变结果, 只让"谁拥有这一行"变模糊
+        //    （本次事故的一半就是写路径太多）。`last_session_config` 也不动: 那是"人最后的选择"。
+        if scheduler.owningTask(for: target) != nil { return }
         let cfg = SessionConfig(provider: currentProvider, modelId: currentModelId,
                                 thinkingLevel: userThinkingLevelPinned ? thinkingLevel.rawValue : nil,
                                 agentMode: agentMode.rawValue, askApproval: askApproval)
@@ -1548,7 +1569,13 @@ final class ChatStore: ObservableObject {
         refreshSideChatBanner(for: id)
         // P10.3v2: 会话配置跟随选中 — 存过 = 应用自己的; 没存过 = 应用 App 默认
         // (不跟随可变全局, 不写行; 被动浏览零写入)
-        if let cfg = persistence?.loadSessionConfig(id: id) {
+        // ⚠️ 2026-11-20: **任务拥有的会话排在最前** —— 那是日志会话，执行配置归任务。
+        // 排不到前面就会去读会话行，而那一行不是真源：老库里可能留着被写穿的假值，
+        // 现场读它 = 显示一个从不生效的模型（同一场会话两轮模型不一致就是这么暴露的）。
+        if scheduler.owningTask(for: id) != nil {
+            // config == nil（只剩 dream 与"老库、还没重新保存过"这两种）⇒ 不动全局，也不读残留行
+            if let owned = scheduler.owningConfig(for: id) { applySessionConfig(owned) }
+        } else if let cfg = persistence?.loadSessionConfig(id: id) {
             applySessionConfig(cfg)
         } else if let def = appDefaultConfig {
             applySessionConfig(def)
@@ -2055,9 +2082,23 @@ final class ChatStore: ObservableObject {
             let assistantSession = scheduler.isAssistantLogSession(sid)
             t.updateApprovalPolicy(askApproval: (unattended || assistantSession) ? false : askApproval)
         }
-        if let modeOverride { t.updateMode(modeOverride) }
         // P10.4: 任务级模型期望 (transport 实例级, 全局零污染; spawn 快照在本轮生效)
-        if let m = modelOverride {
+        //
+        // ⚠️ 2026-11-20 boss 定: **日志会话的执行配置由任务单向拥有** —— 巡检轮与对话轮必须同一个。
+        //    fire 自己带着 `modelOverride` 过来；人在这场会话里说话**不带** ⇒ 从前它用的是
+        //    会话行 / 全局，于是同一场会话里机器跑 A、人问 B（实测: 巡检 `minimax`、对话
+        //    `deepseek-v4-pro`）。这里补的就是这条路：没显式给就取任务配置。
+        //    优先级只有两级：**显式 override（巡检轮）> 任务配置（对话轮 / 执行轮）**；
+        //    都不存在（普通会话）= 一个字都不动，沿用现有期望。
+        let ownedCfg = modelOverride == nil ? scheduler.owningConfig(for: sid) : nil
+        if let modeOverride {
+            t.updateMode(modeOverride)
+        } else if let raw = ownedCfg?.agentMode, let mode = AgentMode(rawValue: raw) {
+            t.updateMode(mode)
+        }
+        if let m = modelOverride ?? ownedCfg.map({
+            (provider: $0.provider, modelId: $0.modelId, thinking: $0.thinkingLevel)
+        }) {
             t.setModel(provider: m.provider, modelId: m.modelId)
             if let thinking = m.thinking { t.setThinkingLevel(thinking) }
         }

@@ -167,6 +167,17 @@ final class MockTransport: AgentTransport {
                             modelId: "deepseek-v4-flash", thinkingLevel: "xhigh")
     }
 
+    /// 冒烟专用：清掉上一次动作的记录。
+    ///
+    /// ⚠️ 为什么必须有：同一场会话上接连做两个动作（fire → 对话轮）时，"后者取对了配置"这类
+    /// 断言会读到**前一次**留下的值 ⇒ **恒绿**。T-OWN 第一版就是这么假绿的：把修复整段拆掉，
+    /// 它照样 PASS（`lastSetModel` 还留着 fire 那次的值）。
+    func resetDispatchProbe() {
+        lastMode = nil
+        lastSetModel = nil
+        lastThinking = nil
+    }
+
     func setModel(provider: String, modelId: String) {
         lastSetModel = (provider, modelId)   // P10.4: 冒烟断言任务级模型下发
         delegate?.transport(self, didUpdateModelState: provider,
