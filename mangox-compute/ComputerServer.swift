@@ -894,10 +894,15 @@ final class ComputerServer {
         var strokes: [ComputerKeyStroke] = []
         for raw in rawStrokes {
             guard let s = ComputerKeyStroke.parse(raw) else {
-                let known = ComputerKeyStroke.Key.allCases.map(\.rawValue).joined(separator: " / ")
+                // 只列**不受白名单限制**的那些键；字母数字单独说，否则这一行会变成长长一串字母。
+                let known = ComputerKeyStroke.Key.allCases.filter { !$0.isLetterOrDigit }
+                    .map(\.rawValue).joined(separator: " / ")
                 return .failure("「\(raw)」我认不出是哪个键 ⇒ 一下都没按。"
                                 + "能按的是 \(known)（可加 shift / option / command / control 前缀，"
-                                + "如 shift+right）。字母数字不在这张表里 —— 要写字用 computer_type。")
+                                + "如 shift+right）。"
+                                + "字母数字**只认 `command+一个字母`** 这一种形态（如 command+s）——"
+                                + " command+shift+s 这类两三个修饰键的组合按不出来，裸字母也不用这个工具"
+                                + "（要写字用 computer_type）。")
             }
             strokes.append(s)
         }
@@ -924,6 +929,12 @@ final class ComputerServer {
             keysEnabled: keysEnabled,
             appActable: actBundles.contains(t.bundle),
             appName: t.name,
+            // 0.3.5: 白名单按 bundle 查 —— 不传这个字段，`⌘+字母` 永远命中不到任何一条
+            // （`allowed.isEmpty` ⇒ 一律拒），而**编译不会报错**（它有默认值 `nil`）。
+            bundle: t.bundle,
+            // 只有**视觉操作**的 App 才给 `⌘+字母`（boss 2026-11-20 定）: 视觉那条路本来就
+            // 要求前台，纯 AX 的 App 反倒能后台动 ⇒ 给它开键 = 把键发给"此刻在前台的那个"。
+            visionOperated: ComputerAppProfile.visionOperated.contains(t.bundle),
             snapshotPid: cached.pid,
             currentPid: t.pid,
             isFrontmost: Self.isFrontmost(bundle: t.bundle, pid: t.pid),
@@ -965,6 +976,46 @@ final class ComputerServer {
             case .delete: return 117
             case .backspace: return 51
             case .enter: return 36
+            // 0.3.5: 字母 / 数字走 **ANSI 标准键码**（与 macOS 的虚拟键位一致）。
+            // ⚠️ 这是**物理位置**，不是字符: 换 Dvorak / 法式 AZERTY 之后同一个键位打出来的
+            //    字不一样。菜单快捷键（`⌘S` 这类）系统也是按**键位**匹配的，所以在这里用
+            //    键码反而是对的；但"换个键盘布局就按不出"这件事必须写进已知限制。
+            case .a: return 0
+            case .s: return 1
+            case .d: return 2
+            case .f: return 3
+            case .h: return 4
+            case .g: return 5
+            case .z: return 6
+            case .x: return 7
+            case .c: return 8
+            case .v: return 9
+            case .b: return 11
+            case .q: return 12
+            case .w: return 13
+            case .e: return 14
+            case .r: return 15
+            case .y: return 16
+            case .t: return 17
+            case .n1: return 18
+            case .n2: return 19
+            case .n3: return 20
+            case .n4: return 21
+            case .n6: return 22
+            case .n5: return 23
+            case .n9: return 25
+            case .n7: return 26
+            case .n8: return 28
+            case .n0: return 29
+            case .o: return 31
+            case .u: return 32
+            case .i: return 34
+            case .p: return 35
+            case .l: return 37
+            case .j: return 38
+            case .k: return 40
+            case .n: return 45
+            case .m: return 46
             }
         }
         func flags(_ m: Set<ComputerKeyStroke.Modifier>) -> CGEventFlags {

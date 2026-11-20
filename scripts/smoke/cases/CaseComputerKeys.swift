@@ -1,6 +1,6 @@
 //
 //  CaseComputerKeys.swift
-//  第六档（2026-11-19）：`computer_keys` 的九道闸 + 键名解析 + 分档 + 工具面/env 管道，
+//  第六档（2026-11-19）：`computer_keys` 的十二道闸 + 键名解析 + 分档 + 工具面/env 管道，
 //  外加同批落的 `D0` 两条判据（自绘画布 vs 被截断的容器、外壳快照）。
 //
 //  ⚠️ 这一档与 `type` 的风险形状**又不一样**，重点也就不同：
@@ -27,6 +27,8 @@ extension SmokeMain {
             keysEnabled: true,
             appActable: true,
             appName: "WPS Office",
+            bundle: nil,
+            visionOperated: true,
             snapshotPid: 4242,
             currentPid: 4242,
             isFrontmost: true,
@@ -41,14 +43,28 @@ extension SmokeMain {
         [ComputerKeyStroke(.right, [.command]), ComputerKeyStroke(.delete)]
     }
 
+    /// `⌘+字母` 那一族的一串 —— `bundle` 是这些断言唯一的变量（白名单按它查）。
+    ///
+    /// ⚠️ `compactMap` 而不是 `map` + 强制解包: 解析失败的输入会让 `strokes` 变短 ⇒
+    ///    "该拒的那条"变成**空串**（④ 先拒、理由变成"没给要按的键"）⇒ 断言红在错的地方。
+    ///    这里宁可让 ④ 之前就少一个键, 也不要一次崩溃; 解析那半边由 ⑪ 单独钉。
+    private static func letterFacts(_ bundle: String?, _ raw: [String]) -> ComputerKeysRule.Facts {
+        var f = keysFacts()
+        f.bundle = bundle
+        // 与运行时同源: 视觉名单是那张表算的, 不是这里手填的（手填 = 自证）。
+        f.visionOperated = bundle.map { ComputerAppProfile.visionOperated.contains($0) } ?? false
+        f.strokes = raw.compactMap { ComputerKeyStroke.parse($0) }
+        return f
+    }
+
     @MainActor
     static func caseComputerKeys() async {
-        print("== T-KEYS 发导航键 / 组合键 (第六档 / 九道闸) ==")
+        print("== T-KEYS 发导航键 / 组合键 (第六档 / 十二道闸) ==")
 
         // MARK: ① 基准
         //  排最前: 基准本身若拒, 后面所有"应该拒"的断言都会**因为错误的原因**通过。
         check(ComputerKeysRule.refusal(keysFacts()) == nil,
-              "T-KEYS 基准: 只按方向键、九道闸全过 ⇒ 放行")
+              "T-KEYS 基准: 只按方向键、十二道闸全过 ⇒ 放行")
 
         // MARK: ② 档位
         var f = keysFacts(); f.keysEnabled = false
@@ -139,15 +155,40 @@ extension SmokeMain {
               + "(实际 \(busyWhy ?? "放行") / \(edge ?? "放行") / \(noFact ?? "放行"))")
 
         // MARK: ⑪ 键名解析 —— 认不出必须是 nil, 不许"默认某个键"
-        //  ⚠️ 三种"认不出"合成一条(字母数字 / 未知修饰键 / 空串): 它们同一个分支, 而漏哪一种
-        //     都会变成"照着一个我没要的键按下去", 且回执说"按了"。字母那一格尤其要紧:
-        //     收窄到不含字母, `⌘S` / `⌘Q` 这类组合才**结构上不存在**(不需要危险组合黑名单)。
+        //  ⚠️ 三种"认不出"合成一条(未知修饰键 / 空串 / 悬空 +): 它们同一个分支, 而漏哪一种
+        //     都会变成"照着一个我没要的键按下去", 且回执说"按了"。`cmd+a` 那一条守的是
+        //     **别名只留最短写法**: 收了 `cmd` 就等于"两种写法都行", 而两种写法迟早不一致
+        //     (同 `Modifier` 那张表的注释)。字母本身的形态另起一条(⑪′), 别混进来 ——
+        //     混进来之后"字母收不收"与"别名收不收"会共用一个失败, 红了分不清是哪一个。
         var unknownAccepted: [String] = []
         for raw in ["cmd+a", "hyper+right", "", "shift+", "right,"] {
             if ComputerKeyStroke.parse(raw) != nil { unknownAccepted.append("\"\(raw)\"") }
         }
         check(unknownAccepted.isEmpty,
-              "T-KEYS 认不出的键名 ⇒ nil (字母数字 / 未知修饰 / 空串 / 悬空 +; 认成过: \(unknownAccepted))")
+              "T-KEYS 认不出的键名 ⇒ nil (未知修饰 / 空串 / 悬空 + / 别名 `cmd` 都只认最短写法; "
+              + "认成过: \(unknownAccepted))")
+
+        // MARK: ⑪′ 字母数字**只认 `command+一个` 这一种形态**（0.3.5）
+        //  ⚠️ 收窄的动作放在 `parse` 而不是判据里: 判据里那些分支还能被改错，而"解析不出来的
+        //     东西连讨论的余地都没有"。四条反例 + 两条正例一起钉，漏哪一条都能让字母变成
+        //     "能随便敲字"的通道（`⇧+字母` 干脆就是打字，`⌥+字母` 是特殊字符）。
+        let bareLetter: ComputerKeyStroke? = ComputerKeyStroke.parse("a")
+        let shiftLetter: ComputerKeyStroke? = ComputerKeyStroke.parse("shift+s")
+        let optLetter: ComputerKeyStroke? = ComputerKeyStroke.parse("option+e")
+        let twoMods: ComputerKeyStroke? = ComputerKeyStroke.parse("command+shift+s")
+        let ctrlLetter: ComputerKeyStroke? = ComputerKeyStroke.parse("control+a")
+        let cmdUpper: ComputerKeyStroke? = ComputerKeyStroke.parse("Command+S")
+        let cmdDigit: ComputerKeyStroke? = ComputerKeyStroke.parse("command+1")
+        check(bareLetter == nil && shiftLetter == nil && optLetter == nil
+              && twoMods == nil && ctrlLetter == nil
+              && cmdUpper == ComputerKeyStroke(.s, [.command])
+              && cmdDigit == ComputerKeyStroke(.n1, [.command]),
+              "T-KEYS 字母数字只认 `command+一个`: 裸字母 / ⇧ / ⌥ / ⌃ / 两三个修饰键(⌘⇧S) 全解析不出 ⇒ "
+              + "结构上不存在; ⌘S 与 ⌘1 解析得出且大小写不敏感 "
+              + "(实际 \(String(describing: bareLetter)) / \(String(describing: shiftLetter)) / "
+              + "\(String(describing: optLetter)) / \(String(describing: twoMods)) / "
+              + "\(String(describing: ctrlLetter)) / \(String(describing: cmdUpper)) / "
+              + "\(String(describing: cmdDigit)))")
 
         // 显式标 `?`: 让"解析出 nil"与"解析出别的键"在断言里是两种能分清的失败。
         let parsed: ComputerKeyStroke? = ComputerKeyStroke.parse("Shift+Right")
@@ -176,13 +217,80 @@ extension SmokeMain {
                             ("delete", .destructive),
                             ("backspace", .destructive),
                             ("enter", .destructive),
-                            ("space", .destructive)] {
+                            ("space", .destructive),
+                            // 0.3.5: 字母走**第三档** —— 它不是"改内容", 是"调用这个 App
+                            // 自己的菜单命令"。归 `destructive` 就等于把 WPS 永久关在门外
+                            // （自绘正文答 `AXSplitGroup`, 永远给不出焦点证据）。
+                            ("command+s", .writes),
+                            ("command+1", .writes)] {
             guard let s = ComputerKeyStroke.parse(raw) else { misgraded.append(raw + "(解析失败)"); continue }
             if s.safety != want { misgraded.append("\(raw)→\(s.safety)") }
         }
         check(misgraded.isEmpty,
-              "T-KEYS 分档: shift 组合只改选中范围 ⇒ 导航档; 其余修饰键与 删除/退格/回车/空格 ⇒ 危险档 "
-              + "(分错的: \(misgraded))")
+              "T-KEYS 分档: shift 组合只改选中范围 ⇒ 导航档; 其余修饰键与 删除/退格/回车/空格 ⇒ 危险档; "
+              + "⌘+字母数字 ⇒ 第三档 writes (归 dangerous = WPS 那条路永久关死) (分错的: \(misgraded))")
+
+        // MARK: ⑫′ `⌘+字母` 的白名单 —— 开放的是"这一条", 不是"字母"这一类
+        //  ⚠️ 这一格的形状与别处**相反**: 别的闸是"证明危险就拒", 这里是"证明安全才放"。
+        //     四条一起钉住边界: 命中放行 / 同 App 未登记的拒且列出**可用清单** / 别的 App 拒 /
+        //     认不出是谁也拒（"不知道这是谁"正是最容易出错的那一类）。
+        //     ⚠️ 命中的那条回执必须是 nil —— 而 `keysFacts()` 的 `focusedRole` 默认就是 nil
+        //        （自绘 App 答不出焦点）, 所以"⌘S 放行"这一条同时证明了**第三档不要求焦点证据**。
+        let wpsSave = ComputerKeysRule.refusal(letterFacts("com.kingsoft.wpsoffice.mac", ["command+s"]))
+        let wpsCopy = ComputerKeysRule.refusal(letterFacts("com.kingsoft.wpsoffice.mac", ["command+k"]))
+        let nobodySave = ComputerKeysRule.refusal(letterFacts(nil, ["command+s"]))
+        check(wpsSave == nil
+              && wpsCopy?.contains("白名单") == true && wpsCopy?.contains("⌘S") == true
+              && nobodySave?.contains("没有登记") == true,
+              "T-KEYS ⌘+字母 白名单: WPS 的 ⌘S 放行(且不要求焦点证据) / 同 App 未登记的组合拒并"
+              + "**列出可用清单** / 认不出 bundle 也拒 "
+              + "(实际 \(wpsSave ?? "放行") | \(wpsCopy ?? "放行") | \(nobodySave ?? "放行"))")
+
+        // MARK: ⑫␟ 快捷键**只给视觉操作**的 App（2026-11-20 boss 定）
+        //  ⚠️ 这条守的是**范围**而不是某一条组合: 键盘事件发的是全局那一份, 谁在前台谁收。
+        //     视觉类 App 本来就必须在前台(坐标是屏幕坐标), 所以给它是顺手; 纯 AX 的 App
+        //     恰恰能后台动 ⇒ 给它开键等于"我以为发给了它, 实际发给了前台那个东西"。
+        //     两个方向都钉: ① 纯 AX 的 App 必须被拒且**点名「纯 AX」**(不能混成"没登记过",
+        //     否则下一步会去申请登记); ② 白名单里**每个** bundle 都必须在视觉名单里 ——
+        //     后者是防漂移: 将来有人手快加一行, 这里当场红。
+        let safariSave = ComputerKeysRule.refusal(letterFacts("com.apple.Safari", ["command+s"]))
+        let notVision = ComputerKeysRule.commandLetterAllowlist.keys
+            .filter { !ComputerAppProfile.visionOperated.contains($0) }.sorted()
+        check(safariSave?.contains("纯 AX") == true && notVision.isEmpty,
+              "T-KEYS ⌘+字母 只给视觉操作的 App: 纯 AX 的 Safari 被拒且点名「纯 AX」/ 白名单里"
+              + "每个 bundle 都在 visionOperated 里 (越界: \(notVision); Safari 实际: "
+              + "\(safariSave ?? "放行"))")
+
+        // MARK: ⑫″ 永不发的四条 —— 它们**排在白名单之前**, 进了白名单也不发
+        //  ⚠️ 顺序本身是判据: 若白名单先判, `⌘W` 在 WPS 上给出的理由是"没登记过"(听起来像
+        //     "加进去就能用"), 而真相是"加了也不用想"。这四条是**封闭有限**的集合
+        //     (退出 / 关窗 / 移废纸篓, macOS 上就这几个键位), 所以穷举是诚实的, 不是黑名单式侥幸。
+        //  ⚠️ `⇧⌘⌫`（清空废纸篓）在这一格上**漏过一次**: 第一版判据是拿 `display` 字符串比一个集合,
+        //     而它的 display 是 `shift+command+backspace`, 表里只有 `command+backspace` ——
+        //     字符串相等只能拦住"一字不差的那一种写法", 而修饰键的合法组合有 15 种。
+        var comboLeaks: [String] = []
+        for raw in ["command+q", "command+w", "command+backspace", "command+delete",
+                    "shift+command+backspace"] {
+            let why = ComputerKeysRule.refusal(letterFacts("com.kingsoft.wpsoffice.mac", [raw]))
+            if why?.contains("永远不发") != true { comboLeaks.append(raw + "→" + (why ?? "放行")) }
+        }
+        check(comboLeaks.isEmpty,
+              "T-KEYS 退出 / 关窗 / 移废纸篓 永不发, 且在白名单**之前**判 "
+              + "(漏的: \(comboLeaks); 理由要是「永远不发」而不是「没登记过」—— 后者会让人以为加进去就能用)")
+
+        // MARK: ⑫‴ 白名单里**故意不放**的那几个 —— 查 WPS 自带快捷键表查出来的坑
+        //  ⚠️ 它们都是"加进去就能用"的诱惑点: `⌘M` 是**最小化窗口**（三个组件全叫 MiniWindow,
+        //     按一下 App 就从屏幕上没了）、`⌘H` 兼着 macOS 的**全局隐藏 App**、`⌘D` 在表格里是
+        //     向下填充（会写数据）、`⌘A` 与 `type` 凑一起就是清空全篇（0.3.4 真发生过）。
+        //     判据 = 必须被拒，且理由落在"不在白名单"那一档 —— 落到别处说明白名单被绕开了。
+        var allowedBad: [String] = []
+        for raw in ["command+m", "command+h", "command+d", "command+a"] {
+            let why = ComputerKeysRule.refusal(letterFacts("com.kingsoft.wpsoffice.mac", [raw]))
+            if why?.contains("白名单") != true { allowedBad.append(raw + "→" + (why ?? "放行")) }
+        }
+        check(allowedBad.isEmpty,
+              "T-KEYS WPS 白名单故意不放 ⌘M/⌘H/⌘D/⌘A (最小化窗口 / 兼着全局隐藏 / 表格里是填充 / "
+              + "全选后接 type 就清空全篇; 放过了: \(allowedBad))")
 
         // MARK: ⑬ 工具面同源（名字对不上, 模型根本看不到这个工具）
         //  ⚠️ 解码那一半只活在 helper 里, 冒烟编不到 ⇒ 由 `run.sh` 扫源码。

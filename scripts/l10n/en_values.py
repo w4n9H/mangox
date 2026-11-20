@@ -1151,6 +1151,25 @@ VALUES = {
     ' 先点进能写字的控件，再按。': ' Click into a control you can write in first, then press.',
     '你 %@ 毫秒前刚动过键鼠 ⇒ 没按。': 'You touched the keyboard or mouse %@ ms ago ⇒ nothing was pressed.',
     '人正在用键盘时我不抢 —— 稍等一下再说一次。': 'I will not take the keyboard away from someone using it — try again in a moment.',
+    # 0.3.5: `⌘+字母` 那两档(永不发的封闭集合 + 按 App 列的白名单)。⚠️ 顺序就是判据 ——
+    # 「永远不发」必须**先于**白名单报, 否则 `⌘W` 的理由会变成"没登记过", 而模型会以为
+    # 加进白名单就能用。翻译时保住这个区别: 一边是"永远", 一边是"这个 App 的清单上没有"。
+    '%@ 是**永远不发**的组合（退出 / 关窗 / 移到废纸篓，': '%@ is a combination this tool never sends (quit / close window / move to trash,',
+    '未存盘的东西会一起没）⇒ 没按。要关窗或退出，交给人在界面上点。': 'unsaved work goes with it) ⇒ nothing was pressed. Leave closing or quitting to the person at the screen.',
+    '「%@」没有登记过任何 `⌘+字母` 组合 ⇒ 没按。': '"%@" has no ⌘+letter combination on record ⇒ nothing was pressed.',
+    # ⚠️ 别在文案里点名"目前只有 X" —— 白名单加一个 App 这句话就假了 (2026-11-20 微信进门时踩到)。
+    #    这条分支的可见集合已经由 ④⓪ 收窄成"视觉类 App 但键不在它白名单上", 点名更没有意义。
+    '这类键只在**逐个 App 列过白名单**的地方可用 ——': 'Keys like these only work in apps listed one by one —',
+    ' 它在别处会干什么没人验证过，所以不放行。别的照旧: 点界面上的按钮、或用方向键去选。': 'nobody has verified what they do anywhere else, so they are not allowed. Everything else still works: press a button, or select with the arrow keys.',
+    '%@ 不在「%@」的白名单里 ⇒ 没按。': '%@ is not on the "%@" allowlist ⇒ nothing was pressed.',
+    '这个 App 只允许: %@。要别的事就点界面。': 'This app allows only: %@. For anything else, use the interface.',
+    # 0.3.5(2026-11-20 boss 定): `⌘+字母` **只给视觉操作**的 App。这条闸的是**范围**:
+    # 纯 AX 的 App 能后台动, 给它发键 = 发给"此刻在前台的那个"。译文要保住"不是没登记,
+    # 是这一类 App 根本不给"这个区别, 否则模型会去申请登记。
+    '「%@」是纯 AX 操作的 App ⇒ %@ 这类 `⌘+字母` 一律不发。': '"%@" is operated purely through AX ⇒ %@ and any other ⌘+letter is never sent to it.',
+    '它用编号和动作表就能做完（press / setValue / custom），而键盘事件是**全局**的：': 'It can do the job with indices and its action list (press / setValue / custom), and key events are **global**:',
+    '真按下去可能落在别的 App 上，同一个 `⌘` 组合在每个 App 里还是不同的事。': 'the keystroke may land in another app entirely, and the same ⌘ combination means different things in each.',
+    '方向键、Home/End、Shift 选字不受这条限制。': 'Arrows, Home/End and Shift-selection are not limited by this rule.',
     '申请': 'Request',
     ' 想按它的话用 press —— 但按它不等于打开它的菜单。': ' Use press if you only meant to click it -- but clicking is not opening its menu.',
     '「%@」没有菜单可开 —— %@ ⇒ 没动。': '"%@": no menu to open -- %@ ⇒ nothing done.',

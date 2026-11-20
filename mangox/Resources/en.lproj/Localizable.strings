@@ -7,7 +7,7 @@
    **本文件由 scripts/l10n/gen_strings.py --write 生成, 别手改** ——
    译文改 scripts/l10n/en_values.py 的 VALUES, 再跑 --write。
 
-   条数: 1117
+   条数: 1128
 */
 
 " (值:\"%@\")" = " (value: %@)";
@@ -27,6 +27,7 @@
 " 字)" = " chars)";
 " 它不是万能的「确认」键 —— 要按某个按钮请用 press。" = " it is not a universal \"OK\" key — to press a button, use press.";
 " 它只有「打开」这条路 —— 想打开/跳到它, 改用 open。" = " That element only takes open — to open or jump to it, use open.";
+" 它在别处会干什么没人验证过，所以不放行。别的照旧: 点界面上的按钮、或用方向键去选。" = "nobody has verified what they do anywhere else, so they are not allowed. Everything else still works: press a button, or select with the arrow keys.";
 " 容器那一层的动作作用于**当前选中项**, 不是这一格 ⇒ 没动。" = " That container-level action applies to whatever is **currently selected**, not to this cell ⇒ nothing done.";
 " 待重启" = " Restart required";
 " 想按它的话用 press —— 但按它不等于打开它的菜单。" = " Use press if you only meant to click it -- but clicking is not opening its menu.";
@@ -43,11 +44,13 @@
 "%@ 上盖着「%@」的另一个窗口(弹层 / 对话框) ⇒ 没点。" = "Another \"%@\" window (a sheet or a dialog) covers %@ ⇒ nothing was tapped.";
 "%@ 不像屏幕上的点 ⇒ 没点。坐标是全局屏幕坐标、左上原点。" = "%@ does not look like a point on screen ⇒ nothing was tapped. Coordinates are global screen coordinates, origin at the top left.";
 "%@ 不像屏幕上的点(超出 ±%lld) ⇒ 没动。" = "%@ does not look like a point on a screen (outside ±%lld) - nothing was done.";
+"%@ 不在「%@」的白名单里 ⇒ 没按。" = "%@ is not on the \"%@\" allowlist ⇒ nothing was pressed.";
 "%@ 不在「%@」的窗口 %@ 里 ⇒ 没点。" = "%@ is not inside \"%@\" window %@ ⇒ nothing was tapped.";
 "%@ 字" = "%@ chars";
 "%@ 底下写着「%@」 ⇒ 没点。" = "Under %@ it says \"%@\" ⇒ nothing was tapped.";
 "%@ 得按编号来 —— 它要知道动的是哪一格。" = "%@ has to go by row number - it needs to know which row it is moving.";
 "%@ 拷贝失败: %@" = "Failed to copy %@: %@";
+"%@ 是**永远不发**的组合（退出 / 关窗 / 移到废纸篓，" = "%@ is a combination this tool never sends (quit / close window / move to trash,";
 "%@ 落在**别的 App** 的窗口上(不是「%@」) ⇒ 没点。" = "%@ lands on **another app**'s window (not \"%@\") ⇒ nothing was tapped.";
 "%lld 个" = "%lld";
 "%lld 个人格文件 frontmatter 破损, 未注入且已禁止新建 key: %@" = "%lld persona files have broken frontmatter — not injected, and creating keys is blocked: %@";
@@ -176,10 +179,12 @@
 "「%@」是 %@," = "%@ is %@,";
 "「%@」是 %@, " = "%@ is %@, ";
 "「%@」是口令/系统类应用 ⇒ 我永远不操作它, 只读。" = "%@ is a password manager or a system app ⇒ it stays read-only, always.";
+"「%@」是纯 AX 操作的 App ⇒ %@ 这类 `⌘+字母` 一律不发。" = "\"%@\" is operated purely through AX ⇒ %@ and any other ⌘+letter is never sent to it.";
 "「%@」此刻**答不出焦点在哪儿**（它的界面不暴露这一层），" = "\"%@\" **cannot say where the focus is** right now (its interface does not expose that layer),";
 "「%@」此刻的焦点在「%@」上, 不是能写字的输入框 ⇒ 没写。" = "\"%@\" has focus on \"%@\" right now, which is not a text field ⇒ nothing was typed.";
 "「%@」此刻的焦点在「%@」上，不是能写字的输入框 ——" = "\"%@\" has focus on \"%@\" right now, which is not a text field — ";
 "「%@」没有「确认」这个动作 —— %@ ⇒ 没动。" = "%@ has no confirm action — %@ ⇒ nothing was done.";
+"「%@」没有登记过任何 `⌘+字母` 组合 ⇒ 没按。" = "\"%@\" has no ⌘+letter combination on record ⇒ nothing was pressed.";
 "「%@」没有菜单可开 —— %@ ⇒ 没动。" = "\"%@\": no menu to open -- %@ ⇒ nothing done.";
 "「%@」的窗口挪过: 原来 %@, 现在 %@ ⇒ 没点。" = "\"%@\" window moved: it was %@, now it is %@ ⇒ nothing was tapped.";
 "「%@」还没勾「可操作」⇒ 没写。看得到不等于动得。" = "\"%@\" is not marked as able to act (Can act) ⇒ nothing was typed. Being visible is not the same as being actionable.";
@@ -492,6 +497,7 @@
 "它支持的是：" = "it offers ";
 "它有的是：" = "what it does declare: ";
 "它没有声明 key（不锁任何名字）" = "It declares no keys (locks no names)";
+"它用编号和动作表就能做完（press / setValue / custom），而键盘事件是**全局**的：" = "It can do the job with indices and its action list (press / setValue / custom), and key events are **global**:";
 "它能做的只有：" = "the only thing it offers is ";
 "它能执行的是：" = "It can run: ";
 "它锁住这些 key，DB 条目里不能再用:" = "It locks these keys, which DB items can no longer use:";
@@ -702,6 +708,7 @@
 "新建笔记" = "New note";
 "新建项目（选择目录）…" = "New project (choose a directory)…";
 "新建：Cron 定时（动作写死）或 助理（目标式，产方案等人批准）" = "New: Cron schedule (fixed actions) or Assistant (goal-based, plans wait for approval)";
+"方向键、Home/End、Shift 选字不受这条限制。" = "Arrows, Home/End and Shift-selection are not limited by this rule.";
 "方案 %lld 步" = "plan · %lld steps";
 "无人值守" = "Unattended";
 "无人值守 · 恒开" = "Unattended · always on";
@@ -756,6 +763,7 @@
 "未保存" = "Unsaved changes";
 "未发现任何扩展\n点右上角 + 导入" = "No extensions found\nUse + in the top right to import";
 "未启用" = "Not enabled";
+"未存盘的东西会一起没）⇒ 没按。要关窗或退出，交给人在界面上点。" = "unsaved work goes with it) ⇒ nothing was pressed. Leave closing or quitting to the person at the screen.";
 "未开启 —— 打开 App 才会巡检" = "Off — checks only run while the app is open";
 "未找到 pi CLI, Agent 引擎不可用。请安装 pi 后重启 MangoX。" = "pi CLI not found; the agent engine is unavailable. Install pi and restart MangoX.";
 "未找到 pi CLI, 捕获未发送" = "pi CLI not found; capture not sent";
@@ -871,6 +879,7 @@
 "目标" = "Target";
 "目标会话已不存在, 捕获未发送" = "The target session no longer exists; capture not sent";
 "直接提问，模型已了解源会话上下文" = "Ask directly — the model already knows the source session's context";
+"真按下去可能落在别的 App 上，同一个 `⌘` 组合在每个 App 里还是不同的事。" = "the keystroke may land in another app entirely, and the same ⌘ combination means different things in each.";
 "知识" = "Knowledge";
 "知识库" = "Knowledge";
 "知识库/记忆: 当前会话注入条数" = "Knowledge base / memory: entries injected into this session";
@@ -1029,6 +1038,7 @@
 "这一轮没有产出（可能被中断了），回 MangoX 里看现场。" = "This turn produced nothing (it may have been interrupted) — check MangoX for the details.";
 "这一轮花了什么" = "What this turn cost";
 "这两项各管一件事，缺哪个哪件事就不工作。系统只会问你一次；被拒之后还能点那一页的「+」手动加回来。" = "Each of these two covers one thing, and whatever it covers stops working without it. macOS asks only once — after a refusal you can still add MangoX with the \"+\" button on that page.";
+"这个 App 只允许: %@。要别的事就点界面。" = "This app allows only: %@. For anything else, use the interface.";
 "这个会话还没说过话，侧问会带一个空上下文。" = "This session has no messages yet — the side chat will start empty.";
 "这个助理现在是停用状态，先在 MangoX 里把它打开。" = "This assistant is currently disabled — turn it on in MangoX first.";
 "这个助理还没写出账本 —— 等它跑一轮，或在会话里让它记一笔，五节就会出现在这里。" = "This assistant hasn't written its ledger yet — after one patrol run, or after you ask it in the chat to note something down, the five sections will show up here.";
@@ -1052,6 +1062,7 @@
 "这看着是凭据文件，不发（%@）" = "That looks like a credentials file, so it was not sent (%@).";
 "这篇在你编辑期间被外部改过 — 你的改动没有写盘" = "This note was changed externally while you were editing — your changes were not written";
 "这篇已经不在了 — 可能在 App 外被删掉或改名了" = "This note is gone — it may have been deleted or renamed outside the app";
+"这类键只在**逐个 App 列过白名单**的地方可用 ——" = "Keys like these only work in apps listed one by one —";
 "这里有未保存的修改, 我不能替你决定保存还是丢弃 ⇒ 我点了「取消」, 等你来处理。" = "There are unsaved changes and I cannot decide for you whether to keep or discard them, so I clicked Cancel and left it to you.";
 "这里有未保存的修改, 而且这个弹窗没有「取消」键 ⇒ 我什么都不点, 等你来处理。" = "There are unsaved changes, and this prompt has no Cancel button, so I clicked nothing and left it to you.";
 "远程驱动档不允许操作界面" = "The remote-driven mode does not allow operating the UI";

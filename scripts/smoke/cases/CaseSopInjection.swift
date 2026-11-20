@@ -290,10 +290,11 @@ extension SmokeMain {
 
         // 整份上限: 一个是"全都装得下"的绝对量级, 一个是运行时预算 —— 两条都要成立,
         // 否则 `block` 会在真机上**静默截尾**, 而这里是唯一能提前发现它的地方。
-        // ⚠️ 4355 与运行时的 4980 不是同一个数（后者含段头）; 两个都压在实测值上
-        //    （实测 4322 / 5045 —— 都是"加一条就红"的紧度）, 理由见 `SopManual` 文件头 ①。
-        check(SopManual.text.count <= 4420 && SopManual.text.count <= Tune.sopTotalCharLimit,
-              "T-SOP 整份 ≤4420 字且在预算 \(Tune.sopTotalCharLimit) 内 (实际 \(SopManual.text.count) 字)")
+        // ⚠️ 4575 与运行时预算（`Tune.sopTotalCharLimit`）不是同一个数（后者含段头）; 两个都压在实测值上
+        //    ⚠️ 别在这里抄那个数的具体值 —— 它抬过六次, 抄一次就假一次（这条注释曾写着 5260）。
+        //    （实测 4484 / 5147 —— 都是"加一条就红"的紧度）, 理由见 `SopManual` 文件头 ①。
+        check(SopManual.text.count <= 4575 && SopManual.text.count <= Tune.sopTotalCharLimit,
+              "T-SOP 整份 ≤4575 字且在预算 \(Tune.sopTotalCharLimit) 内 (实际 \(SopManual.text.count) 字)")
 
         // 不许写具体编号: 编号每次 read 都变, 写死即过期数据（而且是**看起来最精确的**过期数据）
         check(SopManual.text.range(of: "#\\s*\\d", options: .regularExpression) == nil,

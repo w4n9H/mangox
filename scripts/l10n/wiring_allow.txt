@@ -332,3 +332,19 @@ mangox/Models/ComputerAct.swift| 在列表 / 画布上按这些键会变成**别
 mangox/Models/ComputerAct.swift| 先点进能写字的控件，再按。
 mangox/Models/ComputerAct.swift|你 %@ 毫秒前刚动过键鼠 ⇒ 没按。
 mangox/Models/ComputerAct.swift|人正在用键盘时我不抢 —— 稍等一下再说一次。
+
+# 0.3.5: `⌘+字母` 那两档(永不发的封闭集合 + 按 App 列的白名单) —— 同上一条同族, 进的是
+# **模型上下文**不是界面: 模型要知道"这个 App 允许哪几个组合"才会去按, 译成英文它就得
+# 自己把 `⌘` 与 bundle 对回中文界面。⚠️ 豁免的只是「必须接线」这一道, 译文仍在词表里。
+mangox/Models/ComputerAct.swift|%@ 是**永远不发**的组合（退出 / 关窗 / 移到废纸篓，
+mangox/Models/ComputerAct.swift|未存盘的东西会一起没）⇒ 没按。要关窗或退出，交给人在界面上点。
+mangox/Models/ComputerAct.swift|「%@」没有登记过任何 `⌘+字母` 组合 ⇒ 没按。
+mangox/Models/ComputerAct.swift|这类键只在**逐个 App 列过白名单**的地方可用 ——
+mangox/Models/ComputerAct.swift| 它在别处会干什么没人验证过，所以不放行。别的照旧: 点界面上的按钮、或用方向键去选。
+mangox/Models/ComputerAct.swift|%@ 不在「%@」的白名单里 ⇒ 没按。
+mangox/Models/ComputerAct.swift|这个 App 只允许: %@。要别的事就点界面。
+# 2026-11-20: `⌘+字母` 只给视觉操作 App 那道闸的回执 —— 同上一条同族(进模型上下文, 不是界面)。
+mangox/Models/ComputerAct.swift|「%@」是纯 AX 操作的 App ⇒ %@ 这类 `⌘+字母` 一律不发。
+mangox/Models/ComputerAct.swift|它用编号和动作表就能做完（press / setValue / custom），而键盘事件是**全局**的：
+mangox/Models/ComputerAct.swift|真按下去可能落在别的 App 上，同一个 `⌘` 组合在每个 App 里还是不同的事。
+mangox/Models/ComputerAct.swift|方向键、Home/End、Shift 选字不受这条限制。

@@ -767,6 +767,26 @@ struct ComputerKeyStroke: Equatable {
         case home, end, pageup, pagedown
         case tab, esc, space
         case delete, backspace, enter
+        // 0.3.5: 字母与数字 —— **只在 `⌘+一个字母/数字` 这一种形态里可达**，且必须命中
+        // 该 App 的白名单（见 `ComputerKeysRule.commandLetterAllowlist`）。
+        //
+        // ⚠️ 为什么只放 `command`: ⌥+字母 是特殊字符输入、⌃+字母 是控制字符、⇧+字母 干脆
+        //    就是打字 —— 那三种本来就归 `type`。收窄到 command 一个修饰键，字母才**不是**
+        //    "能随便敲字"的通道，而是"调用这个 App 自己的菜单命令"。
+        // ⚠️ `⌘⇧S`（另存为）这类**结构上不存在**: parse 要求修饰键集合恰好是 `[.command]`。
+        case a, b, c, d, e, f, g, h, i, j, k, l, m
+        case n, o, p, q, r, s, t, u, v, w, x, y, z
+        case n0 = "0", n1 = "1", n2 = "2", n3 = "3", n4 = "4"
+        case n5 = "5", n6 = "6", n7 = "7", n8 = "8", n9 = "9"
+
+        /// 单个字符的键（字母 / 数字）—— 走白名单那一档。**判据只看这张表，不看修饰键**
+        /// （修饰键那半边在 `parse` 里已经定死成"恰好 command"）。
+        ///
+        /// ⚠️ 判据是 **rawValue 恰好一个字符**，不是"首字符是字母"：导航键的名字都是**单词**
+        ///    （`right` / `home` / `tab` / `pageup`）⇒ 按首字符判会把 `right` 当成字母键，
+        ///    于是 `⇧→` 解析不出、`⌘→` 归到 `.writes` 白名单档 —— 这两条都是**静默**的
+        ///    （冒烟 T-KEYS ⑫ 分档与 ⑪ 解析当场红过一次，实测）。
+        var isLetterOrDigit: Bool { rawValue.count == 1 }
     }
 
     enum Modifier: String, Equatable, CaseIterable {
@@ -796,6 +816,14 @@ struct ComputerKeyStroke: Equatable {
             guard let m = Modifier(rawValue: p) else { return nil }
             mods.insert(m)
         }
+        // 0.3.5: 字母/数字**只认 `command+一个`**。这条放在 parse 里 = "别的形态根本解析
+        // 不出来"，比放进判据更早一层 —— 判据里那些分支还能被改错，解析不出的东西连讨论
+        // 的余地都没有。
+        // ⚠️ 裸字母（没有修饰键）也在这里被挡掉：`parse("a")` = nil。那是 `type` 的地盘，
+        //    而且"按一下 a"与"往焦点写一个 a"在接收端是同一件事，分两个工具只会让人混。
+        if key.isLetterOrDigit {
+            guard mods == [.command] else { return nil }
+        }
         return ComputerKeyStroke(key, mods)
     }
 
@@ -817,6 +845,12 @@ struct ComputerKeyStroke: Equatable {
     ///    ⚠️ `space` 归危险档是被实测推着改的：Finder 里空格是预览、在不少列表里是切换勾选、
     ///      在文档里是写字 —— 三个副作用都不小，而它不属于"只是移动一下"。
     var safety: Safety {
+        // 0.3.5: 字母 / 数字 = 「调用这个 App 自己的菜单命令」。
+        // ⚠️ 它**不能**归 `destructive` —— 那道门要"焦点落在能写字的控件上"，而自绘 App
+        //    （WPS 正文答 `AXSplitGroup`）永远给不出这个证据 ⇒ `⌘S` 会被永久拒，等于没开。
+        //    它的证据换成**白名单 + 前台 + 人静 + App 可操作**，四条都在 `refusal` 里，
+        //    而且比焦点证据更硬: 白名单是**按 App 逐个列出来的**，不是一条泛化规则。
+        if key.isLetterOrDigit { return .writes }
         if !modifiers.subtracting([.shift]).isEmpty { return .destructive }
         switch key {
         case .delete, .backspace, .enter, .space: return .destructive
@@ -827,6 +861,8 @@ struct ComputerKeyStroke: Equatable {
     enum Safety: Equatable {
         case navigate
         case destructive
+        /// 菜单命令（`⌘+字母/数字`）。依据白名单放行，**不要求焦点证据** —— 见上面那段。
+        case writes
     }
 }
 
@@ -857,12 +893,120 @@ enum ComputerKeysRule {
     /// 展开成两百下，界面会跑到别的地方去，而这一档没有撤销。
     static let maxStrokes = 24
 
+    // MARK: - 组合键白名单（0.3.5）
+
+    /// **哪些 App 允许哪些 `⌘+字母`**。键 = bundle id，值 = 允许的字母/数字（默认带 command）。
+    ///
+    /// ── 为什么是白名单，而不是"放开字母 + 一张危险组合黑名单" ──────────────────
+    /// 黑名单要穷举"哪些组合有害"，而那是**开放集合**（每个 App 各不相同、随版本变），
+    /// 一定漏；白名单只回答"这个 App 里我确知安全的那几个"，漏了只是少一条捷径，
+    /// 不会多一个事故。这条与 0.3.2 那版"不收字母"是同一个思路的两个阶段：
+    /// 那时没有可靠的"哪些安全"的来源，所以整类关掉；现在有了具体的、可审计的短表。
+    ///
+    /// ⚠️ **表里的每一条都是"我确知它会做什么"**，不是"系统里有这个键位"。加之前先想清楚
+    ///   这个 App 里它到底干什么 —— 写错的代价是模型以为自己在存盘，实际在干别的。
+    ///
+    /// ── 数据来源（2026-11-20）────────────────────────────────────────────
+    /// 不是网上抄的、也不是按 macOS 惯例猜的，而是 **WPS 自己装在这台机器上的那张表**：
+    /// `/Applications/wpsoffice.app/Contents/Resources/office6/res/**.kuip` 里的
+    /// `<shortcut cmd="Copy" key="Meta+C"/>` 这种条目。
+    ///
+    /// ⚠️ **同一张表里两套键位是并存的，别拿错那一支**（2026-11-20 差点拿错）：
+    ///   绝大多数命令都登记了两份（`Ctrl+X` 与 `Meta+X`）—— `Ctrl+*` 是 Windows 那一支，
+    ///   **`Meta+*` 才是 macOS 那一支（= `⌘`）**。自证的证据在 macOS 独有的那几个键位上：
+    ///   `Meta+Shift+Z` = 重做、`Meta+Shift+S` = 另存为、`Meta+Shift+V` = 粘贴为纯文本 ——
+    ///   Windows 的重做是 `Ctrl+Y`（表里也确实另有一条 `Ctrl+Y = Redo`）。
+    ///   而 WPS for Mac 是 **Qt 应用**（`office6/qt.conf` + `QtCoreKso.framework`），
+    ///   我们发的是 `⌘`，对上的是 `Meta+*` 那一支 —— 下面这 10 个字母是**逐个在 `Meta` 表里
+    ///   核过三条组件**的，不是从 `Ctrl` 表里推的。
+    /// 三个组件共用**同一个 bundle id**：wps=文字 / et=表格 / wpp=演示。
+    ///
+    /// ── 实机验证（2026-11-20 08:00，本机 WPS + `/tmp/mx-keytest*.docx` 副本）────────────
+    /// 手法：CGEvent 发键 → 用**窗口截图 + AX 树 + `pbpaste`** 三样核对（正文是自绘的，截图是唯一
+    /// 能看见"界面真动了没有"的办法）。结论：
+    ///   · `⌘S` 真写盘（mtime 14:39 → 07:59:45，解压 docx 能看到刚粘进去的那串）；
+    ///   · `⌘Z`/`⌘Y` 撤销重做生效（全选 + `⌘C` + `pbpaste` 比正文：标记消失/回来）；
+    ///   · `⌘C`/`⌘V` 生效；`⌘B`/`⌘I`/`⌘U` 生效（工具条按钮跟着高亮；⚠️ 中日文**不合成斜体**，
+    ///     要拿拉丁字才看得出，第一眼差点判成"⌘I 没生效"）；
+    ///   · `⌘F` 打开「查找和替换」**对话框，AX 完全可读**（textfield + 查找/替换/定位 三个
+    ///     radio + 上一处/下一处）⇒ 替换这件事**只能**走它（正文自绘，画布里改不了字）；
+    ///   · `⌘N` **只是打开「新建」浮窗**（零 AX 节点），不建文档 —— 白名单里它省掉的是"先去点
+    ///     新建按钮"这一步，不是"一步到空白页"。手册照实写。
+    ///   · `⌘H` 实测 = **隐藏 App**（frontmost 掉到别的 App，窗口还在但看不见），不是替换
+    ///     ⇒ 排除它的理由从"押不准"变成"实测如此"。
+    ///
+    /// ⚠️ **一个 bundle 三个组件**是这张表最容易踩错的地方：同一个字母在另一个组件里可能是
+    ///    **另一件事**（`⌘E` 在文字是居中、在表格是「快速填充」，会把整列写掉）⇒ 只有三个组件
+    ///    语义一致（或另一处根本没登记 ⇒ 空操作）的字母才进表。
+    ///
+    /// ── 进表的（10 个，全部是**三组件同名命令**）────────────────────────────
+    ///   `n` 新建 / `s` 保存 / `z` 撤销 / `y` 重做 / `f` 查找
+    ///   `c` 复制 / `v` 粘贴 —— **`v` 是这批里最值钱的**：今天粘贴只能 tap 工具栏那个按钮，
+    ///     而那个按钮要靠坐标算（手册里那条「图里没有、用邻近元素当锚」就是为它写的）
+    ///   `b` 粗体 / `i` 斜体 / `u` 下划线
+    ///
+    /// ── **没进表的，以及为什么**（这一串是逐个查 `Meta` 表查出来的，不是没想起）────────
+    ///   `l`/`e`/`r`/`j` 对齐 —— 文字里是四个对齐，但**表格里 `⌘E` 是快速填充、`⌘R` 是向右
+    ///     填充**（都会写数据），演示里 `⌘L` 是 Left/播放条双绑定。而对齐本来就有更好的路：
+    ///     工具条那排按钮 AX 可读（`press` 就行）⇒ 不为"已经有路可走"的功能担写数据的风险
+    ///   `d` 字体对话框（文字）/ 向下填充（表格，会写数据）—— 同族冲突
+    ///   `m` 合并居中（表格，改表格结构）/ `Ctrl_M`（演示，含义不明）—— 同族冲突
+    ///   `g` 定位（文字/表格）/ 组合（演示）—— 同族冲突
+    ///   `p` 打印（文字）/ 荧光笔（演示）—— 同族冲突
+    ///   `h` 替换（三个组件都登记了）—— 但 `⌘H` 在 macOS 上还兼着**全局隐藏 App**，
+    ///     两个含义叠在同一个键上，押错就整块界面消失 ⇒ 不赌
+    ///   `a` 全选 —— 与 `type` 凑一起就是"清空全篇"，0.3.4 真发生过
+    ///   `x` 剪切 —— 三组件都一致，但它把内容挪进剪贴板，"再粘回去"那一步失败就少一段正文；
+    ///     改文本有 `setValue` 与"选中后覆盖"两条更可控的路
+    ///   `o` 打开 / `k` 超链接 / `t` 插入表格 —— 都要再驱动一个对话框，省不了几步，
+    ///     却多一条"按完弹出个东西"的分支
+    static let commandLetterAllowlist: [String: Set<String>] = [
+        "com.kingsoft.wpsoffice.mac": ["n", "s", "z", "y", "f", "c", "v", "b", "i", "u"],
+        // 微信（2026-11-20 取自它**自己的菜单栏**，即 `AXMenuItemCmdChar` —— AX 树是空的，
+        // 但菜单栏是标准 NSMenu，读得到）：`⌘F` 搜索 / `⌘N` 发起会话 / `⌘1` 聊天 /
+        // `⌘2` 通讯录 / `⌘C` 拷贝 / `⌘V` 粘贴。
+        // ⚠️ `⌘1`/`⌘2` 是这一格最值钱的：侧栏三个入口在 AX 里一个字都没有，本来只能按坐标点。
+        // ⚠️ 同一份菜单里 `⌘A`（全选）/ `⌘X`（剪切）**没收** —— 与别处同一条理由（全选 + 写 = 清空）。
+        "com.tencent.xinWeChat": ["f", "n", "1", "2", "c", "v"],
+    ]
+
+    /// **永不发的四个键位**（带 `command` 就拦，不管同时还按着谁）。封闭、有限、能穷举完。
+    ///
+    /// ⚠️ 判据是 **`command` + 这个键**，不是 `display` 字符串。第一版写的是 `Set<String>` 比
+    ///   `display`，于是 `⇧⌘⌫`（清空废纸篓）**从缝里过去了** —— 它的 display 是
+    ///   `shift+command+backspace`，而表里只有 `command+backspace`。字符串相等只能拦住
+    ///   "一字不差的那一种写法"，而修饰键的合法组合有 15 种。
+    /// ⚠️ 与上面那张表性质不同，别混：白名单是"开放的许可集合"，这个是"这几个键位绝对不行"。
+    ///   它是一张**按键**的短表，所以"黑名单永远漏"那条在这里不适用 —— 漏不了。
+    static let refusedCommandKeys: Set<ComputerKeyStroke.Key> = [
+        .q,          // 退出 App —— 未存盘的内容一起没
+        .w,          // 关窗 —— 同上
+        .backspace,  // 移到废纸篓 / 清空废纸篓（⇧⌘⌫）
+        .delete,     // 同上（两个键名都收，别只拦一个）
+    ]
+
+    /// 这一下是不是"永不发"的那种。`command` 在就算，**不要求别的修饰键为空**。
+    static func isRefused(_ s: ComputerKeyStroke) -> Bool {
+        s.modifiers.contains(.command) && refusedCommandKeys.contains(s.key)
+    }
+
     /// 一次 keys 的全部输入。**全是事实**（同 `ComputerTapRule.Facts` 的纪律）。
     struct Facts {
         /// 全局档（设置页那个「模拟按键」开关）。**默认关**。
         var keysEnabled: Bool
         var appActable: Bool
         var appName: String
+        /// 目标 App 的 bundle id。`nil` = 不知道 ⇒ **字母组合一律拒**（别的键不受影响）。
+        ///
+        /// ⚠️ **没有默认值是有意的**：这一格漏填不会编译错（曾经给了 `= nil`），而症状是
+        ///    "白名单永远命中不到 ⇒ `⌘S` 被永久拒" —— 工具开着、设置页也开着，就是按不出去，
+        ///    回执还理直气壮说"这个 App 没登记过"。让编译器替这道门收口，比加一条扫源码的判据硬。
+        var bundle: String?
+        /// 这个 App 是不是**只能靠坐标 / 视觉操作**（`ComputerAppProfile.visionOperated`）。
+        ///
+        /// ⚠️ 同 `bundle`：**没有默认值**。漏填不会编译错（给过 `= false`），症状是
+        ///   "视觉类 App 的 `⌘V` 被永久拒" —— 与 `bundle` 那一格是同一类静默失效。
+        var visionOperated: Bool
         var snapshotPid: Int32
         var currentPid: Int32
         var isFrontmost: Bool
@@ -896,6 +1040,45 @@ enum ComputerKeysRule {
         guard f.strokes.count <= maxStrokes else {
             return "要按 \(f.strokes.count) 下，超过这一档的上限 \(maxStrokes) ⇒ 没按。"
                 + " 分几次按，每按几下回来看一眼 —— 这一档没有撤销，按过头就回不去了。"
+        }
+        let lettered = f.strokes.filter { $0.key.isLetterOrDigit }
+        // ④⓪ 只有**视觉操作**的 App 才给 `⌘+字母`（2026-11-20 boss 定）。
+        //     理由不是"它特殊"，是**键盘事件没有地址**：发出去的那一份是全局的，谁在前台谁收。
+        //     视觉类 App 本来就必须在前台（坐标是屏幕坐标），所以这一档对它是"顺手"；
+        //     纯 AX 的 App 恰恰能**不在前台**被操作 —— 给它开键，等于把"我以为发给它"变成
+        //     "发给了此刻在前台的那个东西"。而且它压根不需要：编号 + 动作表就够。
+        //     ⚠️ `bundle == nil` 时不走这条 —— 那时我们**不知道**它是谁, 说"它是纯 AX 的"
+        //        是编的; 让它落到 ④″ 的"没登记过"才是诚实的（两句话给模型的下一步不一样:
+        //        前者是"这路不通", 后者是"这个 App 还没登记"）。冒烟两个方向都钉。
+        if !lettered.isEmpty && f.bundle != nil && !f.visionOperated {
+            let names = lettered.prefix(2).map(\.display).joined(separator: "、")
+            return "「\(f.appName)」是纯 AX 操作的 App ⇒ \(names) 这类 `⌘+字母` 一律不发。"
+                + "它用编号和动作表就能做完（press / setValue / custom），而键盘事件是**全局**的："
+                + "真按下去可能落在别的 App 上，同一个 `⌘` 组合在每个 App 里还是不同的事。"
+                + "方向键、Home/End、Shift 选字不受这条限制。"
+        }
+        // ④′ 永不发的键位 —— 最便宜的一条，先判。这四件事一旦发生就**没有撤销**。
+        //     ⚠️ 按 `command + 键` 判，不按 display 字符串（`⇧⌘⌫` 那条漏网是实测过的）。
+        if let banned = f.strokes.first(where: { Self.isRefused($0) }) {
+            return "\(banned.display) 是**永远不发**的组合（退出 / 关窗 / 移到废纸篓，"
+                + "未存盘的东西会一起没）⇒ 没按。要关窗或退出，交给人在界面上点。"
+        }
+        // ④″ `⌘+字母/数字` 只认该 App 的白名单。认不出 bundle 也拒 —— "不知道这是谁"时
+        //     无从判断这条组合在它身上干什么，而那正是最容易出错的一类。
+        if !lettered.isEmpty {
+            let allowed: Set<String> = f.bundle.flatMap { Self.commandLetterAllowlist[$0] } ?? []
+            if allowed.isEmpty {
+                return "「\(f.appName)」没有登记过任何 `⌘+字母` 组合 ⇒ 没按。"
+                    + "这类键只在**逐个 App 列过白名单**的地方可用 ——"
+                    + " 它在别处会干什么没人验证过，所以不放行。别的照旧: 点界面上的按钮、或用方向键去选。"
+            }
+            let bad = lettered.filter { !allowed.contains($0.key.rawValue) }
+            if !bad.isEmpty {
+                let names = bad.prefix(3).map(\.display).joined(separator: "、")
+                let list = allowed.sorted().map { "⌘" + $0.uppercased() }.joined(separator: " / ")
+                return "\(names) 不在「\(f.appName)」的白名单里 ⇒ 没按。"
+                    + "这个 App 只允许: \(list)。要别的事就点界面。"
+            }
         }
         // ⑤ 同上一次读的是不是同一个进程
         guard f.snapshotPid == f.currentPid else {
