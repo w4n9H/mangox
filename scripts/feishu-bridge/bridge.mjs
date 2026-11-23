@@ -16,10 +16,13 @@
 //    ⚠️ 带附件的那一帧里 `file` 是**子对象**（`ok`/`msg` 仍描述整帧）—— 失败原因分三段:
 //      读文件 / 上传素材（`code=99991672` 没开权限、`234006` 超 30MB）/ 发消息。
 //             {"type":"error","msg":"..."}
-//   App → 桥  {"type":"send","bot":"<id>","chat_id":"oc_..","text":"..."}
+//   App → 桥  {"type":"send","bot":"<id>","chat_id":"oc_..","text":"...","ref":"<uuid>"}
 //             {"type":"send","bot":"<id>","chat_id":"oc_..","text":"..","file":{"path":"/Users/..","name":".."}}
 //             {"type":"stop"}
 //   ⚠️ 附件**只给本地绝对路径**，不给二进制: 桥自己读盘（同 TCC 归属），协议保持一行 JSON。
+//   ⚠️ **`ref` 原样回传**（2026-11-23）: App 用它把"这一条发没发出去"对上**具体那一条**
+//      （`agent_sent` 的主键）。不回传的话只能知道"最近有一次发送失败了" —— 而那种含糊
+//      会让"已发消息"记忆里出现一条永远说不清状态的记录。没给 `ref` 的帧照旧回 null。
 //
 // 一个进程管 N 个机器人（`FS_BOTS` 是个 JSON 数组）。实测同一进程里两个 `WSClient`
 // 都能 ready 并共存 ⇒ 不需要"一个机器人一个进程"（那会把单实例锁、孤儿回收、诊断行
@@ -359,7 +362,7 @@ readline.createInterface({ input: process.stdin }).on('line', async (line) => {
     const bot = byId.get(cmd.bot);
     if (!bot) {
       // 回不了就是回不了：**别拿"某个别的机器人"去发** —— 那会用错身份说话。
-      emit({ type: 'send_result', bot: cmd.bot || '', ok: false, msg: 'unknown bot' });
+      emit({ type: 'send_result', bot: cmd.bot || '', ok: false, ref: cmd.ref || null, msg: 'unknown bot' });
       return;
     }
     try {
@@ -383,12 +386,13 @@ readline.createInterface({ input: process.stdin }).on('line', async (line) => {
         type: 'send_result',
         bot: bot.id,
         ok,
+        ref: cmd.ref || null,
         msg,
         message_id: (textRes && textRes.message_id) || (fileRes && fileRes.message_id),
         file: fileRes ? { ok: fileRes.ok, msg: fileRes.msg || '', kind: fileRes.kind, message_id: fileRes.message_id } : null,
       });
     } catch (e) {
-      emit({ type: 'send_result', bot: bot.id, ok: false, msg: String((e && e.message) || e) });
+      emit({ type: 'send_result', bot: bot.id, ok: false, ref: cmd.ref || null, msg: String((e && e.message) || e) });
     }
   } else if (cmd.type === 'stop') {
     process.exit(0);

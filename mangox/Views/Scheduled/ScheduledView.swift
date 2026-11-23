@@ -60,6 +60,10 @@ struct ScheduledView: View {
     /// "打开/切换任务"与"这个任务又跑过一轮"这两个时点（`refreshLedger`）。
     @State private var ledgerParsed: AssistantLedger = .init()
     @State private var ledgerUpdatedAt: Date?
+    /// 2026-11-23:「已发消息」预览。**与 `ledgerParsed` 同一个理由** —— 它也是一次 DB 查询，
+    /// 而这张卡长在编辑器里（每个字段都是 `@State`）⇒ 在 body 里查就是"每敲一个字查一次库"。
+    /// 只在打开编辑器 / 这个任务又跑过一轮时刷（`refreshSent`）。
+    @State private var sentRows: [SentMessage] = []
     // P10.4 任务级执行配置 (2026-11-20 起是**必须项**: cron/助理 一建就钉住, 不再有"跟随全局")
     @State private var draftProvider: String = ""
     @State private var draftModelId: String = ""
@@ -747,6 +751,8 @@ struct ScheduledView: View {
             // 台账常驻（2026-11-18 晚）: 占的正是原来「触达」那一格 —— 那张卡删了（boss 定的
             // "移除触达及相关功能"），而台账是助理档唯一一个"我要随时看见"的东西。
             if draftKind == .assistant, editingTask() != nil { ledgerCard }
+            // 2026-11-23: 台账下面那一张 —— 「它最近往外发过什么」（boss 定，紧挨台账）。
+            if draftKind == .assistant, editingTask() != nil { sentCard }
             if draftKind == .assistant { remoteCard }
             // 2026-11-23: 「模型自主调度」配额。**独立一张小卡，紧挨在「模型与模式配置」之前**
             // （boss 定: 不要塞进那张卡里）。只对助理档显示 —— Cron 档的周期是人定的，
@@ -937,6 +943,107 @@ struct ScheduledView: View {
         ledgerParsed = AssistantLedger.parse(h?.content ?? "")
         ledgerUpdatedAt = h?.updatedAt
         return h
+    }
+
+    // MARK: - 2026-11-23 「已发消息」预览
+
+    /// 它最近往外发过的几条（只**预览**，点不进详情 —— 详情就是飞书那边那条消息本身）。
+    ///
+    /// 为什么不显示 `queued`：那一档的意思是"交出去了，回执还没来"（桥可能已经崩了）。
+    /// 显示成"已发"是撒谎，显示成"发送中"是一句永远不结束的话 ⇒ 干脆不显示。
+    /// `failed` 照显示并**明说没发出去** —— 那是一条真实发生过的事，藏起来比显示更难解释。
+    private var sentCard: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 6) {
+                Image(systemName: "paperplane")
+                    .font(.system(size: 10))
+                    .foregroundStyle(CodexTheme.textMuted)
+                Text(L("已发消息"))
+                    .font(CodexTheme.fontTiny)
+                    .foregroundStyle(CodexTheme.textMuted)
+                Spacer()
+                if !sentRows.isEmpty {
+                    Text(String(format: L("最近 %lld 条"), sentRows.count))
+                        .font(CodexTheme.fontTiny)
+                        .foregroundStyle(CodexTheme.textMuted)
+                }
+            }
+            if sentRows.isEmpty {
+                Text(L("还没往外发过东西。它第一次给你发消息之后，这里会出现最近几条。"))
+                    .font(CodexTheme.fontSmall)
+                    .foregroundStyle(CodexTheme.textTertiary)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else {
+                ForEach(sentRows) { m in
+                    sentRow(m)
+                }
+            }
+            // ⚠️ 一句话**必须写在同一个字符串字面量里** —— 用 `+` 拼两段时取词门会把两段
+            // 各算一个 key（实测：一进词表就变成「未翻译 2 + 废弃 1」）。
+            Text(L("只记它发出去的（飞书私聊 / 文件），不记系统通知。这份记录也会注入给模型，让它知道哪些话已经说过了。"))
+                .font(CodexTheme.fontTiny)
+                .foregroundStyle(CodexTheme.textMuted)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        .background(CodexTheme.bgComposer)
+        .clipShape(RoundedRectangle(cornerRadius: CodexTheme.radiusLg))
+        .overlay(
+            RoundedRectangle(cornerRadius: CodexTheme.radiusLg)
+                .stroke(CodexTheme.border.opacity(0.45), lineWidth: 1)
+        )
+        .onChange(of: editingTask()?.lastRunAt) { _, _ in refreshSent() }
+    }
+
+    private func sentRow(_ m: SentMessage) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 6) {
+            Text(sentClock(m.at))
+                .font(CodexTheme.fontMonoXs)
+                .foregroundStyle(CodexTheme.textMuted)
+                .frame(width: Tune.scheduleSentTimeWidth, alignment: .leading)
+            Text(sentKindLabel(m.kind))
+                .font(CodexTheme.fontTiny)
+                .foregroundStyle(CodexTheme.textMuted)
+            Text(m.text)
+                .font(CodexTheme.fontSmall)
+                .foregroundStyle(m.status == .failed ? CodexTheme.textMuted : CodexTheme.textSecondary)
+                .lineLimit(2)
+            if m.status == .failed {
+                Text(L("没发出去"))
+                    .font(CodexTheme.fontTiny)
+                    .foregroundStyle(CodexTheme.blocked)
+            }
+            Spacer(minLength: 0)
+        }
+    }
+
+    /// 预览行里的时间：今天只给时刻，昨天/更早给相对说法。**与注入段同一套口径**
+    /// （`SchedulerService.sentTag`）—— 两处口径分叉时，人看到的和模型看到的不一样。
+    private func sentClock(_ at: Date) -> String {
+        let cal = Calendar.current
+        let f = DateFormatter()
+        f.dateFormat = "HH:mm"
+        if cal.isDate(at, inSameDayAs: Date()) { return f.string(from: at) }
+        if cal.isDateInYesterday(at) { return L("昨天") + " " + f.string(from: at) }
+        f.dateFormat = "M/d"
+        return f.string(from: at)
+    }
+
+    /// ⚠️ UI 这一份必须走 `L()` —— `SentKind.tag` 是**注入面**的恒中文说法（同 `[笔记]` 那一族），
+    /// 直接拿来上界面就是一处静默漏译。
+    private func sentKindLabel(_ k: SentKind) -> String {
+        switch k {
+        case .reply: return L("回复")
+        case .push: return L("结论")
+        case .file: return L("文件")
+        }
+    }
+
+    /// 与 `refreshLedger` 同一个调用点（打开编辑器 / `lastRunAt` 变了）。
+    private func refreshSent() {
+        guard let id = editingId else { sentRows = []; return }
+        sentRows = store.recentSent(taskId: id)
     }
 
     // MARK: - P19.2 S15b 入口（飞书机器人）
@@ -1805,6 +1912,8 @@ struct ScheduledView: View {
         let h = refreshLedger()
         draftLog = h?.content ?? ""
         handoffUpdatedAt = h?.updatedAt
+        // 「已发消息」预览与它同源（都在"打开这个任务"这一刻取一次）。
+        refreshSent()
     }
 
     private func saveHandoff() {

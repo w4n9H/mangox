@@ -27,7 +27,9 @@ enum RemoteFrame: Equatable {
     /// `botId` 是**桥那边的机器人标识**（App 侧生成 UUID 字符串传下去）。
     case status(botId: String, connected: Bool, note: String?)
     case message(RemoteInbound)
-    case sendResult(botId: String, ok: Bool, messageId: String?, msg: String?)
+    /// `ref` = App 发 `send` 时带下去的那个关联键，桥原样带回来（2026-11-23）。
+    /// 没有它就只能知道"最近有一次发送失败了"，对不上"哪一条没发出去"。
+    case sendResult(botId: String, ok: Bool, messageId: String?, msg: String?, ref: String?)
     case error(String)
 
     /// 解一行。**非 JSON 一律 nil**（不当作 error）—— 桥那边已经把 SDK 的
@@ -49,7 +51,8 @@ enum RemoteFrame: Equatable {
             return .sendResult(botId: obj["bot"] as? String ?? "",
                                ok: obj["ok"] as? Bool ?? false,
                                messageId: obj["message_id"] as? String,
-                               msg: obj["msg"] as? String)
+                               msg: obj["msg"] as? String,
+                               ref: obj["ref"] as? String)
         case "error":
             return .error(obj["msg"] as? String ?? "unknown")
         default:

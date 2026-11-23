@@ -2470,6 +2470,18 @@ final class ChatStore: ObservableObject {
         findings = (try? persistence?.loadFindings()) ?? []
     }
 
+    /// 2026-11-23:「已发消息」预览（助理编辑器那张卡）。
+    ///
+    /// ⚠️ **只读一次，不在 `body` 里读**：这张卡长在编辑器里，而编辑器的每个字段都是
+    /// `@State` ⇒ 每敲一个字求值一次 body。账本卡就是这么踩过一次的（见
+    /// `ScheduledView.ledgerParsed` 的注释）。调用方负责把它存进 `@State`。
+    func recentSent(taskId: UUID, limit: Int = SentLimit.previewCount) -> [SentMessage] {
+        let all = (try? persistence?.loadSent(taskId: taskId, limit: limit * 2)) ?? []
+        // `queued` 不上界面：它的意思是"回执还没来"（桥可能已经崩了）—— 显示成"已发"是撒谎，
+        // 显示成"发送中"是一句永远不结束的话。
+        return Array(all.filter { $0.status.isVisible }.prefix(limit))
+    }
+
     /// P19 S6: 重读执行落痕（执行收尾 / 回滚之后）。
     func reloadFindingActions() {
         findingActions = (try? persistence?.loadFindingActions()) ?? []

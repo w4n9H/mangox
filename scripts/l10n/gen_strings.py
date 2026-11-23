@@ -206,6 +206,10 @@ EXCLUDE_FILES = {
     #    ⚠️ 代价照旧: 将来在本文件里写 `L()` 的 key 永远进不了词表，三道门全都看不见 ——
     #    ⇒ **UI 文案请写在 View 侧**，本文件只出数据（与 `KnowledgeStore` 那条同源）。
     'mangox/Models/FollowUpModels.swift',          # 只出数据 + 落库文案 (无 UI 文案)
+    # ⚠️ 2026-11-23: 同款 —— `SentKind.tag` 是**注入面**的那三个词（回复 / 结论 / 文件），
+    #    它逐字进 prompt 里的「你已经发过的」那一段。界面**另有一份 `L()` 的**（`ScheduledView`
+    #    的 `sentKindLabel`）: 两处各走各的语言，注入字节不随界面语言漂。
+    'mangox/Models/SentMessage.swift',             # 只出数据 + 注入面文案 (无 UI 文案)
     'mangox/mangoxApp.swift',                      # 不参与冒烟编译, 无文案
     # 语言名自带 (中文 / English 必须原样), 故整体跳过。**但其 `AppLanguage.label` 里的 `L("跟随系统")`
     # 是靠 `Theme/AppAppearance.swift` 的同名字面量才活在词表里的** —— 改这句话要两边一起改,

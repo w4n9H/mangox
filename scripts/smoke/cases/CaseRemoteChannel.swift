@@ -37,6 +37,12 @@
 //      ⚠️ 预测 4 红、实测 5 —— 多的那条是"助理打开 ⇒ 桥重起"：关的时候桥没停，起来时
 //      次数自然对不上。**红的条数必须能逐条对上，对不上就先怀疑自己**（同 S15 那条教训）。
 //
+//  反例（2026-11-23 已发消息 **实测**）:
+//    · `dialoguePrompt` 里去掉 `if let sent = sentMemory(task.id) { parts.append(sent) }`
+//      ⇒ **1 红**：⑤第二轮注入段里带着它自己发过的那句。
+//      ⚠️ 这一格**只有它红**是判据本身的一部分：`T-SENT ⑤` 直接调 `sentMemory`，它验的是
+//      段内格式；接线坏了格式仍对 ⇒ 两格分工不重叠。
+//
 
 import Foundation
 
@@ -65,9 +71,14 @@ extension SmokeMain {
               "T-REMOTE ①`create_time` 是毫秒**字符串** ⇒ 解成 Int64（不解析的话这格会一直是 0）")
         check(m.isDirectText, "T-REMOTE ①单聊 + 文本 + 人发 ⇒ 算一句话")
 
-        check(RemoteFrame.decode(#"{"type":"send_result","bot":"B1","ok":true,"message_id":"om_1"}"#)
-                == .sendResult(botId: "B1", ok: true, messageId: "om_1", msg: nil),
-              "T-REMOTE ①send_result 行解得出（含 bot：三个机器人里有一个发失败时，得知道是哪个）")
+        // 2026-11-23: `ref` 是**回执对账键**（「已发消息」靠它把 ok/failed 落回具体那一行）。
+        // 老桥不回这个字段 ⇒ 必须解成 nil 而不是整行丢掉（旧版 App/旧桥混跑是真实形态）。
+        let withRef = RemoteFrame.decode(#"{"type":"send_result","bot":"B1","ok":true,"message_id":"om_1","ref":"R1"}"#)
+        let noRef = RemoteFrame.decode(#"{"type":"send_result","bot":"B1","ok":false,"msg":"boom"}"#)
+        check(withRef == .sendResult(botId: "B1", ok: true, messageId: "om_1", msg: nil, ref: "R1")
+              && noRef == .sendResult(botId: "B1", ok: false, messageId: nil, msg: "boom", ref: nil),
+              "T-REMOTE ①send_result 行解得出（含 bot / ref：三个机器人里有一个发失败时得知道是哪个；"
+              + "ref 缺省是 nil 而不是整行丢）")
         check(RemoteFrame.decode(#"{"type":"error","msg":"token failed"}"#) == .error("token failed"),
               "T-REMOTE ①error 行解得出")
         check(RemoteFrame.decode("[info]: [ 'event-dispatch is ready' ]") == nil,
@@ -247,6 +258,20 @@ extension SmokeMain {
         // 也一样是普通回合，而那种"半绑"状态零信号）。
         check(mock.lastExtraSystemPrompt?.contains("【助理任务 · 对话轮】") == true,
               "T-REMOTE ⑤这一轮带着助理上下文跑（目标/账本/笔都在那条注入段里）")
+        // 注入段的另一半是「它自己说过的话」（2026-11-23 已发消息记忆）—— 这一格判的是
+        // **接线**（`dialoguePrompt` 真的把那段拼进去了），段内格式归 `T-SENT ⑤`。
+        // ⚠️ 必须先**落定一条回执**：不回执时那条记录停在 `queued`，注入段只取 `sent`，
+        //    于是这段是空的 —— 而那看起来和"接线没做"一模一样。用的 `ref` 是桥带回来的那个。
+        if let ref = fake.sent.last?.ref {
+            fake.emit(.sendResult(botId: botId.uuidString, ok: true, messageId: "om_out_1",
+                                  msg: nil, ref: ref))
+        }
+        store.remote.ingest(RemoteInbound(botId: botId.uuidString, chatId: chatId,
+                                          messageId: "om_a2", text: "CI 还是绿的吗"))
+        _ = await waitUntil { store.runningTurns.isEmpty }
+        let prompt2 = mock.lastExtraSystemPrompt ?? ""
+        check(prompt2.contains("【你已经发过的】") && prompt2.contains("CI 这次是绿的"),
+              "T-REMOTE ⑤第二轮注入段里带着**它自己发过的那句**（接不上就等于每轮都失忆）")
         // ⚠️ 2026-11-18: 这里原来还有一格"对话轮是只读面"。只读面整层删了 —— 飞书来的这句话
         //    走的就是那场助理的**对话轮**，工具面跟助理自己选的档位走，不再有第三张面。
 

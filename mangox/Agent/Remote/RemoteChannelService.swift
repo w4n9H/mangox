@@ -375,10 +375,18 @@ final class RemoteChannelService: ObservableObject {
         case .error(let msg):
             lastNote = msg
             Log.event("feishu-bridge-error", "msg", msg)
-        case .sendResult(let botId, let ok, let id, let msg):
+        case .sendResult(let botId, let ok, let id, let msg, let ref):
             if !ok {
                 lastNote = msg ?? L("发消息失败")
                 if let bid = Self.uuid(botId) { botNote[bid] = msg ?? L("发消息失败") }
+            }
+            // 2026-11-23: 回执落到「已发消息」那一行（`ref` 就是 `agent_sent.id`）。
+            // ⚠️ 对不上就**什么都不做** —— 一条不是我发出去的回执不该改任何记录，
+            //    那会让"发没发出去"变成猜的。
+            if let ref, let row = UUID(uuidString: ref) {
+                try? store?.persistence?.settleSent(id: row,
+                                                    status: ok ? .sent : .failed,
+                                                    note: ok ? nil : msg)
             }
             Log.event("feishu-send-result", ok ? "ok" : (msg ?? "failed"), id ?? "-")
         case .message(let inbound):
@@ -488,8 +496,9 @@ final class RemoteChannelService: ObservableObject {
             noticeChat(turn, L("这一轮没有产出（可能被中断了），回 MangoX 里看现场。"), force: true)
             return
         }
-        link?.send(botId: turn.botId, chatId: turn.chatId, text: RemoteReply.compose(text))
-        deliverAttachments(queued, turn: turn)
+        let owner = sentOwner(sid)
+        emit(.reply, taskId: owner, sessionId: sid, turn: turn, text: RemoteReply.compose(text))
+        deliverAttachments(queued, turn: turn, taskId: owner, sessionId: sid)
     }
 
     /// S15c: 这一轮要不要挂「发附件」工具（工具名 `feishu_attach`）。
@@ -506,6 +515,42 @@ final class RemoteChannelService: ObservableObject {
         return RemoteAttachments.spoolPath(sid: sid)
     }
 
+    // MARK: - 出口（唯一）· 已发消息记忆（2026-11-23）
+
+    /// **所有往外发的话都从这里走** —— 它顺手把"模型说过什么"记进 `agent_sent`。
+    ///
+    /// 三条刻意的边界:
+    ///  ① **只记模型说的话**。`notice*` 那一族（"上一个回合还在跑" / "已搁置" / "有文件没能
+    ///     发出去"）继续直接调 `link?.send` —— 那是 **App 的话术**，记进来就会在注入段里
+    ///     冒充"它自己说过的"。
+    ///  ② **先落库、再交给桥**。反过来桥一崩就什么都不剩，而"我以为我说过、其实一个字都
+    ///     没出去"正是这个功能要消灭的那件事。
+    ///  ③ **回执靠 `ref` 落定**（`id` 就是 ref）：没有它只能知道"最近有一次发送失败了"。
+    ///
+    /// `taskId == nil`（普通会话 / 对不上任务）时**不记** —— 没归属的记录进不了任何一轮的
+    /// 注入段，只会占库。
+    private func emit(_ kind: SentKind, taskId: UUID?, sessionId: UUID?,
+                      turn: (chatId: String, botId: String),
+                      text: String, file: RemoteAttachment? = nil) {
+        // 文件那条的正文是空的，记忆里存**文件名** —— "发过哪个文件"才答得出来。
+        let body = text.isEmpty ? (file?.name ?? "") : text
+        var ref: String?
+        if let taskId, !body.isEmpty, let p = store?.persistence {
+            let row = SentMessage(taskId: taskId, sessionId: sessionId, kind: kind, text: body)
+            try? p.insertSent(row)
+            try? p.pruneSent(taskId: taskId)
+            ref = row.id.uuidString
+        }
+        link?.send(botId: turn.botId, chatId: turn.chatId, text: text, file: file, ref: ref)
+    }
+
+    /// 这一轮属于哪个助理任务（注入段与记录都按它归属）。**用 `owningTask` 而不是
+    /// `logSessionId == sid` 那种自拼查找** —— 那条反查已经有一套回落（对话轮 / 巡检轮 /
+    /// 执行轮都在里面），两处各写一遍迟早分叉。
+    private func sentOwner(_ sid: UUID) -> UUID? {
+        store?.scheduler.owningTask(for: sid)?.id
+    }
+
     /// 把这一轮排队的附件发出去。**文本已经发完了才调这里**。
     ///
     /// ⚠️ 顺序是"文本 → 附件": 人先看到"给你，"，再看到文件。反过来的话文件先弹出、
@@ -513,9 +558,12 @@ final class RemoteChannelService: ObservableObject {
     /// ⚠️ 拒绝理由必须**说出来**（`force: true`）: 人刚说"把那个发我"，而助理一个字都不提
     ///    —— 他会以为消息丢了，然后再要一次，然后还是什么都没来。
     private func deliverAttachments(_ queued: (files: [RemoteAttachment], notes: [String]),
-                                    turn: (chatId: String, botId: String)) {
+                                    turn: (chatId: String, botId: String),
+                                    taskId: UUID?, sessionId: UUID?) {
         for file in queued.files {
-            link?.send(botId: turn.botId, chatId: turn.chatId, text: "", file: file)
+            // 文件也算"发过的话"（`kind = .file`，正文那一列放文件名）—— 否则助理会忘了
+            // 自己昨天已经把那份 pdf 发过去了，今天再发一遍。
+            emit(.file, taskId: taskId, sessionId: sessionId, turn: turn, text: "", file: file)
         }
         guard !queued.notes.isEmpty else { return }
         noticeChat(turn, RemoteReply.compose(L("有文件没能发出去：") + "\n"
@@ -552,8 +600,9 @@ final class RemoteChannelService: ObservableObject {
         // 同 `finishRemoteTurn`: 队列无条件消费（执行轮拿不到工具，这里通常是空的 ——
         // 但"通常是"不能当判据，残留一份就是下一轮的旧文件）。
         let queued = RemoteAttachments.drain(sid: sid)
-        link?.send(botId: turn.botId, chatId: turn.chatId, text: line)
-        deliverAttachments(queued, turn: turn)
+        let owner = sentOwner(sid)
+        emit(.reply, taskId: owner, sessionId: sid, turn: turn, text: line)
+        deliverAttachments(queued, turn: turn, taskId: owner, sessionId: sid)
     }
 
     /// 投递失败（引擎没起来 / 并发到顶）—— 回合**没开始**，但仍要回一句。
@@ -589,7 +638,11 @@ final class RemoteChannelService: ObservableObject {
         guard botPhase[bot.id] == .up else {
             return .failed(L("通道没连上（设置 → 集成 → 飞书机器人 里能看灯）"))
         }
-        link?.send(botId: bot.id.uuidString, chatId: chatId, text: Self.pushText(p))
+        emit(.push,
+             taskId: taskId,
+             sessionId: store?.scheduler.scheduledTasks.first { $0.id == taskId }?.logSessionId,
+             turn: (chatId: chatId, botId: bot.id.uuidString),
+             text: Self.pushText(p))
         return .sent(String(format: L("已推给「%@」的私聊"), bot.displayName))
     }
 

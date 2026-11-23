@@ -7,7 +7,7 @@
    **本文件由 scripts/l10n/gen_strings.py --write 生成, 别手改** ——
    译文改 scripts/l10n/en_values.py 的 VALUES, 再跑 --write。
 
-   条数: 1148
+   条数: 1155
 */
 
 " (值:\"%@\")" = " (value: %@)";
@@ -433,6 +433,7 @@
 "只给了回车、没给要写的字 ⇒ 没按。回车在不少 App 里就是「发出去 / 确定」," = "Only a Return and no text ⇒ nothing was pressed. In many apps Return means \"send\" or \"confirm\",";
 "只能发 Documents 或 Downloads 里的文件（这个不在: %@）" = "Only files under Documents or Downloads can be sent (this one is not: %@).";
 "只能看图" = "Picture only";
+"只记它发出去的（飞书私聊 / 文件），不记系统通知。这份记录也会注入给模型，让它知道哪些话已经说过了。" = "Only what it actually sent counts (Feishu DM / files) — system notifications are not recorded. The model also sees this list, so it knows what has already been said.";
 "只读命令静默放行, 其余弹审批卡等待点击。" = "Read-only commands pass silently; anything else raises an approval card and waits for a click.";
 "只读命令静默放行, 危险命令自动拒绝并记下原因 (回执告知) — 远程驱动用。" = "Read-only commands pass silently; dangerous ones are refused automatically with the reason recorded (and sent back in the receipt) — for remote-driven work.";
 "只读显示本轮真正发出去的注入块 —— 门禁绿 ≠ 改对了" = "Read-only view of the injection block actually sent this turn — a green gate does not mean it is right";
@@ -460,6 +461,7 @@
 "回合完成 · 耗时 %02d:%02d" = "Turn finished · took %02d:%02d";
 "回合完成 · 耗时 %02d:%02d\n%@" = "Turn finished · took %02d:%02d\n%@";
 "回合完成通知" = "Turn completion notifications";
+"回复" = "Reply";
 "回滚" = "Roll back";
 "回车在不少 App 里等于发送, 一段带换行的字会变成好几条消息。" = "In many apps Return sends, so a paragraph with line breaks would go out as several messages.";
 "图上的位置是相对窗口的, 窗口一动就全偏 —— 重新 read 一次再算。" = "Positions in the picture are relative to the window, so moving it shifts every one of them — read again and measure again.";
@@ -552,6 +554,7 @@
 "已删除会话" = "Deleted session";
 "已删除的任务" = "Deleted task";
 "已删除的会话" = "Deleted session";
+"已发消息" = "Sent messages";
 "已回滚到执行前的快照" = "Rolled back to the pre-run snapshot";
 "已复制" = "Copied";
 "已复制图片" = "Image copied";
@@ -758,6 +761,7 @@
 "最多 %lld 张" = "Up to %lld";
 "最小化为任务台" = "Minimize to the task bar";
 "最近 %@" = "Last %@";
+"最近 %lld 条" = "%lld recent";
 "最近执行" = "Recently run";
 "最近提交" = "Recent commits";
 "最近来找过机器人的会话" = "Recent sessions that reached a bot";
@@ -842,6 +846,7 @@
 "每轮都带上" = "Every turn";
 "每轮都带上 %lld 条 · %lld 字 / %lld 字" = "%lld every turn · %lld / %lld chars";
 "永久删除" = "Erase";
+"没发出去" = "not delivered";
 "没执行起来：%@" = "Couldn't start: %@";
 "没有匹配的会话或项目" = "No matching chats or projects";
 "没有可勾的应用" = "No apps to select";
@@ -930,6 +935,7 @@
 "索引预览" = "Index preview";
 "约了 %@ 回看" = "Follow-up at %@";
 "细节" = "Details";
+"结论" = "Finding";
 "给 MangoX 发消息…" = "Message MangoX…";
 "缓存" = "Cache";
 "编号只对刚才那一次读有效, 重新读一次。" = "Item numbers are only valid for the read that produced them — read again.";
@@ -1037,6 +1043,7 @@
 "还没填 app_secret —— 它连不上，补上就自动连" = "No app_secret yet — it cannot connect; add one and it connects by itself";
 "还没归助理 —— 收到的话会回一句「先归给一个助理」" = "Not assigned to an assistant yet — incoming messages get 「assign me to an assistant first」";
 "还没归给助理 —— 归了才会连" = "Not assigned to an assistant yet — it connects once assigned.";
+"还没往外发过东西。它第一次给你发消息之后，这里会出现最近几条。" = "Nothing sent yet. Once it messages you for the first time, the latest few will show up here.";
 "还没有人跟它说过话 —— 先在飞书里给它发一句，之后结论就推到这个私聊" = "Nobody has talked to it yet — send it one message in Feishu and findings will go to that direct message from then on.";
 "还没有列出验收项" = "No acceptance items yet";
 "还没有常驻内容\n点右上角 + 新建条目, 或用常驻区与笔记区的入口放入文件" = "Nothing always-on yet\nUse + in the top right to add an entry, or use the resident and notes section entries to put files in place";

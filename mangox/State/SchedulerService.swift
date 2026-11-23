@@ -916,7 +916,8 @@ final class SchedulerService: ObservableObject {
                                                 handoff: readHandoff(for: task)?.content,
                                                 snapshot: snapshot,
                                                 ledgerPath: handoffPath(for: task),
-                                                followUp: followUp?.why)
+                                                followUp: followUp?.why,
+                                                sent: sentMemory(task.id))
             // 收尾要用: 归属哪个任务、这条 finding 算哪个来源、证据允许引用哪些编号。
             // source_id **由 App 决定**（项目来源 / 唯一启用的来源）—— 不接受模型给的 id,
             // 伪造面因此从"编造来源"缩小成"编造观察编号"，后者由 allowedExternalIds 拦。
@@ -1321,6 +1322,53 @@ final class SchedulerService: ObservableObject {
         """
     }
 
+    // MARK: - 已发消息记忆（2026-11-23）
+
+    /// 「你已经发过的」那一段 —— **每轮现算**，进易变段。
+    ///
+    /// 为什么必须现算: 它要接的正是**上一轮刚发出去的那句话**。塞进常驻 persona 就等于
+    /// 把"昨天说过什么"冻在启动那一刻，而这个功能的全部意义是"这一轮别重复上一轮"。
+    ///
+    /// ⚠️ 只取 `status = sent`：`queued`（回执没来）与 `failed` 都不是"已经在他手机上"，
+    ///    把它们写进这段等于教模型记错事实。
+    /// ⚠️ 空就**整段不出现**。写一句"（还没有）"只会让模型去猜自己是不是忘了什么。
+    ///
+    /// 不 `private`：冒烟要直接调它断言"哪几条进了段、每条被渲染成什么样" —— 走整轮 fire
+    /// 去验这段的代价是每加一条判据多跑一整轮，而它是个无副作用的读方法。
+    func sentMemory(_ taskId: UUID, now: Date = Date()) -> String? {
+        guard let p = store?.persistence,
+              let rows = try? p.loadSent(taskId: taskId,
+                                         limit: SentLimit.injectCount,
+                                         onlySent: true),
+              !rows.isEmpty else { return nil }
+        // 查询是"新的在前"，注入按时间**正序**读才像一份记录（人读聊天记录也是从上往下）。
+        let lines = rows.reversed().map { m -> String in
+            let one = m.text.replacingOccurrences(of: "\n", with: " ")
+            let clipped = one.count > SentLimit.injectChars
+                ? String(one.prefix(SentLimit.injectChars)) + "…"
+                : one
+            return "- \(Self.sentTag(m.at, now: now)) · \(m.kind.tag) · \(clipped)"
+        }
+        return """
+        【你已经发过的】（最近 \(lines.count) 条，只有真的发出去的）
+        这些**已经在对方手机上了**。同一件事不必再说一遍 —— 要说就接着往下说
+        （"昨天我说过 X" 可以，重复 X 本身不是）。
+        \(lines.joined(separator: "\n"))
+        """
+    }
+
+    /// 注入段里的时间标签。**恒中文**（注入面不进词表，同 `[笔记]` 那一族）。
+    /// 近的给相对说法（今天/昨天），远的给日期 —— 与任务卡 L2 那行同一套口径。
+    static func sentTag(_ at: Date, now: Date = Date()) -> String {
+        let cal = Calendar.current
+        let f = DateFormatter()
+        f.dateFormat = "HH:mm"
+        if cal.isDate(at, inSameDayAs: now) { return f.string(from: at) }
+        if cal.isDateInYesterday(at) { return "昨天 " + f.string(from: at) }
+        f.dateFormat = "M月d日 HH:mm"
+        return f.string(from: at)
+    }
+
     /// 巡检轮的 system 注入段（走 `--append-system-prompt`）。**纯函数**: 参数即全部输入。
     /// `ledgerPath` **不是可选的** —— 巡检轮按构造永远有一份账本（`handoffPath` 总能算出
     /// 一条路径）。留一个 nil 分支只会让人以为"某一轮可以没有账本"。
@@ -1331,7 +1379,8 @@ final class SchedulerService: ObservableObject {
                                   handoff: String?,
                                   snapshot: WatchSnapshot,
                                   ledgerPath: String,
-                                  followUp: String? = nil) -> String {
+                                  followUp: String? = nil,
+                                  sent: String? = nil) -> String {
         var parts: [String] = []
         parts.append("""
         【助理任务 · 巡检轮】
@@ -1389,6 +1438,9 @@ final class SchedulerService: ObservableObject {
         3. 不要为了"留证据"往别处写文件；不要声称你改了别的东西。
         """)
         parts.append(Self.watchLedgerContract)
+        // 2026-11-23:「已发消息」—— 它上一轮往外说过什么。**排在回看注记之前**：那一段是
+        // "这一轮为什么醒"（属于收尾），而"我说过什么"是判断的输入，得先看见。
+        if let sent, !sent.isEmpty { parts.append(sent) }
         // 2026-11-23: 回看轮的"为什么醒"。**必须排在输出契约之前** —— 契约是"说完就结束"的那一段，
         // 它后面不该再有话（这条不变量从写下来那天就挂着）。
         if let f = followUp, !f.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -1531,6 +1583,8 @@ final class SchedulerService: ObservableObject {
                             + "\(WatchFindingService.archivedKeep) 条。" : ""))
         }
         parts.append(Self.watchLedgerContract)
+        // 2026-11-23:「已发消息」（对话轮同理 —— "我昨天跟你说过 X" 多数发生在这里）。
+        if let sent = sentMemory(task.id) { parts.append(sent) }
         // 回复契约放最后（它是"说完就结束"的那一段，后面不该再有话）
         parts.append(Self.dialogueOutputContract)
         return parts.joined(separator: "\n\n")

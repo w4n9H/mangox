@@ -403,6 +403,24 @@ final class PersistenceStore {
         try db.run("CREATE INDEX IF NOT EXISTS idx_followups_task ON agent_followups(task_id, status)")
         // 配额闸（`followUpCountSince`）按 `created_at` 扫同一个任务的行。
         try db.run("CREATE INDEX IF NOT EXISTS idx_followups_created ON agent_followups(task_id, created_at)")
+        // 2026-11-23:「已发消息」记忆 —— 助理往外发过的每一句。**只记模型说的话**
+        //（`notice*` 那族是 App 话术, 不记, 所以**没有 `origin` 列**）。
+        // `id` 同时是发给桥的 `ref`: 回执带回来 ⇒ "这一条发没发出去"能对上具体那一条。
+        // `status` 同样不做 CHECK（老版打开新库要能写, 同上面两处）。
+        try db.run("""
+        CREATE TABLE IF NOT EXISTS agent_sent (
+            id          TEXT PRIMARY KEY,
+            task_id     TEXT NOT NULL,
+            session_id  TEXT,
+            at          REAL NOT NULL,
+            kind        TEXT NOT NULL,
+            status      TEXT NOT NULL,
+            text        TEXT NOT NULL,
+            note        TEXT
+        )
+        """)
+        // 注入段与界面都问"这个任务最近几条" ⇒ 一条索引够两处用。
+        try db.run("CREATE INDEX IF NOT EXISTS idx_sent_task ON agent_sent(task_id, at)")
         // P19.2 S15b: 旧的「助理 × chat_id」绑定收成机器人行。**放在最后** —— 它要读
         // `scheduled_tasks.remote_chat_id`（上面 260 行才补的列）与刚建好的 `remote_bots`。
         migrateLegacyRemoteBindings()
@@ -1514,6 +1532,78 @@ final class PersistenceStore {
                     .text(id.uuidString)])
     }
 
+    // MARK: - 已发消息（助理往外发过的话, 2026-11-23）
+
+    /// 记一条"要发"。**先落库再交给桥**: 顺序反过来的话，桥一崩就什么都没留下
+    /// —— 而"我以为我说过、其实一个字都没出去"正是这个功能要消灭的那件事。
+    func insertSent(_ s: SentMessage) throws {
+        try db.run("""
+            INSERT OR REPLACE INTO agent_sent
+            (id, task_id, session_id, at, kind, status, text, note)
+            VALUES (?,?,?,?,?,?,?,?)
+            """, [.text(s.id.uuidString),
+                  .text(s.taskId.uuidString),
+                  s.sessionId.map { .text($0.uuidString) } ?? .null,
+                  .real(s.at.timeIntervalSince1970),
+                  .text(s.kind.rawValue),
+                  .text(s.status.rawValue),
+                  .text(String(s.text.prefix(SentLimit.maxTextChars))),
+                  s.note.map { .text($0) } ?? .null])
+    }
+
+    /// 回执到了：把 `queued` 落成 `sent` / `failed`。`ref` 就是行的主键。
+    ///
+    /// ⚠️ 找不到这一行（旧版写的 `ref`、或者桥把别人的 ref 还回来）⇒ **静默不动**：
+    /// 一条对不上的回执不该改任何一条记录，那会让"发没发出去"变成猜的。
+    func settleSent(id: UUID, status: SentStatus, note: String?) throws {
+        guard status != .queued else { return }
+        try db.run("UPDATE agent_sent SET status = ?, note = ? WHERE id = ? AND status = 'queued'",
+                   [.text(status.rawValue),
+                    note.map { .text($0) } ?? .null,
+                    .text(id.uuidString)])
+    }
+
+    /// 这个任务最近发过的几条（新的在前）。
+    ///
+    /// `onlySent = true` ⇒ 只要 `sent`（注入段用：那是模型唯一该当成事实的一档）。
+    /// 默认 **全都要**（含 `queued` / `failed`）—— 存储层不替产品做"哪些该显示"的决定，
+    /// 那两处（注入 / 预览卡）各自有各自的取舍。
+    func loadSent(taskId: UUID, limit: Int, onlySent: Bool = false) throws -> [SentMessage] {
+        let extra = onlySent ? " AND status = 'sent'" : ""
+        let rows = try db.query("""
+            SELECT id, task_id, session_id, at, kind, status, text, note
+            FROM agent_sent WHERE task_id = ?\(extra) ORDER BY at DESC LIMIT ?
+            """, [.text(taskId.uuidString), .int(Int64(max(0, limit)))])
+        return rows.compactMap(decodeSent)
+    }
+
+    /// 行的解码口径 —— **只有这份**。坏行跳过而不是抛（同 `decodeFollowUp`）。
+    private func decodeSent(_ row: [String: DBValue]) -> SentMessage? {
+        guard let id = UUID(uuidString: text(row, "id")),
+              let taskId = UUID(uuidString: text(row, "task_id")),
+              let kind = SentKind(rawValue: text(row, "kind")),
+              let status = SentStatus.decode(text(row, "status"))
+        else { return nil }
+        return SentMessage(id: id,
+                           taskId: taskId,
+                           sessionId: optionalText(row, "session_id").flatMap { UUID(uuidString: $0) },
+                           at: optionalDate(row, "at") ?? .distantPast,
+                           kind: kind,
+                           status: status,
+                           text: text(row, "text"),
+                           note: optionalText(row, "note"))
+    }
+
+    /// 只留最近 `SentLimit.keepPerTask` 条。**在插入之后立刻做**（每次发送只有一次 DELETE），
+    /// 不做定期任务：没有第二个时点，也就没有"定时器忘了跑"这种失效模式。
+    func pruneSent(taskId: UUID, keep: Int = SentLimit.keepPerTask) throws {
+        try db.run("""
+            DELETE FROM agent_sent WHERE task_id = ? AND id NOT IN (
+                SELECT id FROM agent_sent WHERE task_id = ? ORDER BY at DESC LIMIT ?
+            )
+            """, [.text(taskId.uuidString), .text(taskId.uuidString), .int(Int64(max(0, keep)))])
+    }
+
     /// 删任务 —— **连同它的数据**。返回被删 findings 的执行快照目录（供上层删盘）。
     /// ⚠️ 2026-11-18 之前这里只删一行 `scheduled_tasks`。三张带 `task_id` 的表
     /// （`agent_findings` / `agent_finding_actions` / `agent_token_daily`）于是留下**悬空外键**：
@@ -1523,7 +1613,8 @@ final class PersistenceStore {
     ///
     /// **回收判据必须与「谁真持有这些东西」同源**：`task_id` 就是持有者，
     /// 所以删除半径 = 所有 `WHERE task_id = ?` 的表；少认一张就等于把垃圾留在库里。
-    /// ⚠️ 这张名单**每次加一张带 `task_id` 的表都要回来补一行**（2026-11-23 加了 `agent_followups`）——
+    /// ⚠️ 这张名单**每次加一张带 `task_id` 的表都要回来补一行**（2026-11-23 加了
+    /// `agent_followups` 与 `agent_sent`）——
     /// 它就是"谁真持有"的账本本身，漏记的样子是垃圾而不是报错。
     ///
     /// ⚠️ `agent_finding_actions` 的外键是 `finding_id` 而不是 `task_id` —— 它必须**先**删，
@@ -1546,6 +1637,9 @@ final class PersistenceStore {
         // 2026-11-23: 未兑现的约定跟着任务一起走。留着它的下场是 tick 每一分钟都扫到一条指向
         // 不存在任务的 `pending` ⇒ 每次判"任务已删除"再标 cancelled（几十次之后才安静）。
         try db.run("DELETE FROM agent_followups WHERE task_id = ?", [tid])
+        // 2026-11-23:「已发消息」也跟着走。留着它的样子是"任务列表里没有这个助理了，
+        // 但库里还有 200 条它说过的话" —— 而那个任务再也不会说话了。
+        try db.run("DELETE FROM agent_sent WHERE task_id = ?", [tid])
         try db.run("DELETE FROM scheduled_tasks WHERE id = ?", [tid])
         return undos
     }

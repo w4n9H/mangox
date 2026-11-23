@@ -66,7 +66,7 @@ extension SmokeMain {
                                        timeout: 15)
             var ok = false
             for f in frames {
-                if case .sendResult(_, let success, _, _) = f { ok = success }
+                if case .sendResult(_, let success, _, _, _) = f { ok = success }
             }
             check(sent && ok, "T-REMOTELIVE send 命令真的发出一条消息（send_result ok=\(ok)）")
         }
