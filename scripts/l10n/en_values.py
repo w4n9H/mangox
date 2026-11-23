@@ -245,6 +245,16 @@ VALUES = {
     '已拒绝': 'Denied',
     '已暂停': 'Paused',
     '已跑 %lld 次': 'Ran %lld times',
+    # ── follow-up（2026-11-23）· 任务卡 L2 那一行 ──
+    '约了 %@ 回看': 'Follow-up at %@',
+    '明天': 'tomorrow',
+    # ── follow-up 配额卡（编辑器，位置在「模型与模式配置」之前）──
+    '模型自主调度': 'Model self-scheduling',
+    '两次巡检之间，它可以给自己约一个时刻回来（比如「构建还在跑，10 分钟后再看」）。': 'Between scheduled runs it may book itself a time to come back — e.g. "the build is still running, look again in 10 minutes".',
+    '每轮最多约 1 条。约来的那一轮照常算进日预算。': 'At most one booking per run. The run it wakes up still counts against the daily token budget.',
+    '今日已约 %lld 次': '%lld booked today',
+    '不用（关掉）': 'Off',
+    '每天 %lld 次': '%lld times a day',
     '并发回合上限': 'Concurrent turn limit',
     '并发已达上限 (%lld), 捕获未发送': 'Concurrency limit reached (%lld); capture not sent',
     '并发已达上限 (%lld), 请等待任务结束或在设置中调高': 'Concurrency limit reached (%lld) — wait for a task to finish or raise the limit in settings',

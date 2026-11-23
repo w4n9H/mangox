@@ -70,6 +70,17 @@ final class MockTransport: AgentTransport {
         attachSpoolUpdates += 1
     }
 
+    /// 2026-11-23 smoke 断言用: 最近一次 follow-up spool 下发。判据同上 ——
+    /// **"普通回合被清回 nil"必须能观察到**（挂着不清 = 之后每一轮都能给自己约会，
+    /// 而收口只认「归任务的那一轮」，表现是"它说约好了，到点没人叫它"）。
+    private(set) var lastFollowUpSpool: String?
+    private(set) var followUpSpoolUpdates: Int = 0
+
+    func updateFollowUpSpool(_ spool: String?) {
+        lastFollowUpSpool = spool
+        followUpSpoolUpdates += 1
+    }
+
     /// P10.1b: 记录下发的搜索 key —— 冒烟靠它断言"配置变更有没有真的推到 transport"。
     func updateWebSearchKey(_ key: String?) {
         lastWebSearchKey = key

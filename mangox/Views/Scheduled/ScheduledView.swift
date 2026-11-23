@@ -34,6 +34,10 @@ struct ScheduledView: View {
     /// 于是「一场会话」的含义才干净（一个入口 = 一场对话）。想要第二个入口就再建一个助理。
     @State private var draftBotId: UUID? = nil
     @State private var draftBudget: String = ""
+    /// 2026-11-23: 「模型一天最多能自主调度几次」。**草稿里恒是生效值**（不是 nil）——
+    /// 编辑器没有"未指定"这个状态，而 `nil` 与 `0` 的区别只在库里那一位上有意义
+    /// （见 `ScheduledTask.followUpsPerDay` 的三态）。新建助理从出厂默认起步。
+    @State private var draftFollowUpsPerDay: Int = ScheduledTask.factoryFollowUpsPerDay
     @State private var hoveringId: UUID?
     // P9-#17: 无人值守恒开 (fire 不再读 task.unattended), 开关与确认弹窗已移除
     // cron 四档录入器: 控件态 → 生成 cron; 编辑时 classifyCron 反解析回填 (解析不出落高级档)
@@ -658,6 +662,11 @@ struct ScheduledView: View {
         } else if task.continuous && !task.isAssistant {
             parts.append(L("留痕"))
         }
+        // 2026-11-23: 它自己约的那一次。放在"跑了几次"**之前** —— "14:30 还会回来"比"已跑 12 次"
+        // 更影响人此刻的判断；没有约就不出现（大多数任务永远没有这一行）。
+        if let f = store.nextFollowUp(for: task.id) {
+            parts.append(String(format: L("约了 %@ 回看"), followUpTag(f.dueAt)))
+        }
         if task.runCount > 0 {
             parts.append(String(format: L("已跑 %lld 次"), task.runCount))
         } else if let last = task.lastRunAt {
@@ -682,6 +691,19 @@ struct ScheduledView: View {
     }
 
     private func cronValid(_ task: ScheduledTask) -> Bool { task.cronExpr != nil }
+
+    /// 2026-11-23: 回看时刻的人话。今天只写 `14:30`，明天加「明天」，再远给 `11/26 09:00`。
+    /// **不写整日期**的理由: 这一行是三行版式里的 L2（扫一眼的），一个 `2026-11-26 09:00`
+    /// 会把"每天 09:00 · 约了… · 已跑 3 次"挤成换行，而多出来的年份一个字都没用。
+    private func followUpTag(_ date: Date) -> String {
+        let cal = Calendar.current
+        let f = DateFormatter()
+        f.dateFormat = "HH:mm"
+        if cal.isDateInToday(date) { return f.string(from: date) }
+        if cal.isDateInTomorrow(date) { return L("明天") + " " + f.string(from: date) }
+        f.dateFormat = "M/d HH:mm"
+        return f.string(from: date)
+    }
     private func isEditing(_ task: ScheduledTask) -> Bool { editingId == task.id }
 
     // MARK: - 编辑器
@@ -726,6 +748,10 @@ struct ScheduledView: View {
             // "移除触达及相关功能"），而台账是助理档唯一一个"我要随时看见"的东西。
             if draftKind == .assistant, editingTask() != nil { ledgerCard }
             if draftKind == .assistant { remoteCard }
+            // 2026-11-23: 「模型自主调度」配额。**独立一张小卡，紧挨在「模型与模式配置」之前**
+            // （boss 定: 不要塞进那张卡里）。只对助理档显示 —— Cron 档的周期是人定的，
+            // 让模型自己往里插时间点等于改写人定的东西（生效值恒 0，见 `ScheduledTask`）。
+            if draftKind == .assistant { followUpCard }
             configCard   // P10.4: 任务级模型/级别/模式
             if editingId != nil && draftContinuous && draftKind == .execute {
                 workLogCard
@@ -1073,6 +1099,76 @@ struct ScheduledView: View {
     private var draftIsDream: Bool {
         guard let t = editingTask() else { return false }
         return SchedulerService.isDreamTask(t)
+    }
+
+    // MARK: - 2026-11-23 「模型自主调度」配额
+
+    /// 这两行是**一句话的两半**，别拆开看：段落说"它能给自己约时间"，第一行说"每轮最多 1 条"，
+    /// 第二行说"一天最多几条"（那颗胶囊）。
+    ///
+    /// 为什么它是**独立一张卡**而不是塞进「模型与模式配置」: 那一张回答的是"跑起来用什么模型、
+    /// 一天花多少"，这一张回答的是"**什么时候跑**"—— 它与上面的 cron 是一组，与模型不是。
+    private var followUpCard: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 6) {
+                Image(systemName: "clock.arrow.circlepath")
+                    .font(.system(size: 10))
+                    .foregroundStyle(CodexTheme.textMuted)
+                Text(L("模型自主调度"))
+                    .font(CodexTheme.fontTiny)
+                    .foregroundStyle(CodexTheme.textMuted)
+                Spacer()
+                if let id = editingId {
+                    Text(String(format: L("今日已约 %lld 次"), store.followUpsToday(id)))
+                        .font(CodexTheme.fontTiny)
+                        .foregroundStyle(CodexTheme.textMuted)
+                }
+            }
+            HStack(alignment: .firstTextBaseline, spacing: 12) {
+                Text(L("两次巡检之间，它可以给自己约一个时刻回来（比如「构建还在跑，10 分钟后再看」）。"))
+                    .font(CodexTheme.fontSmall)
+                    .foregroundStyle(CodexTheme.textTertiary)
+                    .fixedSize(horizontal: false, vertical: true)
+                Spacer(minLength: 0)
+                followUpQuotaPicker
+                    .fixedSize()
+            }
+            Text(L("每轮最多约 1 条。约来的那一轮照常算进日预算。"))
+                .font(CodexTheme.fontTiny)
+                .foregroundStyle(CodexTheme.textMuted)
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(CodexTheme.bgElevated)
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+    }
+
+    /// 配额胶囊。**落库存 Int**（不是枚举）: 将来要"自定义次数"不用改 schema；
+    /// 而菜单里只给五档，是因为现在只有这五个语义（`0` = 不用）。
+    ///
+    /// ⚠️ 每项必须是 `Button` —— `Menu` 里塞带 `.tag` 的其它视图会**静默失效**（本项目踩过）。
+    private var followUpQuotaPicker: some View {
+        CodexPillMenu {
+            ForEach([0, 1, 2, 3, 5], id: \.self) { n in
+                Button(followUpQuotaLabel(n)) { draftFollowUpsPerDay = n }
+            }
+        } label: {
+            Text(followUpQuotaLabel(draftFollowUpsPerDay))
+            Image(systemName: "chevron.down")
+                .font(.system(size: 8, weight: .semibold))
+        }
+    }
+
+    private func followUpQuotaLabel(_ n: Int) -> String {
+        n == 0 ? L("不用（关掉）") : String(format: L("每天 %lld 次"), n)
+    }
+
+    /// 草稿 → 落库值。Cron 档恒 `nil`（那一档没有这个入口，不该在库里留一份没人能改的数据）。
+    ///
+    /// ⚠️ 助理档存**具体数**而不是"恰好等于默认就存 nil": "他看过并接受了 2" 与 "他从没看过"
+    /// 是两件事 —— 后者会让将来的默认值变更悄悄改掉他的设置。
+    private func savedFollowUpsPerDay(_ kind: TaskKind) -> Int? {
+        kind == .assistant ? max(0, draftFollowUpsPerDay) : nil
     }
 
     // MARK: - P10.4 任务级执行配置 (模型/级别/模式; fire 只动日志会话 transport)
@@ -1607,6 +1703,7 @@ struct ScheduledView: View {
         draftSources = []
         draftBotId = nil
         draftBudget = ""
+        draftFollowUpsPerDay = ScheduledTask.factoryFollowUpsPerDay
         draftLog = ""
         handoffUpdatedAt = nil
         showWorkLog = false
@@ -1735,6 +1832,9 @@ struct ScheduledView: View {
         // 1:1 ⇒ 最多一个；`first` 而不是 `last` 只是为了"万一库里有两条"时行为可预期。
         draftBotId = store.remoteBots.first { $0.assistantId == task.id }?.id
         draftBudget = task.dailyTokenBudget > 0 ? String(task.dailyTokenBudget) : ""
+        // 回填**生效值**：老行（nil）在这里被摊成本档的默认（助理 2 / Cron 0），
+        // 下一次保存就把它固化成具体值 —— 与 `config` 那条"没有跟随全局这个状态了"同款。
+        draftFollowUpsPerDay = task.effectiveFollowUpsPerDay
         syncCronControls(task.cron)
         // P10.4: 任务级配置回填。**没有"跟随全局"这个状态了** —— 老库里的 nil 行回填成
         // "当前全局值"只是把它的既有行为落成一个具体值（下一次保存即固化）。
@@ -1804,6 +1904,7 @@ struct ScheduledView: View {
             // 来源照写: 本版界面不能改来源, 但库里已有的行必须原样留住, 否则一次编辑就静默清空。
             existing.sources = draftSources
             existing.dailyTokenBudget = budget
+            existing.followUpsPerDay = savedFollowUpsPerDay(draftKind)
             // P19.2 S15b: 飞书入口的归属。**只改机器人行**，助理行上没有这份数据。
             store.updateScheduled(existing)
             if draftKind == .assistant { applyRemoteBots(assistantId: id) }
@@ -1818,6 +1919,7 @@ struct ScheduledView: View {
                 store.scheduledTasks[idx].unattended = true   // P9-#17: 恒无人值守
                 store.scheduledTasks[idx].config = buildDraftConfig()   // P10.4
                 store.scheduledTasks[idx].dailyTokenBudget = budget
+                store.scheduledTasks[idx].followUpsPerDay = savedFollowUpsPerDay(draftKind)
                 store.updateScheduled(store.scheduledTasks[idx])
                 if draftKind == .assistant { applyRemoteBots(assistantId: store.scheduledTasks[idx].id) }
             }

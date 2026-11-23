@@ -2021,7 +2021,8 @@ final class ChatStore: ObservableObject {
                    modelOverride: (provider: String, modelId: String, thinking: String?)? = nil,
                    dreamSpool: String? = nil,   // P15.3: 仅 dream fire 非 nil
                    extraSystemPrompt: String? = nil,   // P19: 巡检轮的观察 / 契约 / 交接文件
-                   executionGuard: ExecutionGuard? = nil) {   // P19 S6: 仅执行轮非 nil
+                   executionGuard: ExecutionGuard? = nil,   // P19 S6: 仅执行轮非 nil
+                   followUpOwner: ScheduledTask? = nil) {   // 2026-11-23: 巡检轮显式带任务过来
         let t = transportFor(sid)
         Log.send("turn-begin", ["sid": String(sid.uuidString.prefix(8)),
                                 "eph": ephemeral ? "1" : "0",
@@ -2049,6 +2050,15 @@ final class ChatStore: ObservableObject {
         //    不清的话那一轮也能调 `feishu_attach` —— 而它写的 spool 没有任何轮次会去读,
         //    表现是"助理说发了、人什么都没收到"。
         t.updateAttachSpool(remote.attachSpoolForTurn(sid: sid))
+        // 2026-11-23: follow-up 工具**只给"归某个任务的那一轮"** —— 判据只有一处
+        // （`SchedulerService.beginFollowUpTurn`）: fire 轮把任务显式带过来，对话轮 / 执行轮
+        // 靠 `logSessionId` 反查。普通会话两边都落空 ⇒ 不给 spool ⇒ 不挂扩展 ⇒
+        // "聊着天给自己约个会"这件事在**结构上**做不到（不是靠提示词劝）。
+        // ⚠️ 与上面两条同一个纪律: **无条件赋值**。这个工具只要粘在实例上一次，之后每一轮
+        //    都能约 —— 而它写的 spool 只有"归任务的那一轮"收口时会读，表现是
+        //    "它说约好了，到点没人叫它"。
+        let followUpOwner = followUpOwner ?? scheduler.owningTask(for: sid)
+        t.updateFollowUpSpool(scheduler.beginFollowUpTurn(sid: sid, owner: followUpOwner))
         // P19: 注入段是 per-turn，**无条件赋值**。
         // 巡检轮之后, 同一个 transport 上还会跑人的手动回合; 只用 `if let` 赋值的话,
         // 那次手动回合会**继承巡检注入段**: 表现是"我在会话里问一句, 它却按巡检契约
@@ -2197,6 +2207,9 @@ final class ChatStore: ObservableObject {
         // P19.2 S12: 对话轮的收口 —— 只认领"这一轮真的是对话轮"的那张表。
         // 手动停也要收: 人已经说出口的「提议」不该因为按了停止而丢掉。
         scheduler.finishDialogueTurnIfNeeded(sid: sid)
+        // 2026-11-23: follow-up 的收口。同一条纪律 —— 跑到一半被停也要**收**:
+        // "半小时后再看"是这一轮唯一的产出，丢掉它等于让人白等一场。
+        scheduler.finishFollowUpIfNeeded(sid: sid)
         // P19.2 S15: 被手动停掉的飞书回合也要回一句 —— 那边的人看到的是"消息发出去了、
         // 然后什么都没有"，而这里的"停"是他自己按的，飞书那头看不见这个动作。
         remote.finishRemoteTurn(sid: sid)
@@ -2538,6 +2551,11 @@ final class ChatStore: ObservableObject {
         scheduler.tokenSpentToday(taskId)
     }
 
+    /// 2026-11-23: 某任务今天约了几条回看（编辑器那一行「今日已约 N 次」）。
+    func followUpsToday(_ taskId: UUID) -> Int {
+        scheduler.followUpsToday(taskId)
+    }
+
     /// 某条结论的执行痕迹（视图按行展开时用）。
     func actions(for findingId: UUID) -> [FindingAction] {
         findingActions.filter { $0.findingId == findingId }
@@ -2701,8 +2719,10 @@ final class ChatStore: ObservableObject {
     }
 
     /// 到点投递 (P3.9): 全链路在 SchedulerService, ChatStore 转发 (冒烟直访入口)。
-    func runScheduledFire(_ task: ScheduledTask, at now: Date = Date()) {
-        scheduler.runScheduledFire(task, at: now)
+    /// 2026-11-23: `followUp` 非 nil = 这一轮是 agent 自己约的回看（冒烟用它造反例）。
+    func runScheduledFire(_ task: ScheduledTask, at now: Date = Date(),
+                          followUp: FollowUp? = nil) {
+        scheduler.runScheduledFire(task, at: now, followUp: followUp)
     }
 
     /// P17: 漏跑清单 (视图经 facade 读; 冒烟直访 SchedulerService)。
@@ -2711,6 +2731,9 @@ final class ChatStore: ObservableObject {
     /// P17: 补跑最近一次 / 认账忽略 (视图经 facade 调)。
     func catchUpMissedFire(_ taskId: UUID) { scheduler.catchUpMissedFire(taskId) }
     func ignoreMissedFire(_ taskId: UUID) { scheduler.ignoreMissedFire(taskId) }
+
+    /// 2026-11-23: 这个任务下一条要回看的时刻（nil = 没约）。视图只在任务卡上显示一行。
+    func nextFollowUp(for taskId: UUID) -> FollowUp? { scheduler.nextFollowUp(for: taskId) }
 
     /// P15.3: dream 的 spool 落点 (冒烟直访; 视图侧不用它 —— 谁跑 dream 由任务 id 认)。
     static func dreamSpoolPath(taskId: UUID) -> String {
@@ -2999,6 +3022,7 @@ extension ChatStore: AgentTransportDelegate {
             scheduler.finishWatchFireIfNeeded(sid: sid)   // P19: 助理结论的落定点
             scheduler.finishExecFireIfNeeded(sid: sid)   // P19 S6: 执行结果的回写点
             scheduler.finishDialogueTurnIfNeeded(sid: sid)   // P19.2 S12: 对话轮「提议」的落定点
+            scheduler.finishFollowUpIfNeeded(sid: sid)   // 2026-11-23: agent 自己约的那几条时刻
             // P19.2 S15: 从飞书发起的那一轮，把回复发回去。**认领即删**（`remoteTurns`），
             // 所以同一场会话里你在电脑上说的下一轮不会回响到飞书。
             remote.finishRemoteTurn(sid: sid)

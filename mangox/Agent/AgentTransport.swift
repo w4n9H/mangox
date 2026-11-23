@@ -132,6 +132,12 @@ protocol AgentTransport: AnyObject {
     /// 这个是"人是从飞书私聊发起的"。判据在 `RemoteChannelService`（那个 sid 在不在
     /// `remoteTurns` / `execReplies` 里）, 所以定时巡检 / fire 永远拿不到它。
     func updateAttachSpool(_ spool: String?)
+    /// 2026-11-23: 下发 follow-up 的 spool 落点 (nil = 这一回合不归任何任务)。
+    ///
+    /// **per-turn 实例级**, 与前两个同一层但又是第三件事: dream 是"跑一次提炼", attach 是
+    /// "人从飞书来的", 这个是"这一轮属于某个任务" —— 合成一个变量会让三重闸门互相摘掉对方。
+    /// 判据在 `SchedulerService.beginFollowUpTurn`（任务反查）, 所以普通会话永远拿不到它。
+    func updateFollowUpSpool(_ spool: String?)
     /// P19: 这一回合的 system 注入段（nil = 不注入）。走 `--append-system-prompt`，
     /// **不进 user prompt**（实测: 落成 `role=system` 的 addendum 段，下次 spawn 被替换、
     /// 不累积 —— 见 docs/P19 §02）。spawn 期定格 ⇒ `spawnedExtraSystem` 变了要重启进程。
@@ -274,6 +280,9 @@ extension AgentTransport {
     func updateDreamSpool(_ spool: String?) {}
     /// S15c: 飞书附件 spool 下发 (Mock 无进程 ⇒ 默认空实现; MockTransport 覆盖并记录)。
     func updateAttachSpool(_ spool: String?) {}
+    /// 2026-11-23: follow-up spool 下发 (同 `updateDreamSpool` —— MockTransport 覆盖并记录,
+    /// 空实现会让"普通回合有没有把它清回 nil"变成不可断言的一件事)。
+    func updateFollowUpSpool(_ spool: String?) {}
     /// P10.2a-0: 裁决档下发 (Mock 无审批桥, 空实现)。
     func updateApprovalMode(_ mode: ApprovalMode) {}
     /// P10.2b: 拦截记录 (Mock 无审批桥 → 恒空; 冒烟用 MockTransport.autoJudgeBlocks 注入)。

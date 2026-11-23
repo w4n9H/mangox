@@ -155,6 +155,21 @@ final class PiRpcTransport: AgentTransport {
     /// 协议侧入口 (S15c)。同 `updateDreamSpool`: 一条路径进、一条路径出。
     func updateAttachSpool(_ spool: String?) { attachSpool = spool }
 
+    /// 2026-11-23: 这一份 transport 是不是**在替某个任务跑一轮** —— 非 nil = 是, 值就是那轮的 spool。
+    ///
+    /// ⚠️ 与 `dreamSpool` / `attachSpool` 并列的**第三个** per-turn 开关，不是它们的合并:
+    /// 三者管的是三件不同的事（跑一次 dream / 人从飞书来 / 这一轮属于某个任务），
+    /// 合成一个变量会让三重闸门互相把对方摘掉。
+    ///
+    /// ⚠️ 谁设它: `ChatStore.beginTurn` → `SchedulerService.beginFollowUpTurn` ——
+    /// 判据是"这场会话归某个任务管"（`logSessionId` 反查）。**普通会话无条件写 nil**，
+    /// 所以"聊天时给自己约定时器"这件事在结构上就做不到（不是靠提示词劝住）。
+    private var followUpSpool: String?
+    private var spawnedFollowUpSpool: String?
+
+    /// 协议侧入口 (2026-11-23)。同 `updateDreamSpool`: 一条路径进、一条路径出。
+    func updateFollowUpSpool(_ spool: String?) { followUpSpool = spool }
+
     /// P19: 巡检轮 / 执行轮的**系统级注入**（交接文件 + 输出契约 + Observation 快照）。
     ///
     /// ⚠️ 走 `--append-system-prompt` 而不是塞进 user prompt, 理由是**转录污染**:
@@ -327,6 +342,7 @@ final class PiRpcTransport: AgentTransport {
                                    codemodeExtensionPath: String?,
                                    dreamExtensionPath: String? = nil,
                                    attachExtensionPath: String? = nil,
+                                   followUpExtensionPath: String? = nil,
                                    computerExtensionPath: String? = nil,
                                    enabled: [String]) -> [String] {
         var args = ["--no-extensions", "--extension", builtinLlamaExtension,
@@ -334,6 +350,7 @@ final class PiRpcTransport: AgentTransport {
         if let codemode = codemodeExtensionPath { args += ["--extension", codemode] }
         if let dream = dreamExtensionPath { args += ["--extension", dream] }
         if let attach = attachExtensionPath { args += ["--extension", attach] }
+        if let follow = followUpExtensionPath { args += ["--extension", follow] }
         if let computer = computerExtensionPath { args += ["--extension", computer] }
         for path in enabled { args += ["--extension", path] }
         return args
@@ -951,6 +968,191 @@ final class PiRpcTransport: AgentTransport {
         let dir = NSHomeDirectory() + "/.mangox/extensions"
         let path = dir + "/mangox-feishu-attach.ts"
         let source = Self.attachExtensionSource
+        try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+        let existing = try? String(contentsOfFile: path, encoding: .utf8)
+        if existing != source {
+            try? source.write(toFile: path, atomically: true, encoding: .utf8)
+        }
+        return path
+    }
+
+    // MARK: - follow-up 扩展（2026-11-23, 只写 spool）
+
+    /// env 名 —— **契约 token**: 逐字进子进程 env, `mangox-followup.ts` 那侧读的就是它。
+    /// 改它 = 两边一起改, 且**已经落在磁盘上的旧扩展文件会失效**（读不到变量 ⇒ 工具早退
+    /// "这个会话没有"）。同 `dreamSpoolEnvKey` 那条判据: 不得本地化 / 改写 / 拆分。
+    nonisolated static let followUpEnvKey = "MANGOX_FOLLOWUP_SPOOL"
+
+    /// 扩展注册出来的工具名（面板展开用；与源码同源同改，同 `dreamToolNames` 那条守）。
+    nonisolated static let followUpToolNames: [String] = ["follow_up"]
+
+    /// spool 的**生产形状**: `~/.mangox/followup-spool/`。
+    ///
+    /// 与 `dream-spool` 一样**故意独立**: 它既不是笔记根（否则未兑现的约定会被扫描器当成笔记
+    /// 进索引 —— 那是 P15 最不能接受的一件事），也不是任务记忆目录（那里放的是给人看的账本）。
+    /// 常态下这个目录是空的（ingest 之后立刻删文件），只有"收口没跑到"时才会留下残留。
+    static func productionFollowUpSpoolDir() -> String {
+        NSHomeDirectory() + "/.mangox/followup-spool"
+    }
+
+    /// **进程级**重定向（冒烟）—— 与 `dreamSpoolRootOverride` **同一条理由，逐字同款**:
+    /// 生产调用点（`SchedulerService`）不传参数，靠"每个 helper 记得设实例 override"已经漏过一次。
+    /// 这里漏一次的后果更重: 夹具会写进用户真实的 `~/.mangox/followup-spool/`，而它**不在任何
+    /// 笔记根里** ⇒ 既有的几个"根重定向"守卫没有一个会看见它（守卫 26 的第二个受守对象）。
+    static var followUpSpoolRootOverride: String?
+
+    static func followUpSpoolDir() -> String {
+        followUpSpoolRootOverride ?? productionFollowUpSpoolDir()
+    }
+
+    /// 一个任务一个文件。**文件名 = 任务 id** ⇒ 同一任务的两次 fire 不会互相覆盖，
+    /// 而不同任务之间本来就不该看见对方的约定。
+    ///
+    /// ⚠️ 与 dream 的**一个区别**: dream 在 fire 开头就把 spool 删掉（上一批残留无法归因），
+    /// follow-up **不删** —— 残留的那几行仍然是有效的约定，只是还没被 ingest。代价见
+    /// `SchedulerService.ingestFollowUpSpool` 的注释（幂等键把它兜住了）。
+    static func followUpSpoolPath(taskId: UUID) -> String {
+        followUpSpoolDir() + "/\(taskId.uuidString).jsonl"
+    }
+
+    /// 自建 follow-up 扩展 —— **模型给自己约定时器的唯一入口**。
+    ///
+    /// ⚠️ 这个扩展是哑的: 读 env / 校验形状 / 追加一行。**它不算时刻、不落库、不 fire** ——
+    /// 三件事都在 App 侧: 时刻要 App 的钟（子进程的钟我们看不见，也不该信）, 落库要库,
+    /// fire 要整个调度器。扩展只知道"约多少分钟之后 + 为什么"。
+    ///
+    /// ⚠️ **双闸门**（同 dream / attach）: 挂载闸门 = 只有**属于某个任务的那一轮**才
+    /// `--extension` 它；激活闸门 = 只有那次 spawn 设 `MANGOX_FOLLOWUP_SPOOL`。
+    /// 普通会话两个都没有 ⇒ 模型连这个工具都看不到 —— 而"看得到但每次调用都回未启用"
+    /// 是比看不到更坏的一种假象。
+    ///
+    /// ⚠️ 为什么用 `#"""` 原始字符串: TS 源码里有 `"\n"`（换行符）与 `${…}`，普通 Swift 字面量
+    /// 会把 `\n` 变成真换行 ⇒ 写出来的扩展是坏的。原始字符串里反斜杠逐字保留。
+    static let followUpExtensionSource: String = #"""
+        // Auto-deployed by MangoX (2026-11-23). Lets one run schedule its own wake-up.
+        //
+        // Deliberately dumb: read MANGOX_FOLLOWUP_SPOOL, check the shape, append one line.
+        // It does NOT compute a due time and it does NOT touch the database -- this run
+        // ends, the app reads the line, and only then does anything know what time it is.
+        // A clock inside a subprocess we cannot inspect is not a clock worth trusting.
+        //
+        // It is also deliberately narrow: this tool does not create a new task. It asks an
+        // EXISTING task to be woken up at a time it did not originally have. Tasks are the
+        // user's; their schedule belongs to the cron field, not to the model.
+        import { appendFileSync, mkdirSync } from "node:fs";
+        import { randomUUID } from "node:crypto";
+        import { dirname } from "node:path";
+        import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+        import { Type } from "typebox";
+
+        const SPOOL_ENV = "MANGOX_FOLLOWUP_SPOOL";
+        const MIN_MINUTES = 5;
+        const MAX_MINUTES = 10080;
+
+        export default function (pi: ExtensionAPI) {
+            pi.registerTool({
+                name: "follow_up",
+                label: "Follow up later",
+                description: [
+                    "Ask to be woken up later ON THIS SAME TASK, instead of waiting for its next scheduled run.",
+                    "One call = one future run. Up to 3 may be open per task; the app drops the rest.",
+                    "",
+                    "Use it only when the next step depends on TIME passing:",
+                    "  - something you started is still running (a build, a download, a deploy);",
+                    "  - a number/signal will only change by tomorrow (a daily report, a metric);",
+                    "  - you asked the user something and he has not answered yet;",
+                    "  - you applied a fix and it has to be re-checked after a while.",
+                    "",
+                    "Do NOT use it:",
+                    "  - as a substitute for the task's own schedule (that is its cron, not your call);",
+                    "  - when nothing will have changed by the time it fires -- that is a wake-up that",
+                    "    only costs tokens;",
+                    "  - to chain yourself in a loop (if the answer is 'check again in 5 minutes'",
+                    "    forever, say so in the ledger instead and let the user decide the cadence).",
+                    "",
+                    "after_minutes: integer, 5..10080 (7 days). why: one line, handed back to you",
+                    "verbatim when the wake-up fires -- write WHAT to look at and WHAT would count",
+                    "as done. Do not restate the task's goal; the woken run gets that already.",
+                ].join("\n"),
+                parameters: Type.Object({
+                    after_minutes: Type.Integer({
+                        minimum: MIN_MINUTES,
+                        maximum: MAX_MINUTES,
+                        description: "How long from now, in minutes (5..10080).",
+                    }),
+                    why: Type.String({
+                        description: "One line: what to look at, and what would count as done.",
+                    }),
+                }),
+
+                async execute(_toolCallId, params, _signal, _onUpdate, _ctx) {
+                    const spool = process.env[SPOOL_ENV];
+                    if (!spool) {
+                        return {
+                            content: [{ type: "text", text: "follow_up is not available in this session." }],
+                            details: undefined,
+                        };
+                    }
+                    // Caught here so the model can fix it WITHIN this turn: the app re-checks
+                    // everything when the run ends, and by then there is nobody to tell.
+                    const n = Number(params.after_minutes);
+                    if (!Number.isInteger(n) || n < MIN_MINUTES || n > MAX_MINUTES) {
+                        return {
+                            content: [{
+                                type: "text",
+                                text: "Rejected: after_minutes must be an integer between " + MIN_MINUTES
+                                    + " and " + MAX_MINUTES + " (you gave " + String(params.after_minutes)
+                                    + "). Call follow_up again.",
+                            }],
+                            details: undefined,
+                        };
+                    }
+                    const why = String(params.why || "").trim();
+                    if (!why) {
+                        return {
+                            content: [{
+                                type: "text",
+                                text: "Rejected: why is empty. The woken run only knows what you write there"
+                                    + " -- say what to look at. Call follow_up again.",
+                            }],
+                            details: undefined,
+                        };
+                    }
+                    const line = JSON.stringify({
+                        id: randomUUID(),
+                        after_minutes: n,
+                        why: why,
+                    });
+                    try {
+                        mkdirSync(dirname(spool), { recursive: true });
+                        appendFileSync(spool, line + "\n");
+                    } catch (e) {
+                        return {
+                            content: [{ type: "text", text: "Failed to record the follow-up: " + String(e) }],
+                            details: undefined,
+                        };
+                    }
+                    return {
+                        content: [{
+                            type: "text",
+                            text: "Recorded: this task will be woken up about " + String(n) + " minutes after"
+                                + " this run ends. Carrying on now -- nothing is blocked on it.",
+                        }],
+                        details: undefined,
+                    };
+                },
+            });
+        }
+        """#
+
+    /// 写到 `~/.mangox/extensions/mangox-followup.ts`, 返回路径。
+    ///
+    /// **只有 `followUpSpool != nil` 的那次 spawn 才调它**（同 `ensureDreamExtensionFile`
+    /// 的调用时机纪律）—— 落地一个永久存在的 .ts 而从不挂它，只会让面板多一行看不懂的条目。
+    static func ensureFollowUpExtensionFile() -> String {
+        let dir = NSHomeDirectory() + "/.mangox/extensions"
+        let path = dir + "/mangox-followup.ts"
+        let source = Self.followUpExtensionSource
         try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
         let existing = try? String(contentsOfFile: path, encoding: .utf8)
         if existing != source {
@@ -2121,6 +2323,13 @@ final class PiRpcTransport: AgentTransport {
                 && !$0.hasSuffix("mangox-codemode.ts")
                 && !$0.hasSuffix("mangox-dream.ts")
                 && !$0.hasSuffix("mangox-computer.ts")
+                // 2026-11-23 补两个: 飞书发附件与 follow-up 都是**per-turn 轴**挂的，
+                // 与 dream 同一类。⚠️ 它们原来不在这张滤网里 ⇒ 面板里它们是"开着"的，
+                // 一旦磁盘上有那个 .ts，就会混进业务列表 ⇒ **同一次 spawn 传两遍**
+                // （工具注册两遍），而且更坏: 普通会话也挂得上它们，双闸门的"挂载"那一道
+                // 当场失效（漏的样子是"聊天时也能给自己约会谈" —— 而那条路径**没人读 spool**）。
+                && !$0.hasSuffix("mangox-feishu-attach.ts")
+                && !$0.hasSuffix("mangox-followup.ts")
         }
     }
 
@@ -2325,6 +2534,7 @@ final class PiRpcTransport: AgentTransport {
         // 用户点开任务日志会话说了句话（普通回合, `dreamSpool` 被置回 nil）之后再点「立即运行」。
         if process != nil, spawnedCwd != target || spawnedDreamSpool != dreamSpool
             || spawnedAttachSpool != attachSpool
+            || spawnedFollowUpSpool != followUpSpool
             || spawnedExtraSystem != extraSystemPrompt
             || spawnedExecProject != executionGuard?.projectPath {
             // 诊断日志: 进程**复用**是常态, 重启是例外 —— 后者会丢进程内对话记忆,
@@ -2332,6 +2542,7 @@ final class PiRpcTransport: AgentTransport {
             Log.process("teardown", ["cwdChanged": spawnedCwd != target ? "1" : "0",
                                      "dreamChanged": spawnedDreamSpool != dreamSpool ? "1" : "0",
                                      "attachChanged": spawnedAttachSpool != attachSpool ? "1" : "0",
+                                     "followUpChanged": spawnedFollowUpSpool != followUpSpool ? "1" : "0",
                                      "injectChanged": spawnedExtraSystem != extraSystemPrompt ? "1" : "0",
                                      "fenceChanged": spawnedExecProject != executionGuard?.projectPath ? "1" : "0"])
             teardownProcess()
@@ -2376,6 +2587,10 @@ final class PiRpcTransport: AgentTransport {
         // `RemoteChannelService` 判"这个 sid 是不是飞书来的"后下发，普通会话是 nil
         // ⇒ 扩展段逐字节不变（同 dream / codemode 那条"是'不存在', 不是'挂了但没生效'"）。
         let attachExtPath = attachSpool != nil ? Self.ensureAttachExtensionFile() : nil
+        // 2026-11-23: follow-up 扩展**只在"这一轮属于某个任务"时挂** —— `followUpSpool` 由
+        // `ChatStore.beginTurn` 经 `SchedulerService.beginFollowUpTurn` 下发，普通会话是 nil
+        // ⇒ 扩展段逐字节不变（同 dream / attach 那条"是'不存在', 不是'挂了但没生效'"）。
+        let followUpExtPath = followUpSpool != nil ? Self.ensureFollowUpExtensionFile() : nil
         // P10.1b: 搜索扩展**保底落地**（文件本来由 `ChatStore.scanExtensions` 写好了, 这里只防
         // "列表里有它、文件却不在"——删过 / 换过托管目录 / 首次 spawn 抢在扫掠之前）。
         // 判据 = 它在**启用列表**里（那已经是"用户开着 + 有 key"的交集, 见 `ChatStore.scanExtensions`）
@@ -2431,6 +2646,7 @@ final class PiRpcTransport: AgentTransport {
             codemodeExtensionPath: codemodeExtPath,
             dreamExtensionPath: dreamExtPath,
             attachExtensionPath: attachExtPath,
+            followUpExtensionPath: followUpExtPath,
             computerExtensionPath: computerExtPath,
             enabled: desiredMode.mountsBusinessExtensions ? desiredExtensions : [])
         if let fork = desiredForkSource {
@@ -2558,6 +2774,15 @@ final class PiRpcTransport: AgentTransport {
             if p.environment == nil { p.environment = ProcessInfo.processInfo.environment }
             p.environment?[Self.attachEnvKey] = value
         }
+        // 2026-11-23: follow-up = 双闸门的第二道（挂载那道在上面 `followUpExtPath`）。
+        // 值与 dream 同形（单个路径）。⚠️ 守卫 26 同款: 上面几段都可能没给 `p.environment`
+        // 赋值（nil = 继承父环境），那时 `p.environment?[k] = v` 是**静默空操作** ⇒ 必须整体赋值。
+        // ⚠️ 必须显式删掉父进程残留的同名变量（用户 export 过再从那个 shell 起 App）——
+        //    否则普通会话会莫名拿到这个工具，而它写的 spool **没有任何一轮会去读**。
+        if followUpSpool != nil || ProcessInfo.processInfo.environment[Self.followUpEnvKey] != nil {
+            if p.environment == nil { p.environment = ProcessInfo.processInfo.environment }
+            p.environment?[Self.followUpEnvKey] = followUpSpool   // nil = 删除该键
+        }
         // P19 S6: 执行轮的写围栏 env（扩展侧那一半，见 `approvalExtensionSource`）。
         //
         // ⚠️ 守卫 26 同款: 上面几段都可能没给 `p.environment` 赋值（nil = 继承父环境），
@@ -2625,6 +2850,7 @@ final class PiRpcTransport: AgentTransport {
         spawnedCwd = cwd
         spawnedDreamSpool = dreamSpool
         spawnedAttachSpool = attachSpool
+        spawnedFollowUpSpool = followUpSpool
         spawnedExtraSystem = extraSystemPrompt
         spawnedExecProject = executionGuard?.projectPath
         self.outPipe = outPipe
@@ -3657,6 +3883,43 @@ final class PiRpcTransport: AgentTransport {
         //    是通用的"搜索"档, 将来别的搜索工具的参数未必叫 `query` —— 拿它去猜就是"把 A 的
         //    字段喂给 B"。`kind == .codemode` 那条敢按 kind 写, 是因为 codemode 只会有一个生产方。
         if Self.webSearchToolNames.contains(name) { return (args["query"] as? String ?? name, nil) }
+        // 2026-11-23: 自建扩展的三个工具 —— 与 codemode / bocha 同一条理由(关键参数既不是
+        // `path` 也不是 `command`), 但丢的东西各不相同:
+        //   · `follow_up`: 唯一的信息是 `why`(醒来时要看什么) —— 走通用式它会整个消失,
+        //     卡上只剩 `followUp · follow_up`; 而 `after_minutes` 正是"它自己说多久后回来"。
+        //   · `feishu_attach`: 要紧的是**用户收到的那份文件**(`name`; 省略时取 `path` 的末段) ——
+        //     通用式会把**整条绝对路径**塞进 title, 把 command 列挤掉, 而路径规则恒是
+        //     Documents/Downloads。
+        //   · `note_proposal`: 要紧的是「改哪一篇 + 哪种改动」。⚠️ 它**绝不能**走通用式:
+        //     首个标量参数按 key 排序是 `base_hash`(恒空的机器字段, App 自己填) ⇒ 卡头会变成
+        //     `noteProposal · note_proposal · base_hash=` —— 三个词全是噪音。
+        // ⚠️ 三处 command 都用英文短语(同 `tap (x,y)` / `keys: …` 的既有口径): 那一列是给
+        //    眼睛的定位信息, 不是句式; 拼进 `L()` 在两种语言下都只会更长。
+        if Self.followUpToolNames.contains(name) {
+            let why = (args["why"] as? String)?
+                .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            let mins = (args["after_minutes"] as? Int)
+                ?? (args["after_minutes"] as? NSNumber)?.intValue
+            return (why.isEmpty ? name : why, mins.map { "in \($0) min" })
+        }
+        if Self.attachToolNames.contains(name) {
+            let path = (args["path"] as? String) ?? ""
+            let base = (path as NSString).lastPathComponent
+            let shown = (args["name"] as? String)?
+                .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            // title = **用户收到的那个名字**(`name` 省略时就是磁盘上的文件名)。
+            // 两者不同时把磁盘名留在 command: 否则回看时"发出去的到底是哪个文件"对不上。
+            let title = shown.isEmpty ? base : shown
+            return (title.isEmpty ? name : title,
+                    (base.isEmpty || base == title) ? nil : "file: " + base)
+        }
+        if Self.dreamToolNames.contains(name) {
+            let path = (args["target_path"] as? String) ?? ""
+            let base = (path as NSString).lastPathComponent
+            let op = (args["kind"] as? String)?
+                .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            return (base.isEmpty ? name : base, op.isEmpty ? nil : op)
+        }
         let title = path ?? cmd ?? name
         return (title, (cmd != nil && title == cmd) ? nil : cmd)
     }
@@ -3684,6 +3947,20 @@ final class PiRpcTransport: AgentTransport {
         if toolName == Self.computerReadToolName { return .computerRead }
         if toolName == Self.computerActToolName { return .computerAct }
         if toolName == Self.computerOpenToolName { return .computerOpen }
+        // 2026-11-23: 第四~六档 —— 它们原来全落 `.other`(boss 截图: `email other computer_type`)。
+        // ⚠️ 代价不止标签: `toolHead` 对 `.other` 先一步 return ⇒ 那三段为 tap/type/keys
+        //    写好的卡头(`tap (x,y)` / `type: "…"` / `keys: …`)**从写下来那天起没执行过**,
+        //    卡上只有 `app=…`(首个标量参数) ⇒ "它到底点了哪儿/写了什么"整个消失。
+        if toolName == Self.computerTapToolName { return .computerTap }
+        if toolName == Self.computerTypeToolName { return .computerType }
+        if toolName == Self.computerKeysToolName { return .computerKeys }
+        // 2026-11-23: 自建扩展的三个工具。这里**用常量而不是 `switch` 的字面量** —— 上面
+        // `bocha_web_search` 那条只能写死字面量(Swift 的 case 模式放不下 static property),
+        // 于是"名字改了忘了同步"只能靠冒烟兜; 能写成 `contains` 的就没必要留这个缺口。
+        // ⚠️ 判据恒按**工具名**, 不按前缀猜: 同 `computer_scroll` 那条 —— 没登记就是 `.other`。
+        if Self.followUpToolNames.contains(toolName) { return .followUp }
+        if Self.attachToolNames.contains(toolName) { return .feishuAttach }
+        if Self.dreamToolNames.contains(toolName) { return .noteProposal }
         switch toolName {
         case "bash", "powershell": return .bash   // P6.0④: powershell 是 Windows 同族
         case "read": return .read

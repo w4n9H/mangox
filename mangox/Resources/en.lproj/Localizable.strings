@@ -7,7 +7,7 @@
    **本文件由 scripts/l10n/gen_strings.py --write 生成, 别手改** ——
    译文改 scripts/l10n/en_values.py 的 VALUES, 再跑 --write。
 
-   条数: 1140
+   条数: 1148
 */
 
 " (值:\"%@\")" = " (value: %@)";
@@ -231,11 +231,13 @@
 "不支持的类型" = "Unsupported type";
 "不是能写字的地方 ⇒ 我不往里写。" = " is not a field you can type into ⇒ I will not write there.";
 "不用单独给。辅助功能一给，键盘监听就有了 —— 所以系统设置那一页里看不到 MangoX，那是正常的，不是漏装。" = "Nothing to grant separately. Accessibility already covers keyboard listening, so MangoX will not show up on that page of System Settings — that is normal, not a missing install.";
+"不用（关掉）" = "Off";
 "不采纳该候选, 直接删除" = "Dismiss this candidate and delete it";
 "不限" = "No limit";
 "丢弃" = "Discard";
 "丢弃本地修改, 重读磁盘文件" = "Discard local changes and reread the file from disk";
 "两个都说, 我不知道该按哪个。" = "Both were given; I do not know which one you mean.";
+"两次巡检之间，它可以给自己约一个时刻回来（比如「构建还在跑，10 分钟后再看」）。" = "Between scheduled runs it may book itself a time to come back — e.g. \"the build is still running, look again in 10 minutes\".";
 "个任务" = " tasks";
 "中" = "Medium";
 "为「%@」设置目录…" = "Set a directory for “%@”…";
@@ -262,6 +264,7 @@
 "今天" = "Today";
 "今天做点什么？" = "What should we do today?";
 "今日已用 %lld" = "Used today: %lld";
+"今日已约 %lld 次" = "%lld booked today";
 "仍然覆盖" = "Overwrite anyway";
 "从待处理里移除（不是解决 —— 结论本身留着）" = "Remove from the pending list (this does not resolve it — the finding stays)";
 "从托管区删除" = "Remove from managed area";
@@ -737,6 +740,7 @@
 "旧类型 · 已停用（不再值守）" = "Legacy type · disabled (no longer watching)";
 "旧类型已停用，不能保存" = "Legacy type is disabled and cannot be saved";
 "时" = "Hour";
+"明天" = "tomorrow";
 "昨天" = "Yesterday";
 "是空文件（飞书不收空文件）: %@" = "The file is empty (Feishu rejects empty files): %@";
 "显示 %lld / 折省略 %lld · %lld 字" = "showing %lld / folded %lld · %lld chars";
@@ -815,6 +819,7 @@
 "模型与模式配置为必填" = "Model and mode configuration is required";
 "模型只保留 codemode 一个工具，其余全部经脚本内层调用 — 换一种调用范式，且会占用更多上下文。" = "Keeps codemode as the only tool the model sees; everything else is called from inside the script. A different calling paradigm, and it uses more context.";
 "模型由 MangoX 自管, spawn 时物化到 ~/.mangox/pi-config 供 pi 消费 (不碰 ~/.pi/agent)" = "MangoX owns the model list; it is materialized into ~/.mangox/pi-config at spawn time for pi to consume (your ~/.pi/agent is untouched)";
+"模型自主调度" = "Model self-scheduling";
 "模式" = "Mode";
 "模式档位: 决定 agent 可用的工具与扩展 (下回合生效)" = "Mode: decides which tools and extensions the agent gets (applies next turn)";
 "正在连接…" = "Connecting…";
@@ -830,8 +835,10 @@
 "每周%@ %@" = "Weekly on %@ %@";
 "每天" = "Daily";
 "每天 %@" = "Daily at %@";
+"每天 %lld 次" = "%lld times a day";
 "每小时" = "Hourly";
 "每轮把进展留在工作日志里，下一轮接着它干" = "Each run leaves its progress in the work log; the next run picks up from there";
+"每轮最多约 1 条。约来的那一轮照常算进日预算。" = "At most one booking per run. The run it wakes up still counts against the daily token budget.";
 "每轮都带上" = "Every turn";
 "每轮都带上 %lld 条 · %lld 字 / %lld 字" = "%lld every turn · %lld / %lld chars";
 "永久删除" = "Erase";
@@ -921,6 +928,7 @@
 "系统权限" = "System permissions";
 "索引宁缺勿残 — 残缺的索引会让你以为资料只有这些; 摘掉或停用一两个库即可恢复" = "A partial index is worse than none — it would read as “these are all the materials”. Unmount or disable a base or two to restore it";
 "索引预览" = "Index preview";
+"约了 %@ 回看" = "Follow-up at %@";
 "细节" = "Details";
 "给 MangoX 发消息…" = "Message MangoX…";
 "缓存" = "Cache";

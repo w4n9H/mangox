@@ -944,10 +944,15 @@ fi
 #    外加一个按不动的启停开关(它的挂载走独立参数, 不看面板那个 enabled 列表)。
 #    输入取 `PiRpcTransport.swift` 里的**字面量**(真源, 常量与字面量两种写法都覆盖)
 #    ⇒ 加第 6 个自管扩展时不用记得手动登记这条账。
+#    ⚠️ 2026-11-23 修了一个**假门**: 原正则只认引号紧贴 `mangox-` 的写法 (`"mangox-x.ts"`),
+#       而 `ensureAttachExtensionFile` / `ensureFollowUpExtensionFile` 里写的是
+#       `dir + "/mangox-x.ts"`（引号后面还有个斜杠）⇒ 那两个扩展**从写下来那天起就没被这条账
+#       看过一眼**，于是 `mangox-feishu-attach` 一直不在 builtInNames 里，而门历全绿。
+#       现在正则收 `[/"]` 前缀，比对前先 `basename`。
 #    ⚠️ 这条只管"会不会漏登记"; 「挂载那几条轴」另有判据 —— `businessExtensionPaths` 必须把同一批
 #       都滤掉(漏一个就是同一次 spawn 里 `--extension` 传两次、工具注册两遍),
 #       那条是纯函数断言, 在冒烟 `T-EXT-BUILTIN` 里(见 `caseBuiltInExtensions`)。
-AUTO_EXT_FILES="$(grep -oE '"mangox-[a-z-]+\.ts"' mangox/Agent/PiRpcTransport.swift \
+AUTO_EXT_FILES="$(grep -oE '[/"]mangox-[a-z-]+\.ts"' mangox/Agent/PiRpcTransport.swift \
                   | tr -d '"' | sort -u)"
 if [ -z "$AUTO_EXT_FILES" ]; then
     echo "FAIL - 一个自管扩展文件名都没扫到 ⇒ ③x 这条账是空转的" >&2
@@ -955,7 +960,9 @@ if [ -z "$AUTO_EXT_FILES" ]; then
 fi
 BUILTIN_NAMES_LINE="$(awk '/static let builtInNames/,/\]/' mangox/Models/ExtensionModels.swift | tr '\n' ' ')"
 for one in $AUTO_EXT_FILES; do
-    nm="${one%.ts}"
+    # ⚠️ 必须 basename: 上面那条正则现在也收 `"/mangox-x.ts"` 这种写法（见下面的说明），
+    #    扫出来的值带前导斜杠，直接比对会**永远不命中** ⇒ 把"登记了"判成"没登记"。
+    nm="$(basename "$one" .ts)"
     case "$BUILTIN_NAMES_LINE" in
         *"\"$nm\""*) ;;
         *)

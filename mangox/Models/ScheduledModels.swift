@@ -55,6 +55,30 @@ struct ScheduledTask: Identifiable {
     /// 超预算的处理是**跳过并落痕**，不是"换个便宜模型接着跑"：降级会让人永远不知道
     /// 自己设的上限已经生效，而结论质量变了却没人知道为什么（§04）。
     var dailyTokenBudget: Int = 0
+    /// 2026-11-23: **它一天最多能给自己约几次「回来再看」**。`nil` = 从没配过。
+    ///
+    /// ⚠️ 三态，别塌成一个数：
+    ///   · `nil` —— 没配过（老库升上来的行）⇒ 助理档按出厂默认 [`factoryFollowUpsPerDay`]，Cron 档按 0；
+    ///   · `0` —— 人**明确关掉**；
+    ///   · `n` —— 一天最多 n 条。
+    /// 把 `nil` 与 `0` 合成一个值，"用户关掉了"和"这条老行没配过"就再也分不开 —— 于是要么
+    /// 老助理永远用不上这个功能，要么把用户关掉的重新打开（与 `layer` 缺省那个坑同族）。
+    var followUpsPerDay: Int? = nil
+
+    /// 出厂默认：**存量助理也按它**（2026-11-23 boss 拍板）。选 2 而不是 0 的理由:
+    /// 默认关掉等于这个能力只有新建助理能用上，而存量正是主力；选 2 而不是 3+ 的理由:
+    /// 先给一个温和的默认，觉得不够的人自己调高。
+    static let factoryFollowUpsPerDay = 2
+
+    /// 生效值 —— **唯一读数口**（工具挂不挂、能约几条，两处都读它，别再各算一遍）。
+    ///
+    /// Cron 档恒 0：follow-up 的价值与 cron 周期长度成正比 —— 周循环等一周太贵，而 Cron 任务
+    /// 反正下次 cron 就来了；更要紧的是 **cron 的周期是人定的**，让模型自己往里插时间点
+    /// 就是在改写人定的东西。
+    var effectiveFollowUpsPerDay: Int {
+        guard isAssistant else { return 0 }
+        return max(0, followUpsPerDay ?? Self.factoryFollowUpsPerDay)
+    }
     // P19.2 S15b: 这里**曾经**是 `remoteChatId`。绑定搬到 `RemoteBot.assistantId` 上了 ——
     // `chat_id` 是运行时地址不是身份，挂在助理上会得到「两个助理抢一条单聊」这种说不通的状态。
     // 库里那一列还在（旧版打开不崩），但没人读写；迁移时一次性收成机器人行。

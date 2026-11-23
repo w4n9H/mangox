@@ -61,6 +61,7 @@ extension SmokeMain {
             caseComputerType,
             caseComputerKeys,
             caseComputerHost,
+            caseFollowUp,
         ]
     }
 

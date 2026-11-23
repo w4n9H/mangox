@@ -199,6 +199,13 @@ EXCLUDE_FILES = {
     #    一个都命中不了 —— 那正是这份手册唯一的用处。
     'mangox/Models/SopManual.swift',               # 注入 pi 的内置应用手册正文 (无 UI 文案)
     'mangox/State/SchedulerService.swift',         # 注入 pi 的指令文本
+    # ⚠️ 2026-11-23: 本文件的中文**全部是 spool 的拒绝原因**（`缺 id` / `after_minutes 要在
+    #    5…10080 之间`）。它们的去向是**时间线里那一行**（"约定没记上: 第 2 行 …"）——
+    #    那是落库的字节，同 `SchedulerService` 那些落库文案，切语言不该改写已经写进库的历史。
+    #    进词表就会被翻译，于是同一条记录在不同界面语言下写出不同字节。
+    #    ⚠️ 代价照旧: 将来在本文件里写 `L()` 的 key 永远进不了词表，三道门全都看不见 ——
+    #    ⇒ **UI 文案请写在 View 侧**，本文件只出数据（与 `KnowledgeStore` 那条同源）。
+    'mangox/Models/FollowUpModels.swift',          # 只出数据 + 落库文案 (无 UI 文案)
     'mangox/mangoxApp.swift',                      # 不参与冒烟编译, 无文案
     # 语言名自带 (中文 / English 必须原样), 故整体跳过。**但其 `AppLanguage.label` 里的 `L("跟随系统")`
     # 是靠 `Theme/AppAppearance.swift` 的同名字面量才活在词表里的** —— 改这句话要两边一起改,

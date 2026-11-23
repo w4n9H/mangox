@@ -47,6 +47,24 @@ enum ToolKind: String, Hashable, Codable, CaseIterable {
     ///    卡片标签是这两档权限在回看时唯一的痕迹。并在 act 里, 事后就分不清"它只是打开了
     ///    一个 App"还是"它进去按了东西"(前者只需读权限, 后者要动权限)。
     case computerOpen
+    /// 2026-11-23: computer 的第四~六档**各自一个 kind**（boss 实测截图：三档全落 `OTHER`）。
+    ///
+    /// ⚠️ 为什么不并进 `.computerAct`（它们确实同属操作面那道门）:
+    ///   ① 标签是回看时**唯一**的"用的是哪一档"痕迹。并进 act 之后卡上只剩
+    ///      `computerAct · 微信 · type: "…"` —— 那一行读起来像 act 也能写文本；
+    ///   ② `computer_keys` 是唯一能**一手删掉整篇正文**的档（11-19 的 `Cmd+A` 事故），
+    ///      它必须能在轨迹页被**单独数出来**，混在 act 里就再也数不出"这一轮它按了几个组合键"。
+    /// ⚠️ 卡头**不需要**改：`toolHead` 早就为这三档写好了（`tap (x,y)` / `type: …` / `keys: …`），
+    ///    但那三段一直没被执行过 —— `kindFor` 把它们判成 `.other`，而 `toolHead` 对 `.other`
+    ///    先一步 return 了。**只改归位，那三段活过来。**
+    case computerTap
+    case computerType
+    case computerKeys
+    /// 2026-11-23: 我们**自己的扩展**注册的三个工具（同 `.search` / `.codemode` 那一条:
+    /// 「按名归位才是终点」，`OTHER` 只留给"连参数含义都不可知"的第三方扩展）。
+    case followUp
+    case feishuAttach
+    case noteProposal
 
     /// 展示用名 = **原样工具名**（`rawValue`，小写；多词名自然成驼峰，如 `searchTools`）。
     ///
@@ -65,12 +83,21 @@ enum ToolKind: String, Hashable, Codable, CaseIterable {
     var label: String { rawValue }
 
     /// Default phase color (overridable per card via `phase`).
+    ///
+    /// ⚠️ 只在**轨迹页**用（卡片的 kind 标签色恒为中性，见 `ToolCallCardView.kindColor`）⇒
+    /// 这里分组错了的后果是"轨迹里两类东西被涂成同一个色"，不是卡片变花。
     var defaultColor: Color {
         switch self {
-        case .bash, .delegate, .codemode, .computerAct, .computerOpen: return CodexTheme.accent   // 执行族: codemode 也是"把活干出去"
+        // 执行族: 真的动了手 / 把东西发出去了
+        case .bash, .delegate, .codemode, .computerAct, .computerOpen,
+             .computerTap, .computerType, .computerKeys, .feishuAttach:
+            return CodexTheme.accent
         case .read, .grep, .find, .ls, .fetch, .search, .computerRead: return CodexTheme.info
         case .edit, .write: return CodexTheme.toolDone
-        case .image: return CodexTheme.thinking
+        // 「还没落地的产出」: 图还没回来 / 约定还没到点 / 提案还没被采纳。
+        // ⚠️ `noteProposal` **不许**用 `toolDone` —— 那支绿的语义是"已经改了"，
+        //    而提案在被人点采纳之前，笔记一个字节都没动。
+        case .image, .followUp, .noteProposal: return CodexTheme.thinking
         case .other: return CodexTheme.textSecondary
         }
     }

@@ -64,7 +64,14 @@ struct ExtensionItem: Identifiable {
     /// 启停开关(见 `unswitchableNames`)。门禁在 `run.sh` ③x: 拿那份字面量逐条对账,
     /// 加第 6 个自管扩展时不用记得手动登记。
     static let builtInNames: Set<String> = ["mangox-approval", "mangox-codemode", "mangox-dream",
-                                           "mangox-web-search", "mangox-computer"]
+                                           "mangox-web-search", "mangox-computer",
+                                           // 2026-11-23 补两条（加 follow-up 时才对上账）:
+                                           // 这两个 .ts 一直由本仓自动落盘，却从没登记过 —— 面板里
+                                           // 它们带着**删除按钮**（点一下下次 spawn 又回来 = 打地鼠）。
+                                           // 漏登记零红灯: 门禁 ③x 只认引号紧贴 `mangox-` 的字面量，
+                                           // 而这两处写的是 `dir + "/mangox-x.ts"`（那个斜杠把它漏掉了，
+                                           // 同一条判据已修）。
+                                           "mangox-feishu-attach", "mangox-followup"]
 
     /// 自带扩展里**连启停开关都不给**的那些 —— approval 四档恒挂、codemode 由**档位轴**决定、
     /// dream 只在那次 fire 挂、computer 由**作用域开关**决定。
@@ -80,7 +87,10 @@ struct ExtensionItem: Identifiable {
     /// **完全无效**。给一个按不动的开关就是"开关在说谎"。它们真正的开关是:
     /// computer → 设置 › 集成 › 电脑操作 的作用域; codemode → 档位。
     static let unswitchableNames: Set<String> = ["mangox-approval", "mangox-codemode",
-                                                 "mangox-dream", "mangox-computer"]
+                                                 "mangox-dream", "mangox-computer",
+                                                 // 同样是**per-turn 轴**（飞书轮 / 归某个任务的一轮），
+                                                 // 面板那个 enabled 开关碰不到它们 ⇒ 给开关就是说谎。
+                                                 "mangox-feishu-attach", "mangox-followup"]
 
     /// 内置扩展**注册出来的工具名**, 按扩展名查 —— 面板在那一行下面展开它们。
     ///
@@ -97,10 +107,16 @@ struct ExtensionItem: Identifiable {
         // computer 那四个名字由 helper 侧的执行面决定 (`computerToolNames`), 与内嵌 TS 同源同改;
         // 漏登记只有一处后果 —— 它跑过一次(磁盘有文件)之后那一行不再展开工具名, **零红灯**。
         "mangox-computer": PiRpcTransport.computerToolNames,
+        "mangox-feishu-attach": PiRpcTransport.attachToolNames,
+        "mangox-followup": PiRpcTransport.followUpToolNames,
     ]
 
     /// 内置扩展里**按需挂载**的那几个。不在这张名单里的内置 = **恒挂**（approval 就是）。
-    static let builtInOnDemand: Set<String> = ["mangox-dream"]
+    ///
+    /// 判据 = "挂不挂由**这一轮是什么轮**决定"（dream 的 fire / 飞书轮 / 归任务的一轮），
+    /// 与 computer 那种"由设置页作用域决定"不同类（它的挂载期限是几个小时，不是一轮）。
+    static let builtInOnDemand: Set<String> = ["mangox-dream", "mangox-feishu-attach",
+                                              "mangox-followup"]
 
     /// 这一项当前**挂不上**的原因（nil = 正常）。判据必须是**产品能回答的**问题 ——
     /// 用户的选择（"我就是不想开"）走停用态, 不在这里。

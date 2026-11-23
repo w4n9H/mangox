@@ -17,6 +17,9 @@ final class SchedulerService: ObservableObject {
     /// P17 · 运行可靠性: 睡眠 / 长挂起期间漏跑的任务（由 `refreshMissedFires` 重算）。
     /// 空 = 侧栏那块 UI 整个不出现。
     @Published var missedFires: [MissedFire] = []
+    /// 2026-11-23: 还没兑现的 follow-up（`status = pending`，按到点时刻升序）。
+    /// 界面只读它（任务卡上那一行"约在 14:30 回看"），写路径在 `ingest` / `fire` / `reload`。
+    @Published var followUps: [FollowUp] = []
     private var schedulerTimer: Timer?
     private var lastSchedulerMinute: Int = 0
     /// 上次清理过期快照的**日键**（`yyyy-MM-dd`）。空 = 本进程还没清过 ⇒ 启动后第一次 tick 清一遍。
@@ -41,9 +44,22 @@ final class SchedulerService: ObservableObject {
     /// 回来）, 每个 cron 点都往日志里写同一行会让那场会话被刷成一片同样的字。
     /// 值变了才再记一笔 ⇒ 改过模型又坏掉时仍然看得见（不会因为"记过"而永久闭嘴）。
     private var modelBlockNoted: [UUID: String] = [:]
+    /// 2026-11-23: 「这个任务的档位会削掉扩展工具 ⇒ 调不到 follow_up」这条事实**提过没有**。
+    /// 与 `modelBlockNoted` 同一个理由: 每分钟一次的助理会把同一行刷满整场日志。
+    private var followUpTrimNoted: Set<UUID> = []
+    /// 2026-11-23: 在途的 follow-up 回合 —— 日志会话 -> (spool, 归属任务)。
+    ///
+    /// 为什么要记: 收口发生在**回合落定之后**（`finishFollowUpIfNeeded`），那时只有 `sid`，
+    /// "这份 spool 是哪个任务的"已经查不出来了（对话轮反查得到，fire 轮的新会话还没绑）。
+    private var followUpFires: [UUID: (spool: String, taskId: UUID)] = [:]
 
     private weak var store: ChatStore?
-    func attach(_ store: ChatStore) { self.store = store }
+    func attach(_ store: ChatStore) {
+        self.store = store
+        // 2026-11-23: 启动时把未兑现的约定读进来 —— 任务卡那一行「约在 14:30 回看」不能等到
+        // 第一次 ingest 才出现（那时人已经以为这个功能没生效了）。
+        reloadFollowUps()
+    }
 
     // MARK: - CRUD (P3.6)
 
@@ -143,6 +159,9 @@ final class SchedulerService: ObservableObject {
             // 刚被删掉 ⇒ 留着就是永远没人认领的 tar。先把路径取出来再删盘（见 DB 层注释）。
             for d in undoDirs { try? FileManager.default.removeItem(atPath: d) }
         }
+        // 2026-11-23: 这个任务的约定跟着一起没了（DB 层同步删）。内存那一份要重读 ——
+        // 否则界面还会显示一行"约在 14:30 回看"，而那个任务已经不存在了。
+        reloadFollowUps()
     }
 
     /// 助理的账本**两份都可能存在**：新位置（`.mangox/assistant`）与 S9 之前的旧位置
@@ -687,6 +706,11 @@ final class SchedulerService: ObservableObject {
             guard let cron = task.cronExpr, cron.matches(now) else { continue }
             runScheduledFire(task, at: now)
         }
+        // 2026-11-23: agent 给自己约的时点。位置在 cron **之后**、漏跑重算之前:
+        //  · 之后 —— 同一分钟里"该跑的巡检"优先，回看是补上次的，不抢这一跳；
+        //  · 之前 —— 回看轮**不推进 `lastRunAt`**（它不是这个任务的一次定时运行），
+        //    所以它不会影响漏跑的口径，放哪都一样；仍放在这里读起来最顺。
+        fireDueFollowUps(now: now)
         // P17: 大跳 = 睡眠 / 长时间挂起 ⇒ 重算漏跑清单。放在到期检查**之后**: 刚跑过的任务
         // `lastRunAt` 已经前移, 不会被自己算成"漏跑"。首次启动时 `lastSchedulerMinute` 是 0
         // ⇒ gap 巨大 ⇒ 顺带把"启动时算一次"也覆盖了。
@@ -749,36 +773,53 @@ final class SchedulerService: ObservableObject {
         if changed { store.reloadFindings() }
     }
 
+    /// 一次 fire 的结局 —— 只有两档："起来了" 与 "没起来（+ 为什么）"。
+    ///
+    /// 做成返回值只为一件事: **follow-up 必须在"没起来"时把约定放回去**（见
+    /// `fireDueFollowUps`）。它已经先把那条约定认领成 `fired` 了（防重复叫），若这时被闸挡掉
+    /// 还当作已兑现，人就永远等不到那一次回看，而日志里只有一行"因冲突跳过"。
+    ///
+    /// `@discardableResult`: cron / 补跑 / 定向那些调用点不关心这个值（它们的重试靠下一个 cron 点）。
+    enum FireStart: Equatable {
+        case started
+        case skipped(String)
+    }
+
     /// 到点投递 (P3.9 单日志会话): 任务的全部运行追加进同一个日志会话 (首次 fire 建立)。
     /// P4.0.2: 完全后台化 —— 不劫持选中会话/UI, 直接往日志会话投递回合;
     /// 该任务日志会话已有回合在途则跳过 (cron 到期不重排)。
     /// 持续模式 (continuous): 注入交接文件 (工作日志, agent 写用户可改) + 近期运行摘录,
     /// 并指令 agent 把关键进展写回交接文件——连续性靠文件携带, 磁盘为准零缓存。
+    ///
+    /// `followUp` 非 nil = 这一轮是**它自己约的**（2026-11-23）: 不进 `lastRunAt` / `runCount`
+    /// （同定向 fire 的理由，见末尾那段注释），且把 `why` 原样注入这一轮。
+    @discardableResult
     func runScheduledFire(_ task: ScheduledTask, at now: Date = Date(),
-                          targeted: ConversationItem? = nil) {
+                          targeted: ConversationItem? = nil,
+                          followUp: FollowUp? = nil) -> FireStart {
         // P19: 旧条件值守任务只读归档 —— 不 spawn、不写日志、不落痕。
         // 它是全系统唯一一条「无人授权自动执行」的路（fire 恒 unattended: true），
         // 封在这里就是把那条路拆掉；静默是刻意的，UI 上该行已标「旧类型（已停用）」。
-        if task.isLegacyWaiting { return }
-        guard let store else { return }
+        if task.isLegacyWaiting { return .skipped("旧类型已停用") }
+        guard let store else { return .skipped("store 未就绪") }
         if let pid = task.projectId {
             guard store.projects.contains(where: { $0.id == pid }) else {
                 recordFireSkip(task, at: now, reason: "项目已删除")
-                return
+                return .skipped("项目已删除")
             }
         }
         // 定位/建立日志会话 (有项目归 project, 无项目落平铺 Chats)
         let fmt = DateFormatter()
         fmt.dateFormat = "HH:mm"
-        guard let logId = ensureLogSession(for: task) else { return }
+        guard let logId = ensureLogSession(for: task) else { return .skipped("日志会话建不起来") }
         guard !store.runningTurns.contains(logId) else {
             recordFireSkip(task, at: now, reason: "该任务回合在途")
-            return
+            return .skipped("该任务回合在途")
         }
         // P4.0.4: 并发已满 → 落痕跳过 (与"冲突跳过"同语义, cron 到期不重排)
         if store.runningTurns.count >= store.maxConcurrentTurns {
             recordFireSkip(task, at: now, reason: "并发已满 (\(store.maxConcurrentTurns))")
-            return
+            return .skipped("并发已满 (\(store.maxConcurrentTurns))")
         }
         // 2026-10-21 (空回合): fire 前校验 pinned 模型还在不在清单里 —— **不在就不 fire**。
         // 为什么非拦不可（2026-10-21 实测，不是推断）: 这条路的后半段是**彻底静默**的。
@@ -799,7 +840,7 @@ final class SchedulerService: ObservableObject {
             // 之前, 不绑的话每个 cron 点都会新建一场会话再往里写同一行 —— 那条记录会被撒进
             // 一堆互不相干的会话里, 而任务自己永远指向 nil（下次照样新建）。
             bindLogSession(taskId: task.id, logId: logId)
-            return
+            return .skipped("模型 \(pin) 不在清单里")
         }
         modelBlockNoted.removeValue(forKey: task.id)   // 跑得起来了: 下次再断要重新留痕
         // ── P19 S7 日预算闸 ────────────────────────────────────────────────────
@@ -811,7 +852,7 @@ final class SchedulerService: ObservableObject {
             // 同上面两条 return 的坑：**建了会话就必须绑给任务**，否则每个 cron 点都新建一场。
             bindLogSession(taskId: task.id, logId: logId)
             appendTimeline("── \(fmt.string(from: now)) 本轮未运行（\(reason)）──", to: logId)
-            return
+            return .skipped(reason)
         }
         // 时间线锚点 + prompt 落库 (用户正看着日志会话则同步上屏)
         let viewing = store.selectedConversationId == logId
@@ -822,7 +863,11 @@ final class SchedulerService: ObservableObject {
         // 时间线**, 恒中文（本文件在 L10n 的 `EXCLUDE_FILES` 里）—— 掺一个可本地化词会让同一条
         // 记录在不同界面语言下写出不同字节。默认标题的哨兵在这条路上换成恒中文的说法。
         let sepLabel: String
-        if let targeted {
+        if let followUp {
+            // 2026-11-23: 回看轮必须**一眼认得出**。它与一次普通 cron 运行长得一模一样的话，
+            // 人会以为"这个任务怎么半夜三点自己跑了一次"，而实际是助理自己约的。
+            sepLabel = "回看 · 约的是「" + Self.shortWhy(followUp.why) + "」"
+        } else if let targeted {
             let raw = targeted.title
             let name = raw == ConversationTitle.defaultValue ? "未命名会话" : raw
             sepLabel = "由此 Dream · 「" + (name.count > 40 ? String(name.prefix(40)) + "…" : name) + "」"
@@ -861,7 +906,7 @@ final class SchedulerService: ObservableObject {
                 appendTimeline("── \(fmt.string(from: now)) 本轮未运行（没有可用来源: "
                                + "启用 \(task.sources.filter { $0.isActive }.count) 条, "
                                + "出错 \(snapshot.errorCount) 条）──", to: logId)
-                return
+                return .skipped("没有可用来源")
             }
             if snapshot.errorCount > 0 {
                 appendTimeline("── \(fmt.string(from: now)) 部分来源没采到（\(snapshot.errorCount) 条）, 本轮按其余来源判断 ──", to: logId)
@@ -870,7 +915,8 @@ final class SchedulerService: ObservableObject {
                                                 goal: task.prompt,
                                                 handoff: readHandoff(for: task)?.content,
                                                 snapshot: snapshot,
-                                                ledgerPath: handoffPath(for: task))
+                                                ledgerPath: handoffPath(for: task),
+                                                followUp: followUp?.why)
             // 收尾要用: 归属哪个任务、这条 finding 算哪个来源、证据允许引用哪些编号。
             // source_id **由 App 决定**（项目来源 / 唯一启用的来源）—— 不接受模型给的 id,
             // 伪造面因此从"编造来源"缩小成"编造观察编号"，后者由 allowedExternalIds 拦。
@@ -882,9 +928,16 @@ final class SchedulerService: ObservableObject {
                 }))
         }
         // 助理的用户消息 = 人写的**目标**（观察与契约在 system 段）; Cron 一字不动
-        let prompt = task.isAssistant
+        var prompt = task.isAssistant
             ? Self.watchUserPrompt(goal: task.prompt)
             : buildScheduledPrompt(task, targeted: targeted)
+        // 2026-11-23: 回看轮必须知道自己**为什么醒**，否则它就是"半夜三点被叫起来重新判断一遍"。
+        // 助理档挂在 system 段（`watchSystemPrompt(followUp:)` —— 它得排在输出契约**之前**，
+        // 否则"说完就结束"那条末尾不变量被破）；Cron 档没有 system 段可挂（`--no-session`
+        // 且不注入），只能接在指令后面。
+        if let f = followUp, !task.isAssistant {
+            prompt += "\n\n" + Self.followUpNote(why: f.why)
+        }
         let promptMsg = ChatMessage(role: .user, content: .text(prompt))
         store.persistMessage(promptMsg, sid: logId)
         if viewing { store.messages.append(promptMsg) }
@@ -920,6 +973,17 @@ final class SchedulerService: ObservableObject {
             if let targeted { dreamTargets[logId] = targeted.id }
             fireSpool = spool
         }
+        // 2026-11-23: 档位会削掉扩展工具 ⇒ `follow_up` 那一轮**根本看不到**。
+        // **只告警不拦截**（配成哪一档是用户的选择, 同 dream 那一条）。
+        // ⚠️ 与 dream **不同的一点**: 这里按任务去重。dream 每个 cron 点都说一遍是因为它一天
+        //    通常只跑一次；而 follow-up 的主战场是"每分钟/每小时"的助理 —— 同一个任务把同一行
+        //    刷进时间线几十遍，等于把这场日志淹掉（同 `modelBlockNoted` 的理由）。
+        if fireMode.exposesExtensionTools {
+            followUpTrimNoted.remove(task.id)   // 换档换好了: 以后再削要重新提一次
+        } else if followUpTrimNoted.insert(task.id).inserted {
+            appendTimeline("── 当前档位 \(fireMode.displayName) 会削掉扩展工具, "
+                           + "这个任务调不到 follow_up（换 standard / full 档可解）──", to: logId)
+        }
         store.beginTurn(sid: logId, prompt: prompt, ephemeral: !task.isAssistant,
                         cwd: cwd, unattended: true,
                         modeOverride: cfg.flatMap { AgentMode(rawValue: $0.agentMode) },
@@ -931,7 +995,8 @@ final class SchedulerService: ObservableObject {
                         // **无条件**下发（见那里的注释: 不清就会漏进下一回合）。
                         // ⚠️ 2026-11-18: 这里原来还有 `analysisReadOnly: task.isAssistant`
                         // —— 只读面整层删了，助理的工具面按它自己选的档位（boss 定）。
-                        extraSystemPrompt: watchExtra)
+                        extraSystemPrompt: watchExtra,
+                        followUpOwner: task)
         // P10.3 联动: 日志会话行带上任务配置 (点开会话即恢复其执行配置)
         if let cfg { store.persistence?.saveSessionConfig(id: logId, config: cfg) }
         // P15.9: 定向 fire **不推进 `lastRunAt` / `runCount`** —— 它不是"这个定时任务的一次运行"。
@@ -939,14 +1004,232 @@ final class SchedulerService: ObservableObject {
         // `dreamDigestSince` 取 `max(now - 36h, lastRunAt)`，36 小时是**地板**、改不动, 被吃掉的
         // 是**超出 36 小时的那部分** ⇒ 那段时间里没被定向跑过的会话**永久掉出窗口**, 且零红灯。
         // `runCount` 同理: 它是"定时跑了几次", 定向跑一次不该让它涨。
+        //
+        // 2026-11-23: **回看轮同一条理由**。它是"任务体外的一次唤醒"，不是这个任务的定时那一次 ——
+        // 推进 lastRunAt 会让"下次 cron 该补哪一段"算错，涨 runCount 会让"已跑 N 次"里混进
+        // 用户没安排过的次数（而那个数他就拿来判断"这个东西是不是太吵"）。
         if let idx = scheduledTasks.firstIndex(where: { $0.id == task.id }) {
-            if targeted == nil {
+            if targeted == nil && followUp == nil {
                 scheduledTasks[idx].lastRunAt = now
                 scheduledTasks[idx].runCount += 1   // P3.10: 执行次数
             }
             scheduledTasks[idx].logSessionId = logId
             try? store.persistence?.upsertScheduled(scheduledTasks[idx])
         }
+        return .started
+    }
+
+    // MARK: - follow-up · agent 给自己约定时器（2026-11-23）
+
+    /// 这一轮能不能给自己约定时器 —— 能就把 spool 路径给它，不能就 nil。
+    ///
+    /// **判据只有一条**: 这一轮属于某个**还活着、能跑、还肯给它配额**的任务 —— `owner != nil`，
+    /// 不是旧条件值守（只读归档，连 fire 都不许），不是 dream（见下面那条），且这个任务的
+    /// 回看配额 > 0（Cron 档恒 0 ⇒ 那一档根本看不到这个工具）。
+    /// 为什么必须是任务:
+    ///   · 约定要有个**归属**才能在到点时被叫起来 —— 普通会话没有"那个任务"，醒了往哪跑？
+    ///   · 更实际的一条: 普通会话的收口路径根本不读 spool（`finishFollowUpIfNeeded` 靠
+    ///     `followUpFires` 反查）。给了工具却不读，表现是"它说约好了，到点没人叫它"——
+    ///     比没有这个工具更坏。
+    ///
+    /// ⚠️ **双闸门的挂载那一半**: 返回值非 nil 才把扩展挂上去（`PiRpcTransport`）。
+    func beginFollowUpTurn(sid: UUID, owner: ScheduledTask?) -> String? {
+        // ⚠️ dream 也在排除之列: 它的触发只有「到点的 cron」与「人点由此 Dream」两种，
+        // 让一次提炼给自己约下一次 = 让蒸馏自己决定什么时候蒸馏 —— 那是一条只烧 token
+        // 的回路，而它的产出（提案）本来就要人一条条点采纳。
+        // ⚠️ 配额在这里也是**挂载闸门**的一半: 0 就干脆不给工具。给一个工具却让每次调用
+        //    都被配额挡回来，模型会反复试 —— 而那是最坏的一种"看起来支持"。
+        guard let owner, !owner.isLegacyWaiting, !Self.isDreamTask(owner),
+              owner.effectiveFollowUpsPerDay > 0 else { return nil }
+        let spool = PiRpcTransport.followUpSpoolPath(taskId: owner.id)
+        // 记一笔给收口用: 那里只有 sid，反查不出这份 spool 属于哪个任务
+        //（fire 轮新建的会话在那一刻还没绑到任务上）。
+        followUpFires[sid] = (spool: spool, taskId: owner.id)
+        return spool
+    }
+
+    /// 一轮结束时把 spool 收进 `agent_followups`，然后删掉 spool。
+    ///
+    /// 两条路都要收: **落定**（`agentSettled`）与**手动停**（`stopTurn`）——「跑不完不算失败」，
+    /// 它已经约下的时刻仍然有效（那是这一轮唯一的产出）。
+    ///
+    /// ⚠️ **`dueAt` 在这里算**（`now + after_minutes`），不是扩展侧算的 —— 子进程的钟我们
+    /// 看不见也不该信。代价: 约定比模型说的时间晚"一个回合的尾巴"（几十秒到几分钟）。
+    /// 换来的是"到点时刻只有一个产生者"，不存在"它算的钟和 App 的钟差 8 小时"这种不可复现的偏差。
+    ///
+    /// ⚠️ 顺序 = 解析 → 落库 → 删文件。**删在最后**: 落库失败时 spool 还在，下一轮收口会再
+    /// ingest 一次；而每条请求都带扩展侧生成的 `id` ⇒ 撞主键 ⇒ 不会变成两条约定。
+    func finishFollowUpIfNeeded(sid: UUID) {
+        guard let ctx = followUpFires.removeValue(forKey: sid) else { return }
+        guard let store, let p = store.persistence else { return }
+        // 任务在回合中途被删掉 ⇒ 约定没有归属了（tick 也没有东西可叫起来）。
+        // spool 照旧删 —— 留着它只会被下一轮当成"上一次没消化完的"再读一遍。
+        guard let task = scheduledTasks.first(where: { $0.id == ctx.taskId }) else {
+            try? FileManager.default.removeItem(atPath: ctx.spool)
+            return
+        }
+        guard let text = try? String(contentsOfFile: ctx.spool, encoding: .utf8) else { return }
+        let parsed = FollowUpSpool.parse(text)
+        let now = Date()
+        // ── 三道配额闸，全部**只在 App 侧判**（扩展不知道今天用了多少、也不该知道）──
+        //  ① 每轮最多 `followUpsPerTurn` 条：一轮里写出两个以上的未来时刻 = 它在给自己排班；
+        //  ② 每天最多 `effectiveFollowUpsPerDay` 条：人手里那个旋钮，拦"每轮都约"；
+        //  ③ 未兑现最多 `maxPendingPerTask` 条：拦堆积（与 ①② 不重复 —— 一天的 2 条可能
+        //    横跨好几天，未兑现的可以攒到 3）。
+        let quota = task.effectiveFollowUpsPerDay
+        let usedToday = (try? p.followUpCountSince(
+            taskId: ctx.taskId, since: Calendar.current.startOfDay(for: now))) ?? 0
+        var quotaLeft = max(0, quota - usedToday)
+        var pending = (try? p.pendingFollowUpCount(taskId: ctx.taskId)) ?? 0
+        var inThisTurn = 0
+        var added: [FollowUp] = []
+        var problems = parsed.rejects.map { "第 \($0.line) 行: \($0.reason)" }
+        var duplicates = 0
+        for r in parsed.items {
+            guard inThisTurn < Self.followUpsPerTurn else {
+                problems.append("一轮只能约 \(Self.followUpsPerTurn) 条（这一轮后面那几条没记上）")
+                continue
+            }
+            guard quotaLeft > 0 else {
+                problems.append("今天已经约了 \(usedToday) 条（上限 \(quota)），这条没约上 —— "
+                                + "改配额在任务设置里")
+                continue
+            }
+            // 上限按**未兑现**的算（不是历史上的条数）: 一个跑了一个月的助理不该因为
+            // "它总共约过 50 次"而被禁止再约。
+            guard pending < FollowUpLimit.maxPendingPerTask else {
+                problems.append("这个任务已经欠 \(pending) 条约定了（上限 "
+                                + "\(FollowUpLimit.maxPendingPerTask)），这条没约上")
+                continue
+            }
+            let f = FollowUp(id: r.id,
+                             taskId: ctx.taskId,
+                             dueAt: now.addingTimeInterval(Double(r.afterMinutes) * 60),
+                             why: r.why,
+                             status: .pending,
+                             attempts: 0,
+                             createdAt: now,
+                             firedAt: nil,
+                             note: nil)
+            if (try? p.insertFollowUpIfAbsent(f)) == true {
+                added.append(f)
+                pending += 1
+                inThisTurn += 1
+                quotaLeft -= 1
+            } else {
+                // 同一个 spool 被 ingest 第二次（收口崩在落库与删文件之间）。**不算错误**。
+                duplicates += 1
+            }
+        }
+        if !added.isEmpty || !problems.isEmpty {
+            appendTimeline(Self.followUpSummary(added: added, problems: problems,
+                                                duplicates: duplicates, now: now), to: sid)
+        }
+        try? FileManager.default.removeItem(atPath: ctx.spool)
+        reloadFollowUps()
+    }
+
+    /// 一轮里最多能约几条。**1** —— follow-up 的语义是"过一会儿再看这一件事"；一轮里冒出
+    /// 三个不同的未来时刻，说明它已经在给自己排班了，而那正是要防的。
+    /// ⚠️ 这条比"两次约定之间至少隔 N 分钟"准：后者挡不住真正的病（每轮都约，那是频次问题，
+    /// 由每天配额拦），却会挡住"10 分钟后复查构建"这种正当的近邻复查。
+    static let followUpsPerTurn = 1
+
+    /// 重读未兑现的约定（界面那一行 + `nextFollowUp` 的唯一来源）。
+    func reloadFollowUps() {
+        guard let p = store?.persistence else { followUps = []; return }
+        followUps = (try? p.loadFollowUps(status: .pending)) ?? []
+    }
+
+    /// 这个任务下一条约定（已排序，取最早那条）。界面只用它显示一行。
+    func nextFollowUp(for taskId: UUID) -> FollowUp? {
+        followUps.first { $0.taskId == taskId }
+    }
+
+    /// 扫一遍到点的约定，**一条一条起一轮**。由 `schedulerTick` 每分钟调一次。
+    ///
+    /// 三条纪律（每条都对应一次能复现的坏结局）:
+    ///
+    /// ① **先认领、再起轮**。认领（`pending → fired`）与起轮之间隔着五道闸；顺序反过来
+    ///    （先起后落）的话，"起来了但落库失败"会让下一跳再叫一次 —— 而这一次是**真的重跑一整轮**，
+    ///    烧的是 token，不是一条通知。
+    /// ② **起不来就放回去**（`rearm`）。被"在途 / 并发满 / 超预算"挡掉时不能当作已兑现 ——
+    ///    那等于把约定吃掉，人永远等不到那次回看。重试是**顺延**（`retryStepMinutes` × 次数），
+    ///    不是每分钟狂撞；三次之后判 `missed` 并在日志里留一行。
+    /// ③ **任务没了/停了就作废，不重排**。给一个已经停用的任务排回看，是替用户重新开启他关掉的东西。
+    func fireDueFollowUps(now: Date = Date()) {
+        guard let store, let p = store.persistence else { return }
+        let due = (try? p.dueFollowUps(now: now)) ?? []
+        guard !due.isEmpty else { return }
+        for f in due {
+            guard let task = scheduledTasks.first(where: { $0.id == f.taskId }) else {
+                try? p.settleFollowUp(id: f.id, status: .cancelled, firedAt: nil, note: "任务已删除")
+                continue
+            }
+            guard task.enabled, !task.isLegacyWaiting else {
+                try? p.settleFollowUp(id: f.id, status: .cancelled, firedAt: nil, note: "任务已停用")
+                continue
+            }
+            try? p.settleFollowUp(id: f.id, status: .fired, firedAt: now, note: nil)
+            if case .skipped(let reason) = runScheduledFire(task, at: now, followUp: f) {
+                let attempts = f.attempts + 1
+                if attempts >= FollowUpLimit.maxAttempts {
+                    try? p.settleFollowUp(id: f.id, status: .missed, firedAt: nil,
+                                          note: "\(reason) · 试了 \(attempts) 次没起来")
+                } else {
+                    let next = now.addingTimeInterval(
+                        Double(FollowUpLimit.retryStepMinutes * attempts) * 60)
+                    try? p.rearmFollowUp(id: f.id, dueAt: next, attempts: attempts, note: reason)
+                }
+            }
+            // 日志: 约定 id 前 8 位 + 结局。排查"它约了但没跑"时这是第一现场。
+            Log.event("follow-up", ["id": String(f.id.uuidString.prefix(8)),
+                                    "task": String(f.taskId.uuidString.prefix(8))])
+        }
+        reloadFollowUps()
+    }
+
+    /// 时间线那一行的措辞（恒中文：本文件在 L10n 的 `EXCLUDE_FILES` 里，落库文案不本地化）。
+    ///
+    /// ⚠️ **必须把被拒的那几条说出来**。spool 马上删了，现在不写，人只会看到"这次怎么没约上"，
+    /// 而不知道是哪一条死在了路上（同 `dreamSummary` 的理由）。
+    static func followUpSummary(added: [FollowUp], problems: [String],
+                                duplicates: Int, now: Date) -> String {
+        let fmt = DateFormatter()
+        fmt.dateFormat = "HH:mm"
+        var lines: [String] = []
+        for f in added {
+            let due = fmt.string(from: f.dueAt)
+            lines.append("── \(fmt.string(from: now)) 约在 \(due) 回看（\(f.why)）──")
+        }
+        for p in problems { lines.append("── \(fmt.string(from: now)) 约定没记上: \(p) ──") }
+        if duplicates > 0 {
+            lines.append("── \(fmt.string(from: now)) 有 \(duplicates) 条约定重复提交, 已忽略 ──")
+        }
+        return lines.joined(separator: "\n")
+    }
+
+    /// 回看轮的注入段（助理档走 system、Cron 档接在指令后面 —— 同一份字，两处挂）。
+    ///
+    /// 它只说**为什么醒**与**这一轮该怎么收**，不复述目标（目标/账本/契约都在别处）。
+    /// ⚠️ 最后那句"别连着约第三次"是有意的: follow-up 一旦接上自指回路，最省事的行为就是
+    /// 「再看一次再约一次」—— 那是最贵的空转（每轮都烧满上下文，什么都不变）。
+    static func followUpNote(why: String) -> String {
+        """
+        【回看 · 你自己约的】
+        这是你上一轮结束时给自己约的一次。约的时候你写的是：\(why)
+        ⚠️ 不是人在叫你，也不是这个任务的定时到了 —— 是你自己说「过一会儿再来看看」。
+        这一轮别把上一次的判断重做一遍，先看它现在是什么样，然后落到三种之一：
+        · 已经做完 / 已经过去 ⇒ 说清结论，**不要再约下一次**；
+        · 还没变 ⇒ 说清现在的状态；确实还要等，才再约一次（同一件事别连着约第三次）；
+        · 缺东西（要人给材料 / 要人拍板）⇒ 说清缺什么、要他怎么答。
+        """
+    }
+
+    /// 分隔行里那一小段"约的是什么"。**截短**是因为它会进时间线，而时间线是一条消息。
+    static func shortWhy(_ why: String) -> String {
+        let t = why.trimmingCharacters(in: .whitespacesAndNewlines)
+        return t.count > 24 ? String(t.prefix(24)) + "…" : t
     }
 
     // MARK: - P19 助理 · 巡检轮
@@ -1047,7 +1330,8 @@ final class SchedulerService: ObservableObject {
                                   goal: String,
                                   handoff: String?,
                                   snapshot: WatchSnapshot,
-                                  ledgerPath: String) -> String {
+                                  ledgerPath: String,
+                                  followUp: String? = nil) -> String {
         var parts: [String] = []
         parts.append("""
         【助理任务 · 巡检轮】
@@ -1105,6 +1389,11 @@ final class SchedulerService: ObservableObject {
         3. 不要为了"留证据"往别处写文件；不要声称你改了别的东西。
         """)
         parts.append(Self.watchLedgerContract)
+        // 2026-11-23: 回看轮的"为什么醒"。**必须排在输出契约之前** —— 契约是"说完就结束"的那一段，
+        // 它后面不该再有话（这条不变量从写下来那天就挂着）。
+        if let f = followUp, !f.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            parts.append(Self.followUpNote(why: f))
+        }
         // 回复契约放最后（它是"说完就结束"的那一段，后面不该再有话）
         parts.append(Self.watchOutputContract)
         return parts.joined(separator: "\n\n")
@@ -2163,6 +2452,13 @@ final class SchedulerService: ObservableObject {
     /// 某任务今天已经烧了多少 token。
     func tokenSpentToday(_ taskId: UUID, now: Date = Date()) -> Int {
         (try? store?.persistence?.tokenUsage(taskId: taskId, day: Self.dayKey(now))) ?? 0
+    }
+
+    /// 某任务**今天约了几条**回看（编辑器的「今日已约 N 次」；口径 = `created_at` 的本地日）。
+    /// 与配额闸读同一处、同一个 since，免得界面上写 2、判据却按 3 拦。
+    func followUpsToday(_ taskId: UUID, now: Date = Date()) -> Int {
+        (try? store?.persistence?.followUpCountSince(
+            taskId: taskId, since: Calendar.current.startOfDay(for: now))) ?? 0
     }
 
     /// 超预算的人话原因；nil = 还没超（或这条任务没设上限）。

@@ -280,6 +280,10 @@ final class PersistenceStore {
         // ⚠️ 飞书那条 **URL 不在这里** —— 它住 Keychain, 库里这一列只有一个 Bool。
         addColumnIfMissing("scheduled_tasks", "notify", "TEXT")
         addColumnIfMissing("scheduled_tasks", "daily_token_budget", "INTEGER NOT NULL DEFAULT 0")
+        // 2026-11-23: **可空**是刻意的 —— `NULL` = 从没配过（老库升上来），`0` = 人明确关掉。
+        // 带 `DEFAULT 0` 的话这两件事就再也分不开：老行会被读成"用户关掉了"，
+        // 而默认值本该由 `ScheduledTask.effectiveFollowUpsPerDay` 一处给（含 Cron 档恒 0）。
+        addColumnIfMissing("scheduled_tasks", "follow_ups_per_day", "INTEGER")
         // P19.2 S15: 飞书单聊绑定的 chat_id。**列只增不删**（旧版 App 打开新库会崩那一条）。
         // ⚠️ S15b 起这一列**没人读了**（绑定改在 `remote_bots.assistant_id` 上）。留着是为了
         // "旧版打开新库不崩"，以及迁移时一次性把它收成机器人行（见 `migrateLegacyRemoteBindings`）。
@@ -372,6 +376,33 @@ final class PersistenceStore {
             PRIMARY KEY (task_id, day)
         )
         """)
+        // 2026-11-23: follow-up —— agent 给自己约的定时唤醒。
+        //
+        // **独立一张表**，不借 `scheduled_tasks` 造一次性任务：那张表的每一行都会进任务列表、
+        // 占一条日志会话、参与 cron 匹配与"漏跑"统计；而一次"半小时后再来看看"的最短命周期
+        // 只有一轮，塞进去等于往用户面前扔一堆跑完就该消失的任务，且 `refreshMissedFires`
+        // 会把"约过但没跑"算成漏跑（那是两件完全不同的事）。
+        //
+        // `status` 同样**不做 CHECK 约束**（理由见上面 `agent_findings` 那段）。
+        try db.run("""
+        CREATE TABLE IF NOT EXISTS agent_followups (
+            id          TEXT PRIMARY KEY,
+            task_id     TEXT NOT NULL,
+            due_at      REAL NOT NULL,
+            why         TEXT NOT NULL,
+            status      TEXT NOT NULL,
+            attempts    INTEGER NOT NULL DEFAULT 0,
+            created_at  REAL NOT NULL,
+            fired_at    REAL,
+            note        TEXT
+        )
+        """)
+        // 扫描口径 = `status = ? AND due_at <= ?` ⇒ 这条索引就是 tick 那一跳要的。
+        try db.run("CREATE INDEX IF NOT EXISTS idx_followups_due ON agent_followups(status, due_at)")
+        // 删任务时的回收口径 + "这个任务还欠着几条"（`maxPendingPerTask` 那条闸）。
+        try db.run("CREATE INDEX IF NOT EXISTS idx_followups_task ON agent_followups(task_id, status)")
+        // 配额闸（`followUpCountSince`）按 `created_at` 扫同一个任务的行。
+        try db.run("CREATE INDEX IF NOT EXISTS idx_followups_created ON agent_followups(task_id, created_at)")
         // P19.2 S15b: 旧的「助理 × chat_id」绑定收成机器人行。**放在最后** —— 它要读
         // `scheduled_tasks.remote_chat_id`（上面 260 行才补的列）与刚建好的 `remote_bots`。
         migrateLegacyRemoteBindings()
@@ -1259,7 +1290,7 @@ final class PersistenceStore {
 
     func loadScheduled() throws -> [ScheduledTask] {
         let rows = try db.query("""
-            SELECT id, name, prompt, cron, project_id, enabled, last_run_at, log_session_id, continuous, condition, unattended, completed_at, run_count, created_at, config, kind, sources, notify, daily_token_budget
+            SELECT id, name, prompt, cron, project_id, enabled, last_run_at, log_session_id, continuous, condition, unattended, completed_at, run_count, created_at, config, kind, sources, notify, daily_token_budget, follow_ups_per_day
             FROM scheduled_tasks ORDER BY created_at DESC
             """)
         return rows.map { row in
@@ -1299,7 +1330,9 @@ final class PersistenceStore {
                 notify: optionalText(row, "notify")
                     .flatMap { $0.data(using: .utf8) }
                     .flatMap { try? decoder.decode(NotifyOptions.self, from: $0) } ?? .default,
-                dailyTokenBudget: optionalInt(row, "daily_token_budget") ?? 0)
+                dailyTokenBudget: optionalInt(row, "daily_token_budget") ?? 0,
+                // `nil` = 没配过（不是 0）—— 见 `ScheduledTask.followUpsPerDay` 的三态说明。
+                followUpsPerDay: optionalInt(row, "follow_ups_per_day"))
         }
     }
 
@@ -1318,8 +1351,8 @@ final class PersistenceStore {
         // 这是有意的: 两个真源里活的那一个在 `remote_bots`，留着旧列同步只会让两边有机会不一致。
         try db.run("""
             INSERT OR REPLACE INTO scheduled_tasks
-            (id, name, prompt, cron, project_id, enabled, last_run_at, log_session_id, continuous, condition, unattended, completed_at, run_count, created_at, config, kind, sources, notify, daily_token_budget)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            (id, name, prompt, cron, project_id, enabled, last_run_at, log_session_id, continuous, condition, unattended, completed_at, run_count, created_at, config, kind, sources, notify, daily_token_budget, follow_ups_per_day)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             """, [.text(t.id.uuidString),
                   .text(t.name),
                   .text(t.prompt),
@@ -1339,7 +1372,9 @@ final class PersistenceStore {
                   t.isLegacyWaiting ? .null : .text(t.kind.rawValue),
                   sourcesJSON.map { .text($0) } ?? .null,
                   notifyJSON.map { .text($0) } ?? .null,
-                  .int(Int64(max(0, t.dailyTokenBudget)))])
+                  .int(Int64(max(0, t.dailyTokenBudget))),
+                  // nil 写 NULL（= 没配过），0 写 0（= 人关掉了）—— 这一列的三态全靠它。
+                  t.followUpsPerDay.map { .int(Int64(max(0, $0))) } ?? .null])
     }
 
     // MARK: - P19 S7 日 token 账本
@@ -1362,8 +1397,124 @@ final class PersistenceStore {
             """, [.text(taskId.uuidString), .text(day), .int(Int64(tokens))])
     }
 
-    /// 删任务 —— **连同它的数据**。返回被删 findings 的执行快照目录（供上层删盘）。
+    // MARK: - follow-up（agent 给自己约定时器, 2026-11-23）
+
+    /// 读约定。两个收窄参数都只是往 WHERE 里加条件（同 `loadFindings` 的理由：读全量再在内存里
+    /// filter 与它逐行等价，但多解一遍别的任务的行）。**按 `due_at` 升序** —— 早该叫的先叫。
+    func loadFollowUps(taskId: UUID? = nil, status: FollowUpStatus? = nil) throws -> [FollowUp] {
+        var where_: [String] = []
+        var args: [DBValue] = []
+        if let taskId { where_.append("task_id = ?"); args.append(.text(taskId.uuidString)) }
+        if let status { where_.append("status = ?"); args.append(.text(status.rawValue)) }
+        let filter = where_.isEmpty ? "" : " WHERE " + where_.joined(separator: " AND ")
+        let rows = try db.query("""
+            SELECT id, task_id, due_at, why, status, attempts, created_at, fired_at, note
+            FROM agent_followups\(filter) ORDER BY due_at ASC
+            """, args)
+        return rows.compactMap(decodeFollowUp)
+    }
+
+    /// tick 要的那一批：`pending` 且已到点。
+    func dueFollowUps(now: Date) throws -> [FollowUp] {
+        let rows = try db.query("""
+            SELECT id, task_id, due_at, why, status, attempts, created_at, fired_at, note
+            FROM agent_followups WHERE status = 'pending' AND due_at <= ? ORDER BY due_at ASC
+            """, [.real(now.timeIntervalSince1970)])
+        return rows.compactMap(decodeFollowUp)
+    }
+
+    /// 行的解码口径 —— **只有这份**（上两个读法都走它，加列只改一处）。
     ///
+    /// 坏行**跳过而不是抛**（同 `loadFindings`）：一行解不出来不该让整个调度停摆。
+    /// 未知 `status` ⇒ 也丢：它既不该被 tick 叫起来，也不该在界面上冒充"还在等"。
+    private func decodeFollowUp(_ row: [String: DBValue]) -> FollowUp? {
+        guard let id = UUID(uuidString: text(row, "id")),
+              let taskId = UUID(uuidString: text(row, "task_id")),
+              let status = FollowUpStatus.decode(optionalText(row, "status") ?? "")
+        else { return nil }
+        return FollowUp(id: id,
+                        taskId: taskId,
+                        dueAt: optionalDate(row, "due_at") ?? .distantPast,
+                        why: text(row, "why"),
+                        status: status,
+                        attempts: Int(max(Int64(0), int(row["attempts"] ?? .null))),
+                        createdAt: optionalDate(row, "created_at") ?? .distantPast,
+                        firedAt: optionalDate(row, "fired_at"),
+                        note: optionalText(row, "note"))
+    }
+
+    /// 这个任务还欠着几条（`FollowUpLimit.maxPendingPerTask` 那条闸）。
+    func pendingFollowUpCount(taskId: UUID) throws -> Int {
+        let rows = try db.query(
+            "SELECT COUNT(*) AS n FROM agent_followups WHERE task_id = ? AND status = 'pending'",
+            [.text(taskId.uuidString)])
+        guard let row = rows.first else { return 0 }
+        return Int(int(row["n"] ?? .null))
+    }
+
+    /// 这个任务在 `since` 之后**约了几条**（配额闸用；口径 = `created_at`，不是"跑了几轮"）。
+    ///
+    /// ⚠️ 为什么是 `created_at` 而不是 `fired_at`: 要拦的是"它约得太勤"，而"跑了几轮"会被
+    /// **重试顺延**带偏（一次约定被闸挡三次就记成三轮，配额凭空少一天的量）。
+    /// 取消/重排也算 —— 改主意本身也吵。
+    func followUpCountSince(taskId: UUID, since: Date) throws -> Int {
+        let rows = try db.query("""
+            SELECT COUNT(*) AS n FROM agent_followups WHERE task_id = ? AND created_at >= ?
+            """, [.text(taskId.uuidString), .real(since.timeIntervalSince1970)])
+        guard let row = rows.first else { return 0 }
+        return Int(int(row["n"] ?? .null))
+    }
+
+    /// 插一条。`id` 就是幂等键（扩展侧的 nonce）⇒ `INSERT OR IGNORE`。
+    ///
+    /// 返回是否**真插进去**（`false` = 这条已经在了）。收口那条路径"先落库、再删 spool"，
+    /// 万一崩在中间，下一次 ingest 会读到同一行 —— 靠主键撞掉它，而不是靠调用方记得去重。
+    @discardableResult
+    func insertFollowUpIfAbsent(_ f: FollowUp) throws -> Bool {
+        // ⚠️ `Database` 只暴露 `run` / `query`，没有 `sqlite3_changes` ⇒ "插进去了没有"这件事
+        // 用一次**主键查询**来判。比 `COUNT(*)` 前后各数一遍便宜，口径也更窄（只问这一条）。
+        let exists = try db.query("SELECT 1 FROM agent_followups WHERE id = ? LIMIT 1",
+                                  [.text(f.id.uuidString)]).isEmpty == false
+        guard !exists else { return false }
+        try db.run("""
+            INSERT OR IGNORE INTO agent_followups
+            (id, task_id, due_at, why, status, attempts, created_at, fired_at, note)
+            VALUES (?,?,?,?,?,?,?,?,?)
+            """, [.text(f.id.uuidString),
+                  .text(f.taskId.uuidString),
+                  .real(f.dueAt.timeIntervalSince1970),
+                  .text(f.why),
+                  .text(f.status.rawValue),
+                  .int(Int64(f.attempts)),
+                  .real(f.createdAt.timeIntervalSince1970),
+                  f.firedAt.map { .real($0.timeIntervalSince1970) } ?? .null,
+                  f.note.map { .text($0) } ?? .null])
+        return true
+    }
+
+    /// 落定一条：`fired` / `cancelled` / `missed` 都走这里。
+    ///
+    /// `firedAt` 只在**真的起来过**时给值；`cancelled` 给 nil —— 那一列是"叫过没有"的证据，
+    /// 一条被作废的约定**没有**叫过任何人，给它写个时刻等于伪造证据。
+    func settleFollowUp(id: UUID, status: FollowUpStatus, firedAt: Date?, note: String?) throws {
+        try db.run("UPDATE agent_followups SET status = ?, fired_at = ?, note = ? WHERE id = ?",
+                   [.text(status.rawValue),
+                    firedAt.map { .real($0.timeIntervalSince1970) } ?? .null,
+                    note.map { .text($0) } ?? .null,
+                    .text(id.uuidString)])
+    }
+
+    /// 重排一条（起来被闸挡了，但约定还没作废）：只动 `due_at` / `attempts` / `note`。
+    /// `status` 保持 `pending` —— 一旦标成 `missed` 它就不该再被 tick 捡起来。
+    func rearmFollowUp(id: UUID, dueAt: Date, attempts: Int, note: String?) throws {
+        try db.run("UPDATE agent_followups SET due_at = ?, attempts = ?, note = ? WHERE id = ?",
+                   [.real(dueAt.timeIntervalSince1970),
+                    .int(Int64(attempts)),
+                    note.map { .text($0) } ?? .null,
+                    .text(id.uuidString)])
+    }
+
+    /// 删任务 —— **连同它的数据**。返回被删 findings 的执行快照目录（供上层删盘）。
     /// ⚠️ 2026-11-18 之前这里只删一行 `scheduled_tasks`。三张带 `task_id` 的表
     /// （`agent_findings` / `agent_finding_actions` / `agent_token_daily`）于是留下**悬空外键**：
     /// 实测这一台机器上，删掉两个助理之后 `agent_token_daily` 里还有 2 条账挂着已经不存在的
@@ -1372,6 +1523,8 @@ final class PersistenceStore {
     ///
     /// **回收判据必须与「谁真持有这些东西」同源**：`task_id` 就是持有者，
     /// 所以删除半径 = 所有 `WHERE task_id = ?` 的表；少认一张就等于把垃圾留在库里。
+    /// ⚠️ 这张名单**每次加一张带 `task_id` 的表都要回来补一行**（2026-11-23 加了 `agent_followups`）——
+    /// 它就是"谁真持有"的账本本身，漏记的样子是垃圾而不是报错。
     ///
     /// ⚠️ `agent_finding_actions` 的外键是 `finding_id` 而不是 `task_id` —— 它必须**先**删，
     /// 否则子查询那一步已经把 findings 删了，actions 就再也找不到自己的父行。
@@ -1390,6 +1543,9 @@ final class PersistenceStore {
             """, [tid])
         try db.run("DELETE FROM agent_findings WHERE task_id = ?", [tid])
         try db.run("DELETE FROM agent_token_daily WHERE task_id = ?", [tid])
+        // 2026-11-23: 未兑现的约定跟着任务一起走。留着它的下场是 tick 每一分钟都扫到一条指向
+        // 不存在任务的 `pending` ⇒ 每次判"任务已删除"再标 cancelled（几十次之后才安静）。
+        try db.run("DELETE FROM agent_followups WHERE task_id = ?", [tid])
         try db.run("DELETE FROM scheduled_tasks WHERE id = ?", [tid])
         return undos
     }
