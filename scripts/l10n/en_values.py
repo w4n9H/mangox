@@ -13,6 +13,16 @@ key 的形态必须与 `gen_strings.source_keys()` 的产出**逐字节一致**:
 """
 
 VALUES = {
+    '关于': 'About',
+    '引擎': 'Engine',
+    '本机': 'This Mac',
+    '系统': 'System',
+    '可用': 'Ready',
+    '未找到': 'Not found',
+    '复制诊断信息': 'Copy diagnostics',
+    '你 Mac 上的 AI 同事': 'Your AI colleague on your Mac',
+    'pi 不随 App 发布 —— 需要你自己装好，App 才能发起对话。': "pi doesn't ship with the app \u2014 install it yourself, and the app can start a conversation.",
+    '报问题时贴这段，比截图全。': 'Paste this in a bug report \u2014 it says more than a screenshot.',
     '台账': 'Ledger',
     '在跟踪': 'Tracking',
     '在追': 'In progress',

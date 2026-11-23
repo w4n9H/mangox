@@ -99,6 +99,7 @@ mangox/Views/Settings/SettingsCategory.swift|数据
 mangox/Views/Settings/SettingsCategory.swift|模型
 mangox/Views/Settings/SettingsCategory.swift|通用
 mangox/Views/Settings/SettingsCategory.swift|集成
+mangox/Views/Settings/SettingsCategory.swift|关于
 
 # ── E. 注入模型的文本 (恒中文, 界面上永不显示) ───────────────────────────────
 # 判据: 这段字**只进 prompt**, 界面上永远不出现 ⇒ 本地化它没有意义, 而且有害 ——

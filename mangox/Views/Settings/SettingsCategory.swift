@@ -25,6 +25,10 @@ enum SettingsCategory: String, CaseIterable, Identifiable, Hashable {
     case model       = "模型"
     case integration = "集成"
     case data        = "数据"
+    /// 2026-11-23: 版本与依赖清单。**唯一一个不满足上面"要满"判据的分类** ——
+    /// 它的用途不是"改设置"，是"查我装的是哪个版本"（报问题时第一眼要的东西）。
+    /// 刻意排最后：它是一次性查看，不该占住前四格的注意力。
+    case about       = "关于"
 
     var id: String { rawValue }
 
@@ -38,6 +42,7 @@ enum SettingsCategory: String, CaseIterable, Identifiable, Hashable {
         case .model:       "cpu"
         case .integration: "puzzlepiece.extension"
         case .data:        "externaldrive"
+        case .about:       "info.circle"
         }
     }
 }

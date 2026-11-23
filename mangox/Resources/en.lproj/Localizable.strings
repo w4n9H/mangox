@@ -7,7 +7,7 @@
    **本文件由 scripts/l10n/gen_strings.py --write 生成, 别手改** ——
    译文改 scripts/l10n/en_values.py 的 VALUES, 再跑 --write。
 
-   条数: 1130
+   条数: 1140
 */
 
 " (值:\"%@\")" = " (value: %@)";
@@ -139,6 +139,7 @@
 "key 全局唯一" = "keys are globally unique";
 "key 已被另一条占用" = "That key is already taken by another item";
 "multipart 缺 boundary" = "multipart is missing a boundary";
+"pi 不随 App 发布 —— 需要你自己装好，App 才能发起对话。" = "pi doesn't ship with the app — install it yourself, and the app can start a conversation.";
 "pi 扩展经 spawn 期 --extension 加载, 启停后需重启引擎生效" = "pi extensions are loaded at spawn time via --extension; restart the engine for changes to take effect.";
 "prompt 与 cron 为必填" = "prompt and cron are required";
 "provider (自定义)" = "provider (custom)";
@@ -283,6 +284,7 @@
 "你 %@ 毫秒前刚动过键鼠 ⇒ 没写。" = "You touched the keyboard or mouse %@ ms ago ⇒ nothing was typed.";
 "你 %@ 毫秒前刚动过键鼠 ⇒ 没按。" = "You touched the keyboard or mouse %@ ms ago ⇒ nothing was pressed.";
 "你 %@ 毫秒前刚动过键鼠 ⇒ 没点。" = "You touched the keyboard or mouse %@ ms ago ⇒ nothing was tapped.";
+"你 Mac 上的 AI 同事" = "Your AI colleague on your Mac";
 "你写的" = "You wrote it";
 "你手动压缩了上下文 · %lld → %lld tokens" = "You compacted the context · %lld → %lld tokens";
 "你是谁" = "Who You Are";
@@ -324,6 +326,7 @@
 "全部采纳" = "Accept all";
 "六" = "Sat";
 "关" = "Off";
+"关于" = "About";
 "关闭" = "Close";
 "关闭提示" = "Dismiss";
 "关闭电脑操作" = "Turn off computer use";
@@ -431,6 +434,7 @@
 "只读命令静默放行, 危险命令自动拒绝并记下原因 (回执告知) — 远程驱动用。" = "Read-only commands pass silently; dangerous ones are refused automatically with the reason recorded (and sent back in the receipt) — for remote-driven work.";
 "只读显示本轮真正发出去的注入块 —— 门禁绿 ≠ 改对了" = "Read-only view of the injection block actually sent this turn — a green gate does not mean it is right";
 "可操作" = "Act";
+"可用" = "Ready";
 "可读" = "Read";
 "台账" = "Ledger";
 "右边是空的 —— 采纳后这篇进系统废纸篓, 还能在那里捞回来。" = "The right side is empty — accepting moves this note to the system Trash, where you can still recover it.";
@@ -479,6 +483,7 @@
 "复制" = "Copy";
 "复制全文" = "Copy all";
 "复制全部输出" = "Copy all output";
+"复制诊断信息" = "Copy diagnostics";
 "外观" = "Appearance";
 "外部来源" = "External source";
 "外部来源（邮件）本版未接入 —— 它的只读采集要等「不置已读」验证通过。" = "External sources (mail) are not wired up yet — read-only collection waits for a proven \"never marks as read\" path.";
@@ -580,6 +585,7 @@
 "开启电脑操作" = "Turn on computer use";
 "开始 Dream" = "Start Dream";
 "开着：你一动键鼠，我就停下让路。关着：我正要点一个按钮、你同时动鼠标，落到谁手里是随机的。" = "On: the moment you touch keyboard or mouse, I step aside. Off: if I am about to click a button while you move the mouse, it is a coin toss who lands it.";
+"引擎" = "Engine";
 "引擎 stderr 末尾几行:" = "Last lines of engine stderr:";
 "引擎没有输出任何 stderr。" = "The engine wrote nothing to stderr.";
 "引擎没起来（找不到 pi CLI），这句没跑。" = "The engine is not up (pi CLI not found) — this message was not run.";
@@ -638,6 +644,7 @@
 "把这一轮改动还原成执行前的快照（7 天内可用）" = "Restore the changes from this run using the pre-run snapshot (available for 7 days)";
 "把这批提案逐条落盘; 没成的会留在队列里" = "Write every proposal in this batch to disk; any that fail stay in the queue";
 "把这条回复存成图片放进剪贴板" = "Save this reply as an image on the clipboard";
+"报问题时贴这段，比截图全。" = "Paste this in a bug report — it says more than a screenshot.";
 "拉取失败 (%@), 已回落预设清单" = "Fetch failed (%@); fell back to the built-in preset list";
 "拒绝" = "Deny";
 "拷贝到 ~/.mangox/extensions (默认停用)" = "Copied to ~/.mangox/extensions (disabled by default)";
@@ -766,6 +773,7 @@
 "未启用" = "Not enabled";
 "未存盘的东西会一起没）⇒ 没按。要关窗或退出，交给人在界面上点。" = "unsaved work goes with it) ⇒ nothing was pressed. Leave closing or quitting to the person at the screen.";
 "未开启 —— 打开 App 才会巡检" = "Off — checks only run while the app is open";
+"未找到" = "Not found";
 "未找到 pi CLI, Agent 引擎不可用。请安装 pi 后重启 MangoX。" = "pi CLI not found; the agent engine is unavailable. Install pi and restart MangoX.";
 "未找到 pi CLI, 捕获未发送" = "pi CLI not found; capture not sent";
 "未找到可执行的 pi。已按顺序查找:" = "No executable pi found. Looked in this order:";
@@ -784,6 +792,7 @@
 "本会话还没有改动" = "No changes in this session yet";
 "本周" = "This week";
 "本地" = "Local";
+"本机" = "This Mac";
 "本次没有改动文件" = "No files changed this turn";
 "本次注入 (只读)" = "This turn's injection (read-only)";
 "本轮" = "This turn";
@@ -908,6 +917,7 @@
 "等你决定" = "needs your call";
 "等待" = "Waiting";
 "等待审批" = "Awaiting approval";
+"系统" = "System";
 "系统权限" = "System permissions";
 "索引宁缺勿残 — 残缺的索引会让你以为资料只有这些; 摘掉或停用一两个库即可恢复" = "A partial index is worse than none — it would read as “these are all the materials”. Unmount or disable a base or two to restore it";
 "索引预览" = "Index preview";

@@ -105,6 +105,8 @@ struct SettingsView: View {
                 case .data:
                     backupSection
                     diagnosticLogSection
+                case .about:
+                    AboutSection()
                 }
             }
         }
