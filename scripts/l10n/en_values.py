@@ -243,7 +243,6 @@ VALUES = {
     '已允许': 'Allowed',
     '已允许（始终）': 'Allowed (always)',
     '已拒绝': 'Denied',
-    '已暂停': 'Paused',
     '已跑 %lld 次': 'Ran %lld times',
     # ── follow-up（2026-11-23）· 任务卡 L2 那一行 ──
     '约了 %@ 回看': 'Follow-up at %@',
@@ -309,7 +308,6 @@ VALUES = {
     '新建会话': 'New session',
     '新建条目': 'New entry',
     '新建项目（选择目录）…': 'New project (choose a directory)…',
-    '无人值守': 'Unattended',
     '无人值守 · 恒开': 'Unattended · always on',
     '无匹配文件': 'No matching files',
     '无法侧问：源会话无效或已是侧问会话': 'Cannot start a side chat: the source session is invalid or is itself a side chat',
@@ -1233,7 +1231,6 @@ VALUES = {
     'Cron 定时：到点执行 `prompt` 里写好的动作': 'Cron schedule: runs the actions written in `prompt` when due',
     '助理': 'Assistant',
     '助理（目标式）': 'Assistant (goal-based)',
-    '助理 · %lld 个来源': 'Assistant · %lld sources',
     '助理：到点看一轮，产出带编号的方案等你批准（`prompt` 写目标，不是动作）': 'Assistant: takes a look when due and writes a numbered plan that waits for your approval (`prompt` states the goal, not the actions)',
     '外部来源（邮件）本版未接入 —— 它的只读采集要等「不置已读」验证通过。': 'External sources (mail) are not wired up yet — read-only collection waits for a proven "never marks as read" path.',
     '新建：Cron 定时（动作写死）或 助理（目标式，产方案等人批准）': 'New: Cron schedule (fixed actions) or Assistant (goal-based, plans wait for approval)',
@@ -1440,4 +1437,39 @@ VALUES = {
     '太大了（%ld MB，上限 %ld MB）: %@': 'Too big (%ld MB, the limit is %ld MB): %@',
     '一轮最多发 %ld 件，多的没发（%@）': 'At most %ld files per turn, so the rest were not sent (%@).',
     '有文件没能发出去：': 'Some files could not be sent:',
+
+    # P20 P4 列表页（建与改）—— 身份 / 归属 / 职责 / 五档状态。
+    # ⚠️ `main` / `worker` / `cron` 三个**角色词**不在这里: 它们是技术角色名（与 `prompt` /
+    #    `cron` 同族），中英同形，界面用 `Text(verbatim:)` 直接写。
+    '身份': 'Standing',
+    '归属': 'Under',
+    '职责': 'Role',
+    '说明': 'Details',
+    'main · 自己按班次跑，还能派人': 'main · runs on its own schedule and can delegate',
+    'worker · 只被派活叫起来': 'worker · only runs when it is delegated to',
+    '选一个助理': 'Pick an assistant',
+    '原归属已删除': 'Its lead was deleted',
+    '它负责什么，一句话（会进每一轮注入）': 'What it handles, in one line (this goes into every turn)',
+    '判据、边界、交付形态（比如「差异要列单号与金额，别只给总数」）':
+        'Acceptance, boundaries, delivery shape (e.g. "list ticket numbers and amounts, not just a total")',
+    '超过上限的部分不会保存 —— 这一段每一轮都会进上下文，所以它有硬顶':
+        'Anything past the limit is dropped — this line goes into every turn, so it is capped',
+    '已保存的任务不能改身份 —— 换身份会把它名下那张单子变成一张没有出口的单子':
+        'A saved task cannot change standing — that turns the ticket under it into one with no way out',
+    '职责必填 —— 名单与注入段只读这一行':
+        'Role is required — the roster and the injection read only this line',
+    '选一个助理当归属': 'Pick the assistant it belongs to',
+    '归属不能是另一个 worker': 'A worker cannot belong to another worker',
+    '已经有一个 worker 叫「%@」': 'A worker named 「%@」 already exists',
+    'main 不该有归属': 'main cannot belong to anyone',
+    '没保存上：有一条任务规则不满足': 'Not saved: one of the task rules is not satisfied',
+    '%lld 个 worker': '%lld workers',
+    '归 %@': 'Under %@',
+    '未归属': 'Unassigned',
+    '在跑 %lld 分钟': 'Running · %lld min',
+    '已排上 %@': 'Scheduled · %@',
+    '等回执 %lld 分钟': 'Awaiting report · %lld min',
+    '已停用': 'Paused',
+    '空闲': 'Idle',
+    '空闲 %lld 天': 'Idle · %lld days',
 }

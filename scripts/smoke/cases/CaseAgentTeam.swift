@@ -19,6 +19,10 @@
 //      【你的队伍】12 行 / ≤700 字 / 职责原文照搬 / 说明不进段、状态五档各自说得清、
 //      回执**成功收尾才标**（空回合不标）、一次最多念 5 条、`list_workers` 缺口分两级、
 //      `read_worker_ledger` 超长时**砍验收项保尾巴**、三个工具名与源码同源。
+//    · **㉛~㉝ = P4 的结束判据**（列表页 · 建与改）: 视图层没有门，所以判的是被抽出来的
+//      那三件**纯函数** —— 职责必填**在域层也拦**（不只是保存按钮）、列表行平铺时认得出
+//      谁是队长 / 谁是谁的人（worker 不写周期、孤儿写「未归属」）、五档状态各自说得清。
+//      ⚠️ 界面本身（竖条画在哪、输入框摆在哪）只归眼睛 —— 见文档 §06 P4 那一行「亮/暗各看一次」。
 //
 //  ⚠️ 每条判据都同时问**两件事**: 纯判据（`TeamRule` / `DelegationRule` / `TeamPrompt`）给出的
 //  **理由与字数**，与真链路（`addScheduled` / `updateScheduled` / `fireDueDelegations` /
@@ -32,6 +36,8 @@
 //      （实测输出里 `busyReason` 是空串 = 那条单被收下了，正是要抓的那件事）。
 //    · `markReceiptsReported` 去掉 `produced` 那道判（空回合也标）⇒ **实测 1 红**: ㉕
 //      （读数里 `reported_at` 变成非空 = 那条回执被静默吞了）。
+//    · `TeamRule.violation` 去掉 `workerWithoutDuty` 那道判 ⇒ **实测 1 红**: ㉛
+//      （读数里 `ok=true` = 空职责的 worker 被建出来了，而它在名单里选不出来）。
 //
 //  ⚠️ 这一段**不碰**真实目录: 库走 `dbPath`，与 `CaseFollowUp` 同款（`fixtureDir` + 显式注入）。
 //
@@ -609,10 +615,18 @@ extension SmokeMain {
               + " (实测取到 \(rows12.count) 条 / \(block12.split(separator: "\n").count) 行)")
 
         // ══ ㉗（doc ⑨）list_workers: 必带状态 + 缺口**分两级**说出来 ═════════════
+        // ⚠️ P4 起「没写职责的 worker」**建不出来**了（`TeamViolation.workerWithoutDuty`，
+        // 见 ㉛）—— 而这条缺口提示是给**存量坏行**留的（P4 之前建的、手改的配置）。
+        // 所以夹具直接构造一行、不经 `addScheduled`：那个写路径现在正是要拒它的地方。
         let m11 = addMain("第十一支队")
         _ = addWorker("有职责没说明的", under: m11, duty: "查发票")
-        _ = addWorker("只有名字的", under: m11, duty: "")
-        let dossier11 = TeamPrompt.dossierBlock(main: task(m11)!, roster: store.scheduledTasks,
+        var bare27 = ScheduledTask(id: UUID(), name: "只有名字的", prompt: "按派活单干",
+                                   cron: "0 3 * * *", projectId: projId, continuous: false)
+        bare27.kind = .assistant
+        bare27.role = .worker
+        bare27.parentId = m11
+        bare27.description = ""
+        let dossier11 = TeamPrompt.dossierBlock(main: task(m11)!, roster: store.scheduledTasks + [bare27],
                                                 busy: [:], lastDone: [:], now: Date())
         check(dossier11.contains("（**没有写职责** —— 你只能从名字判断。）")
               && dossier11.contains("（只有一句职责，没有说明。）")
@@ -656,5 +670,68 @@ extension SmokeMain {
               && extSrc.contains("const TEAM_SUFFIX = \"" + SchedulerService.teamDossierSuffix + "\""),
               "T-TEAM ㉚\(PiRpcTransport.delegateToolNames.count) 个工具名都能在扩展源码里找到"
               + " `name: \"…\"`; dossier 后缀两处同源(\(SchedulerService.teamDossierSuffix))")
+
+        // ══ ㉛（doc P4）worker 职责必填 —— **域层也拦**，不只是保存按钮 ═══════════
+        // 文档 §04: 「worker 必填（域层与保存都拦）」。只在表单拦的代价是 `addScheduled`
+        // 这条公开写路径（将来的导入 / 批量编辑 / 飞书指令）能造出一个**选不出来**的人 ——
+        // 而"选不出来"在主模型那一侧不报错，它看起来像"这个 worker 什么都能干"。
+        let m13 = addMain("第十三支队")
+        let bare13 = addWorker("没写职责的", under: m13, duty: "")
+        let filled13 = addWorker("写清楚了的", under: m13, duty: "查发票与月度报表")
+        check(bare13.ok == false && bare13.why == .workerWithoutDuty
+              && !store.scheduledTasks.contains { $0.name == "没写职责的" }
+              && filled13.ok && filled13.why == nil
+              && store.scheduledTasks.contains { $0.name == "第十三支队" },
+              "T-TEAM ㉛(doc P4)worker 职责必填: 没填**域层就拒**、库里没长出行(只在表单拦 ="
+              + " 导入与批量编辑能造出一个选不出来的人); 补上就过; 队长选填"
+              + " (实测 why=\(String(describing: bare13.why)) ok=\(bare13.ok)"
+              + " / 补齐后=\(filled13.ok))")
+
+        // ══ ㉜（doc P4）列表行: 平铺成一行时认得出谁是队长、谁是谁的人 ═══════════
+        // 这是 P4 唯一能自动验的那一半（视图层没有门）: 措辞被抽成 `TeamRowText` 的纯函数,
+        // 于是"worker 不写周期""孤儿写未归属""竖条只给队长"三件事都点得到。
+        let lead13 = task(m13)!
+        let worker13 = store.scheduledTasks.first { $0.name == "写清楚了的" }!
+        var orphan13 = worker13
+        orphan13.parentId = UUID()                    // main 被删之后留下的悬挂值
+        var cron13 = lead13
+        cron13.kind = .execute                        // 同一条任务换个档, 只借字段
+        let lineLead = TeamRowText.identityLine(lead13,
+                                                workers: store.scheduler.workerCount(of: lead13.id),
+                                                parentName: nil)
+        let lineWorker = TeamRowText.identityLine(worker13, workers: 0, parentName: lead13.name)
+        let lineOrphan = TeamRowText.identityLine(orphan13, workers: 0, parentName: nil)
+        // ⚠️ 人数只判"有这一格"，不判具体几: 具体那个数归 `workerCount`（列表直接用它），
+        // 在这里把数字写死会让本条的红色**依赖 ㉛ 的夹具**（实测过: 职责那道判一去掉，
+        // 多长出来的那个 worker 会把这里一起染红，而它本身没有错）。
+        check(lineLead.contains("main") && lineLead.contains(" 个 worker")
+              && lineWorker.hasPrefix("worker") && lineWorker.contains("归 \(lead13.name)")
+              // worker 在 tick / 漏跑 / 补跑三处都被排除了 ⇒ cron 对它是占位值,
+              // 写出来就是承诺一件永远不会发生的事。
+              && !lineWorker.contains("每天")
+              && lineOrphan.contains("未归属")
+              && TeamRowText.isTeamLead(lead13)
+              && !TeamRowText.isTeamLead(worker13)
+              // Cron 档在存储上也是 main, 但它在队伍系统外面 —— 竖条给它就等于把
+              // "这里有个队长"说给每一条 Cron 任务听。
+              && !TeamRowText.isTeamLead(cron13),
+              "T-TEAM ㉜(doc P4)列表行: worker 独立一行, 靠「归 X」认人(没有归属就写「未归属」);"
+              + " worker 不写周期; 3px 竖条只给队长(\(lineLead) / \(lineWorker) / \(lineOrphan))")
+
+        // ══ ㉝（doc P4）五档状态: 界面版四档各自说得清，「等回执」**不折叠** ═══════
+        // 注入面把 `.awaiting` 说成"空闲"（能不能派的角度它确实闲着）; 界面上它必须说出来,
+        // 否则"有一张单等我处理"只能靠翻回执才知道。
+        let now33 = Date()
+        let sRun33 = TeamRowText.stateWord(.running(since: now33.addingTimeInterval(-3 * 60)), now: now33)
+        let sQueue33 = TeamRowText.stateWord(.queued(at: now33.addingTimeInterval(600)), now: now33)
+        let sAwait33 = TeamRowText.stateWord(.awaiting(since: now33.addingTimeInterval(-5 * 60)), now: now33)
+        let sIdle33 = TeamRowText.stateWord(.idle(lastActive: now33.addingTimeInterval(-3 * 86_400)), now: now33)
+        check(sRun33 == "在跑 3 分钟" && sQueue33.hasPrefix("已排上 ")
+              && sAwait33 == "等回执 5 分钟" && sIdle33 == "空闲 3 天"
+              && TeamRowText.stateWord(.idle(lastActive: nil), now: now33) == "空闲"
+              && TeamRowText.stateWord(.disabled, now: now33) == "已停用",
+              "T-TEAM ㉝(doc P4)五档状态(界面版): 在跑 N 分钟 / 已排上 HH:mm / 等回执 N 分钟 /"
+              + " 空闲 [N 天] / 已停用 —— 与注入面**同一判据**(`TeamState.of`)、措辞各写各的"
+              + " (\(sRun33) / \(sQueue33) / \(sAwait33) / \(sIdle33))")
     }
 }

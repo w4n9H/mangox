@@ -7,7 +7,7 @@
    **本文件由 scripts/l10n/gen_strings.py --write 生成, 别手改** ——
    译文改 scripts/l10n/en_values.py 的 VALUES, 再跑 --write。
 
-   条数: 1155
+   条数: 1178
 */
 
 " (值:\"%@\")" = " (value: %@)";
@@ -53,6 +53,7 @@
 "%@ 是**永远不发**的组合（退出 / 关窗 / 移到废纸篓，" = "%@ is a combination this tool never sends (quit / close window / move to trash,";
 "%@ 落在**别的 App** 的窗口上(不是「%@」) ⇒ 没点。" = "%@ lands on **another app**'s window (not \"%@\") ⇒ nothing was tapped.";
 "%lld 个" = "%lld";
+"%lld 个 worker" = "%lld workers";
 "%lld 个人格文件 frontmatter 破损, 未注入且已禁止新建 key: %@" = "%lld persona files have broken frontmatter — not injected, and creating keys is blocked: %@";
 "%lld 个人格文件是「按需」的, 模型不知道它们存在: %@" = "%lld persona files are “on demand” — the model does not know they exist: %@";
 "%lld 个人格文件读不出来 (权限或编码), 内容未进 prompt: %@" = "%lld persona files cannot be read (permissions or encoding) — their content is not in the prompt: %@";
@@ -138,6 +139,8 @@
 "git 分支 · %lld 个改动" = "git branch · %lld changes";
 "key 全局唯一" = "keys are globally unique";
 "key 已被另一条占用" = "That key is already taken by another item";
+"main · 自己按班次跑，还能派人" = "main · runs on its own schedule and can delegate";
+"main 不该有归属" = "main cannot belong to anyone";
 "multipart 缺 boundary" = "multipart is missing a boundary";
 "pi 不随 App 发布 —— 需要你自己装好，App 才能发起对话。" = "pi doesn't ship with the app — install it yourself, and the app can start a conversation.";
 "pi 扩展经 spawn 期 --extension 加载, 启停后需重启引擎生效" = "pi extensions are loaded at spawn time via --extension; restart the engine for changes to take effect.";
@@ -148,6 +151,7 @@
 "token / 天" = "tokens / day";
 "tokens" = "tokens";
 "txt / html 没有 frontmatter — 标题就是文件名" = "txt / html have no frontmatter — the filename is the title";
+"worker · 只被派活叫起来" = "worker · only runs when it is delegated to";
 "· %lld 个在途" = "· %lld in flight";
 "· 内层 %lld" = "· Nested %lld";
 "— 变化:" = "— Changes:";
@@ -380,6 +384,7 @@
 "删除项目…" = "Delete project…";
 "删除项目「%@」？" = "Delete the project “%@”?";
 "删除项目及其全部 AI 记忆文件" = "Delete the project and all its AI memory files";
+"判据、边界、交付形态（比如「差异要列单号与金额，别只给总数」）" = "Acceptance, boundaries, delivery shape (e.g. \"list ticket numbers and amounts, not just a total\")";
 "到点投递给 Agent 的 prompt…" = "The prompt delivered to the agent when the time comes…";
 "刷新" = "Refresh";
 "刷新中…" = "Refreshing…";
@@ -391,7 +396,6 @@
 "加载中…" = "Loading…";
 "助手" = "Assistant";
 "助理" = "Assistant";
-"助理 · %lld 个来源" = "Assistant · %lld sources";
 "助理「%@」连同它的工作会话与账本文件一起删除；巡检停止，账本无法恢复。" = "Assistant “%@” will be deleted together with its working session and ledger file. Its patrols stop and the ledger cannot be restored.";
 "助理关着 —— 打开助理它才会连" = "The assistant is paused — turn it on and this bot connects.";
 "助理巡检住在 App 进程里, 不开 App 就不会巡检。开启后 macOS 可能要求你在「登录项」里批准一次" = "Assistant checks run inside the app process, so nothing runs while it is closed. macOS may ask you to approve it once in Login Items";
@@ -406,6 +410,7 @@
 "压缩中 · 接近上限…" = "Compacting · near limit…";
 "压缩中 · 溢出恢复…" = "Compacting · overflow recovery…";
 "压缩中…" = "Compacting…";
+"原归属已删除" = "Its lead was deleted";
 "原触发条件（旧类型 · 已停用，不再值守）" = "Original trigger condition (legacy type · disabled, no longer watching)";
 "去审核" = "Review";
 "去结算" = "Checkout";
@@ -473,6 +478,7 @@
 "在「文件」或「改动」里点一行" = "Pick a row under File or Changes";
 "在工作区打开" = "Open in workspace";
 "在当前项目下开一个新会话, 它会拿到最新的工具表" = "Start a new conversation in this project — it will see the latest tool list";
+"在跑 %lld 分钟" = "Running · %lld min";
 "在跟踪" = "Tracking";
 "在这里输入该做什么…" = "Type what to do…";
 "在追" = "In progress";
@@ -510,6 +516,7 @@
 "它用编号和动作表就能做完（press / setValue / custom），而键盘事件是**全局**的：" = "It can do the job with indices and its action list (press / setValue / custom), and key events are **global**:";
 "它能做的只有：" = "the only thing it offers is ";
 "它能执行的是：" = "It can run: ";
+"它负责什么，一句话（会进每一轮注入）" = "What it handles, in one line (this goes into every turn)";
 "它锁住这些 key，DB 条目里不能再用:" = "It locks these keys, which DB items can no longer use:";
 "它默认关是因为写进去的字可能被下一拍回车发出去、而发出去撤不回 ——" = "It is off by default because what gets typed can go out on the next Return, and sending cannot be undone —";
 "它默认关是因为可能点错、而且点错了没有撤销 ——" = "It is off by default because it can land in the wrong place and there is no undo —";
@@ -546,6 +553,8 @@
 "已从旧版搬过来 —— 桥会按新凭据重连" = "Imported from the old version — the bridge will reconnect with the new credentials";
 "已保存 (重新输入可覆盖)" = "Saved (type a new key to replace)";
 "已保存 —— 留空就不改" = "Saved — leave blank to keep it";
+"已保存的任务不能改身份 —— 换身份会把它名下那张单子变成一张没有出口的单子" = "A saved task cannot change standing — that turns the ticket under it into one with no way out";
+"已停用" = "Paused";
 "已停用 —— 索引里不出现这个库" = "Disabled — this base does not appear in the index";
 "已允许" = "Allowed";
 "已允许（始终）" = "Allowed (always)";
@@ -565,12 +574,13 @@
 "已执行" = "ran";
 "已拒绝" = "Denied";
 "已挂载的知识库 %lld 个没进索引: %@" = "%lld mounted knowledge bases did not make it into the index: %@";
+"已排上 %@" = "Scheduled · %@";
 "已推给「%@」的私聊" = "Pushed into the direct message of 「%@」";
 "已搁置（那条结论本身还在 App 里）。" = "Shelved (the finding itself stays in the app).";
-"已暂停" = "Paused";
 "已更新: %lld 家 / %lld 条" = "Updated: %lld providers / %lld models";
 "已注册，但系统要求你批准 —— 系统设置 → 通用 → 登录项 → 允许 MangoX" = "Registered, but macOS needs your approval — System Settings → General → Login Items → allow MangoX";
 "已清空 %lld 条提案" = "Cleared %lld proposals";
+"已经有一个 worker 叫「%@」" = "A worker named 「%@」 already exists";
 "已经有同名笔记了" = "A note with that name already exists";
 "已跑 %lld 次" = "Ran %lld times";
 "已采纳 %lld 条" = "Accepted %lld";
@@ -598,8 +608,10 @@
 "引擎返回了空回合 · 引擎没有返回任何内容, 请检查模型与凭据" = "The engine returned an empty turn — nothing came back; check the model and credentials";
 "引擎返回了空回合 · 模型 %@ 可能不存在或已下线" = "The engine returned an empty turn · model %@ may not exist or is no longer available";
 "引用工作区文件" = "Reference a workspace file";
+"归 %@" = "Under %@";
 "归它" = "Assign";
-"归属" = "Goes to";
+"归属" = "Under";
+"归属不能是另一个 worker" = "A worker cannot belong to another worker";
 "归：%@" = "Owner: %@";
 "当前" = "Current";
 "当前会话 %lld 轮" = "Current session: %lld turns";
@@ -724,7 +736,6 @@
 "新建：Cron 定时（动作写死）或 助理（目标式，产方案等人批准）" = "New: Cron schedule (fixed actions) or Assistant (goal-based, plans wait for approval)";
 "方向键、Home/End、Shift 选字不受这条限制。" = "Arrows, Home/End and Shift-selection are not limited by this rule.";
 "方案 %lld 步" = "plan · %lld steps";
-"无人值守" = "Unattended";
 "无人值守 · 恒开" = "Unattended · always on";
 "无匹配文件" = "No matching files";
 "无法侧问：源会话无效或已是侧问会话" = "Cannot start a side chat: the source session is invalid or is itself a side chat";
@@ -781,6 +792,7 @@
 "未启用" = "Not enabled";
 "未存盘的东西会一起没）⇒ 没按。要关窗或退出，交给人在界面上点。" = "unsaved work goes with it) ⇒ nothing was pressed. Leave closing or quitting to the person at the screen.";
 "未开启 —— 打开 App 才会巡检" = "Off — checks only run while the app is open";
+"未归属" = "Unassigned";
 "未找到" = "Not found";
 "未找到 pi CLI, Agent 引擎不可用。请安装 pi 后重启 MangoX。" = "pi CLI not found; the agent engine is unavailable. Install pi and restart MangoX.";
 "未找到 pi CLI, 捕获未发送" = "pi CLI not found; capture not sent";
@@ -846,6 +858,7 @@
 "每轮都带上" = "Every turn";
 "每轮都带上 %lld 条 · %lld 字 / %lld 字" = "%lld every turn · %lld / %lld chars";
 "永久删除" = "Erase";
+"没保存上：有一条任务规则不满足" = "Not saved: one of the task rules is not satisfied";
 "没发出去" = "not delivered";
 "没执行起来：%@" = "Couldn't start: %@";
 "没有匹配的会话或项目" = "No matching chats or projects";
@@ -917,6 +930,8 @@
 "移进「废纸篓」(还能捞回来); 当前内容先记进变更史" = "Move to the Trash (still recoverable); the current content is recorded in the revision history first";
 "移除" = "Remove";
 "稳定段永不参与降级 — 出现这条说明组装有 bug, 请反馈" = "The stable segment never takes part in degradation — seeing this means an assembly bug; please report it";
+"空闲" = "Idle";
+"空闲 %lld 天" = "Idle · %lld days";
 "立刻补跑最近一次 (不等定时)" = "Run the most recent missed one now (without waiting)";
 "立即删除" = "Delete now";
 "立即备份" = "Back up now";
@@ -927,6 +942,7 @@
 "第 %lld 版" = "rev %lld";
 "第 %lld 轮" = "Turn %lld";
 "等你决定" = "needs your call";
+"等回执 %lld 分钟" = "Awaiting report · %lld min";
 "等待" = "Waiting";
 "等待审批" = "Awaiting approval";
 "系统" = "System";
@@ -958,6 +974,8 @@
 "老档位 · 行为不变" = "Older modes · unchanged";
 "而这类键按下去没有撤销 —— 没有焦点证据就不动。" = " and these keys cannot be taken back once pressed — with no evidence about the focus, nothing is pressed.";
 "耗时" = "Duration";
+"职责" = "Role";
+"职责必填 —— 名单与注入段只读这一行" = "Role is required — the roster and the injection read only this line";
 "联网搜索 (博查 API Key)" = "Web search (Bocha API key)";
 "联网搜索扩展没配博查 API Key —— 挂上它也只会每次调用都回「未启用」, 所以不挂。在 设置 → 联网搜索 里填一个 Key 并保存, 它就会挂上。" = "The web search extension has no Bocha API key set - mounting it would only make every call answer not enabled, so it stays unmounted. Enter a key under Settings - Web search and save; it gets mounted right away.";
 "聚焦" = "Focus";
@@ -1003,6 +1021,7 @@
 "该预设需要 API Key" = "This preset needs an API key";
 "详情" = "Details";
 "语言 (Language)" = "Language";
+"说明" = "Details";
 "请直接改那个文件" = "Please edit that file directly";
 "请看图" = "See the image";
 "读" = "Read";
@@ -1019,12 +1038,14 @@
 "超出预算：只会做最近 %@ 字，前面的回合会被省略。" = "Over budget: only the latest %@ chars are used, earlier turns are skipped.";
 "超时" = "timed out";
 "超过上限时: 会话发送被拒绝并提示; 定时任务到点会跳过并在日志会话记录原因。" = "When over the limit: sends in sessions are refused with a message, and scheduled tasks skip that run and record the reason in the log session.";
+"超过上限的部分不会保存 —— 这一段每一轮都会进上下文，所以它有硬顶" = "Anything past the limit is dropped — this line goes into every turn, so it is capped";
 "超高" = "Extra High";
 "跑偏，已中止" = "out of scope, aborted";
 "跟随系统" = "Follow system";
 "跟随系统 = 由 macOS 的浅色/深色设置决定; 切换立即生效, 影响全 App (含迷你台)" = "Follow system = decided by macOS light/dark; switching applies immediately across the app (task bar included)";
 "跟随系统 = 由 macOS 的语言设置决定; 切换立即生效, 影响全 App (含迷你台与快速捕获)。系统级文案 (菜单栏 / 系统弹窗) 仍随系统语言, 重启后完全一致。" = "Follow system = decided by the macOS language setting; switching applies immediately across the app (task bar and quick capture included). System-level text (menu bar, system dialogs) still follows the system language and matches after a restart.";
 "路径是空的" = "The path is empty.";
+"身份" = "Standing";
 "轨迹" = "Trace";
 "轮次" = "Turns";
 "辅助功能" = "Accessibility";
@@ -1100,6 +1121,8 @@
 "追加-%@" = "Append-%@";
 "追问" = "Ask follow-up";
 "送入 %@ 字" = "%@ chars in";
+"选一个助理" = "Pick an assistant";
+"选一个助理当归属" = "Pick the assistant it belongs to";
 "选一轮：那一轮及之前的对话都会带进侧问。" = "Pick a turn: it and everything before it is carried into the side chat.";
 "选择" = "Choose";
 "选择或导入一个插件" = "Choose or import an extension";

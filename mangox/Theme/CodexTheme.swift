@@ -607,6 +607,16 @@ enum Tune {
 
     // 定时任务 (P3.6/P3.9)
     static let scheduleHistoryCharLimit: Int = 4000    // 持续模式注入的近期摘录截取上限
+    /// P20 P4: 列表行左侧那条**身份竖条**的宽度（3px）。文档 §03「身份与颜色分两个通道」:
+    /// 身份走"不占颜色"的三样（竖条 + 名字 500 + 一个 main 的词），颜色只表示状态 ——
+    /// 给身份再配一个色，同一行上就有两套色编码（"正在跑的 main"分不出是身份还是状态）。
+    /// ⇒ 竖条本身用中性灰，**不是 accent**。P5 的泳道卡复用同一个数。
+    static let teamIdentityBarWidth: CGFloat = 3
+    /// P20 P4: 编辑器里「职责说明」那个多行框的**定高**。
+    /// 与 `workLogCard` 同一条理由: 它在 `ScrollView` 里，而 ScrollView 给子视图提的可用高度是
+    /// **无限** —— 只给 `minHeight` 时它会撑到整篇文字那么高，说明写长了整页就被它顶没。
+    /// 64 ≈ 3 行 11pt：够看出"这是一段说明"，要通读是点进去的事。
+    static let scheduleDutyDetailHeight: CGFloat = 64
     static let scheduleLogEditorHeight: CGFloat = 360    // 展开后的"工作日志"编辑器**定高**(内部自滚); 13pt 正文约 20 行
     /// 助理台账卡的高度上限（内联，2026-11-18 晚）。账本上限 16000 字 ⇒ **必须有上界**,
     /// 否则一整篇铺出来会把模型配置顶到看不见。取 280 是为了"五节各露一两行" ——

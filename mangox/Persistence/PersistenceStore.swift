@@ -1683,6 +1683,25 @@ final class PersistenceStore {
         return rows.compactMap(decodeDelegation)
     }
 
+    /// 每个 worker **最近一条**没汇报的终态（worker id → 落定时刻）。一条 SQL，不分人查。
+    ///
+    /// 用途只有一个: 界面那五档里的「等回执」。**它不影响能不能派** —— 派活前的硬拒读的是
+    /// `openDelegations`（只算 queued / running），一次只看一份清单比两处各算一遍可靠。
+    func latestUnreportedByWorker() throws -> [UUID: Date] {
+        let rows = try db.query("""
+            SELECT to_task, MAX(COALESCE(finished_at, due_at)) AS at
+            FROM agent_delegations
+            WHERE reported_at IS NULL AND status IN ('done', 'failed', 'cancelled')
+            GROUP BY to_task
+            """)
+        var out: [UUID: Date] = [:]
+        for row in rows {
+            guard let id = UUID(uuidString: text(row, "to_task")) else { continue }
+            out[id] = optionalDate(row, "at")
+        }
+        return out.compactMapValues { $0 }
+    }
+
     /// 行的解码口径 —— **只有这份**（上面几个读法都走它，加列只改一处）。
     /// 坏行 / 未知 `status` **跳过而不是抛**（同 `decodeFollowUp`）。
     private func decodeDelegation(_ row: [String: DBValue]) -> Delegation? {

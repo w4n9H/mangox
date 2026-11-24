@@ -56,6 +56,17 @@ enum TeamViolation: Equatable {
     case workerWithoutParent
     /// 上级自己也是个 worker ⇒ 深度不是 1。
     case parentIsWorker
+    /// worker 没写职责（`description` 空）。
+    ///
+    /// ⚠️ 这一条**域层也拦**（文档 §04「worker 必填（域层与保存都拦）」）：职责是
+    /// `list_workers` 与【你的队伍】的唯一来源，空着 = 一个**选不出来**的人 ——
+    /// 而"选不出来"在主模型那一侧表现为"这个 worker 好像什么都能干"，不是报错。
+    /// 只在表单拦是不够的：`addScheduled` 是公开写路径（将来的导入 / 批量编辑会绕过视图）。
+    ///
+    /// 代价（明写）：库里若真有一行空职责的 worker（P4 之前建的、或手改的配置），
+    /// 它改名字也会被这一条挡下。`list_workers` 那句「没有写职责」的缺口提示就是给它们留的
+    /// —— 那不是"允许建空的"，是"存量坏了要说得清"。
+    case workerWithoutDuty
     case duplicateName(String)
 
     /// 恒中文，进日志 / 时间线 / 拒绝回执。**不是界面词**（见文件头）。
@@ -65,6 +76,8 @@ enum TeamViolation: Equatable {
             return "main 不该有上级 —— 它是一支队伍的起点"
         case .workerWithoutParent:
             return "worker 必须归属一个 main"
+        case .workerWithoutDuty:
+            return "worker 必须写职责 —— 名单与注入段只读那一行，空着等于一个选不出来的人"
         case .parentIsWorker:
             return "上级自己也是 worker —— 递归深度硬限 1 级"
         case .duplicateName(let name):
@@ -94,6 +107,10 @@ enum TeamRule {
             if let parent = others.first(where: { $0.id == pid }), parent.role != .main {
                 // 深度恒 1 = 上级必须是个 main。只有两种角色, 所以"上级不是 main"就是"上级是 worker"。
                 return .parentIsWorker
+            }
+            // 结构先于内容: 归谁（上面两条）说清了, 才轮到"它是什么人"。
+            if t.description.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                return .workerWithoutDuty
             }
             let name = t.name.trimmingCharacters(in: .whitespacesAndNewlines)
             // ⚠️ 唯一性按**全体 worker** 算（不是"同一支队伍内"）: 派活单里 `worker` 只写名字，
@@ -432,6 +449,39 @@ enum DelegationSpool {
 
 // MARK: - P3 注入段与只读工具的正文（2026-11-24）
 
+/// 一个人在团队里的**五档状态** —— 注入面与界面共用这一份判据（措辞各写各的）。
+///
+/// ⚠️ 为什么判据只许一处: 界面说"在跑"、注入段说"空闲"，模型就会把活派给一个正在干活的
+/// worker（那一单会被硬拒，白烧一轮）。而两处各写一遍「谁在跑、谁排上了」是必然会漂的。
+///
+/// ⚠️ `.awaiting`（等回执）在**注入面**折叠成"空闲"（见 `TeamPrompt.stateWord`）:
+/// 从"能不能派"的角度它确实闲着（`openDelegations` 只算 queued / running），
+/// 而"有一张单等你处理"已经由【派活回执】那一段说了 —— 在名单里再说一遍，
+/// 会让 main 以为这个人不能派。
+enum TeamState: Equatable {
+    case disabled
+    /// 正在跑（`since` = 起跑时刻，用来算"几分钟"）。
+    case running(since: Date?)
+    /// 已排上，等 `at` 起跑。
+    case queued(at: Date)
+    /// 交了活、main 还没汇报（`since` = 落定时刻）。**只影响界面**，不影响能不能派。
+    case awaiting(since: Date)
+    /// 闲着。`lastActive` = 上一次自己跑过的时刻（算"几天没派"）。
+    case idle(lastActive: Date?)
+
+    static func of(_ t: ScheduledTask, busy: [UUID: Delegation],
+                   awaiting: Date?) -> TeamState {
+        // 顺序 = 人的判断顺序: 停用 ⇒ 在跑 ⇒ 已排上 ⇒ 等回执 ⇒ 空闲。
+        // 前两档是**硬的**（派不了），后两档是"闲着，但手上有事 / 没事"。
+        guard t.enabled else { return .disabled }
+        if let d = busy[t.id] {
+            return d.status == .running ? .running(since: d.startedAt) : .queued(at: d.dueAt)
+        }
+        if let a = awaiting { return .awaiting(since: a) }
+        return .idle(lastActive: t.lastRunAt)
+    }
+}
+
 /// 两段注入 + 两个只读工具的**正文** —— 全是纯函数（不碰 DB、不读时钟，`now` 由调用方给），
 /// 所以冒烟可以直接喂数据断言字数与措辞，不用起一场真回合。
 ///
@@ -457,23 +507,22 @@ enum TeamPrompt {
         return Array(mine.prefix(DelegationLimit.maxTeamRows))
     }
 
-    /// 状态词（五档的**显示形态**）。优先级 = 人的判断顺序: 停用 ⇒ 在跑 ⇒ 已排上 ⇒ 空闲。
+    /// 状态词（注入面的**显示形态**）。判据在 `TeamState.of`，这里只管措辞。
     ///
     /// 「空闲 N 天」只在 N ≥ 1 时出现: 一天之内说"空闲 0 天"是噪音，而那个数字的用途是
     /// "三天没派过活的人该被我看见"（文档 §03 列内排序那一条）。
     static func stateWord(_ w: ScheduledTask, busy: [UUID: Delegation], now: Date) -> String {
-        guard w.enabled else { return "已停用" }
-        if let d = busy[w.id] {
-            if d.status == .running, let at = d.startedAt {
-                let minutes = max(1, Int(now.timeIntervalSince(at) / 60))
-                return "在跑 \(minutes) 分钟"
-            }
-            return "已排上 " + DelegationRefusal.hhmm(d.dueAt)
-        }
-        if let last = w.lastRunAt, now.timeIntervalSince(last) >= 86_400 {
+        switch TeamState.of(w, busy: busy, awaiting: nil) {
+        case .disabled: return "已停用"
+        case .running(let since):
+            let minutes = since.map { max(1, Int(now.timeIntervalSince($0) / 60)) } ?? 1
+            return "在跑 \(minutes) 分钟"
+        case .queued(let at): return "已排上 " + DelegationRefusal.hhmm(at)
+        case .awaiting: return "空闲"      // 见 `TeamState` 的说明：手上没活，回执是 main 自己的账
+        case .idle(let last):
+            guard let last, now.timeIntervalSince(last) >= 86_400 else { return "空闲" }
             return "空闲 \(Int(now.timeIntervalSince(last) / 86_400)) 天"
         }
-        return "空闲"
     }
 
     /// 一句话结论 —— 【派活回执】与时间线**共用这一份措辞**。

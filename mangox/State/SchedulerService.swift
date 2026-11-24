@@ -303,6 +303,8 @@ final class SchedulerService: ObservableObject {
         case (.worker, .disabled), (.worker, .enabled):
             break   // 可逆的操作不该毁掉一条活 —— 到期时发现它停着，顺延就是了（P2）
         }
+        // 五档状态跟着连带一起变（停 main ⇒ 名下全停，界面那一列立刻要落成"停用"）。
+        refreshTeamStates()
     }
 
     /// 改动某个 main 名下的 worker。`mutate` 返回 `true` = 这一行要落库（**逐行判**，
@@ -819,7 +821,10 @@ final class SchedulerService: ObservableObject {
         let gap = minute - lastSchedulerMinute
         guard minute != lastSchedulerMinute else { return }
         lastSchedulerMinute = minute
-        for task in scheduledTasks where task.enabled {
+        // P20 P4: **worker 没有 cron 触发面**（文档 §06 ①「worker 没有 cron 入口」）。
+        // 它被叫起来只有一条路: main 派活（`fireDueDelegations`）。不拦的话，UI 里给 worker
+        // 配的那条占位 cron 会让它每天自己跑一次 —— 而它没有任何目标，那一轮只会浪费 token。
+        for task in scheduledTasks where task.enabled && task.role != .worker {
             guard let cron = task.cronExpr, cron.matches(now) else { continue }
             runScheduledFire(task, at: now)
         }
@@ -839,6 +844,8 @@ final class SchedulerService: ObservableObject {
         // （`WatchNagService.due` 是纯函数）。放在 fire 之后: 同一分钟里先跑该跑的巡检，
         // 再催历史遗留 —— 而"催"不 spawn、不烧 token，与预算闸和并发闸都不相交。
         nagWaitingFindings(now: now)
+        // P20 P4: 五档状态的每分钟一跳。界面读的是快照（见 `teamStates`）。
+        refreshTeamStates()
         // 执行快照的过期清理（`undoRetentionDays` = 7 天）。
         //
         // ⚠️ 2026-11-18 review: 这个函数**从写下来那天起零调用** —— 于是时间线上那句
@@ -1286,6 +1293,46 @@ final class SchedulerService: ObservableObject {
     func reloadFollowUps() {
         guard let p = store?.persistence else { followUps = []; return }
         followUps = (try? p.loadFollowUps(status: .pending)) ?? []
+        // 五档状态与这份清单同源（同一批写路径会改它）⇒ 顺手一起刷。两条查询，不值得分开叫。
+        refreshTeamStates()
+    }
+
+    /// 团队五档状态的**快照** —— 界面读它，不在 `body` 里读库。
+    ///
+    /// 为什么是快照而不是计算属性: 一次刷新两条查询，而 SwiftUI 的 `body` 在一次滚动里会
+    /// 求值几十次（本仓踩过"滚动路径上算东西"那一类）。这里把频率压到"数据真的变了"。
+    ///
+    /// 刷新点: `schedulerTick`（每分钟）+ 派活那几条写路径（派出去 / 起跑 / 落定 / 汇报）
+    /// + 连带（停用 / 删除）。**漏一个的后果**: 界面停在旧状态，直到下一跳 —— 一分钟，可接受；
+    /// 所以宁可少叫几次，也不要放进 body。
+    @Published private(set) var teamStates: [UUID: TeamState] = [:]
+
+    func refreshTeamStates() {
+        guard let p = store?.persistence else { teamStates = [:]; return }
+        // 一个 worker 同时只允许一张（硬拒不排队）⇒ 多张时取最早那张当"手上那张"（同 `openDelegationsByWorker`）。
+        var busy: [UUID: Delegation] = [:]
+        for d in (try? p.openDelegations()) ?? [] where busy[d.toTask] == nil { busy[d.toTask] = d }
+        let awaiting = (try? p.latestUnreportedByWorker()) ?? [:]
+        var out: [UUID: TeamState] = [:]
+        for t in scheduledTasks {
+            out[t.id] = TeamState.of(t, busy: busy, awaiting: awaiting[t.id])
+        }
+        teamStates = out
+    }
+
+    /// 一个人现在的状态（没算过 = 空闲，界面不会因此画错一行）。
+    func teamState(of taskId: UUID) -> TeamState {
+        teamStates[taskId] ?? .idle(lastActive: nil)
+    }
+
+    /// 某个 main 名下有几个 worker（列表行右侧那一句「N 个 worker」）。
+    func workerCount(of mainId: UUID) -> Int {
+        scheduledTasks.filter { $0.role == .worker && $0.parentId == mainId }.count
+    }
+
+    /// 某个 worker 归谁（名单与列表要用名字，不要 id）。
+    func parentName(of worker: ScheduledTask) -> String? {
+        worker.parentId.flatMap { pid in scheduledTasks.first { $0.id == pid }?.name }
     }
 
     /// 这个任务下一条约定（已排序，取最早那条）。界面只用它显示一行。
@@ -1488,6 +1535,8 @@ final class SchedulerService: ObservableObject {
                            to: sid)
         }
         try? FileManager.default.removeItem(atPath: ctx.spool)
+        // 新派的单子会改"谁手上有活" ⇒ 界面那一档立刻跟上（不然要等一分钟才显示"已排上"）。
+        refreshTeamStates()
     }
 
     /// 这些 worker 手上还没落定的单（`openDelegations` 的字典版）。
@@ -1543,6 +1592,7 @@ final class SchedulerService: ObservableObject {
         guard produced, let p = store?.persistence else { return }
         let now = Date()
         for id in ids { try? p.markDelegationReported(id: id, at: now) }
+        refreshTeamStates()   // 「等回执」那一档是界面状态，标掉就要跟着落回去
     }
 
     /// dossier 文件名的后缀（spool 派生）。扩展那侧读的是同一个公式 —— **两处一起改**。
@@ -1679,6 +1729,7 @@ final class SchedulerService: ObservableObject {
                          why: Self.shortWhy(head), status: .pending, attempts: 0,
                          createdAt: now, firedAt: nil, note: nil, kind: .callBack)
         if (try? p.insertFollowUpIfAbsent(f)) == true { reloadFollowUps() }
+        refreshTeamStates()
     }
 
     /// 一轮落定：把那张单收成 `done` / `failed`，并给 main 一条回执。
@@ -2674,7 +2725,7 @@ final class SchedulerService: ObservableObject {
         guard let store else { missedFires = []; return }
         let floor = now.addingTimeInterval(-Double(Tune.missedFiresLookbackDays) * 86400)
         var out: [MissedFire] = []
-        for task in scheduledTasks where task.enabled {
+        for task in scheduledTasks where task.enabled && task.role != .worker {
             // 项目已删的任务**不算漏跑**: 它每次到点都会被 `recordFireSkip` 跳过, 而那里
             // **不写** `lastRunAt` ⇒ 它会永远赖在清单里。那是配置坏了, 有别的提示位。
             if let pid = task.projectId, !store.projects.contains(where: { $0.id == pid }) { continue }
@@ -2695,6 +2746,9 @@ final class SchedulerService: ObservableObject {
     /// 后面几个全被"在途则跳过"的保护挡掉 —— 白点。
     func catchUpMissedFire(_ taskId: UUID) {
         guard let task = scheduledTasks.first(where: { $0.id == taskId }) else { return }
+        // P20 P4: worker 不在漏跑清单里（`refreshMissedFires` 已排除），这里是第二道 ——
+        // 手滑把 id 传进来也不该让它自己跑一轮。
+        guard task.role != .worker else { return }
         runScheduledFire(task)
         // ⚠️ 无论这次 fire 是否被在途保护跳过, 都要认账 —— 否则 `lastRunAt` 没前移, 条目原样留着
         // ⇒ 用户看到的是"点了没反应"。同 `runNowButton` 那条"禁用按钮反而把记录藏起来"的理由。

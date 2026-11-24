@@ -17,6 +17,17 @@ struct ScheduledView: View {
     /// 切换编辑目标的**唯一写入口** (保留函数而非直接写 `target`: 语义仍是"换编辑对象")。
     private func setTarget(_ t: EditorTarget) { target = t }
     @State private var draftName: String = ""
+    /// P20 P4: 身份与归属。
+    ///
+    /// **角色只在新建时可选**（`rolePill`）—— 已保存的任务改角色等于换一种东西: main 变 worker
+    /// 要先有归属，worker 变 main 会把它名下那张派活单变成一张没有出口的单子。归属
+    /// （`parentId`）随时可改: P5 的画板就是按它分列。
+    @State private var draftRole: TaskRole = .main
+    @State private var draftParentId: UUID?
+    /// 职责（≤40 字，worker 必填）与职责说明（≤240 字，选填）。
+    /// ⚠️ 两段的**消费者不同**: 职责每轮进【你的队伍】原文照搬，说明只被 `list_workers` 按需读。
+    @State private var draftDescription: String = ""
+    @State private var draftDescriptionDetail: String = ""
     @State private var draftPrompt: String = ""
     @State private var draftCron: String = "0 9 * * *"
     @State private var draftProjectId: UUID?
@@ -77,6 +88,12 @@ struct ScheduledView: View {
     /// 天天摆在最上面就成了噪音（而收件箱的全部价值是"这里有事要你决定"）。
     @State private var showExecuted: Bool = false
     @State private var savedFlash: Bool = false
+    /// P20 P4: 保存被**域层**拒了时那一句（不是按钮状态，是"点了但没成"）。
+    ///
+    /// 为什么需要它: `saveEditing` 从来看不见域层的 `Bool`（那之前它只认按钮的
+    /// `draftReady`）⇒ 域层一拒，界面照样闪"✓ 已保存"。那是零信号失败，而它一旦存在，
+    /// 下一个人会以为任务存下了。
+    @State private var saveError: String?
 
     /// 编辑器当前对象。计划任务侧原代码全按 `editingId` 读写, 这里由 target 派生 →
     /// 该侧 12 处使用零改动 (只有 3 处赋值点改成写 target)。
@@ -152,6 +169,15 @@ struct ScheduledView: View {
                 Menu {
                     Button("Cron 定时任务") { startNew(kind: .execute) }
                     Button("助理（目标式）") { startNew(kind: .assistant) }
+                    // P20 P4: worker 在这里建（文档 §03「定时任务页只负责建与改」）。
+                    // 它的档恒是助理 —— worker 没有 cron / 飞书入口，Cron 档建出来的 worker
+                    // 永远起不来（`schedulerTick` 三处都排除了它）。
+                    //
+                    // 用词: `main` / `worker` 在本仓是**技术角色名**，与 `prompt` / `cron`
+                    // 同族（编辑器的 help 早就写着「prompt 与 cron 为必填」）—— 不再另造
+                    // 「队长 / 队员」：两套词会让人以为列表上的 `main` 和编辑器里的「队长」
+                    // 是两件不同的东西。
+                    Button("worker · 只被派活叫起来") { startNew(kind: .assistant, role: .worker) }
                 } label: {
                     Image(systemName: "plus")
                         .font(.system(size: 11))
@@ -547,48 +573,88 @@ struct ScheduledView: View {
         let selected = isEditing(task)
         let hovered = hoveringId == task.id
         let icon = rowIcon(task)
+        // P20 P4: 身份竖条与名字加粗**只认这一个判据**（Cron 档在队伍系统外面）。
+        let lead = TeamRowText.isTeamLead(task)
+        // ⚠️ 这两行每行都是**每帧现算**的纯函数（不查库、不解析磁盘）—— 列表在滚动路径上，
+        // `workerCount` / `parentName` 只是在内存数组上过一遍（几十条任务的规模），
+        // 而状态读的是 `teamStates` 快照，不是每分钟重算一次库。
+        let meta = TeamRowText.identityLine(task,
+                                            workers: store.scheduler.workerCount(of: task.id),
+                                            parentName: store.scheduler.parentName(of: task))
+        let live = TeamRowText.stateLine(task,
+                                         state: store.scheduler.teamState(of: task.id),
+                                         followUp: store.nextFollowUp(for: task.id)?.dueAt,
+                                         project: projectLine(task),
+                                         now: Date())
         return HStack(spacing: 7) {
-            Image(systemName: icon.name)
-                .font(.system(size: 12))
-                .foregroundStyle(icon.color)
-                .frame(width: 16)
+            if task.role == .worker {
+                // ↳ 占的是图标那一格。**换掉**图标而不是并排 —— 16pt 的槽里挤两个记号，
+                // 两个都看不清；而 worker 的图标（sparkles）本来也不说明什么。
+                Text(verbatim: "↳")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(CodexTheme.textMuted)
+                    .frame(width: 16)
+            } else {
+                Image(systemName: icon.name)
+                    .font(.system(size: 12))
+                    .foregroundStyle(icon.color)
+                    .frame(width: 16)
+            }
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 5) {
                     Text(task.name)
-                        .font(.system(size: 13))
+                        // 名字 500 = 身份三样里的第二样（doc §03）。只给队长 ——
+                        // 全员加粗等于没加粗。
+                        .font(.system(size: 13, weight: lead ? .medium : .regular))
                         .lineLimit(1)
                         .foregroundStyle(selected ? CodexTheme.textPrimary : (task.completedAt != nil ? CodexTheme.textMuted : CodexTheme.textSecondary))
                     if let mark = SchedulerService.rowMarker(task) {
                         markerView(mark, selected: selected)
                     }
+                    Spacer(minLength: 2)
+                    // ⚠️ 两个控件挂在**名字那一行**、不占 L2/L3 的宽度。第一版把它们放在行尾
+                    // （与整个 VStack 平级），L2 只剩约 150pt ⇒ `main · 每天 09:00 · 4 个 worker`
+                    // 被截成 `main · 每天 09:00 · …`，而队伍人数正是 P4 新加的那一项（实测出图）。
+                    if !task.isLegacyWaiting {
+                        // P19: 旧条件值守 = 只读归档 —— 不给「立即运行」、不给开关。
+                        // 两者都必须在**入口处**就不出现: `runScheduledFire` 里那道 guard 是
+                        // **最后一道**, 让按钮在、点了没反应, 比没有按钮更坏（用户会以为调度器坏了）。
+                        // P15.3: 「立即运行」**常显**（不做 hover-only）—— 藏起来的入口 = 没有入口,
+                        // 同常驻区那个 folder 按钮。它不抢眼靠的是颜色（未 hover 时与正文同级）。
+                        runNowButton(task, hovered: hovered)
+                        CodexMiniToggle(isOn: Binding(
+                            get: { task.enabled },
+                            set: { _ in store.toggleScheduled(id: task.id) }
+                        ))
+                    }
                 }
-                Text(statusLine(task))
+                Text(meta)
                     .font(.system(size: 10))
                     .lineLimit(1)
                     .foregroundStyle(cronValid(task) ? CodexTheme.textSecondary : CodexTheme.toolError)
-                Text(contextLine(task))
-                    .font(CodexFonts.monoFont(9))
-                    .lineLimit(1)
-                    .foregroundStyle(CodexTheme.textMuted)
-            }
-            Spacer(minLength: 2)
-            // P19: 旧条件值守 = 只读归档 —— 不给「立即运行」、不给开关。
-            // 两者都必须在**入口处**就不出现: `runScheduledFire` 里那道 guard 是**最后一道**,
-            // 让按钮在、点了没反应, 比没有按钮更坏（用户会以为调度器坏了）。
-            if !task.isLegacyWaiting {
-                // P15.3: 「立即运行」**常显**（不做 hover-only）—— 藏起来的入口 = 没有入口,
-                // 同常驻区那个 folder 按钮。它不抢眼靠的是颜色（未 hover 时与正文同级）。
-                runNowButton(task, hovered: hovered)
-                CodexMiniToggle(isOn: Binding(
-                    get: { task.enabled },
-                    set: { _ in store.toggleScheduled(id: task.id) }
-                ))
+                if !live.isEmpty {
+                    Text(live)
+                        .font(CodexFonts.monoFont(9))
+                        .lineLimit(1)
+                        .foregroundStyle(CodexTheme.textMuted)
+                }
             }
         }
         .padding(.leading, 8)
         .padding(.trailing, 8)
         .padding(.vertical, 5)
-        .background(selected ? CodexTheme.selected : (hovered ? CodexTheme.hover : Color.clear))
+        .background {
+            // 3px 身份竖条画在**背景层**，不占布局: 放进 HStack 会让队长那几行整体右移,
+            // 于是整列图标参差不齐（一条 3px 的线不值得付这个代价）。
+            ZStack(alignment: .leading) {
+                selected ? CodexTheme.selected : (hovered ? CodexTheme.hover : Color.clear)
+                if lead {
+                    Rectangle()
+                        .fill(CodexTheme.textMuted.opacity(0.55))
+                        .frame(width: Tune.teamIdentityBarWidth)
+                }
+            }
+        }
         .clipShape(RoundedRectangle(cornerRadius: CodexTheme.radiusSm))
         .contentShape(Rectangle())
         .onHover { hoveringId = $0 ? task.id : nil }
@@ -651,63 +717,19 @@ struct ScheduledView: View {
         }
     }
 
-    /// 三行版式 · L2 状态行 (扫一眼的高频信息; cron 无效红字提示)
-    private func statusLine(_ task: ScheduledTask) -> String {
-        if task.isLegacyWaiting { return L("旧类型 · 已停用（不再值守）") }
-        if !cronValid(task) { return L("cron 无效") }
-        var parts: [String] = []
-        parts.append(CronExpr.describe(task.cron))   // "每天 09:00" 等人话描述 (识别不出=cron 原文)
-        if task.isAssistant {
-            // 助理的"跑了几次"不如"看了几条来源"有用 —— 它每轮都可能什么都不说
-            parts.append(String(format: L("助理 · %lld 个来源"), task.activeSourceCount))
-        }
-        if !task.enabled {
-            parts.append(L("已暂停"))
-        } else if task.continuous && !task.isAssistant {
-            parts.append(L("留痕"))
-        }
-        // 2026-11-23: 它自己约的那一次。放在"跑了几次"**之前** —— "14:30 还会回来"比"已跑 12 次"
-        // 更影响人此刻的判断；没有约就不出现（大多数任务永远没有这一行）。
-        if let f = store.nextFollowUp(for: task.id) {
-            parts.append(String(format: L("约了 %@ 回看"), followUpTag(f.dueAt)))
-        }
-        if task.runCount > 0 {
-            parts.append(String(format: L("已跑 %lld 次"), task.runCount))
-        } else if let last = task.lastRunAt {
-            parts.append(String(format: L("上次 %@"), last.relativeTag))
-        } else if parts.isEmpty {
-            parts.append(L("待运行"))
-        }
-        return parts.joined(separator: " · ")
-    }
-
-    /// 三行版式 · L3 上下文行 (mono 次要信息)
-    private func contextLine(_ task: ScheduledTask) -> String {
-        var parts: [String] = []
-        if let pid = task.projectId {
-            parts.append(store.projects.first { $0.id == pid }?.title ?? L("未知项目"))
-        } else {
-            parts.append(L("无项目"))
-        }
-        parts.append(task.cron)
-        parts.append(L("无人值守"))   
-        return parts.joined(separator: " · ")
+    /// 三行版式 · L3 的最后一个格: 项目名。
+    ///
+    /// P20 P4 起 L2 / L3 的**其余内容**都由 `TeamRowText` 出（纯函数，冒烟点得到）——
+    /// 这里只剩一件视图才有的东西: 从 `store.projects` 里把 id 翻成名字。
+    /// ⚠️ **不再是「项目 · cron 原文 · 无人值守」**: cron 原文在 L2 已经是人话描述，
+    /// 而「无人值守」自 P9-#17 起恒为真 —— 一条每行都一样的字不叫信息。
+    private func projectLine(_ task: ScheduledTask) -> String {
+        guard let pid = task.projectId else { return L("无项目") }
+        return store.projects.first { $0.id == pid }?.title ?? L("未知项目")
     }
 
     private func cronValid(_ task: ScheduledTask) -> Bool { task.cronExpr != nil }
 
-    /// 2026-11-23: 回看时刻的人话。今天只写 `14:30`，明天加「明天」，再远给 `11/26 09:00`。
-    /// **不写整日期**的理由: 这一行是三行版式里的 L2（扫一眼的），一个 `2026-11-26 09:00`
-    /// 会把"每天 09:00 · 约了… · 已跑 3 次"挤成换行，而多出来的年份一个字都没用。
-    private func followUpTag(_ date: Date) -> String {
-        let cal = Calendar.current
-        let f = DateFormatter()
-        f.dateFormat = "HH:mm"
-        if cal.isDateInToday(date) { return f.string(from: date) }
-        if cal.isDateInTomorrow(date) { return L("明天") + " " + f.string(from: date) }
-        f.dateFormat = "M/d HH:mm"
-        return f.string(from: date)
-    }
     private func isEditing(_ task: ScheduledTask) -> Bool { editingId == task.id }
 
     // MARK: - 编辑器
@@ -737,7 +759,15 @@ struct ScheduledView: View {
         VStack(alignment: .leading, spacing: 12) {
             controlsRow
             nameField
-            cronRow
+            // P20 P4: 「这个助理是谁」—— 职责 / 职责说明 / 身份与归属。位置在**名字下面**
+            // （文档 §03）: 它比来源、台账、模型配置都靠前，因为名单与注入段只读这一行。
+            // 只对助理档显示: Cron 任务不在队伍系统里（没有队伍、不会被派活），
+            // 给它摆一个职责输入框，写下去的那 40 个字没有任何读者。
+            if draftKind == .assistant { teamCard }
+            // ⚠️ P20 P4: worker **不**给 cron 录入器。它在 `schedulerTick` / 漏跑 / 补跑三处都被
+            // 排除了 —— 摆一个能改、改了不生效的档期，就是本仓最反对的那种"看着像支持"。
+            // 列表行同样不写它的周期（`TeamRowText.identityLine`），两处必须一致。
+            if isWorkerDraft { workerTriggerNote } else { cronRow }
             if isLegacyEditing, let t = editingTask() { legacyConditionCard(t) }
             // 助理**没有**手填目标（2026-11-17 boss: "助理的目标来自我的下发"）：
             // 目标要么在会话里说，要么 cron 巡检时从账本里长出来 —— 编辑框里写死一个
@@ -747,21 +777,47 @@ struct ScheduledView: View {
             // 来源卡只在**真有外部来源**时出现。本版没有添加入口（外部来源未接入），
             // 所以它平时是空的；而在助理档显示一行"项目 · 只读查看"是个陷阱 ——
             // 项目在顶栏那颗 pill 里选，这块既点不动又和实现矛盾（见 saveBlocker）。
-            if draftKind == .assistant, !draftSources.isEmpty { sourcesCard }
+            // worker 不巡检、没有"采什么"这回事 ⇒ 这张卡对它也不出现。
+            if draftKind == .assistant, !isWorkerDraft, !draftSources.isEmpty { sourcesCard }
             // 台账常驻（2026-11-18 晚）: 占的正是原来「触达」那一格 —— 那张卡删了（boss 定的
             // "移除触达及相关功能"），而台账是助理档唯一一个"我要随时看见"的东西。
+            // worker 也有台账（它的活都是派活单），照常显示。
             if draftKind == .assistant, editingTask() != nil { ledgerCard }
             // 2026-11-23: 台账下面那一张 —— 「它最近往外发过什么」（boss 定，紧挨台账）。
-            if draftKind == .assistant, editingTask() != nil { sentCard }
-            if draftKind == .assistant { remoteCard }
+            // ⚠️ P20 P4: worker 跳过它。worker 的工具面里**没有** `feishu_attach`（结构上不给，
+            // 见 `ChatStore.attachSpoolAllowed`）⇒ 这张卡对它是永远空着的，"还没往外发过东西"
+            // 读起来像"迟早会发"，而它一辈子不会。
+            if draftKind == .assistant, !isWorkerDraft, editingTask() != nil { sentCard }
+            // ⚠️ P20 P4: 「入口 · 飞书」对 worker 也收掉。给一个 worker 绑机器人 = 给一场
+            // 本该"只被派活叫起来"的会话开一个人能直接说话的入口 —— 那会让"谁决定它开始跑"
+            // 这个分级判据当场失效（而它的工具面里没有对外出口，人也收不到回执）。
+            if draftKind == .assistant, !isWorkerDraft { remoteCard }
             // 2026-11-23: 「模型自主调度」配额。**独立一张小卡，紧挨在「模型与模式配置」之前**
             // （boss 定: 不要塞进那张卡里）。只对助理档显示 —— Cron 档的周期是人定的，
             // 让模型自己往里插时间点等于改写人定的东西（生效值恒 0，见 `ScheduledTask`）。
+            // worker 保留: 它那一轮**有** `follow_up`（P2 实测，见冒烟 ⑲）——
+            // "构建还在跑，十分钟后再看"这种自约对派活回来的活最有用。
             if draftKind == .assistant { followUpCard }
             configCard   // P10.4: 任务级模型/级别/模式
             if editingId != nil && draftContinuous && draftKind == .execute {
                 workLogCard
             }
+        }
+    }
+
+    /// 草稿是不是一个 worker（`teamCard` 之外那些卡的开关都读它）。
+    private var isWorkerDraft: Bool { draftKind == .assistant && draftRole == .worker }
+
+    /// 顶掉 cron 录入器的那一行 —— 它必须**回答两个问题**: 为什么没有档期、谁叫它起来。
+    private var workerTriggerNote: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "arrow.down.right")
+                .font(.system(size: 10))
+                .foregroundStyle(CodexTheme.textMuted)
+            Text("不按档期跑 —— 只由它的 main 派活叫起来。派活单到期才起一轮。")
+                .font(CodexTheme.fontSmall)
+                .foregroundStyle(CodexTheme.textTertiary)
+            Spacer(minLength: 0)
         }
     }
 
@@ -806,6 +862,14 @@ struct ScheduledView: View {
                     disabled: !draftReady))
                 .disabled(!draftReady || savedFlash)
                 .help(LK(draftReady ? "保存" : draftBlockReason))
+            // 点了但**域层**没收下（判据分叉的那种）。摆在按钮右边而不是弹窗:
+            // 它要说的是"哪一条没满足"，而弹窗会把这句话和那个字段隔开。
+            if let e = saveError {
+                Text(e)
+                    .font(CodexTheme.fontTiny)
+                    .foregroundStyle(CodexTheme.toolError)
+                    .lineLimit(1)
+            }
         }
     }
 
@@ -816,7 +880,15 @@ struct ScheduledView: View {
         Group {
             if editingId == nil {
                 Menu {
-                    Button("Cron 定时") { draftKind = .execute }
+                    // P20 P4: 切回 Cron 档 ⇒ 身份**必须跟着回落成队长**。Cron 任务没有队伍，
+                    // 而"队员"这个身份在 Cron 档上没有任何落点（它没有归属下拉、也不会被派活）——
+                    // 留着那份草稿会在保存时撞上 `workerWithoutParent`，而人是刚把身份那格
+                    // 从屏幕上切走的，他会读成"我什么都没改，怎么就存不下去了"。
+                    Button("Cron 定时") {
+                        draftKind = .execute
+                        draftRole = .main
+                        draftParentId = nil
+                    }
                     Button("助理（目标式）") { draftKind = .assistant }
                 } label: { kindPillBody }
                 .menuStyle(.borderlessButton)
@@ -1467,6 +1539,217 @@ struct ScheduledView: View {
             .foregroundStyle(CodexTheme.textPrimary)
     }
 
+    // MARK: - P20 P4 身份 · 归属 · 职责
+
+    /// 「这个助理是谁」那一块 —— 身份 / 归属 / 职责 / 职责说明。
+    ///
+    /// ⚠️ 三处判据都不在这里: 身份可不可改（`rolePicker` 的注释）、归属能选谁
+    /// （`mainsForParent`）、职责必填（`TeamRule.workerWithoutDuty`）。视图只管画，
+    /// 所以"界面拦了、库里拦不住"这类分叉不会发生 —— 保存按钮与域层读的是**同一个函数**。
+    private var teamCard: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 8) {
+                Text(L("身份"))
+                    .font(CodexTheme.fontTiny)
+                    .foregroundStyle(CodexTheme.textMuted)
+                rolePicker
+                if draftRole == .worker {
+                    Text(L("归属"))
+                        .font(CodexTheme.fontTiny)
+                        .foregroundStyle(CodexTheme.textMuted)
+                    parentPicker
+                }
+                Spacer(minLength: 8)
+                // 说不出"为什么存不了"的禁用按钮等于坏了。这一句就地写出来（同 `configCard`）。
+                if let why = teamBlockHint {
+                    Text(why)
+                        .font(CodexTheme.fontTiny)
+                        .foregroundStyle(CodexTheme.toolError)
+                        .lineLimit(1)
+                }
+            }
+            dutyField
+            dutyDetailField
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(CodexTheme.bgElevated)
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+    }
+
+    /// 身份。**已保存的任务不可改**（与 `kindPill` 同一条理由: 换身份等于换一种东西）——
+    /// main 变 worker 要先有归属；worker 变 main 会让它名下那张派活单变成一张没有出口的单子
+    /// （`from_task` 指向一个不再能派活的人），而那张单在画板上还会挂着。
+    @ViewBuilder
+    private var rolePicker: some View {
+        // 词用 `verbatim`: main / worker 是**技术角色名**（与 `prompt` / `cron` 同族），
+        // 中英同形，不进词表 —— 让它们在英文界面上变成另一句话，两边的文档就对不上号了。
+        let text = Text(verbatim: draftRole == .worker ? "worker" : "main")
+        if editingId == nil {
+            CodexPillMenu {
+                Button(L("main · 自己按班次跑，还能派人")) {
+                    draftRole = .main
+                    draftParentId = nil
+                }
+                Button(L("worker · 只被派活叫起来")) { draftRole = .worker }
+            } label: {
+                text
+                Image(systemName: "chevron.down").font(.system(size: 8, weight: .semibold))
+            }
+        } else {
+            text
+                .font(CodexTheme.fontSmall)
+                .foregroundStyle(CodexTheme.textSecondary)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 3)
+                .background(CodexTheme.bgPill)
+                .clipShape(Capsule())
+                .overlay(Capsule().stroke(CodexTheme.border.opacity(0.4), lineWidth: 1))
+                .help("已保存的任务不能改身份 —— 换身份会把它名下那张单子变成一张没有出口的单子")
+        }
+    }
+
+    /// 能当归属的那些人: 队长档的助理。
+    ///
+    /// 三条排除各有理由: `.worker` 不能在 worker 底下（深度恒 1）；Cron 任务不是队长
+    /// （它没有队伍，也不会去派人）；自己不能当归属（`editingId == nil` 时不存在自己）。
+    private var mainsForParent: [ScheduledTask] {
+        store.scheduledTasks.filter {
+            $0.role == .main && $0.isAssistant && !$0.isLegacyWaiting && $0.id != editingId
+        }
+    }
+
+    private var parentPicker: some View {
+        CodexPillMenu {
+            ForEach(mainsForParent) { m in
+                Button(m.name) { draftParentId = m.id }
+            }
+        } label: {
+            Text(parentLabel)
+            Image(systemName: "chevron.down").font(.system(size: 8, weight: .semibold))
+        }
+    }
+
+    /// 归属那一格的字面。悬挂值（那个 main 被删了）**必须说出来** —— 它要是显示成"没选"，
+    /// 人会以为从没归过；而事实上这个人是一支残队的人，P5 的画板要把它放进「未归属」区。
+    private var parentLabel: String {
+        guard let pid = draftParentId else { return L("选一个助理") }
+        guard let name = store.scheduledTasks.first(where: { $0.id == pid })?.name else {
+            return L("原归属已删除")
+        }
+        return name
+    }
+
+    /// 职责 —— 40 字，**worker 必填**。这一段每轮进【你的队伍】原文照搬（不截断、不切句），
+    /// 所以它必须是一句能独立成立的话。
+    ///
+    /// ⚠️ 不在 `onChange` 里硬裁: 中文输入法在**组合中**就触发 onChange，替换字符串会把
+    /// 正在拼的那一段打断。超长的处理放在保存时（`DelegationLimit.clip` 那道最后围栏），
+    /// 这里只把计数染红 —— 人的眼睛比输入法诚实。
+    ///
+    /// 版式与 `dutyDetailField` **同一套**: 标签列（52）+ 控件 + 计数列（56，右对齐）。
+    /// 两行各写一套的话，两个框的右沿会差几个点，而"两行"正是这一块的全部结构。
+    private var dutyField: some View {
+        HStack(spacing: 8) {
+            dutyLabel(L("职责"))
+            TextField("它负责什么，一句话（会进每一轮注入）", text: $draftDescription)
+                .textFieldStyle(.plain)
+                .font(CodexTheme.fontBody)
+                .foregroundStyle(CodexTheme.textPrimary)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 7)
+                .background(CodexTheme.bgComposer)
+                .clipShape(RoundedRectangle(cornerRadius: CodexTheme.radiusSm))
+                .overlay(RoundedRectangle(cornerRadius: CodexTheme.radiusSm)
+                    .stroke(CodexTheme.border.opacity(0.45), lineWidth: 1))
+            dutyCounter(draftDescription.count, DelegationLimit.maxDescriptionChars,
+                        over: dutyOverLimit)
+        }
+    }
+
+    private func dutyLabel(_ text: String) -> some View {
+        Text(text)
+            .font(CodexTheme.fontTiny)
+            .foregroundStyle(CodexTheme.textMuted)
+            .frame(width: 52, alignment: .leading)
+    }
+
+    /// 计数。**不叠在框里**（叠在正文上就是"打到一半被一个数字盖住"），单独占一列。
+    private func dutyCounter(_ n: Int, _ cap: Int, over: Bool) -> some View {
+        Text("\(n)/\(cap)")
+            .font(CodexTheme.fontTiny)
+            .foregroundStyle(over ? CodexTheme.toolError : CodexTheme.textMuted)
+            .frame(width: 56, alignment: .trailing)
+            .help(L("超过上限的部分不会保存 —— 这一段每一轮都会进上下文，所以它有硬顶"))
+    }
+
+    private var dutyOverLimit: Bool {
+        draftDescription.count > DelegationLimit.maxDescriptionChars
+    }
+
+    /// 职责说明 —— 240 字，选填。**只被 `list_workers` 按需读**，从不进常驻注入段
+    /// （12 × 240 字每轮付费 = 违反 context rot 那条）。
+    private var dutyDetailField: some View {
+        HStack(alignment: .top, spacing: 8) {
+            dutyLabel(L("说明")).padding(.top, 7)
+            ZStack(alignment: .topLeading) {
+                TextEditor(text: $draftDescriptionDetail)
+                    .font(CodexTheme.fontSmall)
+                    .scrollContentBackground(.hidden)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 4)
+                    .frame(height: Tune.scheduleDutyDetailHeight)
+                if draftDescriptionDetail.isEmpty {
+                    Text("判据、边界、交付形态（比如「差异要列单号与金额，别只给总数」）")
+                        .font(CodexTheme.fontSmall)
+                        .foregroundStyle(CodexTheme.textMuted)
+                        .padding(.horizontal, 11)
+                        .padding(.vertical, 8)
+                        .allowsHitTesting(false)
+                }
+            }
+            .background(CodexTheme.bgComposer)
+            .clipShape(RoundedRectangle(cornerRadius: CodexTheme.radiusSm))
+            .overlay(RoundedRectangle(cornerRadius: CodexTheme.radiusSm)
+                .stroke(CodexTheme.border.opacity(0.45), lineWidth: 1))
+            dutyCounter(draftDescriptionDetail.count, DelegationLimit.maxDescriptionDetailChars,
+                        over: detailOverLimit).padding(.top, 7)
+        }
+    }
+
+    private var detailOverLimit: Bool {
+        draftDescriptionDetail.count > DelegationLimit.maxDescriptionDetailChars
+    }
+
+    /// 团队这一格"为什么存不了"（`nil` = 这一格没问题）。
+    ///
+    /// 判据直接借 `saveBlocker` —— 那一处是全编辑器唯一的保存判据口（"按钮亮着、点下去
+    /// 说 cron 无效"那个坑的原解法），这里再判一遍就是第二真源。
+    private var teamBlockHint: String? {
+        guard case .team(let v) = saveBlocker else { return nil }
+        return teamViolationText(v)
+    }
+
+    /// 域层那四条不变量的**界面词**。
+    ///
+    /// 域层那份（`TeamViolation.reason`）**不能拿来当界面文案**: 它恒中文、进日志与时间线，
+    /// 随界面语言漂会让日志变成一堆看不懂的英文（`AgentTeam.swift` 文件头的第 ① 条）。
+    private func teamViolationText(_ v: TeamViolation) -> String {
+        switch v {
+        case .workerWithoutDuty:
+            return L("职责必填 —— 名单与注入段只读这一行")
+        case .workerWithoutParent:
+            return L("选一个助理当归属")
+        case .parentIsWorker:
+            return L("归属不能是另一个 worker")
+        case .duplicateName(let n):
+            return String(format: L("已经有一个 worker 叫「%@」"), n)
+        case .mainHasParent:
+            // 归属那一行对 main 根本不显示 ⇒ 到不了这里。留着是为了编译期穷尽。
+            return L("main 不该有归属")
+        }
+    }
+
     /// cron 录入四档: 前三档控件生成 cron, 高级档直写表达式 (手写复杂表达式反解析不出时落这里)
     enum CronMode: String, CaseIterable, Identifiable {
         case daily, weekly, interval, advanced
@@ -1713,6 +1996,30 @@ struct ScheduledView: View {
         case prompt     // Cron: 指令必填
         case cron
         case model      // 模型与模式配置必填 (2026-11-20)
+        /// 团队不变量（P20 P4）: 归属 / 职责 / 重名。
+        ///
+        /// ⚠️ 这里**不另写一套判断** —— 直接把域层那个 `TeamViolation` 带出来。
+        /// 视图自己再判一遍的后果是"按钮亮着、点下去什么都没发生"（域层返回 `false`，
+        /// 而 `saveEditing` 只认按钮状态）—— 那是本仓最怕的那种零信号失败。
+        case team(TeamViolation)
+    }
+
+    /// 草稿 → 送去域层判据的那个形状。
+    ///
+    /// ⚠️ **必须带 `editingId`**（只有新建时才用新 UUID）: `TeamRule` 按 id 摘掉"自己"再比
+    /// 重名，拿一个新 id 去比会把"这一行本来的名字"当成人家的名字 ⇒ 改个无关字段也存不下去。
+    private var teamProbe: ScheduledTask {
+        var t = ScheduledTask(id: editingId ?? UUID(), name: draftName, prompt: draftPrompt,
+                              cron: effectiveCron, projectId: draftProjectId,
+                              continuous: draftContinuous)
+        t.kind = draftKind
+        t.role = draftRole
+        // 队长恒无归属（`TeamRule.mainHasParent`）。这里顺手归一而不是抛错: 界面上归属那一行
+        // 对队长根本不显示，所以这个值只可能是"刚把身份从队员切回队长"的残留。
+        t.parentId = draftRole == .worker ? draftParentId : nil
+        t.description = draftDescription
+        t.descriptionDetail = draftDescriptionDetail
+        return t
     }
 
     private var saveBlocker: SaveBlocker? {
@@ -1730,6 +2037,11 @@ struct ScheduledView: View {
         // 2026-11-20 boss 定: **cron / 助理的「模型与模式配置」是必须项**。
         // 放最后判: 前面几条是"写错了"，这一条是"还没选" —— help 里说清是哪一种。
         if buildDraftConfig() == nil { return .model }
+        // P20 P4: 团队那一组。排在最后 —— 先把"这条任务本身能不能跑"说清，再谈"它在队伍里
+        // 合不合规"（反过来的话，一个 cron 写错的新队员会先被要求写职责）。
+        if draftKind == .assistant, let v = TeamRule.violation(teamProbe, among: store.scheduledTasks) {
+            return .team(v)
+        }
         return nil
     }
 
@@ -1742,6 +2054,7 @@ struct ScheduledView: View {
         case .prompt: return "prompt 与 cron 为必填"
         case .cron:   return "cron 无效"
         case .model:  return "模型与模式配置为必填"
+        case .team(let v): return teamViolationText(v)
         case nil:     return "保存"
         }
     }
@@ -1799,7 +2112,7 @@ struct ScheduledView: View {
 
     // MARK: - 草稿动作
 
-    private func startNew(kind: TaskKind = .execute) {
+    private func startNew(kind: TaskKind = .execute, role: TaskRole = .main) {
         setTarget(.newTask)
         draftName = ""
         draftPrompt = ""
@@ -1807,6 +2120,12 @@ struct ScheduledView: View {
         draftProjectId = store.activeProject?.id
         draftContinuous = false
         draftKind = kind
+        // P20 P4: 新建队员时**归属留空**，不猜。猜错的代价是"这个活归了一个错的人"，
+        // 而它在回执上完全看不出来 —— 让下拉那一格空着、保存按钮明说「选一个助理当归属」。
+        draftRole = role
+        draftParentId = nil
+        draftDescription = ""
+        draftDescriptionDetail = ""
         draftSources = []
         draftBotId = nil
         draftBudget = ""
@@ -1814,6 +2133,7 @@ struct ScheduledView: View {
         draftLog = ""
         handoffUpdatedAt = nil
         showWorkLog = false
+        saveError = nil
         cronMode = .daily
         cronHour = 9
         cronMinute = 0
@@ -1925,6 +2245,7 @@ struct ScheduledView: View {
 
     private func loadDraft(_ task: ScheduledTask) {
         setTarget(.task(task.id))
+        saveError = nil
         draftName = task.name
         // P15.6b: dream 的指令取出厂常量回填（那一栏只读）。**不读 `task.prompt`** ——
         // 库里那份是种任务时的副本, 可能已经过期; 回填旧文案会让只读的那一栏显示错误的指令。
@@ -1936,6 +2257,13 @@ struct ScheduledView: View {
         draftContinuous = task.continuous
         // P19: legacy 不是可编辑的类型（归档态）⇒ 编辑器按 Cron 呈现，但整页只读
         draftKind = task.isLegacyWaiting ? .execute : task.kind
+        // P20 P4: 身份与归属原样载入。⚠️ 身份**不回落**（`role` 列缺省就是 main，读出来是对的），
+        // 而归属要照抄悬挂值 —— 这里把 `parentId` 抹成 nil 的话，一次"改个名字"就会把这个
+        // worker 从残队里摘出来，而它本来还能被认回原来那支队伍。
+        draftRole = task.role
+        draftParentId = task.parentId
+        draftDescription = task.description
+        draftDescriptionDetail = task.descriptionDetail
         draftSources = task.sources
         // 归属从机器人那一侧反查（`remote_bots.assistant_id` 是唯一真源）。
         // 1:1 ⇒ 最多一个；`first` 而不是 `last` 只是为了"万一库里有两条"时行为可预期。
@@ -1995,6 +2323,26 @@ struct ScheduledView: View {
             let head = draftPrompt.split(separator: "\n").first.map { String($0.prefix(24)) }
             draftName = head ?? L("任务")
         }
+        // P20 P4: 名次自动补全**之后**再判一次团队不变量。
+        //
+        // 为什么不是多余: `saveBlocker` 判的是**补全前**的名字，而这里 draftName 可能刚从上
+        // 面那行长出来 —— 长出来的名字撞上另一个 worker 时，按钮是亮的、域层会返回 false，
+        // 而 `saveEditing` 从来看不见那个返回值（它只认按钮状态）⇒ 界面闪"✓ 已保存"、
+        // 库里什么都没变。这正是本仓最怕的那类零信号失败。
+        let probed = teamProbeForSave(name: draftName)
+        if draftKind == .assistant, let v = TeamRule.violation(probed, among: store.scheduledTasks) {
+            saveError = teamViolationText(v)
+            return
+        }
+        saveError = nil
+        var saved = false
+        // 两段职责: **超长在这里收口**（`DelegationLimit.clip` 是最后一道围栏 —— 输入框里
+        // 不硬裁，见 `dutyField`）。职责说明 240 字同理。
+        let duty = DelegationLimit.clip(draftDescription.trimmingCharacters(in: .whitespacesAndNewlines),
+                                        DelegationLimit.maxDescriptionChars)
+        let dutyDetail = DelegationLimit.clip(
+            draftDescriptionDetail.trimmingCharacters(in: .whitespacesAndNewlines),
+            DelegationLimit.maxDescriptionDetailChars)
         if let id = editingId,
            var existing = store.scheduledTasks.first(where: { $0.id == id }) {
             existing.name = draftName
@@ -2010,28 +2358,46 @@ struct ScheduledView: View {
             existing.unattended = true   // P9-#17: 恒无人值守, 字段仅作记录
             existing.config = buildDraftConfig()   // P10.4: 任务级执行配置
             // P19: `kind` **不回写** —— 已保存任务的类型不可改（见 `kindPill` 的注释）。
+            // P20 P4: `role` 同理不回写（见 `rolePicker`）。归属与两段职责照写:
+            // 身份那一格改不了，但归属随时可改（P5 的画板按它分列）。
+            existing.parentId = draftRole == .worker ? draftParentId : nil
+            existing.description = duty
+            existing.descriptionDetail = dutyDetail
             // 来源照写: 本版界面不能改来源, 但库里已有的行必须原样留住, 否则一次编辑就静默清空。
             existing.sources = draftSources
             existing.dailyTokenBudget = budget
             existing.followUpsPerDay = savedFollowUpsPerDay(draftKind)
             // P19.2 S15b: 飞书入口的归属。**只改机器人行**，助理行上没有这份数据。
-            store.updateScheduled(existing)
-            if draftKind == .assistant { applyRemoteBots(assistantId: id) }
+            saved = store.updateScheduled(existing)
+            if saved, draftKind == .assistant { applyRemoteBots(assistantId: id) }
         } else {
             let cron = effectiveCron
-            store.addScheduled(name: draftName, prompt: draftPrompt,
-                               cron: cron, projectId: draftProjectId,
-                               continuous: draftContinuous,
-                               kind: draftKind, sources: draftSources)
+            // P20 P4: 身份 / 归属 / 两段职责走 `addScheduled` 的新形参（全部带缺省值,
+            // 老调用点零改动）。返回值 = 域层收没收下 —— 与上面那条探头同一个判据。
+            saved = store.addScheduled(name: draftName, prompt: draftPrompt,
+                                       cron: cron, projectId: draftProjectId,
+                                       continuous: draftContinuous,
+                                       kind: draftKind, sources: draftSources,
+                                       role: draftKind == .assistant ? draftRole : .main,
+                                       parentId: draftKind == .assistant && draftRole == .worker ? draftParentId : nil,
+                                       description: duty, descriptionDetail: dutyDetail)
             // 无人值守附加字段 (addScheduled 无全参入口, 保存后回填)
-            if let idx = store.scheduledTasks.indices.last {
+            if saved, let idx = store.scheduledTasks.indices.last {
                 store.scheduledTasks[idx].unattended = true   // P9-#17: 恒无人值守
                 store.scheduledTasks[idx].config = buildDraftConfig()   // P10.4
                 store.scheduledTasks[idx].dailyTokenBudget = budget
                 store.scheduledTasks[idx].followUpsPerDay = savedFollowUpsPerDay(draftKind)
+                // 这一条 `updateScheduled` **不参与 saved 判定**: 它写的是同一行,
+                // 而团队不变量已经在上面那条探头里过了 —— 让它的返回值把"存下去了"翻成 false,
+                // 人会看到"没保存"却找不到原行（那一行其实已经在库里了）。
                 store.updateScheduled(store.scheduledTasks[idx])
                 if draftKind == .assistant { applyRemoteBots(assistantId: store.scheduledTasks[idx].id) }
             }
+        }
+        guard saved else {
+            // 域层拒绝而上面那条探头没看见 = 判据分叉了。宁可在这里明说，也不闪"✓ 已保存"。
+            saveError = L("没保存上：有一条任务规则不满足")
+            return
         }
         // "✓ 已保存"短闪 (与代码块"已复制"同模式)
         savedFlash = true
@@ -2039,6 +2405,13 @@ struct ScheduledView: View {
             try? await Task.sleep(nanoseconds: 1_200_000_000)
             savedFlash = false
         }
+    }
+
+    /// `saveEditing` 那一刻的探头: 名称已经补全，其余字段同 `teamProbe`。
+    private func teamProbeForSave(name: String) -> ScheduledTask {
+        var t = teamProbe
+        t.name = name
+        return t
     }
 
     /// 预算草稿 → 整数。空 / 非数字 → 0（不设限）。不拦保存: 这个字段写歪了人一眼能看出来
@@ -2067,8 +2440,15 @@ struct ScheduledView: View {
         setTarget(.newTask)
         draftName = ""
         draftPrompt = ""
+        // P20 P4: 身份与两段职责一起回到出厂形状 —— 不回落的话，删掉一个队员之后
+        // 那个"新建草稿"还是队员档，而人以为自己是在建一个普通任务。
+        draftRole = .main
+        draftParentId = nil
+        draftDescription = ""
+        draftDescriptionDetail = ""
         draftLog = ""
         handoffUpdatedAt = nil
         showWorkLog = false
+        saveError = nil
     }
 }
