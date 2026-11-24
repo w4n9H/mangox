@@ -584,14 +584,14 @@ details.fold[open]>summary{margin-bottom:4px}
 <div class="tw"><table>
   <tr><th>算例</th><th>判的是</th><th>反例怎么造</th></tr>
   <tr><td class="mono">①分级</td><td><code>role</code> 与触发面一致；worker 没有 cron 入口；<code>parent_id</code> 单值</td><td>让 <code>role</code> 由 <code>assistantId != nil</code> 派生 ⇒ 应红</td></tr>
-  <tr><td class="mono">②名单</td><td>12 个上限、<b>职责原文照搬不截断</b>、状态五档正确、<b>不出现职责说明</b></td><td>把职责说明也塞进名单 ⇒ 字数超预算应红</td></tr>
+  <tr><td class="mono">②名单</td><td>12 个上限、<b>职责原文照搬不截断</b>、状态五档正确、<b>不出现职责说明</b>（<b>实际落成 2 条 check</b> ㉒㉓）</td><td>把职责说明也塞进名单 ⇒ 字数超预算应红（夹具按 12×40 字满格搭，半格时泄漏也照样绿）</td></tr>
   <tr><td class="mono">③拒绝</td><td>七条拒绝理由各自说得出（<b>实际落成 4 条 check</b> ⑫⑬⑭⑮：派给谁 / 名单 / 有活 / 额度与顺序）</td><td>去掉"它有活"那道判 ⇒ 第二次派活会成功，应红（<b>实测 1 红：⑭</b>）</td></tr>
   <tr><td class="mono">④到期</td><td><code>due_at</code> 到点起跑；被闸挡则顺延且 <code>attempts+1</code>；worker 删了 <code>cancelled</code></td><td>把顺延改成"直接置 failed" ⇒ 应红</td></tr>
-  <tr><td class="mono">⑤回执消费</td><td>注入一次 → 标 <code>reported_at</code> → 第二次不再出现；失败收尾不标</td><td>在注入时标 ⇒ 崩一轮即丢，造一次"注入后抛错"应红</td></tr>
+  <tr><td class="mono">⑤回执消费</td><td>注入一次 → 标 <code>reported_at</code> → 第二次不再出现；失败收尾不标（<b>3 条 check</b> ㉔㉕㉖：真回合 / 空回合 / 一次 5 条）</td><td>去掉 <code>produced</code> 那道判 ⇒ 空回合也标，应红（<b>实测 1 红：㉕</b>）</td></tr>
   <tr><td class="mono">⑥回叫</td><td>worker 交活 ⇒ main 有一条 0 分钟唤醒；<b>不占</b> main 的 follow_up 配额</td><td>回叫写成记 <code>followUpsPerDay</code> 扣减 ⇒ 应红</td></tr>
   <tr><td class="mono">⑦连带</td><td>删 main 只停 worker；停/启联动只恢复 <code>disabled_by_parent</code></td><td>把"启 main ⇒ 全启"写成无过滤 ⇒ 手动停的那个被拉起，应红</td></tr>
   <tr><td class="mono">⑧工具面</td><td>worker 没有 <code>delegate</code> / <code>feishu_attach</code>；有 <code>follow_up</code> / <code>note_proposal</code></td><td>给 worker 挂上 <code>feishu_attach</code> ⇒ 应红</td></tr>
-  <tr><td class="mono">⑨只读两件</td><td><code>list_workers</code>：12 个上限、缺口分两级提示、必带状态；<code>read_worker_ledger</code>：1500 字截断、未归属拒、含「完成状态」</td><td>去掉那两句提示 ⇒ 应红（它会静默把"没写"读成"没什么特别"）</td></tr>
+  <tr><td class="mono">⑨只读两件</td><td><code>list_workers</code>：12 个上限、缺口分两级提示、必带状态；<code>read_worker_ledger</code>：1500 字截断、未归属拒、含「完成状态」（<b>4 条 check</b> ㉗㉘㉙㉚）</td><td>去掉那两句提示 ⇒ 应红（它会静默把"没写"读成"没什么特别"）；超长时从尾部硬截 ⇒ 尾巴一行不剩，应红</td></tr>
   <tr><td class="mono">⑩顺延</td><td>main 在跑 ⇒ 派活不顺延起跑（<code>runningTurns</code> 判据）</td><td>去掉那条判 ⇒ 两个回合同时要 helper，应红（或至少 <code>started_at</code> 重叠）</td></tr>
 </table></div>
 
@@ -601,6 +601,7 @@ details.fold[open]>summary{margin-bottom:4px}
   <li><b>worker 手动试跑</b>不进 cron、不进飞书，但它会不会写 <code>agent_delegations</code> 还没定 —— 我倾向<b>不写</b>（它不是一次派活，没有 from_task），代价是画板上看不出"这个 worker 刚才被人手动跑过一次"。</li>
   <li><b>亮色板。</b>团队页与列表行都要动颜色，而 <code>run.sh</code> 的算例只认 <code>enum Dark</code> ⇒ <b>动手前先建亮色算例</b>，否则是"看不出来但版式崩了"。</li>
   <li><b>词表增量约 24 条</b>（团队页标题 / 五档状态 / 拒绝理由 / 编辑器的归属、职责与职责说明各一段，含两段占位提示）。状态词有一半在注入面也要用，注意注入面的那份<b>恒中文、不进词表</b>（与 <code>SentKind.tag</code> 同族）。</li>
+  <li><b>扩展那半边没有门禁。</b><code>mangox-delegate.ts</code> 的三个工具只有真 pi 进程跑得起来，而本仓没有 TS 解析门（<code>node --check</code> 只认 CommonJS，对 ESM 静默退 0）。所以<b>真正会进上下文的字节全部由 Swift 渲染好再交给扩展打印</b>（§04「两段注入」与两个只读工具那一节）—— 扩展只剩"读 env / 校验形状 / 追加一行 / 打印一段现成文本"。这条边界是刻意的：判据要留在能被断言的地方。</li>
   <li><b>不做的两件</b>：worker 之间横向对话；"自动重派失败的活"。前者没有终点判据，后者会在同一个坑里烧三次。</li>
 </ul>
 

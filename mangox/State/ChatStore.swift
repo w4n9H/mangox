@@ -3040,9 +3040,19 @@ extension ChatStore: AgentTransportDelegate {
             // elapsed 取自 turnStartAt 且只能取一次 (手动停过的回合已被清 → 不通知)。
             let turnStart = turnStartAt[sid]   // P19 S7: 下面记 token 账要它（移除前先留一份）
             let elapsed = turnStartAt.removeValue(forKey: sid).map { Date().timeIntervalSince($0) }
+            // P20 P3: 这一轮"到底说出话了没有" —— 回执能不能标掉的判据。
+            // 只在 `elapsed != nil`（自然收尾）时才可能为真: 手动停那条路 `turnStartAt` 已被清，
+            // 而"按了停止"不是成功收尾。
+            var receiptsProduced = false
             if let elapsed {
                 // 回复预览须在镜像清除前取
                 let proj = sid == selectedConversationId ? messages : (liveTurns[sid] ?? [])
+                // P20 P3: 判据 = **这一轮最后一条是它说的话**。工具卡收尾 / 空回合都不算 ——
+                // 方向只能是"下一轮再念一遍"：重复一句的代价远小于"那件活出了事，我永远不知道"。
+                receiptsProduced = proj.last.map { m in
+                    guard m.role == .assistant, case .text(let s) = m.content else { return false }
+                    return !s.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                } ?? false
                 // 轮末账单的耗时记账 —— 必须赶在 `liveTurns[sid] = nil` 之前（下面几行就地清镜像）。
                 // 只记实测值；手动停止那条路 `elapsed` 是 nil（turnStartAt 已被清）⇒ 不记，账单少一格。
                 noteTurnElapsed(sid: sid, projection: proj, seconds: elapsed)
@@ -3075,6 +3085,9 @@ extension ChatStore: AgentTransportDelegate {
             // P20: 派活的落定点（与 `stopTurn` 那处同一对）。
             scheduler.finishDelegateTurn(sid: sid)
             scheduler.finishDelegationFireIfNeeded(sid: sid)
+            // P20 P3: 回执的消费点 —— **只在成功收尾**。`markReceiptsReported` 自己判 `produced`
+            // 为空时只清账不落库（那一轮没念给人听，标掉就等于吞了）。
+            scheduler.markReceiptsReported(sid: sid, produced: receiptsProduced)
             // P19.2 S15: 从飞书发起的那一轮，把回复发回去。**认领即删**（`remoteTurns`），
             // 所以同一场会话里你在电脑上说的下一轮不会回响到飞书。
             remote.finishRemoteTurn(sid: sid)

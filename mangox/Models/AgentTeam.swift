@@ -206,6 +206,19 @@ enum DelegationLimit {
     static func clip(_ s: String, _ cap: Int) -> String {
         s.count <= cap ? s : String(s.prefix(cap)) + "…"
     }
+
+    // MARK: - P3 注入与只读工具的容量（2026-11-24）
+
+    /// 【派活回执】最多念几条。堆到十几条时人看到的是一堵墙，而他要决定的是"现在怎么办"。
+    /// 没被念到的**不丢**（`reported_at` 仍 NULL）⇒ 下一轮接着念。
+    static let maxReceipts = 5
+
+    /// `read_worker_ledger` 的总长上限与"最近多少行"。
+    ///
+    /// 为什么不返回整篇: 一份台账五节写满是几千字，一个 main 巡五个 worker 就是两万字 ——
+    /// 那是把"独立台账"的好处（各占各的窗口）又塞回一个窗口里。要看全篇就分节再要一次。
+    static let maxLedgerChars = 1500
+    static let maxLedgerLines = 20
 }
 
 // MARK: - 派活请求（spool 的解析口径 + 七条拒绝）
@@ -414,5 +427,223 @@ enum DelegationSpool {
         return DelegationAsk(id: id, worker: worker, goal: goal, acceptance: acceptance,
                              afterMinutes: after, dueInMinutes: dueIn,
                              context: ctx.isEmpty ? nil : ctx)
+    }
+}
+
+// MARK: - P3 注入段与只读工具的正文（2026-11-24）
+
+/// 两段注入 + 两个只读工具的**正文** —— 全是纯函数（不碰 DB、不读时钟，`now` 由调用方给），
+/// 所以冒烟可以直接喂数据断言字数与措辞，不用起一场真回合。
+///
+/// ⚠️ 为什么正文在 Swift 而不在扩展的 TS 里: 扩展那半边**没有门禁**（`node --check` 只认
+/// CommonJS，对 ESM 静默退 0 —— 0.2.11 那次假门）。而这两段是**每轮都进上下文**的字节，
+/// 它们必须能被断言字数、能被造反例。扩展只负责"按名字把已经算好的那段打印出来"。
+///
+/// ⚠️ 措辞**恒中文**（本文件在 L10n 的 `EXCLUDE_FILES` 里）: 这是注入面，模型认的就是这些字。
+/// 界面取词是 P4/P5 的事 —— 同一件事在两处取词，注入 prompt 的字节会随界面语言变。
+enum TeamPrompt {
+
+    static let teamHeader = "【你的队伍】"
+    static let receiptHeader = "【派活回执】"
+
+    // MARK: 名单（两处共用一份筛选与排序）
+
+    /// "我的人"。**上限 12**（`DelegationLimit.maxTeamRows`，域层拦得住，这里只是兜底）。
+    /// 排序 = 建人顺序：每轮顺序一样，模型才不会以为"队伍变了"。
+    static func myWorkers(_ main: ScheduledTask, roster: [ScheduledTask]) -> [ScheduledTask] {
+        let mine = roster
+            .filter { $0.role == .worker && $0.parentId == main.id }
+            .sorted { $0.createdAt < $1.createdAt }
+        return Array(mine.prefix(DelegationLimit.maxTeamRows))
+    }
+
+    /// 状态词（五档的**显示形态**）。优先级 = 人的判断顺序: 停用 ⇒ 在跑 ⇒ 已排上 ⇒ 空闲。
+    ///
+    /// 「空闲 N 天」只在 N ≥ 1 时出现: 一天之内说"空闲 0 天"是噪音，而那个数字的用途是
+    /// "三天没派过活的人该被我看见"（文档 §03 列内排序那一条）。
+    static func stateWord(_ w: ScheduledTask, busy: [UUID: Delegation], now: Date) -> String {
+        guard w.enabled else { return "已停用" }
+        if let d = busy[w.id] {
+            if d.status == .running, let at = d.startedAt {
+                let minutes = max(1, Int(now.timeIntervalSince(at) / 60))
+                return "在跑 \(minutes) 分钟"
+            }
+            return "已排上 " + DelegationRefusal.hhmm(d.dueAt)
+        }
+        if let last = w.lastRunAt, now.timeIntervalSince(last) >= 86_400 {
+            return "空闲 \(Int(now.timeIntervalSince(last) / 86_400)) 天"
+        }
+        return "空闲"
+    }
+
+    /// 一句话结论 —— 【派活回执】与时间线**共用这一份措辞**。
+    /// 分两处写，三个月后两边说的就不是同一件事了（而人会把它们当成同一件事）。
+    static func verdictHead(status: DelegationStatus, worker: String,
+                            summary: String?, note: String?) -> String {
+        switch status {
+        case .done:
+            return "\(worker) 交活了：\(summary ?? "（没写结论，细节去读它的台账）")"
+        case .cancelled:
+            return "\(worker) 那张单作废了：\(note ?? "原因不明")"
+        default:
+            return "\(worker) 没干成：\(note ?? "这一轮没有产出")"
+        }
+    }
+
+    // MARK: 【你的队伍】
+
+    /// `nil` = 名下**一个 worker 都没有**。
+    ///
+    /// 为什么不是空段头: 一个只有标题的段会被读成"有过、现在没了"，而事实是它还没有人。
+    /// 一个字的成本都不该付在"你什么都没有"这句上 —— 它本来就没有可执行的信息。
+    static func rosterBlock(main: ScheduledTask, roster: [ScheduledTask],
+                            busy: [UUID: Delegation], now: Date) -> String? {
+        let mine = myWorkers(main, roster: roster)
+        guard !mine.isEmpty else { return nil }
+        var lines = [teamHeader]
+        for w in mine {
+            let duty = w.description.trimmingCharacters(in: .whitespacesAndNewlines)
+            // 职责**原文照搬、一字不截**: 这是它被选中的唯一依据，截一半等于让人猜。
+            lines.append("- \(w.name) · \(duty.isEmpty ? "（没写职责）" : duty) · "
+                         + stateWord(w, busy: busy, now: now))
+        }
+        return lines.joined(separator: "\n")
+    }
+
+    // MARK: 【派活回执】
+
+    /// `nil` = 没有没汇报过的终态。
+    ///
+    /// 这里**只念结论一行**，不贴台账正文: 那一行是"要不要现在处理"的判据，
+    /// 细节在 worker 自己的账本里（`read_worker_ledger` 按需取）。
+    static func receiptBlock(_ rows: [Delegation], workers: [UUID: ScheduledTask],
+                             now: Date) -> String? {
+        guard !rows.isEmpty else { return nil }
+        var lines = [receiptHeader + "（最近 \(DelegationLimit.maxReceipts) 条，没汇报过的）"]
+        for d in rows.prefix(DelegationLimit.maxReceipts) {
+            let name = workers[d.toTask]?.name ?? "worker"
+            let at = DelegationRefusal.hhmm(d.finishedAt ?? d.dueAt)
+            lines.append("- \(at) " + verdictHead(status: d.status, worker: name,
+                                                 summary: d.summary, note: d.note))
+        }
+        return lines.joined(separator: "\n")
+    }
+
+    // MARK: `list_workers` 的正文
+
+    /// 名单 + 简历（一次拿全，无参）。
+    ///
+    /// **缺口必须分级说出来**，两档不能合并:
+    ///   · 没有职责 —— 异常态（worker 本该必填）⇒ 明说"你只能从名字判断"；
+    ///   · 有职责、没说明 —— 正常但信息少 ⇒ 说"只有一句职责"。
+    /// 留白会让模型把这两种都读成"这个人没什么特别的"，而它们其实是**可行动的信息缺口**
+    /// （改派，或者先问人）。
+    static func dossierBlock(main: ScheduledTask, roster: [ScheduledTask],
+                             busy: [UUID: Delegation], lastDone: [UUID: Date],
+                             now: Date) -> String {
+        let mine = myWorkers(main, roster: roster)
+        guard !mine.isEmpty else { return "你名下还没有 worker —— 这一轮只能自己干。" }
+        var out: [String] = []
+        for w in mine {
+            let activity: String
+            if let done = lastDone[w.id] {
+                activity = "上次 " + monthDay(done) + " 交活"
+            } else if let ran = w.lastRunAt {
+                activity = "上次 " + monthDay(ran) + " 跑过，没交过活"
+            } else {
+                activity = "从未交活"
+            }
+            out.append("- \(w.name) | \(stateWord(w, busy: busy, now: now)) | \(activity)")
+            let duty = w.description.trimmingCharacters(in: .whitespacesAndNewlines)
+            if duty.isEmpty {
+                out.append("  （**没有写职责** —— 你只能从名字判断。）")
+                continue
+            }
+            out.append("  职责：\(duty)")
+            let detail = w.descriptionDetail.trimmingCharacters(in: .whitespacesAndNewlines)
+            out.append(detail.isEmpty ? "  （只有一句职责，没有说明。）" : "  说明：\(detail)")
+        }
+        return out.joined(separator: "\n")
+    }
+
+    // MARK: `read_worker_ledger` 的正文
+
+    /// 一份台账的**摘要 + 最近 20 行**，总长截到 1500 字。
+    ///
+    /// 结构不靠猜: 目标与「完成状态」走 `AssistantLedger.parse`（那是台账的唯一解析口径），
+    /// 「最近 20 行」走原文的尾巴 —— 两者都要，因为**验收项的原文与它最近的动线是两件事**：
+    /// 前者答"干到哪了"，后者答"刚才在干什么"。
+    static func ledgerBlock(workerName: String, ledger: String?) -> String {
+        let raw = (ledger ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !raw.isEmpty else {
+            return "「\(workerName)」还没有台账 —— 它没跑过，或者跑完没写。"
+        }
+        let a = AssistantLedger.parse(raw)
+        let head = "【\(workerName) · 台账】\n目标："
+            + (a.goal.isEmpty ? "（台账里没写目标）" : a.goal)
+        let tail = raw.split(separator: "\n", omittingEmptySubsequences: false)
+            .suffix(DelegationLimit.maxLedgerLines).joined(separator: "\n")
+        let tailPart = "最近 \(DelegationLimit.maxLedgerLines) 行：\n" + tail
+        // 验收项那一节。**「完成状态」是唯一会随验收项线性变长的一节** —— 所以要砍就砍它。
+        var statusLines: [String]
+        if a.items.isEmpty {
+            statusLines = ["完成状态：（没有验收项）"]
+        } else {
+            statusLines = ["完成状态："]
+            for it in a.items {
+                let mark = it.mark == .done ? "[x]" : (it.mark == .blocked ? "[!]" : "[ ]")
+                statusLines.append("- \(mark) \(it.text)")
+            }
+        }
+        // 预算分配: 头 + 尾巴**先占住**，剩下的给验收项。
+        //
+        // ⚠️ 为什么先保尾巴: 「最近 20 行」是这个工具存在的另一半理由（"刚才在干什么"），
+        // 而验收项是累积的、下一轮还在。从尾部硬截会把最新那条动线藏起来 ——
+        // 第一版就是这么写的，实测读数 1500 字、内容全对、**尾巴一行都没了**。
+        let cap = DelegationLimit.maxLedgerChars
+        let room = cap - head.count - tailPart.count - 4
+            - 24   // 给"还有 N 项没列"那句留的位置
+        var kept = [statusLines[0]]
+        var used = statusLines[0].count
+        if statusLines.count > 1 {
+            for line in statusLines.dropFirst() {
+                if used + line.count + 1 > room { break }
+                kept.append(line)
+                used += line.count + 1
+            }
+        }
+        let omitted = statusLines.count - kept.count
+        if omitted > 0 { kept.append("…还有 \(omitted) 项没列（要看全篇就分节问）") }
+        let s = [head, kept.joined(separator: "\n"), tailPart].joined(separator: "\n\n")
+        // 兜底: 尾巴自己就超了上限（20 行可以很长）—— 那时候只能截，但至少结构还在。
+        return s.count <= cap ? s : clipped(s, cap)
+    }
+
+    /// 截断时**把提示也算在上限里** —— 否则"截到 1500 字"这句话本身就是假的
+    /// （实测读数会是 1500 + 那行提示的长度）。
+    private static func clipped(_ s: String, _ cap: Int) -> String {
+        guard s.count > cap else { return s }
+        let note = "\n…（截到 \(cap) 字；要看全篇就分节问）"
+        return String(s.prefix(max(0, cap - note.count))) + note
+    }
+
+    static func monthDay(_ d: Date) -> String {
+        let f = DateFormatter()
+        f.dateFormat = "MM-dd"
+        return f.string(from: d)
+    }
+
+    // MARK: 交给扩展的那份数据
+
+    /// 两个只读工具的正文**提前算好**，写成一个 JSON 交给扩展。
+    ///
+    /// 为什么提前算: 那两件事要的都是库里的瞬时事实（名单 / 忙闲 / 台账），子进程读不到库，
+    /// 它只能读文件。写的时机是**这一轮开始时** ⇒ 模型在这一轮里拿到的一定是同一份，
+    /// 不会中途漂（而"同一次调用两次结果不一样"是最难解释的一种现象）。
+    static func dossierJSON(roster: String, ledgers: [String: String]) -> String {
+        let obj: [String: Any] = ["roster": roster, "ledgers": ledgers]
+        guard let data = try? JSONSerialization.data(withJSONObject: obj),
+              let s = String(data: data, encoding: .utf8) else { return "{}" }
+        return s
     }
 }

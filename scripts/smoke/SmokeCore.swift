@@ -50,7 +50,7 @@ extension SmokeMain {
     /// 说明: 条数**不是** CI 时间的主因 —— 2707 条里 2647 条合计只占 5 秒, 耗时在 2 条重
     ///    断言与 `swiftc` 编译。这个数管的是**维护成本**（每条都要有人读、有人判断红了是
     ///    改坏了还是判据过期了）。
-    private static let recordedCount = 2785
+    private static let recordedCount = 2794
 
     @MainActor
     static func check(_ cond: Bool, _ what: String) {

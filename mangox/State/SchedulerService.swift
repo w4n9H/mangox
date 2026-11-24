@@ -1039,6 +1039,9 @@ final class SchedulerService: ObservableObject {
             if snapshot.errorCount > 0 {
                 appendTimeline("── \(fmt.string(from: now)) 部分来源没采到（\(snapshot.errorCount) 条）, 本轮按其余来源判断 ──", to: logId)
             }
+            // P20 P3: 队伍段与回执段。**两处都要**: 巡检轮知道"我派出去的活有下文了"，
+            // 而它派活的那一轮是另一轮（同一场会话，不同的 turn）。
+            let seg = teamSegments(for: task, sid: logId)
             watchExtra = Self.watchSystemPrompt(project: proj,
                                                 goal: task.prompt,
                                                 handoff: readHandoff(for: task)?.content,
@@ -1046,7 +1049,9 @@ final class SchedulerService: ObservableObject {
                                                 ledgerPath: handoffPath(for: task),
                                                 followUp: followUp?.why,
                                                 followUpKind: followUp?.kind ?? .selfWake,
-                                                sent: sentMemory(task.id))
+                                                sent: sentMemory(task.id),
+                                                team: seg.team,
+                                                receipts: seg.receipts)
             // 收尾要用: 归属哪个任务、这条 finding 算哪个来源、证据允许引用哪些编号。
             // source_id **由 App 决定**（项目来源 / 唯一启用的来源）—— 不接受模型给的 id,
             // 伪造面因此从"编造来源"缩小成"编造观察编号"，后者由 allowedExternalIds 拦。
@@ -1413,6 +1418,9 @@ final class SchedulerService: ObservableObject {
               !owner.isLegacyWaiting, owner.effectiveDelegatesPerDay > 0 else { return nil }
         let spool = PiRpcTransport.delegateSpoolPath(mainTaskId: owner.id)
         delegateSpools[sid] = (spool: spool, mainId: owner.id)
+        // P3: 两个只读工具要的正文与 spool **同时**落盘 —— 挂得上工具就读得到数据，
+        // 不存在"工具有、数据没有"那个中间态。
+        writeTeamDossier(main: owner, spool: spool)
         return spool
     }
 
@@ -1489,6 +1497,90 @@ final class SchedulerService: ObservableObject {
         // 一个 worker 同时只允许一张（硬拒不排队）⇒ 有多张时取最早的那张当"手上那张"。
         var out: [UUID: Delegation] = [:]
         for d in open where out[d.toTask] == nil { out[d.toTask] = d }
+        return out
+    }
+
+    // MARK: - P3 注入与只读工具（2026-11-24）
+
+    /// 本轮**注入过**哪几条回执 —— 收口成功时按它标 `reported_at`。
+    /// 与 `delegateSpools` / `delegationFires` 同一套理由: 收口那一刻手里只有 `sid`。
+    private var receiptsInjected: [UUID: [UUID]] = [:]
+
+    /// 有下文、还没念过的那一批（最多 5 条，最新的在前）。
+    func unreportedReceipts(from mainId: UUID) -> [Delegation] {
+        guard let p = store?.persistence else { return [] }
+        return (try? p.unreportedDelegations(from: mainId,
+                                            limit: DelegationLimit.maxReceipts)) ?? []
+    }
+
+    /// 这一轮要注入的两段（`nil` = 这一段没有内容）。
+    ///
+    /// ⚠️ **判据只有"数据有没有"，没有角色判据** —— worker 名下必然没有 worker（深度恒 1），
+    /// 它派出去的也必然没有单子（工具面里没有 `delegate`）。多写一个 `role == .main`
+    /// 只是又一处会漂的判据，而它判的这件事本来就不成立。
+    func teamSegments(for task: ScheduledTask, sid: UUID) -> (team: String?, receipts: String?) {
+        let busy = openDelegationsByWorker()
+        let now = Date()
+        let team = TeamPrompt.rosterBlock(main: task, roster: scheduledTasks,
+                                         busy: busy, now: now)
+        let rows = unreportedReceipts(from: task.id)
+        // **无条件赋值**（含清空）: 上一轮若半路没跑起来，这条记录会留成一条指向旧单子的账，
+        // 下一轮成功收尾时就会把**没念过**的那条标掉 —— 静默吞掉一条回执。
+        receiptsInjected[sid] = rows.isEmpty ? nil : rows.map(\.id)
+        var byId: [UUID: ScheduledTask] = [:]
+        for t in scheduledTasks { byId[t.id] = t }
+        let receipts = TeamPrompt.receiptBlock(rows, workers: byId, now: now)
+        return (team, receipts)
+    }
+
+    /// 回执消化掉了。**只在那一轮成功收尾时调**（`ChatStore.streamEnded`）。
+    ///
+    /// `produced == false`（空回合 / 崩了）⇒ **不标**: 那一轮一个字都没说，人根本没看见这条回执，
+    /// 标掉等于把它吞了。方向永远是"宁可下一轮再念一遍" —— 重复念一句的代价远小于
+    /// "那件活出了事，而我永远不会知道"。
+    func markReceiptsReported(sid: UUID, produced: Bool) {
+        guard let ids = receiptsInjected.removeValue(forKey: sid), !ids.isEmpty else { return }
+        guard produced, let p = store?.persistence else { return }
+        let now = Date()
+        for id in ids { try? p.markDelegationReported(id: id, at: now) }
+    }
+
+    /// dossier 文件名的后缀（spool 派生）。扩展那侧读的是同一个公式 —— **两处一起改**。
+    static let teamDossierSuffix = ".team.json"
+
+    /// 两个只读工具的正文**提前算好**，写在 spool 旁边（`<spool>.team.json`）。
+    ///
+    /// 为什么不另开一个 env: 那要多一条 per-turn 下发通道（协议 / 默认实现 / Mock 三处），
+    /// 而这两份文件本来就同生同死（同一个 main、同一轮）；派生一个文件名比加一条通道便宜。
+    /// 为什么不等到调工具那一刻再算: 子进程读不到库，它只能读文件；而写在**这一轮开始时**
+    /// 还顺带保证了"同一轮两次调用看到的是同一份"。
+    private func writeTeamDossier(main: ScheduledTask, spool: String) {
+        let busy = openDelegationsByWorker()
+        let now = Date()
+        let roster = TeamPrompt.dossierBlock(main: main, roster: scheduledTasks, busy: busy,
+                                             lastDone: lastDoneByWorker(main), now: now)
+        var ledgers: [String: String] = [:]
+        for w in TeamPrompt.myWorkers(main, roster: scheduledTasks) {
+            ledgers[w.name] = TeamPrompt.ledgerBlock(workerName: w.name,
+                                                     ledger: readHandoff(for: w)?.content)
+        }
+        let json = TeamPrompt.dossierJSON(roster: roster, ledgers: ledgers)
+        let dir = (spool as NSString).deletingLastPathComponent
+        try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+        try? json.write(toFile: spool + Self.teamDossierSuffix,
+                        atomically: true, encoding: .utf8)
+    }
+
+    /// 每个 worker 最近一次**交活**的时刻（`list_workers` 那句「上次 11-22 交活」）。
+    /// 用 `finishedAt`（真的干完了）而不是 `createdAt`（派出去了）。
+    private func lastDoneByWorker(_ main: ScheduledTask) -> [UUID: Date] {
+        guard let p = store?.persistence,
+              let rows = try? p.loadDelegations(fromTask: main.id) else { return [:] }
+        var out: [UUID: Date] = [:]
+        for d in rows where d.status == .done {
+            let at = d.finishedAt ?? d.createdAt
+            if (out[d.toTask] ?? .distantPast) < at { out[d.toTask] = at }
+        }
         return out
     }
 
@@ -1796,7 +1888,9 @@ final class SchedulerService: ObservableObject {
                                   ledgerPath: String,
                                   followUp: String? = nil,
                                   followUpKind: FollowUpKind = .selfWake,
-                                  sent: String? = nil) -> String {
+                                  sent: String? = nil,
+                                  team: String? = nil,
+                                  receipts: String? = nil) -> String {
         var parts: [String] = []
         parts.append("""
         【助理任务 · 巡检轮】
@@ -1830,6 +1924,9 @@ final class SchedulerService: ObservableObject {
             """)
         }
         let h = (handoff ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        // P20 P3:【你的队伍】。位置 = "我是谁 / 我要干什么"之后、"上一轮的记忆"之前 ——
+        // 它回答的是"我手上有什么人"，与目标同属**这一轮的判断输入**，而不是记忆。
+        if let team, !team.isEmpty { parts.append(team) }
         parts.append(h.isEmpty
             ? "【上一轮留下的工作日志】\n（**账本还不存在或还是空的**。如果你判断没有可追踪的目标，只回一行 NO_FINDING；有的话就把五节写全。）"
             : "【上一轮留下的工作日志】\n\(h)")
@@ -1863,6 +1960,9 @@ final class SchedulerService: ObservableObject {
             parts.append(followUpKind == .callBack ? Self.callBackNote(why: f)
                                                   : Self.followUpNote(why: f))
         }
+        // P20 P3:【派活回执】。位置与回看注记同一条理由 —— 排在输出契约**之前**。
+        // 它是"这一轮有下文要处理"，属于判断输入；放在契约后面等于让它在"说完就结束"之后。
+        if let receipts, !receipts.isEmpty { parts.append(receipts) }
         // 回复契约放最后（它是"说完就结束"的那一段，后面不该再有话）
         parts.append(Self.watchOutputContract)
         return parts.joined(separator: "\n\n")
@@ -1933,7 +2033,7 @@ final class SchedulerService: ObservableObject {
         else { return nil }
         let ledger = handoffPath(for: task)
         return AssistantChatTurn(taskId: task.id,
-                                 prompt: dialoguePrompt(for: task, ledgerPath: ledger),
+                                 prompt: dialoguePrompt(for: task, ledgerPath: ledger, sid: sid),
                                  ledgerPath: ledger)
     }
 
@@ -1947,7 +2047,7 @@ final class SchedulerService: ObservableObject {
         return chat
     }
 
-    private func dialoguePrompt(for task: ScheduledTask, ledgerPath: String) -> String {
+    private func dialoguePrompt(for task: ScheduledTask, ledgerPath: String, sid: UUID) -> String {
         var parts: [String] = []
         var head = """
         【助理任务 · 对话轮】
@@ -1959,6 +2059,10 @@ final class SchedulerService: ObservableObject {
         let goal = task.prompt.trimmingCharacters(in: .whitespacesAndNewlines)
         if !goal.isEmpty { head += "\n你的长期目标：\(goal)" }
         parts.append(head)
+        // P20 P3: 队伍与回执在**对话轮也要有** —— 人在这儿说"让财务对账再跑一次"，
+        // 而它上一轮派的活刚交活；只在巡检轮注入的话，人在会话里问起来它一问三不知。
+        let seg = teamSegments(for: task, sid: sid)
+        if let team = seg.team, !team.isEmpty { parts.append(team) }
         parts.append("""
         【能做什么】
         这一轮**人在跟你说话**（可能在 App 里，也可能从飞书发过来 —— 同一场会话）。
@@ -2002,6 +2106,8 @@ final class SchedulerService: ObservableObject {
         parts.append(Self.watchLedgerContract)
         // 2026-11-23:「已发消息」（对话轮同理 —— "我昨天跟你说过 X" 多数发生在这里）。
         if let sent = sentMemory(task.id) { parts.append(sent) }
+        // P20 P3:【派活回执】。同巡检轮的位置 —— 输出契约之前。
+        if let receipts = seg.receipts, !receipts.isEmpty { parts.append(receipts) }
         // 回复契约放最后（它是"说完就结束"的那一段，后面不该再有话）
         parts.append(Self.dialogueOutputContract)
         return parts.joined(separator: "\n\n")

@@ -15,17 +15,23 @@
 //      七条拒绝理由各自说得出、名单只列自己人且状态三档、到点真起跑、被闸挡住只顺延
 //      （不按次数判死）、过了 `due_by` 才作废并回执、交活给 main 一条 0 分钟唤醒且**不占配额**、
 //      worker 那一轮没有 `delegate` / `feishu_attach`、main 在跑时派活**顺延**。
+//    · **㉒~㉚ = P3 的结束判据**（②名单 / ⑤回执消费 / ⑨两个只读工具）:
+//      【你的队伍】12 行 / ≤700 字 / 职责原文照搬 / 说明不进段、状态五档各自说得清、
+//      回执**成功收尾才标**（空回合不标）、一次最多念 5 条、`list_workers` 缺口分两级、
+//      `read_worker_ledger` 超长时**砍验收项保尾巴**、三个工具名与源码同源。
 //
-//  ⚠️ 每条判据都同时问**两件事**: 纯判据（`TeamRule` / `DelegationRule`）给出的**理由**，
-//  与真链路（`addScheduled` / `updateScheduled` / `fireDueDelegations` / `beginTurn`）
-//  **真的挡住了 / 真的起跑了**。只判前者不知道门有没有接上（假门），只判后者分不出
-//  是被哪个理由拒的（"拒了"不等于"拒对了"）。
+//  ⚠️ 每条判据都同时问**两件事**: 纯判据（`TeamRule` / `DelegationRule` / `TeamPrompt`）给出的
+//  **理由与字数**，与真链路（`addScheduled` / `updateScheduled` / `fireDueDelegations` /
+//  `beginTurn` / 收口）**真的挡住了 / 真的起跑了 / 真的标了**。只判前者不知道门有没有接上
+//  （假门），只判后者分不出是被哪个理由拒的（"拒了"不等于"拒对了"）。
 //
 //  反例（只写**实测过**的，不编数字）:
 //    · `applyTeamCascade` 的 `.disabled` 分支去掉 `guard w.enabled else { return false }`
 //      ⇒ ⑧ **实测 1 红**: 手动停掉的那个 worker 会被"启 main"拉起来。
 //    · `DelegationRule.check` 去掉 `busy` 那道判（"他手上有活"）⇒ **实测 1 红**: ⑭
 //      （实测输出里 `busyReason` 是空串 = 那条单被收下了，正是要抓的那件事）。
+//    · `markReceiptsReported` 去掉 `produced` 那道判（空回合也标）⇒ **实测 1 红**: ㉕
+//      （读数里 `reported_at` 变成非空 = 那条回执被静默吞了）。
 //
 //  ⚠️ 这一段**不碰**真实目录: 库走 `dbPath`，与 `CaseFollowUp` 同款（`fixtureDir` + 显式注入）。
 //
@@ -481,5 +487,174 @@ extension SmokeMain {
               + " 「它说派出去了, 那个活从没开始」) (实测 main 那一轮=\(mainHasDelegate)"
               + " 之后=\(String(describing: mock.lastDelegateSpool)))")
         _ = await waitUntil { store.runningTurns.isEmpty }
+
+        // ══════════════════════ P3 注入与只读工具（2026-11-24）══════════════════
+        // 本文件的 ㉒~㉚ 对上文档 §06 的结束判据: ㉒㉓ = ②名单 · ㉔㉕㉖ = ⑤回执消费 ·
+        // ㉗㉘㉙㉚ = ⑨两个只读工具（+ 工具名与源码同源）。
+        //
+        // ⚠️ 这一段的判据**全落在纯函数上**（`TeamPrompt`）**加上一条真链路**（回执的
+        // 消费点）—— 前者的正文进上下文、必须能断言字数与措辞；后者是"标在哪一刻"，
+        // 而标错一格的后果是回执被静默吞掉。
+
+        // ══ ㉒（doc ②）【你的队伍】: 12 行 / 段长 ≤ 700 / 职责原文照搬 / 不含说明 ═══
+        let m9 = addMain("第九支队")
+        let fullDuty = String(repeating: "查", count: DelegationLimit.maxDescriptionChars)
+        let dutyDetail = String(repeating: "细", count: 60)
+        for i in 0..<DelegationLimit.maxTeamRows {
+            // **12 个都是满格职责 + 60 字说明** —— 这样"说明泄漏进来"会直接把段长顶过 700，
+            // 预算那条判据才有牙（半格职责时 12 个人也到不了上限，泄漏也照样绿）。
+            _ = addWorker("兵\(i)", under: m9, duty: fullDuty, detail: dutyDetail)
+        }
+        let roster9 = TeamPrompt.rosterBlock(main: task(m9)!, roster: store.scheduledTasks,
+                                            busy: [:], now: Date()) ?? ""
+        check(roster9.split(separator: "\n").count == DelegationLimit.maxTeamRows + 1
+              && roster9.count <= 700 && roster9.contains(fullDuty)
+              && !roster9.contains(dutyDetail),
+              "T-TEAM ㉒(doc②)【你的队伍】12 个人 12 行、整段 ≤ 700 字、职责**原文照搬不截断**"
+              + "(40 字满格也在)，而职责说明**一个字都不进来** —— 进来的话每轮要多付 "
+              + "12×240 = 2880 字，等于每轮先读一篇文档再干活"
+              + " (实测 \(roster9.count) 字 / \(roster9.split(separator: "\n").count) 行)")
+
+        // ══ ㉓（doc ②）状态五档各自说得出来 ═══════════════════════════════════
+        // 同一份 `stateWord` 三处用（队伍段 / list_workers / 以后的画板）⇒ 只判它一处。
+        // 五档不能合并: "已排上 09:31"与"在跑 3 分钟"对模型的含义完全不同（能不能现在派）。
+        let wIdle = idOf("兵1"), wRun = idOf("兵2"), wQueued = idOf("兵3"), wOff = idOf("兵4")
+        var busy9: [UUID: Delegation] = [:]
+        var running9 = delegate(from: m9, to: wRun)
+        running9.status = .running
+        running9.startedAt = Date().addingTimeInterval(-180)
+        busy9[wRun] = running9
+        busy9[wQueued] = delegate(from: m9, to: wQueued)
+        store.scheduler.setEnabled(wOff, false)
+        if let i = store.scheduledTasks.firstIndex(where: { $0.id == wIdle }) {
+            store.scheduledTasks[i].lastRunAt = Date().addingTimeInterval(-3 * 86_400)
+        }
+        let now9 = Date()
+        let wordIdleDays = TeamPrompt.stateWord(task(wIdle)!, busy: busy9, now: now9)
+        let wordRunning = TeamPrompt.stateWord(task(wRun)!, busy: busy9, now: now9)
+        let wordQueued = TeamPrompt.stateWord(task(wQueued)!, busy: busy9, now: now9)
+        let wordOff = TeamPrompt.stateWord(task(wOff)!, busy: busy9, now: now9)
+        store.scheduler.setEnabled(wOff, true)
+        check(wordIdleDays == "空闲 3 天" && wordRunning == "在跑 3 分钟"
+              && wordQueued.hasPrefix("已排上 ") && wordOff == "已停用",
+              "T-TEAM ㉓(doc②)状态五档: 空闲 N 天(三天没派过活的人要被看见) / 在跑 N 分钟 /"
+              + " 已排上 HH:mm / 已停用 —— 四档各自说得清, 且短的优先(停用 ⇒ 在跑 ⇒ 已排上 ⇒ 空闲)"
+              + " (实测 \(wordIdleDays) / \(wordRunning) / \(wordQueued) / \(wordOff))")
+
+        // ══ ㉔（doc ⑤）回执: 注入 ⇒ 那一轮**成功收尾**才标 ═════════════════════
+        let m10 = addMain("第十支队")
+        _ = addWorker("交活的", under: m10)
+        let w10b = idOf("交活的")
+        let sid10 = UUID()
+        let conv10 = ConversationItem(id: sid10, title: "第十支队")
+        store.chats.append(conv10)
+        try? p.insertChatSession(conv10)
+        if let i = store.scheduledTasks.firstIndex(where: { $0.id == m10 }) {
+            store.scheduledTasks[i].logSessionId = sid10
+            store.updateScheduled(store.scheduledTasks[i])
+        }
+        var done10 = delegate(from: m10, to: w10b)
+        done10.status = .done
+        done10.summary = "3 处差异，见台账"
+        done10.finishedAt = Date()
+        try? p.insertDelegation(done10)
+        store.beginTurn(sid: sid10, prompt: "对账有下文吗", ephemeral: false, cwd: nil,
+                        unattended: false)
+        let injected = mock.lastExtraSystemPrompt ?? ""
+        _ = await waitUntil { store.runningTurns.isEmpty }
+        let after10 = ((try? p.loadDelegations(toTask: w10b)) ?? []).first { $0.id == done10.id }
+        check(!injected.isEmpty && injected.contains("【派活回执】")
+              && injected.contains("3 处差异，见台账")
+              && after10?.reportedAt != nil,
+              "T-TEAM ㉔(doc⑤)回执: 有下文 ⇒ 注入段里有【派活回执】+ 那一行结论;"
+              + " 这一轮成功收尾之后才标 `reported_at`(标在注入时, 那一轮崩了回执就永久丢了)"
+              + " (实测 注入=\(injected.contains("【派活回执】"))"
+              + " 已汇报=\(after10?.reportedAt != nil))")
+
+        // ══ ㉕（doc ⑤）没说出话的那一轮 ⇒ **不标** ═══════════════════════════
+        // 丢了回执比重复念一遍坏得多: 空回合那一轮人什么都没看见，标掉等于把这条回执吞了。
+        var done10b = delegate(from: m10, to: w10b)
+        done10b.status = .done
+        done10b.summary = "第二件也完了"
+        done10b.finishedAt = Date()
+        try? p.insertDelegation(done10b)
+        mock.scriptedReply = { _ in "" }          // 空回合
+        store.beginTurn(sid: sid10, prompt: "还有吗", ephemeral: false, cwd: nil,
+                        unattended: false)
+        _ = await waitUntil { store.runningTurns.isEmpty }
+        let after10b = ((try? p.loadDelegations(toTask: w10b)) ?? []).first { $0.id == done10b.id }
+        check(after10b?.reportedAt == nil,
+              "T-TEAM ㉕(doc⑤)空回合(一句话都没说) ⇒ 回执**不标**, 下一轮接着念"
+              + " (实测 reported_at=\(String(describing: after10b?.reportedAt)))")
+        mock.scriptedReply = { _ in "我看了一眼。" }
+
+        // ══ ㉖（doc ⑤）一次最多念 5 条 —— 没念到的不丢 ═══════════════════════
+        let m12 = addMain("第十二支队")
+        _ = addWorker("攒活的", under: m12)
+        let w12 = idOf("攒活的")
+        for i in 0..<(DelegationLimit.maxReceipts + 1) {
+            var d = delegate(from: m12, to: w12)
+            d.status = .failed
+            d.note = "第 \(i) 次没干成"
+            d.finishedAt = Date().addingTimeInterval(Double(i))
+            try? p.insertDelegation(d)
+        }
+        let rows12 = store.scheduler.unreportedReceipts(from: m12)
+        let block12 = TeamPrompt.receiptBlock(rows12, workers: store.scheduledTasks
+            .reduce(into: [UUID: ScheduledTask]()) { $0[$1.id] = $1 }, now: Date()) ?? ""
+        check(rows12.count == DelegationLimit.maxReceipts
+              && block12.split(separator: "\n").count == DelegationLimit.maxReceipts + 1,
+              "T-TEAM ㉖(doc⑤)回执一次最多念 \(DelegationLimit.maxReceipts) 条(最新的在前);"
+              + " 第 \(DelegationLimit.maxReceipts + 1) 条**不丢**, 只是排到下一轮"
+              + " (实测取到 \(rows12.count) 条 / \(block12.split(separator: "\n").count) 行)")
+
+        // ══ ㉗（doc ⑨）list_workers: 必带状态 + 缺口**分两级**说出来 ═════════════
+        let m11 = addMain("第十一支队")
+        _ = addWorker("有职责没说明的", under: m11, duty: "查发票")
+        _ = addWorker("只有名字的", under: m11, duty: "")
+        let dossier11 = TeamPrompt.dossierBlock(main: task(m11)!, roster: store.scheduledTasks,
+                                                busy: [:], lastDone: [:], now: Date())
+        check(dossier11.contains("（**没有写职责** —— 你只能从名字判断。）")
+              && dossier11.contains("（只有一句职责，没有说明。）")
+              && dossier11.contains("职责：查发票") && dossier11.contains("| 空闲 |"),
+              "T-TEAM ㉗(doc⑨)list_workers: 每行必带状态; 两档缺口**分开说**(没有职责是异常态、"
+              + "有职责没说明是信息少) —— 留白会让它把两者都读成「这人没什么特别的」,"
+              + "而它们都是可行动的缺口(改派 / 先问人)")
+
+        // ══ ㉘（doc ⑨）read_worker_ledger: 含完成状态 + 最近 20 行 + 1500 字截断 ═══
+        // ⚠️ 夹具必须是**长成这样的**台账: 只有"最近 20 行"的短台账根本顶不到 1500 字，
+        // 那条上限就成了恒真（第一次写这一格时实测只有 482 字，正是这个坑）。
+        // 顶上去的是「完成状态」那一节 —— 它是唯一会随验收项线性变长的一节。
+        var items28: [String] = ["- [!] 缺 3 月"]
+        for i in 0..<80 { items28.append("- [x] 验收项 \(i) 的原文说明说明说明") }
+        let ledgerLong = "## 目标\n对一遍 11 月发票\n\n## 完成状态\n"
+            + items28.joined(separator: "\n") + "\n\n## 在跟踪\n- 等财务回信\n"
+        let block28 = TeamPrompt.ledgerBlock(workerName: "有职责没说明的", ledger: ledgerLong)
+        check(block28.count <= DelegationLimit.maxLedgerChars
+              && block28.contains("完成状态") && block28.contains("[!] 缺 3 月")
+              && block28.contains("最近 \(DelegationLimit.maxLedgerLines) 行")
+              && block28.contains("等财务回信") && block28.contains("…还有"),
+              "T-TEAM ㉘(doc⑨)read_worker_ledger: 目标 + 「完成状态」原文(带 [!] 这类标记) +"
+              + " 最近 \(DelegationLimit.maxLedgerLines) 行, 总长 ≤ "
+              + "\(DelegationLimit.maxLedgerChars) 字; 超长时**砍验收项、保尾巴**"
+              + "(从尾部硬截会把最新那条动线藏起来 —— 第一版就是这么错的)"
+              + " (实测 \(block28.count) 字 / 尾巴还在=\(block28.contains("等财务回信"))"
+              + " / 说了还有几项=\(block28.contains("…还有")))")
+
+        // ══ ㉙（doc ⑨）没台账 ⇒ 直说没有, 不编一份出来 ═══════════════════════
+        let empty29 = TeamPrompt.ledgerBlock(workerName: "只有名字的", ledger: nil)
+        check(empty29.contains("还没有台账"),
+              "T-TEAM ㉙(doc⑨)没台账 ⇒ 说「还没有台账」; 编一份空模板会让 main 以为它跑过、"
+              + "什么都没干 (实测「\(empty29)」)")
+
+        // ══ ㉚ 三个工具名与扩展源码同源; dossier 文件名后缀两处同源 ═════════════
+        // 前半: 面板那一行会展开工具名, 名字对不上 = 面板说谎。
+        // 后半: Swift 写 `<spool>.team.json`、TS 读同一个公式 —— 漂了就是"工具在、数据读不到",
+        // 而那种失败**零信号**(工具会回一句"这一轮没有队伍数据")。
+        let extSrc = PiRpcTransport.delegateExtensionSource
+        check(PiRpcTransport.delegateToolNames.allSatisfy { extSrc.contains("name: \"\($0)\"") }
+              && extSrc.contains("const TEAM_SUFFIX = \"" + SchedulerService.teamDossierSuffix + "\""),
+              "T-TEAM ㉚\(PiRpcTransport.delegateToolNames.count) 个工具名都能在扩展源码里找到"
+              + " `name: \"…\"`; dossier 后缀两处同源(\(SchedulerService.teamDossierSuffix))")
     }
 }

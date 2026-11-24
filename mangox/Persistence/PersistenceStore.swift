@@ -1663,7 +1663,27 @@ final class PersistenceStore {
             .compactMap(decodeDelegation)
     }
 
-    /// 行的解码口径 —— **只有这份**（上面三个读法都走它，加列只改一处）。
+    /// 【派活回执】要念的那一批: **已落定、但还没汇报过**的单子，最近 `limit` 条。
+    ///
+    /// 判据是 `reported_at IS NULL`，不是另存一个"待念队列" —— 那一行本身就是待汇报状态，
+    /// 再存一份就是第二真源（而两份一定会先漂一份）。`reported_at` 只在 main 那一轮
+    /// **成功收尾**之后才标（见 `SchedulerService.markReceiptsReported`）。
+    ///
+    /// 按 `finished_at` 降序: 人最想知道的是"刚才那件事怎么样了"。`finished_at` 为 NULL 的
+    /// 老行（理论上不会有）用 `due_at` 兜底排序。
+    func unreportedDelegations(from taskId: UUID, limit: Int) throws -> [Delegation] {
+        let rows = try db.query("""
+            SELECT id, from_task, to_task, goal, acceptance, context, due_at, due_by, status,
+                   attempts, note, summary, reported_at, created_at, started_at, finished_at
+            FROM agent_delegations
+            WHERE from_task = ? AND reported_at IS NULL
+              AND status IN ('done', 'failed', 'cancelled')
+            ORDER BY COALESCE(finished_at, due_at) DESC LIMIT ?
+            """, [.text(taskId.uuidString), .int(Int64(max(1, limit)))])
+        return rows.compactMap(decodeDelegation)
+    }
+
+    /// 行的解码口径 —— **只有这份**（上面几个读法都走它，加列只改一处）。
     /// 坏行 / 未知 `status` **跳过而不是抛**（同 `decodeFollowUp`）。
     private func decodeDelegation(_ row: [String: DBValue]) -> Delegation? {
         guard let id = UUID(uuidString: text(row, "id")),

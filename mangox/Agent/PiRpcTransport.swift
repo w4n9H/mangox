@@ -1182,7 +1182,12 @@ final class PiRpcTransport: AgentTransport {
     nonisolated static let delegateEnvKey = "MANGOX_DELEGATE_SPOOL"
 
     /// 扩展注册出来的工具名（面板展开用；与源码同源同改，同 `followUpToolNames` 那条守）。
-    nonisolated static let delegateToolNames: [String] = ["delegate"]
+    ///
+    /// P3 起是**三个**: 派活 + 两个只读（`list_workers` / `read_worker_ledger`）。
+    /// 为什么并进同一个扩展而不另起一个: 挂载闸门是**同一条**（只有 main 那一轮），
+    /// 而另起一个扩展就要多一条 per-turn spool 通道 —— 三个工具同生同死，没必要分开。
+    nonisolated static let delegateToolNames: [String] = ["delegate", "list_workers",
+                                                          "read_worker_ledger"]
 
     /// spool 的生产形状: `~/.mangox/delegate-spool/`。与 `followup-spool` 一样**故意独立**
     /// （它不是笔记根，否则这些工单会被扫描器当成笔记进索引）。
@@ -1223,7 +1228,7 @@ final class PiRpcTransport: AgentTransport {
         //
         // It also does NOT start anything. Nothing happens until the app's scheduler decides the
         // start time has come; a worker that is busy right now is retried, not queued.
-        import { appendFileSync, mkdirSync } from "node:fs";
+        import { appendFileSync, mkdirSync, readFileSync } from "node:fs";
         import { randomUUID } from "node:crypto";
         import { dirname } from "node:path";
         import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
@@ -1232,6 +1237,20 @@ final class PiRpcTransport: AgentTransport {
         const SPOOL_ENV = "MANGOX_DELEGATE_SPOOL";
         const MIN_MINUTES = 0;
         const MAX_MINUTES = 10080;
+        // The two read-only tools print text the app rendered for this turn. It sits next to
+        // the spool -- same main, same turn, same lifetime. Keep this formula in sync with
+        // SchedulerService.teamDossierSuffix.
+        const TEAM_SUFFIX = ".team.json";
+
+        function readDossier(): any {
+            const spool = process.env[SPOOL_ENV];
+            if (!spool) { return null; }
+            try {
+                return JSON.parse(readFileSync(spool + TEAM_SUFFIX, "utf8"));
+            } catch {
+                return null;
+            }
+        }
 
         export default function (pi: ExtensionAPI) {
             pi.registerTool({
@@ -1376,6 +1395,94 @@ final class PiRpcTransport: AgentTransport {
                         }],
                         details: undefined,
                     };
+                },
+            });
+
+            // ------------------------------------------------------------------
+            // Read-only views of the team. Their text is ALREADY rendered by the app
+            // (dossier file next to the spool); these two tools only print it.
+            //
+            // Why the rendering lives in the app: these two answers are facts out of a
+            // database (who is on the team, whether they are busy, what their ledger says),
+            // and this process cannot read that database. Also -- anything that lands in the
+            // model's context every turn has to be assertable by a test, and nothing here is.
+            // ------------------------------------------------------------------
+            pi.registerTool({
+                name: "list_workers",
+                label: "List your workers with their full duties",
+                description: [
+                    "Every worker you have, with the full duty text, the optional detail,",
+                    "their current state, and when they last delivered something.",
+                    "",
+                    "Use it when the one-line team list you were given is not enough to pick",
+                    "someone -- the detail (acceptance criteria, delivery shape) only lives here.",
+                    "It takes no arguments on purpose: with a dozen workers, choosing a filter is",
+                    "one more hesitation, and the whole list is cheaper than that hesitation.",
+                    "",
+                    "Gaps are spelled out, not left blank: 'no duty written' means you can only",
+                    "guess from the name (that worker was created wrong); 'only one line' means",
+                    "the duty exists but the detail does not. Both are reasons to ask a human",
+                    "instead of guessing.",
+                    "",
+                    "Read-only. You cannot change anyone's duty -- and that is deliberate: a model",
+                    "that could rewrite descriptions after a failed dispatch would advertise itself",
+                    "as able to do anything.",
+                ].join("\n"),
+                parameters: Type.Object({}),
+                async execute(_toolCallId, _params, _signal, _onUpdate, _ctx) {
+                    const doc = readDossier();
+                    if (!doc || typeof doc.roster !== "string") {
+                        return {
+                            content: [{ type: "text", text: "The team roster is not available in this session." }],
+                            details: undefined,
+                        };
+                    }
+                    return { content: [{ type: "text", text: doc.roster }], details: undefined };
+                },
+            });
+
+            pi.registerTool({
+                name: "read_worker_ledger",
+                label: "Read one worker's ledger",
+                description: [
+                    "One worker's ledger: their goal line, the raw 'completion status' items, and",
+                    "the last 20 lines of the file (capped at 1500 characters).",
+                    "",
+                    "Use it after a receipt, when the one-line conclusion is not enough to decide",
+                    "what to do next. The summary you got is what they concluded; this is what they",
+                    "actually wrote down.",
+                    "",
+                    "Only workers that belong to you are readable -- a name from someone else's team",
+                    "is refused, not looked up.",
+                ].join("\n"),
+                parameters: Type.Object({
+                    worker: Type.String({
+                        description: "The worker's name, exactly as it appears in your team list.",
+                    }),
+                }),
+                async execute(_toolCallId, params, _signal, _onUpdate, _ctx) {
+                    const doc = readDossier();
+                    const name = String(params.worker || "").trim();
+                    const ledgers = doc && doc.ledgers ? doc.ledgers : null;
+                    if (!ledgers) {
+                        return {
+                            content: [{ type: "text", text: "Worker ledgers are not available in this session." }],
+                            details: undefined,
+                        };
+                    }
+                    const body = Object.prototype.hasOwnProperty.call(ledgers, name)
+                        ? ledgers[name] : null;
+                    if (typeof body !== "string") {
+                        return {
+                            content: [{
+                                type: "text",
+                                text: "No worker named " + (name || "(empty)")
+                                    + " among your own -- check the spelling against your team list.",
+                            }],
+                            details: undefined,
+                        };
+                    }
+                    return { content: [{ type: "text", text: body }], details: undefined };
                 },
             });
         }
