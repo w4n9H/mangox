@@ -63,17 +63,34 @@ final class SchedulerService: ObservableObject {
 
     // MARK: - CRUD (P3.6)
 
+    /// P20 (2026-11-24): 新增 `role` / `parentId` / 两个职责字段 —— 全部带缺省值，老调用点零改动。
+    ///
+    /// 返回 `false` = **域层拒绝**（`TeamRule.violation`）。为什么是 `Bool` 而不是一个发布出去的
+    /// 错误状态: 拒绝理由的属性是"**保存前**就该看见"（P4 的编辑器直接问 `TeamRule` 拿词），
+    /// 存完再报只是一句事后通知，而它长在 `@Published` 上就成了一份没有读者的第二真源。
+    /// 这里只负责一件事: **库里长不出坏行**。
+    @discardableResult
     func addScheduled(name: String, prompt: String, cron: String,
                       projectId: UUID?, continuous: Bool = false,
                       kind: TaskKind = .execute,
-                      sources: [WatchSourceSpec] = []) {
+                      sources: [WatchSourceSpec] = [],
+                      role: TaskRole = .main, parentId: UUID? = nil,
+                      description: String = "", descriptionDetail: String = "") -> Bool {
         var t = ScheduledTask(id: UUID(), name: name, prompt: prompt, cron: cron,
                               projectId: projectId, continuous: continuous)
         t.kind = kind
         t.sources = sources
+        t.role = role
+        t.parentId = parentId
+        t.description = description
+        t.descriptionDetail = descriptionDetail
         t = normalizedConfig(t)
+        // P20: 与 `normalizedConfig` 同一条理由 —— 视图侧只是**可见性**，这里是**能力**。
+        // `addScheduled` 是公开写路径（将来的批量导入 / 冒烟 / 飞书指令都会绕过视图）。
+        guard TeamRule.violation(t, among: scheduledTasks) == nil else { return false }
         scheduledTasks.append(t)
         try? store?.persistence?.upsertScheduled(t)
+        return true
     }
 
     /// 2026-11-20 boss 定：「模型与模式配置」是 **cron / 助理的必须项**。
@@ -99,8 +116,10 @@ final class SchedulerService: ObservableObject {
         return out
     }
 
-    func updateScheduled(_ t: ScheduledTask) {
-        guard let idx = scheduledTasks.firstIndex(where: { $0.id == t.id }) else { return }
+    /// 返回 `false` = 域层拒绝（同 `addScheduled`：库里长不出坏行）。
+    @discardableResult
+    func updateScheduled(_ t: ScheduledTask) -> Bool {
+        guard let idx = scheduledTasks.firstIndex(where: { $0.id == t.id }) else { return false }
         var t = t
         // P15.6b: dream 的指令是**出厂常量** ⇒ 不接受调用方带来的 prompt, 一律归一成常量。
         // 守卫同样放在**域层**而不是视图（与 `deleteScheduled` 同一条理由）: 视图侧"那一栏只读"
@@ -112,6 +131,8 @@ final class SchedulerService: ObservableObject {
         // —— 所以即使一行都不编辑, 旧文案也**永远没有效果**; 这里只是别让库里继续留着假副本。
         if Self.isDreamTask(t) { t.prompt = Self.dreamPrompt }
         t = normalizedConfig(t)   // 2026-11-20: cron/助理 必须有确定配置（见该函数）
+        // P20: 团队不变量。`among:` 里带着这一行的**旧值**，`TeamRule` 自己按 id 摘掉自己。
+        guard TeamRule.violation(t, among: scheduledTasks) == nil else { return false }
         scheduledTasks[idx] = t
         try? store?.persistence?.upsertScheduled(t)
         // 2026-11-20: 日志会话的执行配置归任务 ⇒ 任务一改，那一行跟着改。
@@ -121,6 +142,7 @@ final class SchedulerService: ObservableObject {
         if let logId = t.logSessionId, let cfg = t.config {
             store?.persistence?.saveSessionConfig(id: logId, config: cfg)
         }
+        return true
     }
 
     /// 删除任务; deleteSessions = 连带删除日志会话 (开放问题 12: 默认保留, 用户可选删)。
@@ -161,6 +183,9 @@ final class SchedulerService: ObservableObject {
         }
         // 2026-11-23: 这个任务的约定跟着一起没了（DB 层同步删）。内存那一份要重读 ——
         // 否则界面还会显示一行"约在 14:30 回看"，而那个任务已经不存在了。
+        // P20: 团队连带（**唯一一处**，见 `applyTeamCascade`）。放在这里而不是各个调用点:
+        // 删任务有两条入口（用户删 / 将来的批量清理），连带逻辑一旦跟着入口走就必然漏一条。
+        applyTeamCascade(task, event: .deleted)
         reloadFollowUps()
     }
 
@@ -193,9 +218,101 @@ final class SchedulerService: ObservableObject {
     }
 
     func toggleScheduled(id: UUID) {
-        guard let idx = scheduledTasks.firstIndex(where: { $0.id == id }) else { return }
-        scheduledTasks[idx].enabled.toggle()
-        try? store?.persistence?.upsertScheduled(scheduledTasks[idx])
+        guard let task = scheduledTasks.first(where: { $0.id == id }) else { return }
+        setEnabled(id, !task.enabled)
+    }
+
+    // MARK: - P20 助理团队（2026-11-24）
+
+    /// 开关的**唯一写路径**（`toggleScheduled` 与将来的行内开关都走它）。
+    ///
+    /// 它比"翻个 bool"多三件事，每件都有单独的失败模式（所以别在视图里再拼一份）：
+    ///   ① 人**手动**打开一个 worker ⇒ 清掉 `disabledByParent`（它不再"因 main 而停"，
+    ///      否则下次启 main 会把它当成跟随停用的那个再动一次）；
+    ///   ② main 的开关要**往下连累**（`applyTeamCascade`）；
+    ///   ③ 落库 + 级联都在这一个事务边界里，界面不会看到"开关翻了但 worker 没跟着"。
+    @discardableResult
+    func setEnabled(_ id: UUID, _ on: Bool) -> Bool {
+        guard let idx = scheduledTasks.firstIndex(where: { $0.id == id }) else { return false }
+        guard scheduledTasks[idx].enabled != on else { return true }
+        var t = scheduledTasks[idx]
+        t.enabled = on
+        if on && t.role == .worker { t.disabledByParent = false }
+        scheduledTasks[idx] = t
+        try? store?.persistence?.upsertScheduled(t)
+        applyTeamCascade(t, event: on ? .enabled : .disabled)
+        return true
+    }
+
+    /// 连带的三种触发（删 / 停 / 启）。**枚举而不是三个 Bool**：三个布尔有 8 种组合，其中 5 种
+    /// 没有意义，而"传错一个"在这里的后果是悄悄改了别人名下的 worker。
+    enum TeamEvent {
+        case deleted
+        case disabled
+        case enabled
+    }
+
+    /// 团队的**全部连带逻辑**（文档 §04「连带与回收」那张表）。
+    ///
+    /// ⚠️ 只许写在这一处。散到 `deleteScheduled` / `toggleScheduled` / 将来的行内开关各一份的话，
+    /// "改一条漏一条"是必然的 —— 与 `deleteScheduled` 那批连带同族（`removeAssistantLedger`
+    /// 之所以要同时看新老两个路径，就是被这种分叉坑过一次）。
+    ///
+    /// | 触发 | 名下的 worker | 未完成的派活 |
+    /// | 删 main | 只停用，不删；`parent_id` 留成悬挂值（画板落进「未归属」） | `cancelled` |
+    /// | 停 main | 全部停用，并打上 `disabledByParent` | 保持 `queued`（到期顺延） |
+    /// | 启 main | 只启用打了标记的那些，并清标记 | 顺延的自然会在下一跳起跑 |
+    /// | 删 worker | — | `cancelled`（那一行留着，P3 靠它给 main 一条「这个活没了」） |
+    /// | 停 worker | — | 保持 `queued`（可逆的操作不该毁掉一条活） |
+    private func applyTeamCascade(_ task: ScheduledTask, event: TeamEvent) {
+        let now = Date()
+        switch (task.role, event) {
+        case (.main, .deleted):
+            // ⚠️ **不打 `disabledByParent`**: 那个标记的唯一读者是"启 main ⇒ 恢复谁"，
+            // 而这个 main 不会再启了。给一个没人读的标记只会在将来骗人。
+            updateWorkers(of: task.id) { w in
+                guard w.enabled else { return false }
+                w.enabled = false
+                return true
+            }
+            _ = try? store?.persistence?.cancelOpenDelegations(from: task.id, note: "main 已删除", at: now)
+
+        case (.main, .disabled):
+            updateWorkers(of: task.id) { w in
+                // ⚠️ **只打在"原本是开的"那些上**。给一个已经被手动停掉的 worker 也打标记，
+                // 下次启 main 就会把它拉起来 —— 而那是人自己关的（这个功能最贵的一条判据）。
+                guard w.enabled else { return false }
+                w.enabled = false
+                w.disabledByParent = true
+                return true
+            }
+
+        case (.main, .enabled):
+            updateWorkers(of: task.id) { w in
+                guard w.disabledByParent else { return false }
+                w.enabled = true
+                w.disabledByParent = false
+                return true
+            }
+
+        case (.worker, .deleted):
+            // 行**不删**、只落终态: 一条 `cancelled` 且没汇报过的单子正是 P3 要念给 main 的那句
+            // "这个活没了"（见 `cancelOpenDelegations` 的注释）。
+            _ = try? store?.persistence?.cancelOpenDelegations(to: task.id, note: "worker 已删除", at: now)
+
+        case (.worker, .disabled), (.worker, .enabled):
+            break   // 可逆的操作不该毁掉一条活 —— 到期时发现它停着，顺延就是了（P2）
+        }
+    }
+
+    /// 改动某个 main 名下的 worker。`mutate` 返回 `true` = 这一行要落库（**逐行判**，
+    /// 而不是"全量重写一遍"—— 后者会把这些 worker 的其它字段一起写回去）。
+    private func updateWorkers(of mainId: UUID, mutate: (inout ScheduledTask) -> Bool) {
+        for i in scheduledTasks.indices
+        where scheduledTasks[i].role == .worker && scheduledTasks[i].parentId == mainId {
+            guard mutate(&scheduledTasks[i]) else { continue }
+            try? store?.persistence?.upsertScheduled(scheduledTasks[i])
+        }
     }
 
     // MARK: - P15.3 dream（预置任务）

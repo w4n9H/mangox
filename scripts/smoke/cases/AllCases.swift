@@ -63,6 +63,7 @@ extension SmokeMain {
             caseComputerHost,
             caseFollowUp,
             caseSentMemory,
+            caseAgentTeam,
         ]
     }
 

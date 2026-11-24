@@ -284,6 +284,21 @@ final class PersistenceStore {
         // 带 `DEFAULT 0` 的话这两件事就再也分不开：老行会被读成"用户关掉了"，
         // 而默认值本该由 `ScheduledTask.effectiveFollowUpsPerDay` 一处给（含 Cron 档恒 0）。
         addColumnIfMissing("scheduled_tasks", "follow_ups_per_day", "INTEGER")
+        // P20 (2026-11-24) 助理团队: 六个列。**`role` 带 NOT NULL DEFAULT 'main'`** ——
+        // 老行、以及所有 Cron 行都没有"角色"这个概念，读出来必须还是"队长"；把缺省放在 DDL 里
+        // 而不是靠读侧兜，是因为 NULL 会一路飘到 `role == .main` 这类比较里（`TaskRole.decode`
+        // 只是最后一道，不是唯一一道）。
+        addColumnIfMissing("scheduled_tasks", "role", "TEXT NOT NULL DEFAULT 'main'")
+        // worker 归属的 main。单值列保证"一个 worker 只归一个 main"。**删 main 之后故意不置空**
+        // （留成悬挂值）: 画板上它要落进「未归属」区，而置空之后"归谁"这件事就再也查不回来了。
+        addColumnIfMissing("scheduled_tasks", "parent_id", "TEXT")
+        // 职责 / 职责说明。两段都是**注入面或工具面的原文**（见 `AgentTeam.swift` 文件头）。
+        addColumnIfMissing("scheduled_tasks", "description", "TEXT NOT NULL DEFAULT ''")
+        addColumnIfMissing("scheduled_tasks", "description_detail", "TEXT NOT NULL DEFAULT ''")
+        // 三态（同 `follow_ups_per_day`）: NULL = 没配过（走出厂值），0 = 人明确关掉。
+        addColumnIfMissing("scheduled_tasks", "delegate_per_day", "INTEGER")
+        // 1 = "它是因为 main 停用才跟着停的"。唯一读者是"启 main ⇒ 恢复谁"。
+        addColumnIfMissing("scheduled_tasks", "disabled_by_parent", "INTEGER NOT NULL DEFAULT 0")
         // P19.2 S15: 飞书单聊绑定的 chat_id。**列只增不删**（旧版 App 打开新库会崩那一条）。
         // ⚠️ S15b 起这一列**没人读了**（绑定改在 `remote_bots.assistant_id` 上）。留着是为了
         // "旧版打开新库不崩"，以及迁移时一次性把它收成机器人行（见 `migrateLegacyRemoteBindings`）。
@@ -421,6 +436,41 @@ final class PersistenceStore {
         """)
         // 注入段与界面都问"这个任务最近几条" ⇒ 一条索引够两处用。
         try db.run("CREATE INDEX IF NOT EXISTS idx_sent_task ON agent_sent(task_id, at)")
+        // P20 (2026-11-24) 派活单 —— main 给 worker 的一次**定时唤醒 + 工单**。
+        //
+        // 为什么独立一张表而不是并进 `agent_followups`（两者都按时间触发，看起来该合一）:
+        // 判据是**字段与状态机是否同构**，不是"是不是都按时间触发"。follow-up 只有 `why` 与四态;
+        // 派活有工单三件、两条时间线（`due_at` / `due_by`）、回执消费（`reported_at`）与五种终态。
+        // 并表会得到十几个 nullable 列，而每一列都要在两种语义下各解释一遍。
+        //
+        // `status` 同样**不做 CHECK 约束**（理由见上面 `agent_findings` 那段）。
+        // `id` 同时是回执的关联键（与 `agent_sent.id` 当 `ref` 同一族做法）。
+        try db.run("""
+        CREATE TABLE IF NOT EXISTS agent_delegations (
+            id          TEXT PRIMARY KEY,
+            from_task   TEXT NOT NULL,              -- 必须是 main（域层校验，见 TeamRule）
+            to_task     TEXT NOT NULL,
+            goal        TEXT NOT NULL,
+            acceptance  TEXT NOT NULL,
+            context     TEXT,
+            due_at      REAL NOT NULL,              -- 起跑时刻 = 派活那一刻 + after_minutes
+            due_by      REAL,                       -- 最晚什么时候要（可空）
+            status      TEXT NOT NULL,
+            attempts    INTEGER NOT NULL DEFAULT 0,
+            note        TEXT,                       -- 为什么被挡 / 为什么失败（闸与桥的原话）
+            summary     TEXT,                       -- 交活时 worker 写的一句话结论
+            reported_at REAL,                       -- main **成功收尾之后**才标（不标在注入时）
+            created_at  REAL NOT NULL,
+            started_at  REAL,
+            finished_at REAL
+        )
+        """)
+        // "它手上有没有活" 是最高频的查询（派活前那道硬拒）⇒ 主索引在 `to_task`。
+        try db.run("CREATE INDEX IF NOT EXISTS idx_delegation_to ON agent_delegations(to_task, status)")
+        // tick 那一跳: `status = 'queued' AND due_at <= now`。
+        try db.run("CREATE INDEX IF NOT EXISTS idx_delegation_due ON agent_delegations(status, due_at)")
+        // 每日配额（`delegationCountSince` 按 `created_at` 数同一个 main 的单子）+ 一轮几条。
+        try db.run("CREATE INDEX IF NOT EXISTS idx_delegation_from ON agent_delegations(from_task, created_at)")
         // P19.2 S15b: 旧的「助理 × chat_id」绑定收成机器人行。**放在最后** —— 它要读
         // `scheduled_tasks.remote_chat_id`（上面 260 行才补的列）与刚建好的 `remote_bots`。
         migrateLegacyRemoteBindings()
@@ -1308,7 +1358,8 @@ final class PersistenceStore {
 
     func loadScheduled() throws -> [ScheduledTask] {
         let rows = try db.query("""
-            SELECT id, name, prompt, cron, project_id, enabled, last_run_at, log_session_id, continuous, condition, unattended, completed_at, run_count, created_at, config, kind, sources, notify, daily_token_budget, follow_ups_per_day
+            SELECT id, name, prompt, cron, project_id, enabled, last_run_at, log_session_id, continuous, condition, unattended, completed_at, run_count, created_at, config, kind, sources, notify, daily_token_budget, follow_ups_per_day,
+                   role, parent_id, description, description_detail, delegate_per_day, disabled_by_parent
             FROM scheduled_tasks ORDER BY created_at DESC
             """)
         return rows.map { row in
@@ -1350,7 +1401,16 @@ final class PersistenceStore {
                     .flatMap { try? decoder.decode(NotifyOptions.self, from: $0) } ?? .default,
                 dailyTokenBudget: optionalInt(row, "daily_token_budget") ?? 0,
                 // `nil` = 没配过（不是 0）—— 见 `ScheduledTask.followUpsPerDay` 的三态说明。
-                followUpsPerDay: optionalInt(row, "follow_ups_per_day"))
+                followUpsPerDay: optionalInt(row, "follow_ups_per_day"),
+                // P20: 角色**缺省恒 main**（列是 NOT NULL DEFAULT 'main'，这里的 decode 只是
+                // 对"将来可能出现的第三态"表态，见 `TaskRole.decode`）。
+                role: TaskRole.decode(optionalText(row, "role")),
+                parentId: UUID(uuidString: text(row, "parent_id")),
+                // 空串 = 没写（不是 NULL：两段都是 NOT NULL DEFAULT ''，少一层"空串还是 null"的分叉）。
+                description: text(row, "description"),
+                descriptionDetail: text(row, "description_detail"),
+                delegatesPerDay: optionalInt(row, "delegate_per_day"),
+                disabledByParent: int(row["disabled_by_parent"] ?? .null) == 1)
         }
     }
 
@@ -1369,8 +1429,8 @@ final class PersistenceStore {
         // 这是有意的: 两个真源里活的那一个在 `remote_bots`，留着旧列同步只会让两边有机会不一致。
         try db.run("""
             INSERT OR REPLACE INTO scheduled_tasks
-            (id, name, prompt, cron, project_id, enabled, last_run_at, log_session_id, continuous, condition, unattended, completed_at, run_count, created_at, config, kind, sources, notify, daily_token_budget, follow_ups_per_day)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            (id, name, prompt, cron, project_id, enabled, last_run_at, log_session_id, continuous, condition, unattended, completed_at, run_count, created_at, config, kind, sources, notify, daily_token_budget, follow_ups_per_day, role, parent_id, description, description_detail, delegate_per_day, disabled_by_parent)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             """, [.text(t.id.uuidString),
                   .text(t.name),
                   .text(t.prompt),
@@ -1392,7 +1452,16 @@ final class PersistenceStore {
                   notifyJSON.map { .text($0) } ?? .null,
                   .int(Int64(max(0, t.dailyTokenBudget))),
                   // nil 写 NULL（= 没配过），0 写 0（= 人关掉了）—— 这一列的三态全靠它。
-                  t.followUpsPerDay.map { .int(Int64(max(0, $0))) } ?? .null])
+                  t.followUpsPerDay.map { .int(Int64(max(0, $0))) } ?? .null,
+                  // P20: 角色 / 归属 / 两段职责 / 派活配额 / 跟随停用标记。
+                  // `role` 恒写实值（不写 NULL）: 列是 NOT NULL，而"没有角色"这件事由 `.main` 表达。
+                  .text(t.role.rawValue),
+                  t.parentId.map { .text($0.uuidString) } ?? .null,
+                  // 两段都**恒写实值**（空串也写）: 读侧只需 "空串 = 没写"，不必再分 NULL 与 ''。
+                  .text(t.description),
+                  .text(t.descriptionDetail),
+                  t.delegatesPerDay.map { .int(Int64(max(0, $0))) } ?? .null,
+                  .int(t.disabledByParent ? 1 : 0)])
     }
 
     // MARK: - P19 S7 日 token 账本
@@ -1530,6 +1599,192 @@ final class PersistenceStore {
                     .int(Int64(attempts)),
                     note.map { .text($0) } ?? .null,
                     .text(id.uuidString)])
+    }
+
+    // MARK: - 派活单（P20 agent_delegations, 2026-11-24）
+
+    /// 读派活单。三个收窄参数都只是往 WHERE 里加条件 —— 语义与"读全量再在内存里 filter"
+    /// 逐行等价，但少解一遍别人的单子（同 `loadFollowUps` / `loadFindings` 的理由）。
+    /// **按 `due_at` 升序**: 早该起的排前面，画板与回执都按时间读。
+    func loadDelegations(fromTask: UUID? = nil, toTask: UUID? = nil,
+                         status: DelegationStatus? = nil) throws -> [Delegation] {
+        var where_: [String] = []
+        var args: [DBValue] = []
+        if let fromTask { where_.append("from_task = ?"); args.append(.text(fromTask.uuidString)) }
+        if let toTask { where_.append("to_task = ?"); args.append(.text(toTask.uuidString)) }
+        if let status { where_.append("status = ?"); args.append(.text(status.rawValue)) }
+        let filter = where_.isEmpty ? "" : " WHERE " + where_.joined(separator: " AND ")
+        let rows = try db.query("""
+            SELECT id, from_task, to_task, goal, acceptance, context, due_at, due_by, status,
+                   attempts, note, summary, reported_at, created_at, started_at, finished_at
+            FROM agent_delegations\(filter) ORDER BY due_at ASC
+            """, args)
+        return rows.compactMap(decodeDelegation)
+    }
+
+    /// tick 要的那一批：`queued` 且已到点。
+    func dueDelegations(now: Date) throws -> [Delegation] {
+        let rows = try db.query("""
+            SELECT id, from_task, to_task, goal, acceptance, context, due_at, due_by, status,
+                   attempts, note, summary, reported_at, created_at, started_at, finished_at
+            FROM agent_delegations WHERE status = 'queued' AND due_at <= ? ORDER BY due_at ASC
+            """, [.real(now.timeIntervalSince1970)])
+        return rows.compactMap(decodeDelegation)
+    }
+
+    /// "它手上有没有活" —— 只看**未落定**的两种，不看历史条数。
+    ///
+    /// ⚠️ 派活前那道硬拒读的是这个，不是 `COUNT(*) > 0`: 一个交过活、又被重新派了一单的
+    /// worker 在历史上有很多行，但"手上有没有活"是 0 或 1 的瞬时事实。
+    func openDelegations(to taskId: UUID) throws -> [Delegation] {
+        let rows = try db.query("""
+            SELECT id, from_task, to_task, goal, acceptance, context, due_at, due_by, status,
+                   attempts, note, summary, reported_at, created_at, started_at, finished_at
+            FROM agent_delegations WHERE to_task = ? AND status IN ('queued', 'running')
+            ORDER BY due_at ASC
+            """, [.text(taskId.uuidString)])
+        return rows.compactMap(decodeDelegation)
+    }
+
+    /// 行的解码口径 —— **只有这份**（上面三个读法都走它，加列只改一处）。
+    /// 坏行 / 未知 `status` **跳过而不是抛**（同 `decodeFollowUp`）。
+    private func decodeDelegation(_ row: [String: DBValue]) -> Delegation? {
+        guard let id = UUID(uuidString: text(row, "id")),
+              let from = UUID(uuidString: text(row, "from_task")),
+              let to = UUID(uuidString: text(row, "to_task")),
+              let status = DelegationStatus.decode(optionalText(row, "status") ?? "")
+        else { return nil }
+        return Delegation(id: id,
+                          fromTask: from,
+                          toTask: to,
+                          goal: text(row, "goal"),
+                          acceptance: text(row, "acceptance"),
+                          context: optionalText(row, "context"),
+                          dueAt: optionalDate(row, "due_at") ?? .distantPast,
+                          dueBy: optionalDate(row, "due_by"),
+                          status: status,
+                          attempts: Int(max(Int64(0), int(row["attempts"] ?? .null))),
+                          note: optionalText(row, "note"),
+                          summary: optionalText(row, "summary"),
+                          reportedAt: optionalDate(row, "reported_at"),
+                          createdAt: optionalDate(row, "created_at") ?? .distantPast,
+                          startedAt: optionalDate(row, "started_at"),
+                          finishedAt: optionalDate(row, "finished_at"))
+    }
+
+    /// 插一张单。`id` 是幂等键（回执要靠它对上具体那一条）⇒ `INSERT OR REPLACE`。
+    ///
+    /// ⚠️ **四个长文本在这里再截一次**。这不是主要手段（P2 的工具入参该拒的还在拒，且会
+    /// 报实际字数），而是最后一道围栏: 这一列的内容会**逐字进 worker 的 prompt 与 main 的回执**,
+    /// 没有上限就是一个没有围栏的注入面。放在存储层是因为它是唯一一个"所有写路径都必经"的点。
+    func insertDelegation(_ d: Delegation) throws {
+        try db.run("""
+            INSERT OR REPLACE INTO agent_delegations
+            (id, from_task, to_task, goal, acceptance, context, due_at, due_by, status,
+             attempts, note, summary, reported_at, created_at, started_at, finished_at)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            """, [.text(d.id.uuidString),
+                  .text(d.fromTask.uuidString),
+                  .text(d.toTask.uuidString),
+                  .text(DelegationLimit.clip(d.goal, DelegationLimit.maxGoalChars)),
+                  .text(DelegationLimit.clip(d.acceptance, DelegationLimit.maxAcceptanceChars)),
+                  d.context.map {
+                      .text(DelegationLimit.clip($0, DelegationLimit.maxContextChars))
+                  } ?? .null,
+                  .real(d.dueAt.timeIntervalSince1970),
+                  d.dueBy.map { .real($0.timeIntervalSince1970) } ?? .null,
+                  .text(d.status.rawValue),
+                  .int(Int64(max(0, d.attempts))),
+                  d.note.map { .text($0) } ?? .null,
+                  d.summary.map { .text(DelegationLimit.clip($0, DelegationLimit.maxSummaryChars)) } ?? .null,
+                  d.reportedAt.map { .real($0.timeIntervalSince1970) } ?? .null,
+                  .real(d.createdAt.timeIntervalSince1970),
+                  d.startedAt.map { .real($0.timeIntervalSince1970) } ?? .null,
+                  d.finishedAt.map { .real($0.timeIntervalSince1970) } ?? .null])
+    }
+
+    /// 起跑: `queued` → `running`，只写 `started_at`。**不动 `finished_at`**。
+    func startDelegation(id: UUID, at: Date) throws {
+        try db.run("UPDATE agent_delegations SET status = 'running', started_at = ? WHERE id = ?",
+                   [.real(at.timeIntervalSince1970), .text(id.uuidString)])
+    }
+
+    /// 落定: `done` / `failed` / `cancelled` 都走这里（`finished_at` 一并写）。
+    ///
+    /// `summary` / `note` 传 `nil` = **清空**（同 `settleFollowUp`）—— 落定只发生一次，
+    /// 所以不存在"想保留上一次那句"的场景；反过来，含糊成"nil 表示不动"会让
+    /// "为什么这条回执没有结论"变成猜的。
+    ///
+    /// ⚠️ **不清 `reported_at`**: 一条已经汇报过的单子被改成 cancelled（比如 main 后来删了），
+    /// 清掉它会让 main 再被念一遍同一件事 —— 而人已经在上一轮看过那条回执了。
+    func settleDelegation(id: UUID, status: DelegationStatus,
+                          summary: String?, note: String?, at: Date) throws {
+        try db.run("""
+            UPDATE agent_delegations SET status = ?, summary = ?, note = ?, finished_at = ?
+            WHERE id = ?
+            """, [.text(status.rawValue),
+                  summary.map { .text(DelegationLimit.clip($0, DelegationLimit.maxSummaryChars)) } ?? .null,
+                  note.map { .text($0) } ?? .null,
+                  .real(at.timeIntervalSince1970),
+                  .text(id.uuidString)])
+    }
+
+    /// 顺延（起跑被闸挡住，单子还没作废）：只动 `due_at` / `attempts` / `note`。
+    /// `status` 保持 `queued` —— 它仍然"该起"，只是这一跳轮不到它。
+    func rearmDelegation(id: UUID, dueAt: Date, attempts: Int, note: String?) throws {
+        try db.run("""
+            UPDATE agent_delegations SET due_at = ?, attempts = ?, note = ? WHERE id = ?
+            """, [.real(dueAt.timeIntervalSince1970),
+                  .int(Int64(max(0, attempts))),
+                  note.map { .text($0) } ?? .null,
+                  .text(id.uuidString)])
+    }
+
+    /// 回执消化掉了。**只在 main 那一轮成功收尾之后调** —— 标在"注入时"会让崩掉的那一轮
+    /// 永久丢回执（同 `settleSent` 的哲学：唯一诚实的位置是"真的消化完了"）。
+    func markDelegationReported(id: UUID, at: Date) throws {
+        try db.run("UPDATE agent_delegations SET reported_at = ? WHERE id = ?",
+                   [.real(at.timeIntervalSince1970), .text(id.uuidString)])
+    }
+
+    /// 这个 main 在 `since` 之后派了几张单（每日配额闸）。
+    ///
+    /// ⚠️ 口径 = `created_at`，不是"跑了几轮": 要拦的是"派得太勤"，而"跑了几轮"会被
+    /// **顺延**带偏（一张单被闸挡三次就记成三张，配额凭空少一天的量）。取消/改期也算。
+    func delegationCount(from taskId: UUID, since: Date) throws -> Int {
+        let rows = try db.query("""
+            SELECT COUNT(*) AS n FROM agent_delegations WHERE from_task = ? AND created_at >= ?
+            """, [.text(taskId.uuidString), .real(since.timeIntervalSince1970)])
+        guard let row = rows.first else { return 0 }
+        return Int(int(row["n"] ?? .null))
+    }
+
+    /// 连带作废：某个 main 派出去、或某个 worker 名下**还没落定**的单子。
+    ///
+    /// ⚠️ **行不删、只落终态**（与 `deleteScheduled` 里 follow-up 那条"清掉"相反）。
+    /// 理由是回执: 一条 `cancelled` 且 `reported_at` 仍为 NULL 的单子，正好是 P3 那段
+    /// 【派活回执】要念给 main 的"这个活没了" —— 删掉行，那条回执就永远到不了。
+    /// 代价（明写）: 行会随时间堆，保留期属于产品决定，将来要加时按 `agent_findings` 同款处理。
+    ///
+    /// 返回作废了几条（冒烟与日志要能说"影响面有多大"）。
+    @discardableResult
+    func cancelOpenDelegations(from taskId: UUID? = nil, to: UUID? = nil,
+                               note: String, at: Date) throws -> Int {
+        precondition(taskId != nil || to != nil, "cancelOpenDelegations 至少给一个方向")
+        var where_: [String] = ["status IN ('queued', 'running')"]
+        var whereArgs: [DBValue] = []
+        if let taskId { where_.append("from_task = ?"); whereArgs.append(.text(taskId.uuidString)) }
+        if let to { where_.append("to_task = ?"); whereArgs.append(.text(to.uuidString)) }
+        let clause = where_.joined(separator: " AND ")
+        // `Database` 只暴露 run / query（没有 sqlite3_changes）⇒ "影响了几条"用一次 COUNT 来报。
+        let rows = try db.query("SELECT COUNT(*) AS n FROM agent_delegations WHERE " + clause, whereArgs)
+        let n = Int(int(rows.first?["n"] ?? .null))
+        guard n > 0 else { return 0 }
+        try db.run("""
+            UPDATE agent_delegations SET status = 'cancelled', note = ?, finished_at = ?
+            WHERE \(clause)
+            """, [.text(note), .real(at.timeIntervalSince1970)] + whereArgs)
+        return n
     }
 
     // MARK: - 已发消息（助理往外发过的话, 2026-11-23）

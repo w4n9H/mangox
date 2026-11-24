@@ -79,6 +79,51 @@ struct ScheduledTask: Identifiable {
         guard isAssistant else { return 0 }
         return max(0, followUpsPerDay ?? Self.factoryFollowUpsPerDay)
     }
+
+    // MARK: - P20 助理团队（2026-11-24）· 六个字段
+    //
+    // 判据与边界见 `AgentTeam.swift`（`TaskRole` / `TeamRule` / `DelegationLimit`）。
+    // 这里只放**存储形态**，不放规则 —— 规则一旦散到模型与域层两处，就有一处会先漂。
+
+    /// 身份。**缺省 main**：老行与所有 Cron 行都没有这个概念，读出来必须是"队长"
+    /// （`TaskRole.decode` 解释了为什么不猜 worker）。
+    var role: TaskRole = .main
+    /// worker 归属的 main。main 恒 `nil`（由 `TeamRule` 判，不靠保存时扫全表去摘别人的）。
+    var parentId: UUID? = nil
+
+    /// 职责 —— 一句话说清"它是谁"，≤40 字。**注入段每轮原文照搬**（不截断、不切句），
+    /// 所以它必须是一句能独立成立的话。worker 必填，main 选填（只有需要"被选择"的那个才需要它）。
+    ///
+    /// ⚠️ 名字就叫 `description`（与列名、文档同一处词），它是"职责"不是 `CustomStringConvertible`
+    /// —— 本类型没有也不需要那个协议，所以不会有 `"\(task)"` 悄悄变成一句职责的风险。
+    var description: String = ""
+    /// 职责说明 —— 判据、边界、交付形态，≤240 字，选填。**只被 `list_workers` 按需读**，
+    /// 从不进常驻注入段（12 × 240 字每轮付费 = 违反 context rot 那条）。
+    var descriptionDetail: String = ""
+
+    /// 一天最多派几次活。`nil` = 没配过（按出厂 `factoryDelegatesPerDay`）／`0` = 人明确关掉／
+    /// `n` = 上限。⚠️ 与 `followUpsPerDay` 同一族的坑：塌成两态就再也分不开"他没看过"与
+    /// "他关掉了"—— 前者会让将来改出厂值时**悄悄改掉他的选择**。
+    var delegatesPerDay: Int? = nil
+
+    /// `true` = 它是因为 main 停用才跟着停的。
+    ///
+    /// 这个标记存在的**唯一**原因: 启 main 时只恢复这些，不碰"你自己手动停掉的那个 worker"。
+    /// 没有它，启一次 main 会把你单独关掉的也拉起来 —— 而那种事发生一次，人就不敢再用那个开关。
+    var disabledByParent: Bool = false
+
+    /// 出厂默认：存量助理也按它（同 `factoryFollowUpsPerDay` 的取舍 —— 默认关掉等于这个能力
+    /// 只有新建的能用上，而存量正是主力）。
+    static let factoryDelegatesPerDay = 5
+
+    /// 生效值 —— **唯一读数口**（P2 挂不挂 `delegate` 工具、P3 的判断、P4 的说明行都读它）。
+    ///
+    /// worker 与 Cron 档恒 0：worker 的工具面里根本没有 `delegate`（结构上不给），
+    /// 而 Cron 任务没有"一支队伍"这个概念 —— 给一个每次都被挡的工具，模型只会反复试。
+    var effectiveDelegatesPerDay: Int {
+        guard isAssistant, role == .main else { return 0 }
+        return max(0, delegatesPerDay ?? Self.factoryDelegatesPerDay)
+    }
     // P19.2 S15b: 这里**曾经**是 `remoteChatId`。绑定搬到 `RemoteBot.assistantId` 上了 ——
     // `chat_id` 是运行时地址不是身份，挂在助理上会得到「两个助理抢一条单聊」这种说不通的状态。
     // 库里那一列还在（旧版打开不崩），但没人读写；迁移时一次性收成机器人行。

@@ -84,6 +84,7 @@ h3{font-size:14px;font-weight:600;margin:28px 0 10px;color:var(--fg)}
 /* ---------- 文本 ---------- */
 p{margin:12px 0}
 .lead{color:var(--mute);font-size:13px;margin:8px 0 0}
+.lead.gap{margin-top:14px}
 code{font:12.5px/1.5 var(--mono);background:var(--soft);padding:2px 5px;border-radius:5px;color:var(--fg)}
 pre{font:12.5px/1.7 var(--mono);background:var(--soft);border:1px solid var(--line);border-left:3px solid var(--accbd);
     padding:14px 16px;border-radius:10px;overflow-x:auto;margin:12px 0;color:var(--fg)}
@@ -223,6 +224,19 @@ details.fold[open]>summary{margin-bottom:4px}
   background:repeating-linear-gradient(45deg,var(--soft),var(--soft) 7px,transparent 7px,transparent 14px)}
 .mock .note{font-size:12px;color:var(--faint);padding:9px 14px;border-top:1px solid var(--line);background:var(--soft)}
 .mock .note b{color:var(--fg);font-weight:500}
+
+/* ---------- UI 原型 · 泳道（状态分列） ----------
+   列宽**固定**、容器横向滚：压窄列会让"名字 + 归属"两行都折行，
+   而两行都折行的卡片读起来是一团。 */
+.mock .lanes{flex:1;min-width:0;display:flex;gap:8px;overflow-x:auto;padding:12px 14px}
+.mock .lane{flex:none;width:150px}
+.mock .lane .lh{font:500 11px/1.4 var(--mono);color:var(--mute);letter-spacing:.04em;margin-bottom:8px}
+.mock .card{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:8px 10px;margin-bottom:6px}
+.mock .card .cn{font-size:12.5px;font-weight:500;color:var(--fg)}
+.mock .card .cs{font-size:11.5px;color:var(--faint);margin-top:2px}
+.mock .card.own{border-left:3px solid var(--fg)}
+.mock .card.off{opacity:.55;border-style:dashed}
+.mock .card.warn{border-color:var(--warnbd)}
 
 /* ---------- 窄屏 ---------- */
 @media (max-width:760px){
@@ -1086,7 +1100,7 @@ details.fold[open]>summary{margin-bottom:4px}
   </div>
 </div>
 
-<p class="lead" style="margin-top:14px"><b>同一轮查出、下一批改掉的那件</b>：<code>read</code> 的渲染上限是 <b>120 项</b>，而日历月视图在"日历来源列表展开"时有 <b>130 项</b> —— 被截掉的恰好是<b>工具栏</b>（AX 遍历顺序里它在末尾，屏幕上却是最上面那一行），于是<b>「添加日程」这个入口根本不在快照里</b>；切到「收件箱」只剩 113 项，它才出现。<b>同一件事能不能做，取决于当时界面上有多少个格子</b>。⇒ 批 2l（见下）。</p>
+<p class="lead gap"><b>同一轮查出、下一批改掉的那件</b>：<code>read</code> 的渲染上限是 <b>120 项</b>，而日历月视图在"日历来源列表展开"时有 <b>130 项</b> —— 被截掉的恰好是<b>工具栏</b>（AX 遍历顺序里它在末尾，屏幕上却是最上面那一行），于是<b>「添加日程」这个入口根本不在快照里</b>；切到「收件箱」只剩 113 项，它才出现。<b>同一件事能不能做，取决于当时界面上有多少个格子</b>。⇒ 批 2l（见下）。</p>
 
 <h3>补记 · 批 2l：截断不许吃掉固定区（2026-11-04）</h3>
 
@@ -1102,7 +1116,7 @@ details.fold[open]>summary{margin-bottom:4px}
   </div>
 </div>
 
-<p class="lead" style="margin-top:14px"><b>计划里写了、这轮没做的一条：<code>PointMissKind</code> 第五类「被截断」。</b>理由不是省事，而是<b>它走不到</b>：坐标命中之后，<code>rowIndex(for:in:)</code> 查的是<b>整张行表</b>（不是渲染出来的那 120 行），所以被渲染上限截掉的行<b>照样能认回编号、照样能按</b> —— 这一档永远不进 <code>missKind</code>。加一个走不到的分支，就等于加一道<b>判不红</b>的门。真正要修的是"别让它被截"（第一条），不是"被截了怎么说"。<br><b>还剩的已知边界</b>：只认窗口<b>顶部</b>那一带。底部的固定条（状态栏 / 播放条）没有实测样本，没敢按同一套推 —— 要加得先量。</p>
+<p class="lead gap"><b>计划里写了、这轮没做的一条：<code>PointMissKind</code> 第五类「被截断」。</b>理由不是省事，而是<b>它走不到</b>：坐标命中之后，<code>rowIndex(for:in:)</code> 查的是<b>整张行表</b>（不是渲染出来的那 120 行），所以被渲染上限截掉的行<b>照样能认回编号、照样能按</b> —— 这一档永远不进 <code>missKind</code>。加一个走不到的分支，就等于加一道<b>判不红</b>的门。真正要修的是"别让它被截"（第一条），不是"被截了怎么说"。<br><b>还剩的已知边界</b>：只认窗口<b>顶部</b>那一带。底部的固定条（状态栏 / 播放条）没有实测样本，没敢按同一套推 —— 要加得先量。</p>
 
 <h3>补记 · 批 3d：视觉（三档读法）与「凭位置点一下」（2026-11-10，boss 定：视觉AX 先暂停 · 只做纯视觉动手 · 按他的话「那就开成窄口」）</h3>
 
@@ -1173,7 +1187,7 @@ details.fold[open]>summary{margin-bottom:4px}
   </div>
 </div>
 
-<p class="lead" style="margin-top:14px"><b>这一批没做、但已经知道要做的</b>：① 视觉AX 的两阶段（读的降级链、按编号动）整段暂停，代码一行没落地 —— 上面第 36 条的降级链仍是<b>设计</b>，不是现状；② 设置页那张「读法」列（<code>文字树 · 42 行</code> / <code>屏幕识别 · 50 块</code> / <code>只能看图</code>）同理，没做；③ 按坐标动的真机全链路未验（见第 37 条末）；④ OCR 抖动的容差、以及"伪 AX 与一张图 token 基本打平"这两个数，都要等视觉AX 解冻之后的真机读数才谈得上定。<br><b>④ 的两条已知量级</b>（供解冻时对照，不是结论）：同一块内容两帧会读出不同字（<code>8、心</code> vs <code>大、心</code>），差分得按 bbox 对齐 + 文本相似度；伪 AX 1095 字符 ≈ 750 tokens，一张 1024 图 ≈ 900 tokens ⇒ <b>单屏并不省 token</b>，省的是历史（只留最新屏、可 diff），而 diff 命中率没测过。</p>
+<p class="lead gap"><b>这一批没做、但已经知道要做的</b>：① 视觉AX 的两阶段（读的降级链、按编号动）整段暂停，代码一行没落地 —— 上面第 36 条的降级链仍是<b>设计</b>，不是现状；② 设置页那张「读法」列（<code>文字树 · 42 行</code> / <code>屏幕识别 · 50 块</code> / <code>只能看图</code>）同理，没做；③ 按坐标动的真机全链路未验（见第 37 条末）；④ OCR 抖动的容差、以及"伪 AX 与一张图 token 基本打平"这两个数，都要等视觉AX 解冻之后的真机读数才谈得上定。<br><b>④ 的两条已知量级</b>（供解冻时对照，不是结论）：同一块内容两帧会读出不同字（<code>8、心</code> vs <code>大、心</code>），差分得按 bbox 对齐 + 文本相似度；伪 AX 1095 字符 ≈ 750 tokens，一张 1024 图 ≈ 900 tokens ⇒ <b>单屏并不省 token</b>，省的是历史（只留最新屏、可 diff），而 diff 命中率没测过。</p>
 
 <p class="foot">本文件是 P13 起的对齐文档格式(见 <code>docs/must_read.txt</code>)。<b>本文所有性能与覆盖数字均为二手或未测</b>(§02.B / §02.D 已标),§04 前置门第 ②③ 条未过之前,§03 改动九的账只是估算。</p>
 

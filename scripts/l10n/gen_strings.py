@@ -210,6 +210,16 @@ EXCLUDE_FILES = {
     #    它逐字进 prompt 里的「你已经发过的」那一段。界面**另有一份 `L()` 的**（`ScheduledView`
     #    的 `sentKindLabel`）: 两处各走各的语言，注入字节不随界面语言漂。
     'mangox/Models/SentMessage.swift',             # 只出数据 + 注入面文案 (无 UI 文案)
+    # ⚠️ P20 (2026-11-24): 本文件出**三类恒中文的字节**, 一类都不能翻:
+    #    ① `TeamViolation.reason` —— 拒绝理由，进日志 / 时间线 / 拒绝回执（与 `Redline`
+    #       同族: 那是"给人看的落库数据", 不是界面词）。翻它 = 同一件事在不同界面语言下
+    #       写出不同字节，而对照日志的人只能看到其中一份。
+    #    ② P3 会在这里拼【你的队伍】/【派活回执】两段的**段头与行格式** —— 逐字进
+    #       `--append-system-prompt`，且段头是模型认得的契约 token（同 `KnowledgeBaseScan.token`）。
+    #    ③ `Delegation` 的字段长度上限与截断口径 —— 可执行判据，不是文案。
+    #    代价照旧: 在此文件里写 `L()` 的 key 永远进不了词表，三道门全都看不见 ——
+    #    ⇒ **UI 文案请写在 View 侧**（按 `TeamViolation` 的 case 各取词），本文件只出数据。
+    'mangox/Models/AgentTeam.swift',               # 只出数据 + 拒绝理由/注入面字节 (无 UI 文案)
     'mangox/mangoxApp.swift',                      # 不参与冒烟编译, 无文案
     # 语言名自带 (中文 / English 必须原样), 故整体跳过。**但其 `AppLanguage.label` 里的 `L("跟随系统")`
     # 是靠 `Theme/AppAppearance.swift` 的同名字面量才活在词表里的** —— 改这句话要两边一起改,

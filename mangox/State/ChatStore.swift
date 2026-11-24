@@ -2452,16 +2452,24 @@ final class ChatStore: ObservableObject {
 
     // MARK: - Scheduled (P3.6 本地定时任务; P9.1b 起由 SchedulerService 承载, 此处仅转发)
 
+    /// P20: `role` / `parentId` / 两段职责 —— 全部带缺省值，老调用点零改动。
+    /// 返回值 = 域层是否接受（`false` = 违反 `TeamRule`，库里没长出新行）。
+    @discardableResult
     func addScheduled(name: String, prompt: String, cron: String,
                       projectId: UUID?, continuous: Bool = false,
                       kind: TaskKind = .execute,
-                      sources: [WatchSourceSpec] = []) {
+                      sources: [WatchSourceSpec] = [],
+                      role: TaskRole = .main, parentId: UUID? = nil,
+                      description: String = "", descriptionDetail: String = "") -> Bool {
         scheduler.addScheduled(name: name, prompt: prompt, cron: cron,
                                projectId: projectId, continuous: continuous,
-                               kind: kind, sources: sources)
+                               kind: kind, sources: sources,
+                               role: role, parentId: parentId,
+                               description: description, descriptionDetail: descriptionDetail)
     }
 
-    func updateScheduled(_ t: ScheduledTask) {
+    @discardableResult
+    func updateScheduled(_ t: ScheduledTask) -> Bool {
         scheduler.updateScheduled(t)
     }
 

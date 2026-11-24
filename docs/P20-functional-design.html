@@ -1,0 +1,667 @@
+<!DOCTYPE html>
+<html lang="zh-Hans">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>P20 — Personal Agent Team：main 与 worker，派活靠一次定时</title>
+<!-- @style:begin · generated from docs/assets/design-doc.css — 请勿手改 -->
+<style>
+/* ============================================================================
+   design-doc.css —— MangoX 对齐文档统一样式
+   ----------------------------------------------------------------------------
+   ⚠️ 这是**唯一手改的样式源**。任何 docs/*.html 都不得自己写样式。
+      各文档里的 style 块由 scripts/docs/design_doc_css.py 从本文件生成：
+          python3 scripts/docs/design_doc_css.py --apply    # 同步
+          python3 scripts/docs/design_doc_css.py --check    # 不同步就退码 1
+      改完样式必须重跑 --apply，否则文档里的副本是旧的。
+
+   为什么不用外链：预览面板只服务单个文件（同级路径返回 403），
+   外链样式在面板里会静默失效 ⇒ 必须内联。单一来源靠脚本保证，不靠链接。
+
+   主题：跟随系统（prefers-color-scheme），两套色板都在 :root 里。
+   字号：正文 14px；标题 30 / 19 / 14；说明 12~13px。**不要小于 11px。**
+
+   —— 类名清单（骨架 = .wrap + 章节 h2，其余按需） ——
+   骨架   .wrap .eyebrow h1(.small) .metaline .tag h2(.n .en) h3
+   文本   .lead p code pre(.c .k) .foot ul.tight .kv .cite
+   强调块 .call(.lbl)  变体：.call.ok / .call.warn / .call.bad
+          .tldr > .tl(> .tln)
+   状态   .chip  变体：.c-ok .c-bad .c-warn .c-info .c-acc .c-mute
+   卡片   .grid(.g2 .g3) > .v(> .face > span)
+   对照   .flow > .lyr(.name .code .st)  + .arrowdown
+   条形   .bars > .bar(.on) > .track > .fill / .bv   + .barnote
+   表格   .tbl / .tw  > table > th/td(.num .sub)
+   待办   .todos > .todo(.blocked) > .tn / .tbody > .tt .td   + .cite
+   折叠   details.fold > summary
+   ============================================================================ */
+
+:root{
+  --bg:#fbfbf9; --card:#ffffff; --soft:#f4f4f0;
+  --fg:#1b1b19; --mute:#6a6a64; --faint:#9c9c95;
+  --line:#e5e4df; --line2:#d2d1cb;
+  --ok:#0f6e56; --okbg:#e3f5ee; --okbd:#9fe1cb;
+  --bad:#a32d2d; --badbg:#fcebeb; --badbd:#f7c1c1;
+  --warn:#82500b; --warnbg:#faeeda; --warnbd:#fac775;
+  --info:#185fa5; --infobg:#e8f1fb; --infobd:#b5d4f4;
+  --acc:#4a41b0; --accbg:#eeedfe; --accbd:#cecbf6;
+  --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
+}
+@media (prefers-color-scheme:dark){
+  :root{
+    --bg:#141417; --card:#1d1d21; --soft:#232328;
+    --fg:#ececea; --mute:#a2a29b; --faint:#74746e;
+    --line:#2e2e33; --line2:#414148;
+    --ok:#8adcbc; --okbg:#0e2f27; --okbd:#1d6e57;
+    --bad:#f4a4a4; --badbg:#361818; --badbd:#8f3b3b;
+    --warn:#f2c47f; --warnbg:#332610; --warnbd:#8a5f19;
+    --info:#9bc9f2; --infobg:#132539; --infobd:#255f94;
+    --acc:#b6b1f4; --accbg:#231f3e; --accbd:#4a41b0;
+  }
+}
+
+*{box-sizing:border-box}
+html{-webkit-text-size-adjust:100%}
+body{
+  margin:0;background:var(--bg);color:var(--fg);
+  font:14px/1.65 -apple-system,BlinkMacSystemFont,"PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;
+}
+.wrap{max-width:1060px;margin:0 auto;padding:44px 28px 72px}
+
+/* ---------- 页头 ---------- */
+.eyebrow{font:500 12px/1 var(--mono);letter-spacing:.08em;text-transform:uppercase;color:var(--faint)}
+h1{font-size:30px;line-height:1.25;font-weight:600;margin:12px 0 10px;letter-spacing:-.01em}
+h1 small{display:block;font-size:15px;font-weight:400;color:var(--mute);margin-top:8px;letter-spacing:0}
+.metaline{display:flex;flex-wrap:wrap;gap:8px;margin-top:18px}
+.tag{font:12px/1 var(--mono);padding:6px 10px;border:1px solid var(--line2);border-radius:999px;color:var(--mute);background:var(--card)}
+.tag b{color:var(--fg);font-weight:500}
+
+/* ---------- 章节 ---------- */
+h2{font-size:19px;font-weight:600;margin:52px 0 4px;padding-bottom:10px;border-bottom:1px solid var(--line);letter-spacing:-.01em}
+h2 .n{font:500 12px/1 var(--mono);color:var(--faint);margin-right:10px;vertical-align:2px}
+h2 .en{font:400 11px/1 var(--mono);color:var(--faint);letter-spacing:.06em;margin-left:10px;vertical-align:2px}
+h3{font-size:14px;font-weight:600;margin:28px 0 10px;color:var(--fg)}
+
+/* ---------- 文本 ---------- */
+p{margin:12px 0}
+.lead{color:var(--mute);font-size:13px;margin:8px 0 0}
+.lead.gap{margin-top:14px}
+code{font:12.5px/1.5 var(--mono);background:var(--soft);padding:2px 5px;border-radius:5px;color:var(--fg)}
+pre{font:12.5px/1.7 var(--mono);background:var(--soft);border:1px solid var(--line);border-left:3px solid var(--accbd);
+    padding:14px 16px;border-radius:10px;overflow-x:auto;margin:12px 0;color:var(--fg)}
+pre .c{color:var(--faint)}
+pre .k{color:var(--acc)}
+.foot{color:var(--faint);font-size:12px;margin-top:44px;padding-top:18px;border-top:1px solid var(--line);font-family:var(--mono)}
+ul.tight{margin:12px 0;padding-left:20px}
+ul.tight li{margin:7px 0;font-size:13.5px}
+ul.tight li b{font-weight:600}
+.kv{display:grid;grid-template-columns:96px 1fr;gap:6px 14px;font-size:13px;margin:14px 0}
+.kv dt{color:var(--faint);font-family:var(--mono);font-size:11.5px;padding-top:2px}
+.kv dd{margin:0}
+.cite{font:11.5px/1.5 var(--mono);color:var(--faint);white-space:nowrap}
+hr{border:none;border-top:1px solid var(--line);margin:40px 0}
+
+/* ---------- 强调块 ---------- */
+.call{border:1px solid var(--accbd);background:var(--accbg);border-radius:12px;padding:16px 18px;margin:20px 0}
+.call .lbl{font:500 11px/1 var(--mono);letter-spacing:.08em;text-transform:uppercase;color:var(--acc);margin-bottom:8px}
+.call p{margin:0;font-size:14px}
+.call+.call{margin-top:10px}
+.call.ok{border-color:var(--okbd);background:var(--okbg)}   .call.ok .lbl{color:var(--ok)}
+.call.warn{border-color:var(--warnbd);background:var(--warnbg)} .call.warn .lbl{color:var(--warn)}
+.call.bad{border-color:var(--badbd);background:var(--badbg)}   .call.bad .lbl{color:var(--bad)}
+
+.tldr{display:flex;flex-direction:column;gap:1px;background:var(--line);border:1px solid var(--line);border-radius:12px;overflow:hidden;margin:10px 0 0}
+.tldr .tl{display:flex;gap:12px;align-items:flex-start;background:var(--card);padding:12px 16px;font-size:13.5px}
+.tldr .tl .tln{flex:none;color:var(--acc);font:500 13px/1.6 var(--mono)}
+.tldr .tl b{font-weight:600}
+
+/* ---------- 状态 chip ---------- */
+.chip{display:inline-block;font-size:11.5px;font-weight:500;padding:4px 9px;border-radius:999px;border:1px solid;white-space:nowrap}
+.c-ok{color:var(--ok);background:var(--okbg);border-color:var(--okbd)}
+.c-bad{color:var(--bad);background:var(--badbg);border-color:var(--badbd)}
+.c-warn{color:var(--warn);background:var(--warnbg);border-color:var(--warnbd)}
+.c-info{color:var(--info);background:var(--infobg);border-color:var(--infobd)}
+.c-acc{color:var(--acc);background:var(--accbg);border-color:var(--accbd)}
+.c-mute{color:var(--mute);background:var(--soft);border-color:var(--line2)}
+
+/* ---------- 卡片 ---------- */
+.grid{display:grid;gap:10px;margin:18px 0}
+.g2{grid-template-columns:repeat(2,1fr)}
+.g3{grid-template-columns:repeat(3,1fr)}
+.v{display:flex;align-items:center;gap:12px;background:var(--card);border:1px solid var(--line);border-radius:10px;padding:12px 14px}
+.v.top{align-items:flex-start}
+.v .face{flex:1;font-size:13px;min-width:0}
+.v .face>span{display:block;font-size:11.5px;color:var(--faint);margin-top:2px;font-family:var(--mono)}
+
+/* ---------- 对照（层 / 开关 / 流程） ---------- */
+.flow{display:flex;flex-direction:column;gap:8px;margin:18px 0}
+.lyr{display:flex;align-items:center;gap:14px;background:var(--card);border:1px solid var(--line);border-radius:10px;padding:13px 16px}
+.lyr .name{flex:none;width:112px;font-size:13px;font-weight:600}
+.lyr .code{flex:1;font-family:var(--mono);font-size:12px;color:var(--mute);min-width:0}
+.lyr .st{flex:none}
+.lyr.off{border-style:dashed}
+.arrowdown{text-align:center;color:var(--faint);font-size:15px;line-height:1;margin:-2px 0}
+
+/* ---------- 条形对比 ---------- */
+.bars{margin:18px 0;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:18px 20px}
+.bar{display:grid;grid-template-columns:150px 1fr 76px;align-items:center;gap:12px;margin-bottom:10px}
+.bar:last-child{margin-bottom:0}
+.bar .bn{font:12px/1.4 var(--mono);color:var(--mute)}
+.bar .track{height:26px;background:var(--soft);border-radius:6px;overflow:hidden}
+.bar .fill{height:100%;border-radius:6px;background:var(--line2);transition:width .6s ease}
+.bar.on .fill{background:var(--okbd);border:1px solid var(--ok)}
+.bar .bv{font:12px/1 var(--mono);color:var(--mute);text-align:right}
+.bar.on .bv{color:var(--ok);font-weight:500}
+.barnote{font-size:12px;color:var(--faint);margin-top:12px;padding-top:12px;border-top:1px solid var(--line)}
+
+/* ---------- 表格 ---------- */
+table{width:100%;border-collapse:collapse;margin:16px 0;font-size:13px}
+th{text-align:left;font-weight:500;color:var(--mute);font-size:11.5px;text-transform:uppercase;letter-spacing:.05em;
+   padding:10px 12px;border-bottom:1px solid var(--line2);white-space:nowrap}
+td{padding:11px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+tr:last-child td{border-bottom:none}
+tbody tr:hover{background:var(--soft)}
+td.mono,th.mono{font-family:var(--mono);font-size:12px}
+td .sub{display:block;color:var(--faint);font-size:12px;margin-top:3px;font-family:var(--mono)}
+.num{text-align:right;font-family:var(--mono);font-size:12px}
+.tbl{border:1px solid var(--line);border-radius:12px;overflow:hidden;background:var(--card)}
+.tbl table{margin:0}
+.tw{overflow-x:auto;border:1px solid var(--line);border-radius:12px;background:var(--card)}
+.tw table{margin:0;min-width:640px}
+/* 定义式表格：首列窄、键名不折行（契约 / 术语 / 字段表） */
+table.def th:first-child{width:150px}
+table.def th{white-space:nowrap}
+
+/* ---------- 待办与跟进 ---------- */
+.todos{margin:18px 0}
+.todo{display:flex;gap:14px;align-items:flex-start;background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px 16px;margin-bottom:8px}
+.todo .tn{flex:none;width:26px;height:22px;border-radius:6px;background:var(--soft);border:1px solid var(--line2);
+  font:500 12px/20px var(--mono);text-align:center;color:var(--mute);margin-top:1px}
+.todo .tbody{flex:1;min-width:0}
+.todo .tt{font-size:13.5px;font-weight:600}
+.todo .td{font-size:12.5px;color:var(--mute);margin-top:4px}
+.todo .td b{color:var(--fg);font-weight:500}
+.todo.blocked{border-color:var(--warnbd);background:var(--warnbg)}
+.todo.done{border-color:var(--okbd);background:var(--okbg)}
+.todo.done .tt{color:var(--ok)}
+
+/* ---------- 折叠 ---------- */
+details.fold{margin:16px 0}
+details.fold>summary{cursor:pointer;list-style:none;display:inline-flex;align-items:center;gap:8px;
+  font:12px/1 var(--mono);color:var(--info);background:var(--infobg);border:1px solid var(--infobd);
+  border-radius:999px;padding:7px 13px;user-select:none}
+details.fold>summary::-webkit-details-marker{display:none}
+details.fold>summary::before{content:"▸";font-size:10px;translate:0 1px}
+details.fold[open]>summary::before{content:"▾"}
+details.fold>summary:hover{border-color:var(--info)}
+details.fold[open]>summary{margin-bottom:4px}
+
+/* ---------- UI 原型 (mock) ----------
+   给「新页面长什么样」用的积木。**只在设计文档里用**, 不是产品样式。
+   为什么必须放这儿: lint ① 要求所有 class 都能在共享 CSS 里找到定义。 */
+.mocks{display:flex;flex-direction:column;gap:20px;margin:18px 0}
+.mock{background:var(--card);border:1px solid var(--line2);border-radius:12px;overflow:hidden}
+.mock .cap{font:500 11px/1 var(--mono);letter-spacing:.07em;text-transform:uppercase;color:var(--faint);
+  padding:9px 14px;border-bottom:1px solid var(--line);background:var(--soft)}
+.mock .win{display:flex;min-height:112px}
+.mock .pane{flex:1;padding:12px 14px;min-width:0}
+.mock .pane.side{flex:none;width:154px;border-right:1px solid var(--line);background:var(--soft)}
+.mock .tbar{display:flex;align-items:center;gap:6px;padding:9px 12px;border-bottom:1px solid var(--line)}
+.mock .dot{width:9px;height:9px;border-radius:50%;background:var(--line2);flex:none}
+.mock .ttl{font-size:12px;font-weight:500;color:var(--mute);margin-left:6px}
+.mock .row{display:flex;align-items:center;gap:8px;padding:6px 9px;border-radius:7px;font-size:12.5px}
+.mock .row.on{background:var(--accbg);color:var(--acc)}
+.mock .row .lab{flex:1;min-width:0}
+.mock .row .k{flex:none;color:var(--faint);font:11.5px/1.5 var(--mono)}
+.mock .row.on .k{color:var(--acc)}
+.mock .sep{height:1px;background:var(--line);margin:6px 0}
+.mock .mi{display:flex;gap:28px;justify-content:space-between;padding:5px 10px;border-radius:5px;font-size:12.5px}
+.mock .mi.hl{background:var(--accbg);color:var(--acc)}
+.mock .mi .k{color:var(--faint);font:11.5px/1.5 var(--mono)}
+.mock .mi.hl .k{color:var(--acc)}
+.mock .pill{display:inline-block;font:11px/1 var(--mono);padding:4px 8px;border-radius:999px;
+  border:1px solid var(--line2);background:var(--soft);color:var(--mute)}
+.mock .thumb{display:block;width:100%;height:74px;border:1px solid var(--line);border-radius:8px;
+  background:repeating-linear-gradient(45deg,var(--soft),var(--soft) 7px,transparent 7px,transparent 14px)}
+.mock .note{font-size:12px;color:var(--faint);padding:9px 14px;border-top:1px solid var(--line);background:var(--soft)}
+.mock .note b{color:var(--fg);font-weight:500}
+
+/* ---------- UI 原型 · 泳道（状态分列） ----------
+   列宽**固定**、容器横向滚：压窄列会让"名字 + 归属"两行都折行，
+   而两行都折行的卡片读起来是一团。 */
+.mock .lanes{flex:1;min-width:0;display:flex;gap:8px;overflow-x:auto;padding:12px 14px}
+.mock .lane{flex:none;width:150px}
+.mock .lane .lh{font:500 11px/1.4 var(--mono);color:var(--mute);letter-spacing:.04em;margin-bottom:8px}
+.mock .card{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:8px 10px;margin-bottom:6px}
+.mock .card .cn{font-size:12.5px;font-weight:500;color:var(--fg)}
+.mock .card .cs{font-size:11.5px;color:var(--faint);margin-top:2px}
+.mock .card.own{border-left:3px solid var(--fg)}
+.mock .card.off{opacity:.55;border-style:dashed}
+.mock .card.warn{border-color:var(--warnbd)}
+
+/* ---------- 窄屏 ---------- */
+@media (max-width:760px){
+  .g3,.g2{grid-template-columns:1fr}
+  .bar{grid-template-columns:1fr;gap:4px}
+  .bar .bv{text-align:left}
+  .lyr{flex-wrap:wrap;gap:8px}
+  .lyr .name{width:auto}
+}
+</style>
+<!-- @style:end -->
+</head>
+<body>
+<div class="wrap">
+
+<div class="eyebrow">P20 &nbsp;·&nbsp; 状态 <b>设计已定</b>&nbsp;·&nbsp; 单一来源 <b>本文件</b>&nbsp;·&nbsp; 2026-11-24</div>
+
+<h1>Personal Agent Team
+  <small><b>一个人装不下两个领域，不是因为它不够聪明，是因为台账只有一份</b>。助理的整条闭环都压在「一本台账 + 一场会话 + 一套配置」上：把「保证 CI 是绿的」和「每月发票对账」塞进同一个助理，两件事会互相污染账本 —— 完成状态是混的，注入段是互相挤的，一轮的注意力是分裂的。<b>所以拆成两级</b>：<code>main</code> 有独立触发面（人 / 飞书 / cron），负责对一个目标长期负责、在外说话、找人拍板；<code>worker</code> 没有触发面，只能被派活，拿自己的台账、自己的会话、自己的模型，干一件事然后交活。<b>派活不新造一套调度</b> —— 复用「到点叫醒」那条已经跑熟的路径：<code>delegate</code> 工具就是「给别人的 follow_up」，同样落一张定时表、同样由每分钟那一跳扫到期、同样先认领再落定。<b>权限只有一条根：外发唯一出口只属于 main</b> —— worker 不挂 <code>feishu_attach</code>、不发系统通知、不弹审批卡；它要说给人听的话只能写进回执，由 main 决定说不说。<b>层级硬限 1 级</b>，worker 的工具面里没有 <code>delegate</code>，`agent_delegations` 里也不存在 worker → worker 的边。</small>
+</h1>
+
+<div class="metaline">
+  <span class="tag">类型 <b>main / worker</b></span>
+  <span class="tag">派活 <b>delegate · 0~10080 分钟</b></span>
+  <span class="tag">触发面 <b>只有 main 有</b></span>
+  <span class="tag">权限 <b>外发只归 main</b></span>
+  <span class="tag">记忆 <b>各自台账 / 会话 / 配置</b></span>
+  <span class="tag">层级 <b>硬限 1 级</b></span>
+  <span class="tag">界面 <b>列表（建与改）· 泳道（纯展示）</b></span>
+  <span class="tag">阶段 <b>6 个 · 每阶段一次 commit</b></span>
+</div>
+
+<h2><span class="n">00</span>结论先行<span class="en">VERDICT</span></h2>
+
+<p><b>为什么必须是「多个助理」而不是「一个助理更努力」。</b>助理这个形态的价值在长程：它替一个要跑几周的目标持续在线，靠的是<b>台账</b>记住进度、<b>注入段</b>重建上下文、<b>收件箱</b>攒下待拍板的东西。这三样都是<b>单数</b>的 —— 一本台账、一份注入段、一个目标。所以当一个人有两个都要长期盯的目标时，问题的本质不是"忙不过来"，是<b>账会记混</b>。三条硬约束把结构推了出来：</p>
+
+<div class="tw"><table>
+  <tr><th>约束</th><th>为什么</th><th>逼出了什么设计</th></tr>
+  <tr><td><b>① 一本台账只承载一个目标</b></td><td>台账是「完成状态」的验收面，程序要能算出来。两个目标写进同一本，「哪些做完了」立刻变成人肉判断；注入段也会互相挤掉（预算就那么多字）</td><td>每个助理<b>各自一本台账</b>、各自一场会话、各自一份模型配置 —— 拆分不是省上下文，是<b>让验收面保持可算</b></td></tr>
+  <tr><td><b>② 一轮可能跑十分钟</b></td><td>派活如果同步等，main 会被卡住整整一轮；它还占着一个并发名额，人在飞书里问一句也进不来。而真正需要等的活（查发票、跑对账）恰恰是最慢的</td><td>派活<b>只排时间不做事</b>：<code>delegate</code> 立刻返回"已排上，最早 X 开始"，worker 到点自己起跑，结论落库，main 下一轮读回执</td></tr>
+  <tr><td><b>③ 对外说话只能有一个出口</b></td><td>"两个助理同时往同一个飞书单聊发消息"会让人分不清谁在说话；更糟的是审批卡 —— worker 在后台跑，卡弹给谁？</td><td>权限从这一条长出来：worker <b>结构性地没有</b> <code>feishu_attach</code> / 通知 / 审批；它要说的话只能进回执</td></tr>
+</table></div>
+
+<p>⇒ 所以这不是"一个能派活的模型"，而是<b>一个有队长、有分工、有交活回执的最小组织结构</b>。它小到只有两级、只允许向下派、只允许队长对外说话 —— 这三条限制不是能力不足，是<b>让"谁负责"永远有唯一答案</b>。</p>
+
+<div class="call">
+  <div class="lbl">一句话</div>
+  <p>把助理分成 <code>main</code>（有触发面，对一个目标长期负责，唯一能对外说话的那个）与 <code>worker</code>（无触发面，只能被派活，各带自己的台账与会话）。<b>派活 = 给别人的一次定时唤醒</b>：<code>delegate(worker, goal, acceptance, after_minutes, due_by?, context?)</code> 落 <code>agent_delegations</code>，由每分钟那一跳扫到期起跑 —— 复用 follow_up 已经跑熟的「先认领、被挡则顺延、任务没了就作废」。<b>有活的 worker 不许再派</b>（硬拒，不排队）；<b>交活由 App 自动回叫 main</b>（不占 main 的自主调度配额）；<b>层级硬限 1 级</b>；<b>worker 的话只能进回执</b>，想说给人听必须经 main。界面上：<b>定时任务页只负责建与改</b>，新增的<b>助理团队页纯展示</b>（队伍 · 状态 · 关系）。</p>
+</div>
+
+<h2><span class="n">01</span>需求与边界<span class="en">REQUIREMENT</span></h2>
+
+<p><b>它替人做什么</b>：让一个长期目标的执行面从"一个助理一次干一件"变成"一个队长把并行的几条活分出去"。真实的形状是：<b>一个目标下面有几条互不依赖的活</b> —— 保证 CI 是绿的这条线里，既要盯冒烟、又要核对发版产物、还要月底出一份对账；它们共享同一个目标，但彼此不需要看对方的中间过程。</p>
+
+<p><b>谁受益</b>：①<b>多领域的看守</b> —— 同一个「项目健康」目标下，构建、依赖、数据三条线各一个人；②<b>慢活的并流</b> —— 对账要跑十分钟，main 不必等它，可以同时把「看看昨天那个 flaky 测试」派出去；③<b>要独立模型的任务</b> —— 便宜活给便宜模型、关键活给强模型，配置本来就是分开的。</p>
+
+<p><b>明确不做（含理由）</b>：</p>
+<ul class="tight">
+  <li><b>不做三级以上。</b>worker 的工具面里没有 <code>delegate</code>，库里也不存在 worker→worker 的边。多一级就多一层"这笔钱算谁的"和"它为什么不回我"，而收益（再细分）在这台机器上看不出来。</li>
+  <li><b>不做 worker 之间的横向对话。</b>只有 main→worker 单向派活，worker 只能回执。两个模型互相聊是最容易变成"聊了很久什么也没定"的形状，而且没有终点判据。</li>
+  <li><b>不做同一 worker 并行，也不排队。</b>有活就<b>硬拒</b>并在回执里说清它手上是什么、什么时候完。排队会让时间语义全乱 —— 你说的是「1 分钟后启动」，实际是「等它手上那条完了再说」。</li>
+  <li><b>不做同步等待式的派活。</b>没有「等 worker 回来再继续」这一档。真需要等的活，等于不该拆出去。</li>
+  <li><b>worker 不对外发消息、不发通知、不弹审批卡。</b>它只写台账与回执。这条是权限模型的根，详见 §05。</li>
+  <li><b>团队页纯展示，不可编辑。</b>归属在助理编辑器里改（一行下拉）。画板上不做拖拽 —— 拖拽一旦存在，就要处理"拖到一半 main 被停用"，而那些状态在图上是不可见的。</li>
+  <li><b>不做跨组连线、不做自由画布。</b>布局是<b>固定的五条泳道</b>（按状态分列），卡片在列内按时间排 —— 人不摆位置，否则每次进来都要重新认人。拖拽也不做：拖拽一旦存在，就要处理"拖到一半 main 被停用"，而那个状态在图上是不可见的。</li>
+  <li><b>不做"模型改职责"，连提案也不做。</b>职责与职责说明<b>只有人能写</b>：模型对它们是纯只读（<code>list_workers</code> 读，注入段读那 40 字）。原因不是"以后再说"，是<b>这一层还没跑通</b> —— 职责写得准不准，要真派过几十次活才知道；在没有任何真实交活数据之前让模型去改它，改出来的一定是"什么都能干"。等 P3 跑过一段时间、手里有"派了但派错"的真实案例，再谈提案。</li>
+</ul>
+
+<h2><span class="n">02</span>外部契约与实测依据<span class="en">RESEARCH</span></h2>
+
+<h3>外部契约（每条给出处）</h3>
+<div class="tw"><table>
+  <tr><th>来源</th><th>关键原文 / 数据</th><th>对本产品的约束</th><th>可信度</th></tr>
+  <tr><td>Anthropic《How we built our multi-agent research system》<br><span class="cite">anthropic.com/engineering/built-multi-agent-research-system</span></td><td>orchestrator-worker：主 agent 拆解、子代理<b>各带自己的上下文窗口</b>并行、只交回压缩后的结论。收益真实：内部评测 <b>+90.2%</b>；但成本也真实：agent 约是聊天的 <b>4×</b> token，多代理约 <b>15×</b>，而「token 用量本身就解释了 80% 的表现方差」</td><td>①「各带自己的上下文」正是我们要的（台账独立、会话独立）；②<b>15× 这个数决定了必须有配额</b> —— 没有上限的多助理会安静地烧钱；③它同时说明<b>收益来自「并行 + 独立窗口」，不是来自「更聪明」</b> ⇒ 不值得拆的活别拆</td><td><span class="chip c-ok">强 · 官方工程文</span></td></tr>
+  <tr><td>同文 · 失败教训</td><td>「lead 必须被<b>教会怎么委派</b>：每个子任务要有目标、输出格式、工具指引与边界」；含糊的委派会导致<b>重复劳动与覆盖缺口</b>；子代理同步执行会造成瓶颈，而异步协调自带复杂度</td><td>派活单<b>必填 goal + acceptance</b>（不是可选字段）：这不是形式主义，是官方点名的最常见失败原因。异步是我们主动选的，代价（回执、状态机）照单认下</td><td><span class="chip c-ok">强 · 官方原文</span></td></tr>
+  <tr><td>多代理实践汇总（2026）<br><span class="cite">blckalpaca.at/…/multi-agent-systems-fundamentals</span></td><td>已定型的协作规则是<b>写路径</b>：「多个 agent 可以读、收集、推理、提议，但<b>只有一个提交</b>」；扇出读稳健，扇出写脆弱。另：A2A 的 task 生命周期 <code>submitted → working → input-required → completed / failed / canceled</code></td><td>①「只有一个提交」= 我们这条<b>外发唯一出口只属于 main</b>；②派活的状态机直接借 A2A 的六个态（我们多一个 <code>queued</code> 表示"排上了还没起跑"）</td><td><span class="chip c-info">中 · 二手汇总</span></td></tr>
+  <tr><td>Anthropic《Effective context engineering for AI agents》<br><span class="cite">anthropic.com/engineering/…</span></td><td>context rot：token 越多回忆越差；记忆应当外置成文件 + 工具结果清理</td><td>【你的队伍】只给「名字 + 描述首句 + 状态」；完整描述与台账都要<b>按需取</b>（工具），不进常驻注入</td><td><span class="chip c-ok">强 · 官方工程文</span></td></tr>
+</table></div>
+
+<h3>本仓实测依据（这几条直接决定取舍）</h3>
+<div class="tw"><table>
+  <tr><th>事实</th><th>出处</th><th>约束</th></tr>
+  <tr><td>调度 tick <b>每分钟一次</b>（<code>guard minute != lastSchedulerMinute</code>）</td><td class="mono">SchedulerService.swift:703</td><td><b>0 分钟 ≠ 立即</b>：它是"下一跳就起"，最长 60 秒。工具描述里必须写这一句，否则模型会以为自己能精确到秒</td></tr>
+  <tr><td><code>ComputerHost</code> 是<b>一个进程一个 scope</b>，scope 变了就 <code>stop()</code> 再起</td><td class="mono">ComputerHost.swift:220-225</td><td>main 还在跑、worker 同时起 ⇒ 两边换 scope 会互相把对方的 helper 杀掉。⇒ <b>到期时 main 那场还在跑就顺延</b></td></tr>
+  <tr><td>同一场任务同时只跑一轮；<code>maxConcurrentTurns</code> 默认 10</td><td class="mono">SchedulerService.swift:815-822</td><td>"同一 worker 不许并行"有现成的判据（那场在跑 ⇒ 拒）；派活另给一个更小的并发预算（同时 3 个 worker）</td></tr>
+  <tr><td>follow_up 的成熟路径：<b>先认领成 fired → 起不来就 rearm 顺延 → 三次之后 missed</b></td><td class="mono">SchedulerService.swift:1161-1190</td><td>派活整条复用；<b>但 miss 的口径必须换</b> —— worker 忙 40 分钟是正常的，按次数放弃等于把主子的活吃掉</td></tr>
+  <tr><td>台账是<b>每任务一份</b> markdown（<code>assistantHandoffPath</code>），五节 + 三态验收</td><td class="mono">SchedulerService.swift:2218 · AssistantLedger.swift</td><td>"台账独立"基本不用写新代码，只要 worker 用自己的 id 去算</td></tr>
+</table></div>
+
+<h3>注入落点（沿用 P19 的结论，不重复论证）</h3>
+<p>两段新注入都走 <code>--append-system-prompt</code>，落成一条新的 <code>role=system</code> 消息、section 名 <code>addendum</code>，<b>不进 user prompt</b>。每轮各带各的一份，<b>不累积</b>。</p>
+
+<h2><span class="n">03</span>路径与方案<span class="en">APPROACH</span></h2>
+
+<h3>一个上午的样子（场景）</h3>
+<p>目标是「保证这个项目是健康的」。09:00，CI 看守醒来，看到 CI 红了一条、月度对账还没出。</p>
+<div class="flow">
+  <div class="lyr"><span class="name">09:00 到点</span><span class="code">main 的巡检轮：四道闸（预算 / 并发 / 在途 / 模型在清单里）先过</span><span class="st chip c-ok">调度</span></div>
+  <div class="arrowdown">↓</div>
+  <div class="lyr"><span class="name">09:02 判断</span><span class="code">CI 红的那条自己能查（它是队长，工具面最全）；对账要跑十来分钟，且属于另一本账 ⇒ <b>派出去</b></span><span class="st chip c-acc">分析</span></div>
+  <div class="arrowdown">↓</div>
+  <div class="lyr"><span class="name">09:03 派活</span><span class="code"><code>delegate(worker: "财务对账", goal: "出 11 月发票对账", acceptance: "三处以上差异要列明单号与金额", after_minutes: 0)</code> ⇒ 回执「已排上，下一跳起跑」</span><span class="st chip c-acc">派活</span></div>
+  <div class="arrowdown">↓</div>
+  <div class="lyr"><span class="name">09:04 各干各的</span><span class="code">main 继续查 CI；<b>09:05</b> 那一跳把 worker 叫起来，它在自己那场会话里跑，写自己的台账</span><span class="st chip c-ok">并行</span></div>
+  <div class="arrowdown">↓</div>
+  <div class="lyr"><span class="name">09:12 交活</span><span class="code">worker 收尾 ⇒ 派活行落 <code>done</code> + 一句摘要；App <b>自动给 main 排一条 0 分钟的唤醒</b></span><span class="st chip c-acc">回叫</span></div>
+  <div class="arrowdown">↓</div>
+  <div class="lyr"><span class="name">09:13 汇报</span><span class="code">main 醒来，注入段里多一条【派活回执】；它把「CI 红了（已诊断）+ 对账有 3 处差异」合成一句话发到飞书</span><span class="st chip c-ok">对外</span></div>
+  <div class="arrowdown">↓</div>
+  <div class="lyr"><span class="name">09:14 收尾</span><span class="code">回执标记成「已汇报」⇒ 下一轮不再重复出现（否则它会每天跟你念同一句话）</span><span class="st chip c-mute">消费</span></div>
+  <div class="lyr off"><span class="name">不在回路里</span><span class="code">worker 直连飞书 · worker 互相派活 · 同一 worker 并行 · 同步等 worker 回来 · 自动重派失败的活</span><span class="st chip c-bad">恒不进入</span></div>
+</div>
+
+<h3>两个角色差在哪</h3>
+<div class="tw"><table>
+  <tr><th></th><th>main</th><th>worker</th></tr>
+  <tr><td><b>怎么开始跑</b></td><td>人手动 / 飞书 / cron / 自己约的回看</td><td><b>只有一种：被别人派活</b>（到期起跑）</td></tr>
+  <tr><td><b>台账</b></td><td>自己的，记一个长期目标的验收面</td><td>自己的，记"这一次被派的活"</td></tr>
+  <tr><td><b>会话</b></td><td>自己的日志会话（飞书来的话也进这里）</td><td>自己的日志会话，<b>默认不进侧栏</b>，从派活卡点进去</td></tr>
+  <tr><td><b>配置</b></td><td>自己的模型 / 思考强度 / 预算</td><td>自己的 —— 可以给便宜模型</td></tr>
+  <tr><td><b>工具面</b></td><td>全部（含 <code>delegate</code> / <code>feishu_attach</code>）</td><td><b>没有</b> <code>delegate</code>、<b>没有</b> <code>feishu_attach</code>；有 <code>follow_up</code> / <code>note_proposal</code></td></tr>
+  <tr><td><b>对外</b></td><td>唯一出口（飞书 / 通知）</td><td><b>零出口</b>：只能写台账与回执</td></tr>
+  <tr><td><b>谁给它派活</b></td><td>没人（它是队长）</td><td>它的 main，且同一时刻只能有一条</td></tr>
+  <tr><td><b>能不能当别人的 worker</b></td><td>不能（main 永远是 main）</td><td>能，但只归一个 main</td></tr>
+</table></div>
+
+<h3>派活的生命周期</h3>
+<div class="flow">
+  <div class="lyr"><span class="name">queued</span><span class="code">已排上：<code>due_at</code> 到了才起跑。有活时第二次派活<b>直接被拒</b>，不进这个态</span><span class="st chip c-mute">排队中</span></div>
+  <div class="arrowdown">↓</div>
+  <div class="lyr"><span class="name">running</span><span class="code">起跑了（那一场同时只跑一轮）。被闸挡（main 在跑 / 并发满 / 预算 / worker 停用）⇒ <b>原地顺延</b>，仍是 queued，不消耗重试次数上限之外的东西</span><span class="st chip c-acc">在跑</span></div>
+  <div class="arrowdown">↓</div>
+  <div class="lyr"><span class="name">done</span><span class="code">交活：写摘要 + 落 <code>finished_at</code> ⇒ 给 main 排一条 0 分钟唤醒（<b>不占</b> main 的自主调度配额）</span><span class="st chip c-ok">已交活</span></div>
+  <div class="lyr"><span class="name">failed</span><span class="code">那一轮崩了 / 模型超时：带原因。<b>不自动重派</b> —— 同一个坑里再烧一次是最贵的失败方式</span><span class="st chip c-bad">没干成</span></div>
+  <div class="lyr"><span class="name">cancelled</span><span class="code">永远起不来：worker 被删、main 被删、<code>due_by</code> 已过而它一直停着。要留一句"为什么没做"</span><span class="st chip c-bad">作废</span></div>
+</div>
+
+<h3>界面上四块</h3>
+<p><b>定时任务页只负责建与改</b>（含 worker 的创建，以及"归属哪个 main"那一行下拉）；<b>新的助理团队页纯展示</b>。这是分工，不是两个入口做同一件事。</p>
+<p>编辑器顶上多一块两行：<b>职责</b>（一行输入，40 字，worker 必填）与 <b>职责说明</b>（多行，240 字，选填），位置在名字下面、来源与台账上面 —— 它回答"这个助理是谁"，比后面那些都靠前。<b>职责没填，worker 存不下去</b>：这个字段是 <code>list_workers</code> 与注入段的唯一来源，允许空等于允许一个选不出来的 worker。</p>
+
+<div class="mocks">
+  <div class="mock">
+    <div class="cap">定时任务 · 建与改</div>
+    <div class="win">
+      <div class="pane">
+        <div class="row"><span class="lab">CI 看守</span><span class="k">main · 每天 09:00 · 4 个 worker</span></div>
+        <div class="row"><span class="lab">↳ 财务对账</span><span class="k">worker · 归 CI 看守</span></div>
+        <div class="row"><span class="lab">↳ 周报整理</span><span class="k">worker · 归 CI 看守</span></div>
+        <div class="row"><span class="lab">客户回访</span><span class="k">main · 每周一 10:00 · 2 个 worker</span></div>
+        <div class="row"><span class="lab">发版检查</span><span class="k">cron · 每天 18:00</span></div>
+      </div>
+    </div>
+    <div class="note">worker 独立一行（不平铺在 main 里面），名字前带 <b>↳</b>、右侧写归属。类型与周期移到右侧同一列，左侧只留"叫什么"。⚠️ 这里也要有<b>同一条 3px 竖条</b>（main 有、worker 没有）：平铺成行时只靠 <code>↳</code> 和归属小字，扫一眼分不出谁是队长。</div>
+  </div>
+
+  <div class="mock">
+    <div class="cap">助理团队 · 状态泳道 · 纯展示</div>
+    <div class="win">
+      <div class="pane side">
+        <div class="row on"><span class="lab">全部</span><span class="k">6</span></div>
+        <div class="row"><span class="lab">CI 看守</span><span class="k">4</span></div>
+        <div class="row"><span class="lab">客户回访</span><span class="k">2</span></div>
+        <div class="sep"></div>
+        <div class="row"><span class="lab">未归属</span><span class="k">0</span></div>
+      </div>
+      <div class="lanes">
+        <div class="lane">
+          <div class="lh">在跑 · 2</div>
+          <div class="card own"><div class="cn">CI 看守</div><div class="cs">main · 4 分钟</div></div>
+          <div class="card"><div class="cn">财务对账</div><div class="cs">CI 看守 · 3 分钟</div></div>
+        </div>
+        <div class="lane">
+          <div class="lh">已排上 · 1</div>
+          <div class="card"><div class="cn">发版检查</div><div class="cs">CI 看守 · 09:31</div></div>
+        </div>
+        <div class="lane">
+          <div class="lh">等回执 · 1</div>
+          <div class="card warn"><div class="cn">周报整理</div><div class="cs">CI 看守 · 09:42</div></div>
+        </div>
+        <div class="lane">
+          <div class="lh">空闲 · 2</div>
+          <div class="card"><div class="cn">日志归档</div><div class="cs">CI 看守 · 3 天没派</div></div>
+          <div class="card"><div class="cn">工单摘要</div><div class="cs">客户回访 · 2 天</div></div>
+        </div>
+        <div class="lane">
+          <div class="lh">停用 · 1</div>
+          <div class="card off"><div class="cn">退订整理</div><div class="cs">客户回访 · 派了会被拒</div></div>
+        </div>
+      </div>
+    </div>
+    <div class="note">五列 = 五档状态，<b>卡片会换列</b>。每条卡上必须写<b>归属</b>（第二行前半段），左边那一条竖线是 <b>main</b> 的身份记号 —— 泳道把"队伍"拆散了，这两个是唯一还能认出"谁是谁的人"的地方。左侧队伍列表点一下过滤整片泳道。</div>
+  </div>
+</div>
+
+<p><b>列内排序不是按名字，是按"最该被我看见的"</b>：在跑按开始时刻（<b>跑太久了的浮上来</b>）、已排上按 <code>due_at</code>、等回执按交活时刻（等最久的在上）、空闲按 <code>lastRunAt</code>（<b>最久没动的在上</b> —— "三天没派过活"能被人看见，靠的就是这一条）、停用按停用时刻。</p>
+<p>列宽<b>固定 150px、容器横向滚</b>：压窄列会让"名字 + 归属"两行都折行，而两行都折行的卡片读起来是一团。也<b>不做换列动画</b> —— 卡片在列间移动的几百毫秒里，点谁都是错的位置。</p>
+<p>⚠️ 泳道把"队伍"拆散了，这是它唯一的真代价。补法只有两个，两个都要有：<b>每张卡的第二行前半段写归属</b>；<b>左侧那一列队伍可以点，点一下整片泳道只剩它的人</b>。少任何一个，二十张卡就是认不出谁是谁的。</p>
+<p><b>身份与颜色分两个通道。</b>身份走<b>不占颜色</b>的三样：卡头/卡片左侧那条 <b>3px 竖条 + 名字 500 + 一个 <code>main</code> 徽标</b>；颜色只表示状态（蓝在跑 / 黄等回执 / 灰空闲）。给身份再配一个色的话，同一张卡上就有两套色编码：main 用了蓝，那"正在跑的 main"就分不出是身份还是状态；而二十个 worker 各带身份色，整页变成一堵彩墙。</p>
+<p><b>点一张卡 → 右侧检查器</b>：职责与职责说明、role、模型、最近五次执行（时刻 + 结果）、台账「完成状态」摘要，底部两个动作「打开编辑器」「打开会话」。泳道只承担"谁在哪个状态"，细节不挤进来。</p>
+
+<h2><span class="n">04</span>数据与契约<span class="en">DATA &amp; CONTRACT</span></h2>
+
+<h3>助理行新增六列</h3>
+<div class="tw"><table class="def">
+  <tr><th>列</th><th>类型</th><th>缺省</th><th>语义与坑</th></tr>
+  <tr><td class="mono">role</td><td class="mono">TEXT</td><td class="mono">'main'</td><td><code>main</code> / <code>worker</code>。<b>缺省必须是 main</b>：老行（以及以后的 Cron 行）没有这个概念，读出来要还是"队长"。<b>不由"有没有绑飞书"派生</b> —— 绑定是通道不是身份，一解绑角色就漂，而有一大批助理是"有 cron、没飞书"的</td></tr>
+  <tr><td class="mono">parent_id</td><td class="mono">TEXT NULL</td><td class="mono">NULL</td><td>worker 归属的 main。<b>main 恒 NULL</b>（单值列保证"一个 worker 只归一个 main"，不靠保存时扫全表去摘别人的）</td></tr>
+  <tr><td class="mono">description</td><td class="mono">TEXT</td><td class="mono">''</td><td><b>职责 · 40 字上限</b>。一句话说清"它是谁"。<b>被注入段每轮原文读取</b>（不截断、不切句），所以它必须是一句能独立成立的话。<b>worker 必填</b>（域层与保存都拦），main 选填 —— 只有需要"被选择"的那个才需要这一行</td></tr>
+  <tr><td class="mono">description_detail</td><td class="mono">TEXT</td><td class="mono">''</td><td><b>职责说明 · 240 字上限</b>，选填。判据、边界、交付形态（"差异要列单号与金额，别只给总数"）写这里。<b>只被 <code>list_workers</code> 按需读</b>，从不进常驻注入段</td></tr>
+  <tr><td class="mono">delegate_per_day</td><td class="mono">INTEGER NULL</td><td class="mono">NULL</td><td><b>三态</b>：<code>nil</code> 没配过（按出厂 5）/ <code>0</code> 明确关掉 / <code>n</code> 上限。⚠️ 与 <code>followUpsPerDay</code> 同一族的坑：合成两态就再也分不开"他没看过"与"他关掉了"</td></tr>
+  <tr><td class="mono">disabled_by_parent</td><td class="mono">INTEGER</td><td class="mono">0</td><td>1 = 它是因为 main 停用才跟着停的。<b>这个标记存在的原因</b>：main 重新启用时只恢复这些，不碰"你自己手动停掉的那个 worker"（否则启一次 main 会把你单独关的也拉起来）</td></tr>
+</table></div>
+
+<h3>派活表 <code>agent_delegations</code></h3>
+<div class="tw"><table class="def">
+  <tr><th>列</th><th>语义</th></tr>
+  <tr><td class="mono">id</td><td>主键。同时是<b>回执关联键</b>（与 <code>agent_sent</code> 用 id 当 <code>ref</code> 同一族做法）</td></tr>
+  <tr><td class="mono">from_task / to_task</td><td>谁派的 / 派给谁。两条都是 <code>task_id</code>，索引在 <code>to_task</code>（"它手上有没有活"是最高频查询）</td></tr>
+  <tr><td class="mono">goal / acceptance / context</td><td>工单三件。<b>goal 与 acceptance 必填</b>（见 §02 的失败教训），context 可空。落库前各自截断：800 / 400 / 1200 字</td></tr>
+  <tr><td class="mono">due_at</td><td>什么时候起跑 = 派活那一刻 + <code>after_minutes</code>。<b>App 侧算</b>，不信子进程的钟</td></tr>
+  <tr><td class="mono">due_by</td><td>最晚什么时候要（可空）。它与 <code>due_at</code> 的关系在工具入参处校验：<code>due_at &gt;= due_by</code> 直接拒</td></tr>
+  <tr><td class="mono">status</td><td><code>queued / running / done / failed / cancelled</code>。<b>五态</b>，与 §03 那张流程图一一对应</td></tr>
+  <tr><td class="mono">attempts</td><td>顺延次数（被闸挡住时 +1）。<b>不用于判死</b>：worker 忙四十分钟是正常的</td></tr>
+  <tr><td class="mono">note</td><td>为什么被挡 / 为什么失败（闸的原话、桥的原话）。<b>必须有</b>：否则人只看到"没跑"，不知道为什么</td></tr>
+  <tr><td class="mono">summary</td><td>交活时 worker 写的一句话结论（≤400 字）。main 的回执读它，不读全文</td></tr>
+  <tr><td class="mono">reported_at</td><td>main <b>成功收尾</b>之后才标。标在"注入时"会让那一轮崩掉时回执永久丢失；标在"收尾时"是唯一诚实的位置（同 <code>settleSent</code> 的哲学）</td></tr>
+  <tr><td class="mono">created_at / started_at / finished_at</td><td>三个时刻。画板的"在跑 N 分钟"= <code>started_at</code> 到现在的分钟数</td></tr>
+</table></div>
+
+<h3>为什么不并进 <code>agent_followups</code></h3>
+<p>两者共享"到点叫醒"这一段（扫到期、认领、顺延、删任务连带清），看起来该合一张表 —— 但它们的<b>语义与字段差得太远</b>：follow_up 只有 <code>why</code> 与四态，派活有工单三件、两条时间线、回执消费与五种终态。合成一张会得到十几个 nullable 列，而每一列都要在两种语义下各解释一遍。</p>
+<div class="tw"><table>
+  <tr><th>方案</th><th>好处</th><th>代价</th><th>取舍</th></tr>
+  <tr><td>并表（<code>action</code> + <code>payload</code>）</td><td>一次扫描、一套连带清理</td><td>两套语义挤在一张表；<code>dueFollowUps</code> 这类查询全要加 <code>action</code> 过滤；统计"今天约了几条回看"变成按 action 数</td><td><span class="chip c-mute">未采用</span></td></tr>
+  <tr><td><b>独立表</b></td><td>每张表的列都只说一件事；状态机能各自演进</td><td>tick 里两次到期查询、删任务时两处连带（<b>要写成一处函数，不许复制</b>）</td><td><span class="chip c-ok">采用</span></td></tr>
+</table></div>
+<p>⚠️ 顺带记一条 P15 的教训：那次"两表合一"是对的，因为两边是<b>同一个语义</b>（都是知识条目）；这次不是。判据是<b>字段与状态机是否同构</b>，不是"是不是都按时间触发"。</p>
+
+<h3><code>delegate</code> 工具契约</h3>
+<div class="tw"><table class="def">
+  <tr><th>参数</th><th>约束</th></tr>
+  <tr><td class="mono">worker</td><td>名字（字符串）。<b>域层要求 worker 名字唯一</b> —— 列表按名字选人，重名就等于"A 和 B 都叫这个"</td></tr>
+  <tr><td class="mono">goal</td><td>必填，≤800 字。"这一次要干什么"，不含长期职责（那是它自己的 prompt）</td></tr>
+  <tr><td class="mono">acceptance</td><td>必填，≤400 字。"怎么算干完"。它会进 worker 台账的「完成状态」</td></tr>
+  <tr><td class="mono">after_minutes</td><td>必填，<b>0 ~ 10080</b>（7 天）闭区间。<b>0 = 下一跳就起（≤60 秒）</b>，不是"立刻"</td></tr>
+  <tr><td class="mono">due_in_minutes</td><td>可选。最晚什么时候要。必须 <code>&gt; after_minutes</code>，否则拒（"2 小时后开始、1 小时后要"是张没人能完成的单）</td></tr>
+  <tr><td class="mono">context</td><td>可选，≤1200 字。相关文件路径、上次结论、约束。⚠️ <b>不传对话快照</b>：fork 会把 main 整段历史塞进去，worker 分不清哪条目标是自己 的</td></tr>
+</table></div>
+
+<p><b>拒绝的理由必须说得出（每条都带"下一步怎么办"）：</b></p>
+<div class="todos">
+  <div class="todo"><div class="tn">1</div><div class="tbody"><div class="tt">名字不存在</div><div class="td">回一句<b>可用名单</b>（名字 + 状态），让下一轮能直接改对。只报"不存在"等于让它再猜一次</div></div></div>
+  <div class="todo"><div class="tn">2</div><div class="tbody"><div class="tt">它是个 main</div><div class="td">"<b>它自己是一支队伍的队长</b>，不能当 worker"。main 永远是 main，不提供"降级成 worker"这个动作</div></div></div>
+  <div class="todo"><div class="tn">3</div><div class="tbody"><div class="tt">它被停用了</div><div class="td">说清是<b>被停用</b>而不是"不存在"，并指出要么先启用、要么换人</div></div></div>
+  <div class="todo"><div class="tn">4</div><div class="tbody"><div class="tt">它手上有活</div><div class="td"><b>硬拒，不排队</b>。要说清手上那条是什么、什么时候开始 / 已经跑了多久 —— 否则模型下一轮还会再派一次</div></div></div>
+  <div class="todo blocked"><div class="tn">5</div><div class="tbody"><div class="tt">时间越界或自相矛盾</div><div class="td">越界（&lt;0 / &gt;10080）与 <code>due_in_minutes ≤ after_minutes</code> 都要拒，且报实际值</div></div></div>
+  <div class="todo"><div class="tn">6</div><div class="tbody"><div class="tt">本轮到量了</div><div class="td">一轮最多派 <b>2</b> 条。理由与 follow_up"一轮一条"同族：一轮冒出五张单子 = 它在乱派，不是在分工</div></div></div>
+  <div class="todo"><div class="tn">7</div><div class="tbody"><div class="tt">今天到量了 / 已关掉</div><div class="td">配额三态生效。<b><code>0</code> 时连工具都不挂</b>（给一个每次都被挡的工具，模型会反复试）</div></div></div>
+</div>
+
+<h3>两段注入</h3>
+<p><b>【你的队伍】（排进 main 的注入段，常驻）</b> —— 每个 worker 一行，<b>上限 12 个</b>：</p>
+<pre>【你的队伍】
+- 财务对账 · 查发票与月度报表 · 空闲
+- 周报整理 · 汇总本周合并的 PR · 已排上 09:31
+- 发版检查 · 核对 tag 与产物一致性 · 在跑 3 分钟
+<span class="c">（每行中间那段 = 职责原文，一字不截 —— 所以要求 40 字以内写清。判据与边界在「职责说明」里，用 list_workers 取）</span></pre>
+<p>为什么只有职责 + 状态：这一段是<b>每轮都付</b>的固定成本。12 个 worker × 每行约 55 字 ≈ 700 字，已经是一份 SOP 的量级；把职责说明也塞进来会变成 3000 字，等于每轮先读一篇文档再干活。<b>12 这个上限就是从这里倒推出来的</b>。</p>
+
+<p><b>【派活回执】（只在有没汇报过的终态时出现，排在输出契约之前）</b>：</p>
+<pre>【派活回执】（最近 5 条，没汇报过的）
+- 09:42 财务对账 交活了：11 月发票 3 处差异，见它台账「完成状态」
+- 10:05 周报整理 没干成：模型超时，未重派
+<span class="c">（汇报过就标掉；worker 的结论细节去吃 read_worker_ledger）</span></pre>
+
+<h3><code>list_workers</code>：名单常驻、简历按需</h3>
+<p><b>分工只有一句：注入段回答"有谁"，这个工具回答"他到底能干什么"。</b>常驻那 40 字是为了让人名在上下文里<b>一直存在</b>（模型得先知道有这个人，才谈得上选谁）；完整职责是<b>决策时才需要</b>的信息，所以按需取。</p>
+<pre>list_workers()
+
+- 财务对账 | 空闲 | 上次 11-22 交活
+  职责：查发票与月度报表
+  说明：差异要列单号与金额，别只给总数；月度那份带一页对比。
+- 周报整理 | 已排上 09:31 | 上次 11-21 交活
+  职责：汇总本周合并的 PR
+  <span class="c">（没写说明 —— 只有一句职责）</span>
+- 日志归档 | 空闲 3 天 | 从未交活
+  <span class="c">（没写职责 —— 你只能从名字判断）</span></pre>
+
+<p><b>五条规则，每条都在挡一种具体的失败</b>：</p>
+<div class="tw"><table class="def">
+  <tr><th>规则</th><th>为什么</th></tr>
+  <tr><td><b>无参</b></td><td>不设 <code>status</code> 过滤、不设 <code>limit</code>、不做 <code>query</code> 检索。12 个的规模下，参数只会让模型在"要不要带参数"上犹豫一次；而全量也就 3000 字出头，比一次犹豫便宜</td></tr>
+  <tr><td><b>必带状态</b></td><td>不带的话它会派给一个正忙的，白挨一次拒（拒了才知道 "它手上有活"）—— 一次拒就是一整轮</td></tr>
+  <tr><td><b>缺口要分级说出来</b></td><td>两档，不能合并：<b>没有职责</b>写「你只能从名字判断」（这是异常态，worker 本该必填）；<b>有职责、没说明</b>写「只有一句职责」。留白会让模型把这当成"这个人没什么特别的"，而说出来它才知道这是<b>信息缺口</b>，可以改派或先问人</td></tr>
+  <tr><td><b>只有 main 能调</b></td><td>worker 的工具面里没有它 —— 它连 <code>delegate</code> 都没有，知道"还有谁"只会让它想找人而做不到</td></tr>
+  <tr><td><b>只读，两个字段都只能人改</b></td><td>不提供 <code>set_description</code> / <code>set_detail</code>。一旦模型能改自己的职责，它会在被派活失败之后把自己写成"什么都能干"—— 那是最坏的一种自我宣传</td></tr>
+</table></div>
+
+<p><b>容量账</b>：12 个 ×（名字 + 状态 + 40 字职责 + 240 字说明）≈ <b>3000~3500 字</b>，一次调用摊在<b>需要它的那一轮</b>上，不是每轮。这也是它和【你的队伍】的分界：那段是每轮 700 字，这一段是"选人那一次"的 3000 字。</p>
+
+<p><b>否掉的三个备选</b>：① 把职责说明塞进注入段（12 × 240 = 2880 字<b>每轮</b>付费，违反 context rot 那条）；② 语义检索 <code>find_worker(query)</code>（12 个的规模用不上，还会引入一层不该有的依赖）；③ 按名字取单人简历 <code>worker_profile(name)</code>（模型得先猜谁可能合适，猜错就是两次往返 —— 而一次拿全比猜两次省）。</p>
+
+<h3><code>read_worker_ledger</code></h3>
+<p>入参只有 worker 名字。返回：目标一行摘要 + 「完成状态」原文 + <b>最近 20 行</b>，<b>总长截到 1500 字</b>。</p>
+<p>为什么不返回整篇：一份台账五节写满是几千字，一个 main 巡五个 worker 就是两万字 —— 那是把"独立台账"的好处（各占各的窗口）又塞回一个窗口里。要看全篇就再要一次（分节取）。</p>
+
+<h3>连带与回收</h3>
+<div class="tw"><table>
+  <tr><th>动作</th><th>它自己</th><th>名下的 worker</th><th>未完成的派活</th></tr>
+  <tr><td><b>删 main</b></td><td>删行 + 删台账文件</td><td><b>只停用，不删</b>（<code>enabled=0</code>），<code>parent_id</code> 保留成悬挂值 ⇒ 它在画板上落进「未归属」区</td><td><code>cancelled</code>，note 写"main 已删除"</td></tr>
+  <tr><td><b>停 main</b></td><td><code>enabled=0</code></td><td>全部停用，并<b>打上 <code>disabled_by_parent=1</code></b></td><td>保持 <code>queued</code>：到期时 worker 停着 ⇒ 顺延；<code>due_by</code> 过了才 <code>cancelled</code></td></tr>
+  <tr><td><b>启 main</b></td><td><code>enabled=1</code></td><td><b>只启用 <code>disabled_by_parent=1</code> 的那些</b>，并清掉标记</td><td>顺延的自然会在下一跳起跑</td></tr>
+  <tr><td><b>删 worker</b></td><td>删行 + 删台账文件</td><td>—</td><td><code>cancelled</code> + 给 main 一条回执（"这个活没了"）</td></tr>
+  <tr><td><b>停 worker</b></td><td><code>enabled=0</code></td><td>—</td><td>保持 <code>queued</code> 顺延（可逆的操作不该毁掉一条活）</td></tr>
+</table></div>
+<p>⚠️ 这五行的"连带"逻辑只许写<b>一处</b>（一个 <code>applyTeamCascade</code>），否则"改一条漏一条"是必然的 —— 与 <code>deleteScheduled</code> 那批连带同族。</p>
+<p class="lead">⚠️ 派活单<b>不随任务一起删</b>，这一条与 <code>agent_followups</code> 正好相反（那张表是按 <code>pending</code> 扫的，留着会让 tick 每分钟扫到一条指向不存在任务的约定）。<code>cancelled</code> 的行必须留着：P3 那句"这个活没了"就是靠它送到 main 面前的 —— 删掉行，回执永远到不了。代价明写：行会随时间堆，保留期属于产品决定，将来按 <code>agent_findings</code> 同款处理。</p>
+
+<h2><span class="n">05</span>风险与边界<span class="en">RISK &amp; BOUNDARY</span></h2>
+
+<div class="call bad">
+  <div class="lbl">根不变量</div>
+  <p><b>外发的唯一出口只属于 main。</b>worker 的工具面里没有 <code>feishu_attach</code>、不发系统通知、不弹审批卡。这不是"配置上关掉"，是<b>结构上不挂</b> —— 与"工具级弹卡在助理线上恒关"（P19）同一族做法。<br>它带来一个必须接受的代价：<b>worker 发现"这事要人拍板"时，它自己叫不动人</b>，只能写进回执等人。我们认这个代价，因为反过来（worker 直接找人）会让人收到一条他无法归属的消息，而审批的粒度就散了。</p>
+</div>
+
+<div class="tw"><table>
+  <tr><th>风险</th><th>为什么会发生</th><th>怎么防</th></tr>
+  <tr><td><b>main 与 worker 抢 computer helper</b></td><td>helper 是<b>一个进程一个 scope</b>；两边 scope 不同 ⇒ 互相 <code>stop()</code> 重启。现象是"微信点了一半助手消失了"</td><td>到期时若 main 那场还在 <code>runningTurns</code> 里 ⇒ <b>顺延</b>。代价：伪实时退化成"main 跑完立刻起"</td></tr>
+  <tr><td><b>委派把成本放大</b></td><td>外部实测：多代理约是聊天的 15× token（Anthropic）。而派活一旦顺手，一个 main 一天能派二十次</td><td>三道：每轮 2 条 / 每天 <code>delegate_per_day</code>（出厂 5）/ 同时 3 个 worker。worker 的预算各算各的（<b>不合并拦截</b>，合并会让人莫名看到"跳过"）</td></tr>
+  <tr><td><b>派错人</b></td><td>职责写得含糊 + 名单只有那一句</td><td>名单永远带状态；拒绝时返回名单；<b>职责是必填</b>（worker 建不出来就没有）；占位文案写"它负责什么，一句话"</td></tr>
+  <tr><td><b>回执被反复念</b></td><td>回执如果在注入段常驻，模型每轮都会跟人汇报同一件事</td><td><code>reported_at</code>：<b>main 那一轮成功收尾</b>才标；失败则不标（丢了回执比重复更坏）</td></tr>
+  <tr><td><b>递归扇出</b></td><td>worker 也想派活</td><td>工具面不给 + 库里没有 worker→worker 的边（<code>from_task</code> 必须是 main，域层校验）</td></tr>
+  <tr><td><b>台账把窗口撑爆</b></td><td>只读工具返回整篇</td><td>1500 字截断 + 分节取；"最近 20 行"是刻意的粗粒度</td></tr>
+  <tr><td><b>孤立 worker</b></td><td>main 被删后 <code>parent_id</code> 悬空</td><td>停用 + 画板单列「未归属」；它不能被执行，但台账与历史都在（<b>删了就不可恢复，而台账是历史</b>）</td></tr>
+</table></div>
+
+<h3>门禁计划</h3>
+<p>新算例 <code>T-TEAM</code>（约 20 条，落在 <code>scripts/smoke/cases/CaseAgentTeam.swift</code>）。每条都要求能造出反例 —— 只写正例的断言在这套代码里等于没写。</p>
+<div class="tw"><table>
+  <tr><th>算例</th><th>判的是</th><th>反例怎么造</th></tr>
+  <tr><td class="mono">①分级</td><td><code>role</code> 与触发面一致；worker 没有 cron 入口；<code>parent_id</code> 单值</td><td>让 <code>role</code> 由 <code>assistantId != nil</code> 派生 ⇒ 应红</td></tr>
+  <tr><td class="mono">②名单</td><td>12 个上限、<b>职责原文照搬不截断</b>、状态五档正确、<b>不出现职责说明</b></td><td>把职责说明也塞进名单 ⇒ 字数超预算应红</td></tr>
+  <tr><td class="mono">③拒绝</td><td>七条拒绝理由各自说得出（合成 3 条 check）</td><td>去掉"它有活"那道判 ⇒ 第二次派活会成功，应红</td></tr>
+  <tr><td class="mono">④到期</td><td><code>due_at</code> 到点起跑；被闸挡则顺延且 <code>attempts+1</code>；worker 删了 <code>cancelled</code></td><td>把顺延改成"直接置 failed" ⇒ 应红</td></tr>
+  <tr><td class="mono">⑤回执消费</td><td>注入一次 → 标 <code>reported_at</code> → 第二次不再出现；失败收尾不标</td><td>在注入时标 ⇒ 崩一轮即丢，造一次"注入后抛错"应红</td></tr>
+  <tr><td class="mono">⑥回叫</td><td>worker 交活 ⇒ main 有一条 0 分钟唤醒；<b>不占</b> main 的 follow_up 配额</td><td>回叫写成记 <code>followUpsPerDay</code> 扣减 ⇒ 应红</td></tr>
+  <tr><td class="mono">⑦连带</td><td>删 main 只停 worker；停/启联动只恢复 <code>disabled_by_parent</code></td><td>把"启 main ⇒ 全启"写成无过滤 ⇒ 手动停的那个被拉起，应红</td></tr>
+  <tr><td class="mono">⑧工具面</td><td>worker 没有 <code>delegate</code> / <code>feishu_attach</code>；有 <code>follow_up</code> / <code>note_proposal</code></td><td>给 worker 挂上 <code>feishu_attach</code> ⇒ 应红</td></tr>
+  <tr><td class="mono">⑨只读两件</td><td><code>list_workers</code>：12 个上限、缺口分两级提示、必带状态；<code>read_worker_ledger</code>：1500 字截断、未归属拒、含「完成状态」</td><td>去掉那两句提示 ⇒ 应红（它会静默把"没写"读成"没什么特别"）</td></tr>
+  <tr><td class="mono">⑩顺延</td><td>main 在跑 ⇒ 派活不顺延起跑（<code>runningTurns</code> 判据）</td><td>去掉那条判 ⇒ 两个回合同时要 helper，应红（或至少 <code>started_at</code> 重叠）</td></tr>
+</table></div>
+
+<h3>已知缺口（写在这里，别当成忘了）</h3>
+<ul class="tight">
+  <li><b>团队页零门禁。</b>它只读状态画行；"画得对不对"归眼睛。唯一能自动验的是"<code>@State</code> 快照与库一致"，但那属于视图层探针，不在本版。</li>
+  <li><b>worker 手动试跑</b>不进 cron、不进飞书，但它会不会写 <code>agent_delegations</code> 还没定 —— 我倾向<b>不写</b>（它不是一次派活，没有 from_task），代价是画板上看不出"这个 worker 刚才被人手动跑过一次"。</li>
+  <li><b>亮色板。</b>团队页与列表行都要动颜色，而 <code>run.sh</code> 的算例只认 <code>enum Dark</code> ⇒ <b>动手前先建亮色算例</b>，否则是"看不出来但版式崩了"。</li>
+  <li><b>词表增量约 24 条</b>（团队页标题 / 五档状态 / 拒绝理由 / 编辑器的归属、职责与职责说明各一段，含两段占位提示）。状态词有一半在注入面也要用，注意注入面的那份<b>恒中文、不进词表</b>（与 <code>SentKind.tag</code> 同族）。</li>
+  <li><b>不做的两件</b>：worker 之间横向对话；"自动重派失败的活"。前者没有终点判据，后者会在同一个坑里烧三次。</li>
+</ul>
+
+<h2><span class="n">06</span>执行计划<span class="en">PLAN</span></h2>
+
+<p>六个阶段，<b>每个阶段自己就能跑绿、自己就能提交</b>。顺序不是"从简单的开始"，而是<b>每一步都为下一步提供可验证的地基</b>：数据层先落地（否则后面每改一次列都要动测试），派活闭环在<b>没有一行界面</b>的情况下先跑通（那时它已经能干活了，只是要你在飞书上跟它说话），注入排在工具之后（先教它用一个不存在的工具是反的），界面排最后（它是唯一只能靠眼睛验的部分，等后端全绿再动，返工最少）。</p>
+
+<div class="tw"><table>
+  <tr><th>阶段</th><th>做什么</th><th>结束判据</th><th>能单独发版</th></tr>
+  <tr>
+    <td><b>P1 数据与域</b><span class="sub">无行为变化</span></td>
+    <td>助理行六列（<code>role</code> / <code>parent_id</code> / <code>description</code> / <code>description_detail</code> / <code>delegate_per_day</code> / <code>disabled_by_parent</code>）+ 派活表 <code>agent_delegations</code> + 域层四条不变量（main 无 parent · worker 必须有 parent · 深度恒 1 · 名字唯一）+ <b>一处</b> <code>applyTeamCascade</code></td>
+    <td>T-TEAM ①（分级与唯一）、⑦ 的域层半边</td>
+    <td>技术上可以，<b>但建议与 P2 一起发</b> —— 只增列没有价值</td>
+  </tr>
+  <tr>
+    <td><b>P2 派活闭环</b><span class="sub">没有界面也能用</span></td>
+    <td><code>delegate</code> 工具（七条校验）+ 到期起跑 + <b>顺延口径</b>（不按次数判死）+ <code>done / failed</code> 与 <code>summary</code> + 交活回叫（0 分钟唤醒，不占配额）+ worker 工具面（去掉 <code>delegate</code> / <code>feishu_attach</code>）</td>
+    <td>T-TEAM ③④⑥⑧⑩</td>
+    <td><b>可以，而且这一阶段结束就该用真飞书跑一次</b>：让 main 自己派人，看回执能不能按时回来</td>
+  </tr>
+  <tr>
+    <td><b>P3 注入</b><span class="sub">模型才真知道有队伍</span></td>
+    <td>【你的队伍】+【派活回执】两段 + <code>reported_at</code> 的消费时机（<b>成功收尾才标</b>）+ <code>list_workers</code>（名单 40 字 / 简历全量）+ <code>read_worker_ledger</code>（1500 字截断）</td>
+    <td>T-TEAM ②⑤⑨</td>
+    <td>可以 —— 但必须排在 P2 之后</td>
+  </tr>
+  <tr>
+    <td><b>P4 列表页</b><span class="sub">建与改</span></td>
+    <td><b>职责</b>与<b>职责说明</b>两个输入框（在名字下面） + 归属下拉 + worker 独立一行 + <b>3px 身份竖条</b> + 五档状态小字。<b>职责对 worker 必填</b>：没填存不下去</td>
+    <td>视图层无门 ⇒ 亮/暗各看一次 + 本地化四道</td>
+    <td>可以（这之前 worker 只能通过域层接口建）</td>
+  </tr>
+  <tr>
+    <td><b>P5 团队页</b><span class="sub">泳道 · 纯展示</span></td>
+    <td>统计行 + 队伍筛选 + 五条泳道（列内按时间排）+ 检查器 + 「未归属」区</td>
+    <td><b>亮色算例先建</b>，然后亮/暗各看一次 + <code>e2e_probe</code> + 词表</td>
+    <td>可以</td>
+  </tr>
+  <tr>
+    <td><b>P6 打磨</b><span class="sub">可以永远不做</span></td>
+    <td>worker 手动试跑 · main 会话里的派活事件卡（点进 worker 会话） · 检查器的最近五次执行</td>
+    <td>——</td>
+    <td>可以</td>
+  </tr>
+</table></div>
+
+<h3>三条不许跨阶段提前做的事</h3>
+<ul class="tight">
+  <li><b>表只增列，不删不改名。</b>P1 之后任何一次"改个列名更顺"都会让旧版 App 打开新库直接崩（已发版 tag 的用户还在跑）—— 这条是 P11 立的硬规，不因为这次是新表就放宽。</li>
+  <li><b>界面不许先于工具。</b>先把卡片画出来、再补 <code>delegate</code>，中间那几天你会看到"点得动但点了没反应"，而那种状态最容易被当成 bug 报回来，也最容易被顺手用假数据糊过去。</li>
+  <li><b>亮色算例必须先于 P5 的任何颜色改动。</b><code>run.sh</code> 的视觉算例只认 <code>enum Dark</code>（P16 的既有缺口）⇒ 泳道那套颜色在亮色下崩了，门是绿的。</li>
+</ul>
+
+<div class="call warn">
+  <div class="lbl">最可能被真跑推翻的四个数</div>
+  <p>这些数字现在是<b>估的</b>，P2 结束那次真实往返之后要重估一次：<b>worker 上限 12</b>（注入预算倒推出来的）、<b>每轮 2 条派活</b>、<b>同时 3 个 worker</b>、<b>每天 5 条</b>。四个都在一张表里改，改完要重算【你的队伍】那段的字数预算 —— 那段是<b>每轮都付</b>的固定成本。</p>
+</div>
+
+<div class="call ok">
+  <div class="lbl">每个阶段的完成定义</div>
+  <p>不是"代码写完"，是<b>三件事同时成立</b>：双门禁绿（冒烟 + <code>xcodebuild</code>，各零 warning）+ <b>至少一条新判据造过反例并真的变红</b> + 一次 commit（<b>不打 tag</b>，tag 单独决定）。反例这一条最容易被跳过，而跳过它等于这个阶段的判据全是"看起来对"。</p>
+</div>
+
+<div class="foot">P20 · 2026-11-24 · 单一来源 = 本文件 · 决策来源 = 与 boss 的连续四轮讨论（分级判据 / 派活形态 / 团队页 / 执行计划）</div>
+
+</div>
+</body>
+</html>
