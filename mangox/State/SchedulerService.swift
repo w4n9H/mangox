@@ -828,6 +828,9 @@ final class SchedulerService: ObservableObject {
         //  · 之前 —— 回看轮**不推进 `lastRunAt`**（它不是这个任务的一次定时运行），
         //    所以它不会影响漏跑的口径，放哪都一样；仍放在这里读起来最顺。
         fireDueFollowUps(now: now)
+        // P20: 派活的起跑。放在回看之后: 同一分钟里"它自己约的"优先（那是它上一轮的判断），
+        // 派活是别人交代的活。两者都按 `runScheduledFire` 的五道闸走，谁也不抢谁。
+        fireDueDelegations(now: now)
         // P17: 大跳 = 睡眠 / 长时间挂起 ⇒ 重算漏跑清单。放在到期检查**之后**: 刚跑过的任务
         // `lastRunAt` 已经前移, 不会被自己算成"漏跑"。首次启动时 `lastSchedulerMinute` 是 0
         // ⇒ gap 巨大 ⇒ 顺带把"启动时算一次"也覆盖了。
@@ -913,7 +916,8 @@ final class SchedulerService: ObservableObject {
     @discardableResult
     func runScheduledFire(_ task: ScheduledTask, at now: Date = Date(),
                           targeted: ConversationItem? = nil,
-                          followUp: FollowUp? = nil) -> FireStart {
+                          followUp: FollowUp? = nil,
+                          delegation: Delegation? = nil) -> FireStart {
         // P19: 旧条件值守任务只读归档 —— 不 spawn、不写日志、不落痕。
         // 它是全系统唯一一条「无人授权自动执行」的路（fire 恒 unattended: true），
         // 封在这里就是把那条路拆掉；静默是刻意的，UI 上该行已标「旧类型（已停用）」。
@@ -980,10 +984,17 @@ final class SchedulerService: ObservableObject {
         // 时间线**, 恒中文（本文件在 L10n 的 `EXCLUDE_FILES` 里）—— 掺一个可本地化词会让同一条
         // 记录在不同界面语言下写出不同字节。默认标题的哨兵在这条路上换成恒中文的说法。
         let sepLabel: String
-        if let followUp {
+        if let delegation {
+            // P20: 派活轮与 cron / 回看**必须一眼分得开** —— 不然人会以为"这个 worker 自己跑了一次"。
+            sepLabel = "派活 · 「" + Self.shortWhy(delegation.goal) + "」"
+        } else if let followUp {
             // 2026-11-23: 回看轮必须**一眼认得出**。它与一次普通 cron 运行长得一模一样的话，
             // 人会以为"这个任务怎么半夜三点自己跑了一次"，而实际是助理自己约的。
-            sepLabel = "回看 · 约的是「" + Self.shortWhy(followUp.why) + "」"
+            // 回叫与回看是两件事（一个是 App 替 worker 报信，一个是它自己约的），
+            // 长得一样的话三个月后翻日志没人分得清。
+            sepLabel = followUp.kind == .callBack
+                ? "回叫 · " + Self.shortWhy(followUp.why)
+                : "回看 · 约的是「" + Self.shortWhy(followUp.why) + "」"
         } else if let targeted {
             let raw = targeted.title
             let name = raw == ConversationTitle.defaultValue ? "未命名会话" : raw
@@ -1034,6 +1045,7 @@ final class SchedulerService: ObservableObject {
                                                 snapshot: snapshot,
                                                 ledgerPath: handoffPath(for: task),
                                                 followUp: followUp?.why,
+                                                followUpKind: followUp?.kind ?? .selfWake,
                                                 sent: sentMemory(task.id))
             // 收尾要用: 归属哪个任务、这条 finding 算哪个来源、证据允许引用哪些编号。
             // source_id **由 App 决定**（项目来源 / 唯一启用的来源）—— 不接受模型给的 id,
@@ -1046,15 +1058,24 @@ final class SchedulerService: ObservableObject {
                 }))
         }
         // 助理的用户消息 = 人写的**目标**（观察与契约在 system 段）; Cron 一字不动
-        var prompt = task.isAssistant
-            ? Self.watchUserPrompt(goal: task.prompt)
-            : buildScheduledPrompt(task, targeted: targeted)
+        // P20: 派活轮的用户消息**就是那张单子**（它的长期职责仍在 system 段的【目标】里）——
+        // 混进 `task.prompt` 的话，worker 会把一次性的活写进账本目标。
+        var prompt: String
+        if let delegation {
+            prompt = Self.workOrderPrompt(delegation, worker: task)
+        } else {
+            prompt = task.isAssistant
+                ? Self.watchUserPrompt(goal: task.prompt)
+                : buildScheduledPrompt(task, targeted: targeted)
+        }
         // 2026-11-23: 回看轮必须知道自己**为什么醒**，否则它就是"半夜三点被叫起来重新判断一遍"。
         // 助理档挂在 system 段（`watchSystemPrompt(followUp:)` —— 它得排在输出契约**之前**，
         // 否则"说完就结束"那条末尾不变量被破）；Cron 档没有 system 段可挂（`--no-session`
         // 且不注入），只能接在指令后面。
         if let f = followUp, !task.isAssistant {
-            prompt += "\n\n" + Self.followUpNote(why: f.why)
+            prompt += "\n\n" + (f.kind == .callBack
+                                 ? Self.callBackNote(why: f.why)
+                                 : Self.followUpNote(why: f.why))
         }
         let promptMsg = ChatMessage(role: .user, content: .text(prompt))
         store.persistMessage(promptMsg, sid: logId)
@@ -1102,6 +1123,8 @@ final class SchedulerService: ObservableObject {
             appendTimeline("── 当前档位 \(fireMode.displayName) 会削掉扩展工具, "
                            + "这个任务调不到 follow_up（换 standard / full 档可解）──", to: logId)
         }
+        // 收口只有 sid ⇒ 先记下"这一轮是哪张单"（与 `followUpFires` / `watchFires` 同一套理由）。
+        if let delegation { delegationFires[logId] = delegation }
         store.beginTurn(sid: logId, prompt: prompt, ephemeral: !task.isAssistant,
                         cwd: cwd, unattended: true,
                         modeOverride: cfg.flatMap { AgentMode(rawValue: $0.agentMode) },
@@ -1127,7 +1150,8 @@ final class SchedulerService: ObservableObject {
         // 推进 lastRunAt 会让"下次 cron 该补哪一段"算错，涨 runCount 会让"已跑 N 次"里混进
         // 用户没安排过的次数（而那个数他就拿来判断"这个东西是不是太吵"）。
         if let idx = scheduledTasks.firstIndex(where: { $0.id == task.id }) {
-            if targeted == nil && followUp == nil {
+            // P20: 派活轮同理 —— 它不是这个 worker 的定时那一次。
+            if targeted == nil && followUp == nil && delegation == nil {
                 scheduledTasks[idx].lastRunAt = now
                 scheduledTasks[idx].runCount += 1   // P3.10: 执行次数
             }
@@ -1344,10 +1368,284 @@ final class SchedulerService: ObservableObject {
         """
     }
 
+    /// 回叫轮的注入段（P20）。与 `followUpNote` **并列而不是复用**它:
+    /// 那一份开头写着"这是你上一轮结束时给自己约的"，而回叫是**别人那边**结束了 ——
+    /// 用同一份会让 main 以为自己约过，于是它去"再检查一遍"而不是去看回执。
+    ///
+    /// ⚠️ 最后那句"别把它的活重做一遍"是有针对的: main 手上有全部上下文，最省事的反应就是
+    /// 自己顺手干完 —— 那等于同一件事烧两次 token，而 worker 那一轮的产出白扔。
+    static func callBackNote(why: String) -> String {
+        """
+        【回叫 · 你的 worker 交活了】
+        \(why)
+        ⚠️ 不是人叫你，也不是定时到了 —— 是你派出去的那件事有了下文。
+        这一轮先看这条回执：办成了就跟人说清结论；没办成要决定重派、换人，还是自己接。
+        **不要把它的活重做一遍** —— 它那一轮的产出在它自己的台账里。
+        """
+    }
+
     /// 分隔行里那一小段"约的是什么"。**截短**是因为它会进时间线，而时间线是一条消息。
     static func shortWhy(_ why: String) -> String {
         let t = why.trimmingCharacters(in: .whitespacesAndNewlines)
         return t.count > 24 ? String(t.prefix(24)) + "…" : t
+    }
+
+    // MARK: - P20 派活（2026-11-24）
+
+    /// 在途的**派活轮** —— 日志会话 -> 那张单。
+    ///
+    /// 为什么要记: 收口（`finishDelegationFireIfNeeded`）发生在回合落定之后，那时只有 `sid`；
+    /// "这一轮是哪张单"在库里查不出来（那张单此刻还是 `running`，但同一个 worker 可能
+    /// 先跑自己的 cron 再跑下一张单）。与 `followUpFires` / `watchFires` 同一套理由。
+    private var delegationFires: [UUID: Delegation] = [:]
+
+    /// 在途的**派活请求收集** —— 日志会话 -> (spool, main 的任务 id)。这一轮是 main 在派活。
+    private var delegateSpools: [UUID: (spool: String, mainId: UUID)] = [:]
+
+    /// 这一轮能不能给 worker 派活 —— 能就把 spool 路径给它。
+    ///
+    /// 判据三条，缺一条都不给工具（**挂载闸门**，`PiRpcTransport` 那半靠返回值非 nil）:
+    ///   · 它是 main —— worker 的工具面里没有 `delegate`，递归扇出在结构上不成立；
+    ///   · 它是助理 —— Cron 档没有"一支队伍"这个概念（也没有 `--session` 的注入面）；
+    ///   · 配额 > 0 —— 0 = 人明确关掉。**给一个每次都被挡的工具比不给更坏**（模型会反复试）。
+    func beginDelegationTurn(sid: UUID, owner: ScheduledTask?) -> String? {
+        guard let owner, owner.isAssistant, owner.role == .main,
+              !owner.isLegacyWaiting, owner.effectiveDelegatesPerDay > 0 else { return nil }
+        let spool = PiRpcTransport.delegateSpoolPath(mainTaskId: owner.id)
+        delegateSpools[sid] = (spool: spool, mainId: owner.id)
+        return spool
+    }
+
+    /// 一轮结束时把 spool 里那几张派活请求过一遍**七条判据**，落库，然后删 spool。
+    ///
+    /// 顺序 = 解析 → 判 → 落库 → 删文件（同 `finishFollowUpIfNeeded`）: 删在最后，
+    /// 崩在中间时下一轮会再读一遍，而每张请求都带扩展侧生成的 `id` ⇒ 撞主键不会变成两张单。
+    ///
+    /// ⚠️ **判据只在这里**（不在扩展里）: 名单 / 谁手上有活 / 今天派了几条都是库里的瞬时事实，
+    /// 而塞进子进程 env 的那一份会在进程复用时**冻结**。代价 = 模型下一轮才知道被拒。
+    func finishDelegateTurn(sid: UUID) {
+        guard let ctx = delegateSpools.removeValue(forKey: sid) else { return }
+        guard let store, let p = store.persistence else { return }
+        guard let main = scheduledTasks.first(where: { $0.id == ctx.mainId }) else {
+            // main 在回合中途被删了 ⇒ 这些请求没有归属。spool 照旧删。
+            try? FileManager.default.removeItem(atPath: ctx.spool)
+            return
+        }
+        guard let text = try? String(contentsOfFile: ctx.spool, encoding: .utf8) else { return }
+        let parsed = DelegationSpool.parse(text)
+        let now = Date()
+        var busy = openDelegationsByWorker()
+        var usedToday = (try? p.delegationCount(
+            from: main.id, since: Calendar.current.startOfDay(for: now))) ?? 0
+        var usedThisTurn = 0
+        var accepted: [(Delegation, String)] = []
+        var problems = parsed.rejects.map { "第 \($0.line) 行: \($0.reason)" }
+        for ask in parsed.items {
+            switch DelegationRule.check(ask, from: main, roster: scheduledTasks, busy: busy,
+                                        usedToday: usedToday, usedThisTurn: usedThisTurn) {
+            case .failure(let why):
+                // 前三条是**事实错误**（改一次就对）⇒ 顺手把可用名单回给它，省一轮来回。
+                // 配额那两条不回名单: 名单没问题，它需要的是等或者改设置。
+                let withRoster: Bool
+                switch why {
+                case .unknownWorker, .workerIsMain, .workerDisabled: withRoster = true
+                default: withRoster = false
+                }
+                problems.append("派给「\(ask.worker)」没成: " + why.reason
+                                + (withRoster
+                                   ? "\n   " + DelegationRule.rosterLine(main, roster: scheduledTasks,
+                                                                        busy: busy)
+                                   : ""))
+            case .success(let workerId):
+                guard let worker = scheduledTasks.first(where: { $0.id == workerId }) else { continue }
+                let d = Delegation(id: ask.id, fromTask: main.id, toTask: workerId,
+                                   goal: ask.goal, acceptance: ask.acceptance, context: ask.context,
+                                   dueAt: now.addingTimeInterval(Double(ask.afterMinutes) * 60),
+                                   dueBy: ask.dueInMinutes.map {
+                                       now.addingTimeInterval(Double($0) * 60)
+                                   },
+                                   status: .queued, attempts: 0, note: nil, summary: nil,
+                                   reportedAt: nil, createdAt: now, startedAt: nil, finishedAt: nil)
+                try? p.insertDelegation(d)
+                // 同一轮里派第二张单时，"他手上有活"必须看得见刚派的这张 —— 否则一轮可以
+                // 给同一个 worker 派两单，而那正是文档硬拒的那件事。
+                busy[workerId] = d
+                accepted.append((d, worker.name))
+                usedThisTurn += 1
+                usedToday += 1
+            }
+        }
+        if !accepted.isEmpty || !problems.isEmpty {
+            appendTimeline(Self.delegationSummary(accepted: accepted, problems: problems, now: now),
+                           to: sid)
+        }
+        try? FileManager.default.removeItem(atPath: ctx.spool)
+    }
+
+    /// 这些 worker 手上还没落定的单（`openDelegations` 的字典版）。
+    private func openDelegationsByWorker() -> [UUID: Delegation] {
+        guard let p = store?.persistence else { return [:] }
+        let open = (try? p.openDelegations()) ?? []
+        // 一个 worker 同时只允许一张（硬拒不排队）⇒ 有多张时取最早的那张当"手上那张"。
+        var out: [UUID: Delegation] = [:]
+        for d in open where out[d.toTask] == nil { out[d.toTask] = d }
+        return out
+    }
+
+    /// 时间线那几行措辞（恒中文，本文件在 L10n 的 `EXCLUDE_FILES` 里）。
+    static func delegationSummary(accepted: [(Delegation, String)], problems: [String],
+                                  now: Date) -> String {
+        let fmt = DateFormatter()
+        fmt.dateFormat = "HH:mm"
+        var lines: [String] = []
+        for (d, name) in accepted {
+            lines.append("── \(fmt.string(from: now)) 派给「\(name)」· 约在 "
+                         + "\(fmt.string(from: d.dueAt)) 起跑（\(shortWhy(d.goal))）──")
+        }
+        for p in problems { lines.append("── \(fmt.string(from: now)) 派活没成: \(p) ──") }
+        return lines.joined(separator: "\n")
+    }
+
+    /// 扫一遍到点的派活单，**一张一张起 worker 的一轮**。由 `schedulerTick` 每分钟调一次。
+    ///
+    /// 与 `fireDueFollowUps` 同构，只有两处**故意不同**:
+    ///  · **不按次数判死**（那个函数三次就 `missed`）: worker 忙四十分钟是正常的，把它判成
+    ///    失败等于把一条活扔掉。顺延到天荒地老，直到 `due_by` 过了才作废；
+    ///  · 起跑要额外避让 **main 那一场**（`ComputerHost` 一个进程一个 scope，两场同时要助手
+    ///    会互相 `stop()` 重启 —— 现象是"微信点了一半助手消失了"）。
+    func fireDueDelegations(now: Date = Date()) {
+        guard let store, let p = store.persistence else { return }
+        let due = (try? p.dueDelegations(now: now)) ?? []
+        guard !due.isEmpty else { return }
+        for d in due {
+            guard let main = scheduledTasks.first(where: { $0.id == d.fromTask }) else {
+                // main 没了 ⇒ 这张单谁也不欠，作废（不留回执: 收件人都不在了）。
+                try? p.settleDelegation(id: d.id, status: .cancelled,
+                                        summary: nil, note: "main 已删除", at: now)
+                continue
+            }
+            guard let worker = scheduledTasks.first(where: { $0.id == d.toTask }) else {
+                finishDelegation(d, worker: nil, status: .cancelled,
+                                 summary: nil, note: "worker 已删除", at: now)
+                continue
+            }
+            // 停用 / 只读归档 ⇒ **顺延**（可逆的操作不该毁掉一条活），过了 due_by 才作废。
+            if !worker.enabled || worker.isLegacyWaiting {
+                postpone(d, reason: "「\(worker.name)」停着", now: now, at: p)
+                continue
+            }
+            // ⚠️ main 那一场还在跑 ⇒ 顺延。代价明写: 伪实时退化成"main 跑完立刻起"。
+            if let mainLog = main.logSessionId, store.runningTurns.contains(mainLog) {
+                postpone(d, reason: "main 这一轮还在跑", now: now, at: p)
+                continue
+            }
+            switch runScheduledFire(worker, at: now, delegation: d) {
+            case .started:
+                try? p.startDelegation(id: d.id, at: now)
+                Log.event("delegate", ["id": String(d.id.uuidString.prefix(8)),
+                                       "to": String(worker.id.uuidString.prefix(8))])
+            case .skipped(let reason):
+                // `runScheduledFire` 自己会留痕（在途 / 并发满 / 模型不在清单 …）。
+                postpone(d, reason: reason, now: now, at: p)
+            }
+        }
+    }
+
+    /// 顺延一张单（起不来），或者——过了 `due_by`——作废并回执。
+    private func postpone(_ d: Delegation, reason: String, now: Date, at p: PersistenceStore) {
+        if let dueBy = d.dueBy, dueBy <= now {
+            finishDelegation(d, worker: scheduledTasks.first(where: { $0.id == d.toTask }),
+                             status: .cancelled, summary: nil,
+                             note: "过了期限没起来（\(reason)）", at: now)
+            return
+        }
+        // 步长固定、不按次数判死（见 `fireDueDelegations` 的注释）。`attempts` 只是给人看的量。
+        let next = now.addingTimeInterval(Double(FollowUpLimit.retryStepMinutes) * 60)
+        try? p.rearmDelegation(id: d.id, dueAt: next, attempts: d.attempts + 1, note: reason)
+    }
+
+    /// 一张单落定 + （按需）给 main 一条回执。**所有终态都走这里** —— 分叉出去就会有一条路忘了回执。
+    ///
+    /// 为什么不给"回执"另造一张表/一个队列: `agent_delegations` 那一行本身就是待汇报的状态
+    /// （`reported_at IS NULL` = 还没汇报），再存一份就是第二真源。回执的**投递**借用 follow-up
+    /// 的到期机制（`dueAt = now` ⇒ 下一跳就叫它），但 `kind = .callBack` ⇒ **不占** main 的配额。
+    private func finishDelegation(_ d: Delegation, worker: ScheduledTask?,
+                                  status: DelegationStatus, summary: String?, note: String?,
+                                  at now: Date) {
+        guard let p = store?.persistence else { return }
+        try? p.settleDelegation(id: d.id, status: status, summary: summary, note: note, at: now)
+        // main 已经不在了 ⇒ 没有收件人，不插回执（插了也没人会读，而 tick 每次都会去叫它）。
+        guard scheduledTasks.contains(where: { $0.id == d.fromTask }) else { return }
+        let name = worker?.name ?? "worker"
+        let head: String
+        switch status {
+        case .done: head = "\(name) 交活了：\(summary ?? "（没写结论，细节去读它的台账）")"
+        case .cancelled: head = "\(name) 那张单作废了：\(note ?? "原因不明")"
+        default: head = "\(name) 没干成：\(note ?? "这一轮没有产出")"
+        }
+        let f = FollowUp(id: UUID(), taskId: d.fromTask, dueAt: now,
+                         why: Self.shortWhy(head), status: .pending, attempts: 0,
+                         createdAt: now, firedAt: nil, note: nil, kind: .callBack)
+        if (try? p.insertFollowUpIfAbsent(f)) == true { reloadFollowUps() }
+    }
+
+    /// 一轮落定：把那张单收成 `done` / `failed`，并给 main 一条回执。
+    ///
+    /// **判据**: "这一轮有没有产出"（最后一条 assistant 消息有没有字），不是"活干成没有" ——
+    /// 活成没成只有 worker 自己知道，那一句写在 `summary` 里由 main 读。
+    func finishDelegationFireIfNeeded(sid: UUID) {
+        guard let d = delegationFires.removeValue(forKey: sid) else { return }
+        guard let store, store.persistence != nil else { return }
+        let text = Self.turnConclusion(store.replayMessages(for: sid))
+        let worker = scheduledTasks.first(where: { $0.id == d.toTask })
+        guard !text.isEmpty else {
+            finishDelegation(d, worker: worker, status: .failed, summary: nil,
+                             note: "这一轮没有产出（空回合 / 中途停 / 出错）", at: Date())
+            return
+        }
+        finishDelegation(d, worker: worker, status: .done,
+                         summary: DelegationLimit.clip(text, DelegationLimit.maxSummaryChars),
+                         note: nil, at: Date())
+    }
+
+    /// 这一轮的结论 = **最后一条 assistant 文本的第一行**（≤400 字由调用方截）。
+    ///
+    /// 为什么是第一行: 助理档的输出契约第一行就是「结论：…」，而摘要的用途是"main 读一眼
+    /// 就知道它干成没干成" —— 整段塞进回执等于把 worker 的窗口搬进 main 的窗口。
+    static func turnConclusion(_ msgs: [ChatMessage]) -> String {
+        guard let last = msgs.last(where: { $0.role == .assistant }),
+              case .text(let s) = last.content else { return "" }
+        let first = s.split(separator: "\n").first.map(String.init) ?? ""
+        return first.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// 派活轮的**正文**（工人看到的那张单子）。恒中文，逐字进 user prompt。
+    ///
+    /// 为什么不复用 `task.prompt`: 那是它的**长期职责**（"盯着 CI"），而一张单子是
+    /// "这一次干什么"。混成一个字段的话，worker 会把一次性的活写进账本目标里。
+    static func workOrderPrompt(_ d: Delegation, worker: ScheduledTask) -> String {
+        let fmt = DateFormatter()
+        fmt.dateFormat = "MM-dd HH:mm"
+        var lines = [
+            "【派活单】这一轮只干这件事。",
+            "",
+            "要做的：\(d.goal)",
+            "算干完的标志：\(d.acceptance)",
+        ]
+        if let c = d.context?.trimmingCharacters(in: .whitespacesAndNewlines), !c.isEmpty {
+            lines.append("相关上下文：\n\(c)")
+        }
+        if let dueBy = d.dueBy {
+            lines.append("最晚要：\(fmt.string(from: dueBy)) 之前。")
+        }
+        lines.append("")
+        lines.append("""
+        收尾时：
+        · **第一行写一句话结论**（队长读的就是那一行；细节写进你的账本）；
+        · 别把这张单并进你账本里的长期目标 —— 它是这个队长的一次委派；
+        · 没人坐在旁边，所以不写「方案」等审批；但删东西 / 对外发消息仍然不许碰。
+        """)
+        return lines.joined(separator: "\n")
     }
 
     // MARK: - P19 助理 · 巡检轮
@@ -1497,6 +1795,7 @@ final class SchedulerService: ObservableObject {
                                   snapshot: WatchSnapshot,
                                   ledgerPath: String,
                                   followUp: String? = nil,
+                                  followUpKind: FollowUpKind = .selfWake,
                                   sent: String? = nil) -> String {
         var parts: [String] = []
         parts.append("""
@@ -1561,7 +1860,8 @@ final class SchedulerService: ObservableObject {
         // 2026-11-23: 回看轮的"为什么醒"。**必须排在输出契约之前** —— 契约是"说完就结束"的那一段，
         // 它后面不该再有话（这条不变量从写下来那天就挂着）。
         if let f = followUp, !f.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            parts.append(Self.followUpNote(why: f))
+            parts.append(followUpKind == .callBack ? Self.callBackNote(why: f)
+                                                  : Self.followUpNote(why: f))
         }
         // 回复契约放最后（它是"说完就结束"的那一段，后面不该再有话）
         parts.append(Self.watchOutputContract)

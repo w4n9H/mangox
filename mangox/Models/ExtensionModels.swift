@@ -71,7 +71,10 @@ struct ExtensionItem: Identifiable {
                                            // 漏登记零红灯: 门禁 ③x 只认引号紧贴 `mangox-` 的字面量，
                                            // 而这两处写的是 `dir + "/mangox-x.ts"`（那个斜杠把它漏掉了，
                                            // 同一条判据已修）。
-                                           "mangox-feishu-attach", "mangox-followup"]
+                                           "mangox-feishu-attach", "mangox-followup",
+                                           // P20 (2026-11-24): 派活。同族坑: 漏登记零红灯,
+                                           // 后果是面板给它一个**删除按钮**（点一下下次 spawn 又回来）。
+                                           "mangox-delegate"]
 
     /// 自带扩展里**连启停开关都不给**的那些 —— approval 四档恒挂、codemode 由**档位轴**决定、
     /// dream 只在那次 fire 挂、computer 由**作用域开关**决定。
@@ -90,7 +93,10 @@ struct ExtensionItem: Identifiable {
                                                  "mangox-dream", "mangox-computer",
                                                  // 同样是**per-turn 轴**（飞书轮 / 归某个任务的一轮），
                                                  // 面板那个 enabled 开关碰不到它们 ⇒ 给开关就是说谎。
-                                                 "mangox-feishu-attach", "mangox-followup"]
+                                                 "mangox-feishu-attach", "mangox-followup",
+                                                 // P20: 派活同族 —— per-turn 轴（只挂 main 那一轮）,
+                                                 // 面板那个 enabled 开关碰不到它。
+                                                 "mangox-delegate"]
 
     /// 内置扩展**注册出来的工具名**, 按扩展名查 —— 面板在那一行下面展开它们。
     ///
@@ -109,6 +115,8 @@ struct ExtensionItem: Identifiable {
         "mangox-computer": PiRpcTransport.computerToolNames,
         "mangox-feishu-attach": PiRpcTransport.attachToolNames,
         "mangox-followup": PiRpcTransport.followUpToolNames,
+        // P20 (2026-11-24): 派活 —— 只有 main 的那一轮挂（worker 结构上没有这个工具）。
+        "mangox-delegate": PiRpcTransport.delegateToolNames,
     ]
 
     /// 内置扩展里**按需挂载**的那几个。不在这张名单里的内置 = **恒挂**（approval 就是）。
@@ -116,7 +124,7 @@ struct ExtensionItem: Identifiable {
     /// 判据 = "挂不挂由**这一轮是什么轮**决定"（dream 的 fire / 飞书轮 / 归任务的一轮），
     /// 与 computer 那种"由设置页作用域决定"不同类（它的挂载期限是几个小时，不是一轮）。
     static let builtInOnDemand: Set<String> = ["mangox-dream", "mangox-feishu-attach",
-                                              "mangox-followup"]
+                                              "mangox-followup", "mangox-delegate"]
 
     /// 这一项当前**挂不上**的原因（nil = 正常）。判据必须是**产品能回答的**问题 ——
     /// 用户的选择（"我就是不想开"）走停用态, 不在这里。

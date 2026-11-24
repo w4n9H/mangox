@@ -498,6 +498,11 @@ details.fold[open]>summary{margin-bottom:4px}
   <div class="todo"><div class="tn">7</div><div class="tbody"><div class="tt">今天到量了 / 已关掉</div><div class="td">配额三态生效。<b><code>0</code> 时连工具都不挂</b>（给一个每次都被挡的工具，模型会反复试）</div></div></div>
 </div>
 
+<h3>实现取舍：七条判据<b>只在 App 侧</b>，扩展只负责收</h3>
+<p>扩展（<code>mangox-delegate.ts</code>）只做三件事：读 <code>MANGOX_DELEGATE_SPOOL</code> 这个 env、校验形状（<code>worker</code> / <code>goal</code> / <code>acceptance</code> 非空、<code>after_minutes</code> 是整数）、往 spool 里追一行 JSONL。<b>上面那七条一条都不在扩展里</b>。</p>
+<p>为什么：名单、谁手上有活、今天派了几条，全是<b>库里的瞬时事实</b>。把它们塞进子进程的 env 会随进程复用而<b>冻结</b>（本仓踩过同族：改了配置、进程被复用 ⇒ 助手照旧按旧名单拒，而设置页是勾着的）。两处各判一遍之后，"拒了"与"拒对了"就变成两件会分叉的事 —— 而派活拒错一次，代价是一整轮。</p>
+<p><b>代价明写：模型是「下一轮」才知道被拒的</b>（时间线里落那几行「派活没成: …」，P3 的回执注入再把它念给 main）。换来的是"判据只有一个产生者"，以及拒绝理由里能带上<b>当场算出来的</b>名单与起跑时刻。</p>
+
 <h3>两段注入</h3>
 <p><b>【你的队伍】（排进 main 的注入段，常驻）</b> —— 每个 worker 一行，<b>上限 12 个</b>：</p>
 <pre>【你的队伍】
@@ -580,7 +585,7 @@ details.fold[open]>summary{margin-bottom:4px}
   <tr><th>算例</th><th>判的是</th><th>反例怎么造</th></tr>
   <tr><td class="mono">①分级</td><td><code>role</code> 与触发面一致；worker 没有 cron 入口；<code>parent_id</code> 单值</td><td>让 <code>role</code> 由 <code>assistantId != nil</code> 派生 ⇒ 应红</td></tr>
   <tr><td class="mono">②名单</td><td>12 个上限、<b>职责原文照搬不截断</b>、状态五档正确、<b>不出现职责说明</b></td><td>把职责说明也塞进名单 ⇒ 字数超预算应红</td></tr>
-  <tr><td class="mono">③拒绝</td><td>七条拒绝理由各自说得出（合成 3 条 check）</td><td>去掉"它有活"那道判 ⇒ 第二次派活会成功，应红</td></tr>
+  <tr><td class="mono">③拒绝</td><td>七条拒绝理由各自说得出（<b>实际落成 4 条 check</b> ⑫⑬⑭⑮：派给谁 / 名单 / 有活 / 额度与顺序）</td><td>去掉"它有活"那道判 ⇒ 第二次派活会成功，应红（<b>实测 1 红：⑭</b>）</td></tr>
   <tr><td class="mono">④到期</td><td><code>due_at</code> 到点起跑；被闸挡则顺延且 <code>attempts+1</code>；worker 删了 <code>cancelled</code></td><td>把顺延改成"直接置 failed" ⇒ 应红</td></tr>
   <tr><td class="mono">⑤回执消费</td><td>注入一次 → 标 <code>reported_at</code> → 第二次不再出现；失败收尾不标</td><td>在注入时标 ⇒ 崩一轮即丢，造一次"注入后抛错"应红</td></tr>
   <tr><td class="mono">⑥回叫</td><td>worker 交活 ⇒ main 有一条 0 分钟唤醒；<b>不占</b> main 的 follow_up 配额</td><td>回叫写成记 <code>followUpsPerDay</code> 扣减 ⇒ 应红</td></tr>

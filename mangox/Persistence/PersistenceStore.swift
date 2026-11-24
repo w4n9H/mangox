@@ -418,6 +418,13 @@ final class PersistenceStore {
         try db.run("CREATE INDEX IF NOT EXISTS idx_followups_task ON agent_followups(task_id, status)")
         // 配额闸（`followUpCountSince`）按 `created_at` 扫同一个任务的行。
         try db.run("CREATE INDEX IF NOT EXISTS idx_followups_created ON agent_followups(task_id, created_at)")
+        // P20: `agent_followups.kind` —— `self`（模型自己约的，占配额）/ `call_back`（worker 交活
+        // 之后 App 插的，不占配额）。**老行全是 `self`**（那个功能出生时只有一种来路），
+        // 所以缺省值就是真相，不需要迁移脚本。
+        // ⚠️ 补列必须写在**建表之后** —— `addColumnIfMissing` 对不存在的表是静默无效的
+        // （PRAGMA 返回空 ⇒ 以为缺 ⇒ ALTER 失败被 `try?` 吞掉），而这里“失败”的表现是
+        // 配额口径永远按老 SQL 走、回叫照样吃配额，且零红灯。
+        addColumnIfMissing("agent_followups", "kind", "TEXT NOT NULL DEFAULT 'self'")
         // 2026-11-23:「已发消息」记忆 —— 助理往外发过的每一句。**只记模型说的话**
         //（`notice*` 那族是 App 话术, 不记, 所以**没有 `origin` 列**）。
         // `id` 同时是发给桥的 `ref`: 回执带回来 ⇒ "这一条发没发出去"能对上具体那一条。
@@ -1495,7 +1502,7 @@ final class PersistenceStore {
         if let status { where_.append("status = ?"); args.append(.text(status.rawValue)) }
         let filter = where_.isEmpty ? "" : " WHERE " + where_.joined(separator: " AND ")
         let rows = try db.query("""
-            SELECT id, task_id, due_at, why, status, attempts, created_at, fired_at, note
+            SELECT id, task_id, due_at, why, status, attempts, created_at, fired_at, note, kind
             FROM agent_followups\(filter) ORDER BY due_at ASC
             """, args)
         return rows.compactMap(decodeFollowUp)
@@ -1504,7 +1511,7 @@ final class PersistenceStore {
     /// tick 要的那一批：`pending` 且已到点。
     func dueFollowUps(now: Date) throws -> [FollowUp] {
         let rows = try db.query("""
-            SELECT id, task_id, due_at, why, status, attempts, created_at, fired_at, note
+            SELECT id, task_id, due_at, why, status, attempts, created_at, fired_at, note, kind
             FROM agent_followups WHERE status = 'pending' AND due_at <= ? ORDER BY due_at ASC
             """, [.real(now.timeIntervalSince1970)])
         return rows.compactMap(decodeFollowUp)
@@ -1527,7 +1534,10 @@ final class PersistenceStore {
                         attempts: Int(max(Int64(0), int(row["attempts"] ?? .null))),
                         createdAt: optionalDate(row, "created_at") ?? .distantPast,
                         firedAt: optionalDate(row, "fired_at"),
-                        note: optionalText(row, "note"))
+                        note: optionalText(row, "note"),
+                        // 未知值回落 `selfWake`（占配额的那一侧）: 宁可多算一次配额，
+                        // 也不要把一条来路不明的唤醒当成"App 自己插的"从而少算。
+                        kind: FollowUpKind.decode(optionalText(row, "kind") ?? ""))
     }
 
     /// 这个任务还欠着几条（`FollowUpLimit.maxPendingPerTask` 那条闸）。
@@ -1545,8 +1555,12 @@ final class PersistenceStore {
     /// **重试顺延**带偏（一次约定被闸挡三次就记成三轮，配额凭空少一天的量）。
     /// 取消/重排也算 —— 改主意本身也吵。
     func followUpCountSince(taskId: UUID, since: Date) throws -> Int {
+        // ⚠️ `kind = 'self'` 是**配额口径的一半**（P20）: 这条数的是"人给它的额度用掉了多少"，
+        // 而 worker 交活回叫是 App 插的 —— 算进去等于一个带 5 个 worker 的 main 一天就把
+        // 自己的回看配额耗光，而人会说"我没约过这么多次"。
         let rows = try db.query("""
-            SELECT COUNT(*) AS n FROM agent_followups WHERE task_id = ? AND created_at >= ?
+            SELECT COUNT(*) AS n FROM agent_followups
+            WHERE task_id = ? AND created_at >= ? AND kind = 'self'
             """, [.text(taskId.uuidString), .real(since.timeIntervalSince1970)])
         guard let row = rows.first else { return 0 }
         return Int(int(row["n"] ?? .null))
@@ -1565,8 +1579,8 @@ final class PersistenceStore {
         guard !exists else { return false }
         try db.run("""
             INSERT OR IGNORE INTO agent_followups
-            (id, task_id, due_at, why, status, attempts, created_at, fired_at, note)
-            VALUES (?,?,?,?,?,?,?,?,?)
+            (id, task_id, due_at, why, status, attempts, created_at, fired_at, note, kind)
+            VALUES (?,?,?,?,?,?,?,?,?,?)
             """, [.text(f.id.uuidString),
                   .text(f.taskId.uuidString),
                   .real(f.dueAt.timeIntervalSince1970),
@@ -1575,7 +1589,8 @@ final class PersistenceStore {
                   .int(Int64(f.attempts)),
                   .real(f.createdAt.timeIntervalSince1970),
                   f.firedAt.map { .real($0.timeIntervalSince1970) } ?? .null,
-                  f.note.map { .text($0) } ?? .null])
+                  f.note.map { .text($0) } ?? .null,
+                  .text(f.kind.rawValue)])
         return true
     }
 
@@ -1636,14 +1651,16 @@ final class PersistenceStore {
     ///
     /// ⚠️ 派活前那道硬拒读的是这个，不是 `COUNT(*) > 0`: 一个交过活、又被重新派了一单的
     /// worker 在历史上有很多行，但"手上有没有活"是 0 或 1 的瞬时事实。
-    func openDelegations(to taskId: UUID) throws -> [Delegation] {
-        let rows = try db.query("""
+    /// `to == nil` = **全体**未落定的（派活前那一批要一次拿全，别按 worker 查 N 次）。
+    func openDelegations(to taskId: UUID? = nil) throws -> [Delegation] {
+        let filter = taskId == nil ? "" : " AND to_task = ?"
+        let sql = """
             SELECT id, from_task, to_task, goal, acceptance, context, due_at, due_by, status,
                    attempts, note, summary, reported_at, created_at, started_at, finished_at
-            FROM agent_delegations WHERE to_task = ? AND status IN ('queued', 'running')
-            ORDER BY due_at ASC
-            """, [.text(taskId.uuidString)])
-        return rows.compactMap(decodeDelegation)
+            FROM agent_delegations WHERE status IN ('queued', 'running')
+            """ + filter + " ORDER BY due_at ASC"
+        return try db.query(sql, taskId.map { [.text($0.uuidString)] } ?? [])
+            .compactMap(decodeDelegation)
     }
 
     /// 行的解码口径 —— **只有这份**（上面三个读法都走它，加列只改一处）。

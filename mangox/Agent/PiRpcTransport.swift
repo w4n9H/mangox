@@ -170,6 +170,18 @@ final class PiRpcTransport: AgentTransport {
     /// 协议侧入口 (2026-11-23)。同 `updateDreamSpool`: 一条路径进、一条路径出。
     func updateFollowUpSpool(_ spool: String?) { followUpSpool = spool }
 
+    /// 2026-11-24 (P20): 这一轮是不是**一个 main 在派活** —— 非 nil = 是, 值就是那份 spool。
+    ///
+    /// ⚠️ 与 `followUpSpool` 并列的**第四个** per-turn 开关，不是它的扩展:
+    /// 两者都是"给这一轮一个工具"，但一个写给自己的任务、一个写给别人的任务，
+    /// 而**只有 main 该有后者**（worker 的 `delegate` 能力必须结构性不存在 ——
+    /// 递归深度硬限 1 级靠的是"工具面里没有"，不是靠提示词劝）。
+    private var delegateSpool: String?
+    private var spawnedDelegateSpool: String?
+
+    /// 协议侧入口 (2026-11-24)。同 `updateFollowUpSpool`: 一条路径进、一条路径出。
+    func updateDelegateSpool(_ spool: String?) { delegateSpool = spool }
+
     /// P19: 巡检轮 / 执行轮的**系统级注入**（交接文件 + 输出契约 + Observation 快照）。
     ///
     /// ⚠️ 走 `--append-system-prompt` 而不是塞进 user prompt, 理由是**转录污染**:
@@ -343,6 +355,7 @@ final class PiRpcTransport: AgentTransport {
                                    dreamExtensionPath: String? = nil,
                                    attachExtensionPath: String? = nil,
                                    followUpExtensionPath: String? = nil,
+                                   delegateExtensionPath: String? = nil,
                                    computerExtensionPath: String? = nil,
                                    enabled: [String]) -> [String] {
         var args = ["--no-extensions", "--extension", builtinLlamaExtension,
@@ -351,6 +364,7 @@ final class PiRpcTransport: AgentTransport {
         if let dream = dreamExtensionPath { args += ["--extension", dream] }
         if let attach = attachExtensionPath { args += ["--extension", attach] }
         if let follow = followUpExtensionPath { args += ["--extension", follow] }
+        if let delegatePath = delegateExtensionPath { args += ["--extension", delegatePath] }
         if let computer = computerExtensionPath { args += ["--extension", computer] }
         for path in enabled { args += ["--extension", path] }
         return args
@@ -1153,6 +1167,226 @@ final class PiRpcTransport: AgentTransport {
         let dir = NSHomeDirectory() + "/.mangox/extensions"
         let path = dir + "/mangox-followup.ts"
         let source = Self.followUpExtensionSource
+        try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+        let existing = try? String(contentsOfFile: path, encoding: .utf8)
+        if existing != source {
+            try? source.write(toFile: path, atomically: true, encoding: .utf8)
+        }
+        return path
+    }
+
+    // MARK: - 派活扩展（P20, 2026-11-24, 只写 spool）
+
+    /// env 名 —— **契约 token**（同 `followUpEnvKey`）：逐字进子进程 env，`mangox-delegate.ts`
+    /// 那侧读的就是它。改它 = 两边一起改，且已经落在磁盘上的旧扩展文件会失效。
+    nonisolated static let delegateEnvKey = "MANGOX_DELEGATE_SPOOL"
+
+    /// 扩展注册出来的工具名（面板展开用；与源码同源同改，同 `followUpToolNames` 那条守）。
+    nonisolated static let delegateToolNames: [String] = ["delegate"]
+
+    /// spool 的生产形状: `~/.mangox/delegate-spool/`。与 `followup-spool` 一样**故意独立**
+    /// （它不是笔记根，否则这些工单会被扫描器当成笔记进索引）。
+    static func productionDelegateSpoolDir() -> String {
+        NSHomeDirectory() + "/.mangox/delegate-spool"
+    }
+
+    /// **进程级**重定向（冒烟）—— 与 `followUpSpoolRootOverride` 逐字同款，漏一次的后果也一样:
+    /// 夹具写进用户真实的 `~/.mangox/delegate-spool/`，而它不在任何笔记根里 ⇒ 没有守卫会看见。
+    static var delegateSpoolRootOverride: String?
+
+    static func delegateSpoolDir() -> String {
+        delegateSpoolRootOverride ?? productionDelegateSpoolDir()
+    }
+
+    /// 一个 main 一个文件（文件名 = main 的任务 id）: 两次 fire 不互相覆盖，不同 main 之间
+    /// 本来就不该看见对方的工单。
+    static func delegateSpoolPath(mainTaskId: UUID) -> String {
+        delegateSpoolDir() + "/\(mainTaskId.uuidString).jsonl"
+    }
+
+    /// 自建派活扩展 —— **main 把工单交给 worker 的唯一入口**。
+    ///
+    /// ⚠️ 这个扩展是哑的: 读 env / 校验形状 / 追加一行。**它不查名单、不查配额、不看谁手上有活** ——
+    /// 那三件事都在 App 侧（`DelegationRule.check`），因为它们是库里的瞬时事实，而塞进子进程的
+    /// env 会随进程复用**冻结**（本项目踩过: 改了作用域、进程被复用 ⇒ 助手照旧按旧名单拒）。
+    /// 代价: 模型要下一轮才知道被拒（时间线里那几行"没派出去"）。
+    ///
+    /// ⚠️ 双闸门（同 dream / attach / follow-up）: 挂载闸门 = 只有 main 那一轮才 `--extension`；
+    /// 激活闸门 = 只有那次 spawn 设 `MANGOX_DELEGATE_SPOOL`。worker 与普通会话两个都没有。
+    static let delegateExtensionSource: String = #"""
+        // Auto-deployed by MangoX (2026-11-24). Lets a main assistant hand a work order to a worker.
+        //
+        // Deliberately dumb: read MANGOX_DELEGATE_SPOOL, check the shape, append one line.
+        // It does NOT check the roster, the quotas, or whether that worker is busy -- the app
+        // does that when the run ends, because those are facts in a database and a copy of them
+        // inside this process would freeze at spawn time.
+        //
+        // It also does NOT start anything. Nothing happens until the app's scheduler decides the
+        // start time has come; a worker that is busy right now is retried, not queued.
+        import { appendFileSync, mkdirSync } from "node:fs";
+        import { randomUUID } from "node:crypto";
+        import { dirname } from "node:path";
+        import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+        import { Type } from "typebox";
+
+        const SPOOL_ENV = "MANGOX_DELEGATE_SPOOL";
+        const MIN_MINUTES = 0;
+        const MAX_MINUTES = 10080;
+
+        export default function (pi: ExtensionAPI) {
+            pi.registerTool({
+                name: "delegate",
+                label: "Hand a work order to a worker",
+                description: [
+                    "Hand ONE work order to ONE of your workers. It runs later, in that worker's own",
+                    "session and its own ledger -- you do not see it happen, and you keep working.",
+                    "",
+                    "When it finishes, the app wakes YOU up with a receipt (one line: what it concluded,",
+                    "or why it did not run). You can read the detail from that worker's ledger later.",
+                    "",
+                    "Write the work order the way you would brief a colleague who has never seen this",
+                    "conversation -- the worker does NOT inherit your history:",
+                    "  - goal: what to do THIS time (not its standing duty -- that is its own description);",
+                    "  - acceptance: what would count as done. This line lands in the worker's ledger",
+                    "    and is the first thing you read when it reports back;",
+                    "  - context: paths, last conclusion, constraints. Optional, but usually worth it.",
+                    "",
+                    "Rules the app enforces when this run ends (a rejected order is reported there,",
+                    "so you will see it next turn):",
+                    "  - one open order per worker at a time -- a busy worker is refused, never queued;",
+                    "  - at most 2 orders per turn, and a daily quota in the assistant's settings;",
+                    "  - after_minutes 0..10080 (0 means 'next scheduler tick', i.e. within a minute);",
+                    "  - due_in_minutes, if given, must be greater than after_minutes.",
+                    "",
+                    "Do NOT use it to do something you could finish yourself in one step -- a worker",
+                    "costs a whole extra turn. Do use it when the work is separable and long: a report,",
+                    "a reconciliation, a sweep over many files.",
+                ].join("\n"),
+                parameters: Type.Object({
+                    worker: Type.String({
+                        description: "The worker's name, exactly as it appears in your team list.",
+                    }),
+                    goal: Type.String({
+                        description: "What to do this time, in a sentence or two.",
+                    }),
+                    acceptance: Type.String({
+                        description: "What counts as done -- one line, concrete.",
+                    }),
+                    after_minutes: Type.Integer({
+                        minimum: MIN_MINUTES,
+                        maximum: MAX_MINUTES,
+                        description: "How long from now, in minutes (0..10080).",
+                    }),
+                    due_in_minutes: Type.Optional(Type.Integer({
+                        description: "Optional deadline, in minutes from now. Must be > after_minutes.",
+                    })),
+                    context: Type.Optional(Type.String({
+                        description: "Optional: paths, previous conclusions, constraints.",
+                    })),
+                }),
+
+                async execute(_toolCallId, params, _signal, _onUpdate, _ctx) {
+                    const spool = process.env[SPOOL_ENV];
+                    if (!spool) {
+                        return {
+                            content: [{ type: "text", text: "delegate is not available in this session." }],
+                            details: undefined,
+                        };
+                    }
+                    const worker = String(params.worker || "").trim();
+                    if (!worker) {
+                        return {
+                            content: [{ type: "text", text: "Rejected: worker is empty. Call delegate again with a name from your team list." }],
+                            details: undefined,
+                        };
+                    }
+                    const goal = String(params.goal || "").trim();
+                    if (!goal) {
+                        return {
+                            content: [{ type: "text", text: "Rejected: goal is empty -- the worker does not inherit this conversation, so this line is all it knows to do. Call delegate again." }],
+                            details: undefined,
+                        };
+                    }
+                    const acceptance = String(params.acceptance || "").trim();
+                    if (!acceptance) {
+                        return {
+                            content: [{ type: "text", text: "Rejected: acceptance is empty -- without it nobody can tell whether the work is done. Call delegate again." }],
+                            details: undefined,
+                        };
+                    }
+                    const after = Number(params.after_minutes);
+                    if (!Number.isInteger(after) || after < MIN_MINUTES || after > MAX_MINUTES) {
+                        return {
+                            content: [{
+                                type: "text",
+                                text: "Rejected: after_minutes must be an integer between " + MIN_MINUTES
+                                    + " and " + MAX_MINUTES + " (you gave " + String(params.after_minutes)
+                                    + "). Call delegate again.",
+                            }],
+                            details: undefined,
+                        };
+                    }
+                    let dueIn = null;
+                    if (params.due_in_minutes !== undefined && params.due_in_minutes !== null) {
+                        const d = Number(params.due_in_minutes);
+                        if (!Number.isInteger(d)) {
+                            return {
+                                content: [{ type: "text", text: "Rejected: due_in_minutes must be an integer. Call delegate again." }],
+                                details: undefined,
+                            };
+                        }
+                        if (d <= after) {
+                            return {
+                                content: [{
+                                    type: "text",
+                                    text: "Rejected: due_in_minutes (" + String(d) + ") must be greater than"
+                                        + " after_minutes (" + String(after) + ") -- start first, then deliver."
+                                        + " Call delegate again.",
+                                }],
+                                details: undefined,
+                            };
+                        }
+                        dueIn = d;
+                    }
+                    const context = String(params.context || "").trim();
+                    const line = JSON.stringify({
+                        id: randomUUID(),
+                        worker: worker,
+                        goal: goal,
+                        acceptance: acceptance,
+                        after_minutes: after,
+                        due_in_minutes: dueIn,
+                        context: context,
+                    });
+                    try {
+                        mkdirSync(dirname(spool), { recursive: true });
+                        appendFileSync(spool, line + "\n");
+                    } catch (e) {
+                        return {
+                            content: [{ type: "text", text: "Failed to record the work order: " + String(e) }],
+                            details: undefined,
+                        };
+                    }
+                    return {
+                        content: [{
+                            type: "text",
+                            text: "Work order recorded for " + worker + " (" + String(after)
+                                + " min from the end of this run). Whether it is accepted is decided"
+                                + " then -- carry on now, nothing is blocked on it.",
+                        }],
+                        details: undefined,
+                    };
+                },
+            });
+        }
+        """#
+
+    /// 写到 `~/.mangox/extensions/mangox-delegate.ts`, 返回路径。
+    /// **只有 `delegateSpool != nil` 的那次 spawn 才调它**（同 `ensureFollowUpExtensionFile`）。
+    static func ensureDelegateExtensionFile() -> String {
+        let dir = NSHomeDirectory() + "/.mangox/extensions"
+        let path = dir + "/mangox-delegate.ts"
+        let source = Self.delegateExtensionSource
         try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
         let existing = try? String(contentsOfFile: path, encoding: .utf8)
         if existing != source {
@@ -2535,6 +2769,7 @@ final class PiRpcTransport: AgentTransport {
         if process != nil, spawnedCwd != target || spawnedDreamSpool != dreamSpool
             || spawnedAttachSpool != attachSpool
             || spawnedFollowUpSpool != followUpSpool
+            || spawnedDelegateSpool != delegateSpool
             || spawnedExtraSystem != extraSystemPrompt
             || spawnedExecProject != executionGuard?.projectPath {
             // 诊断日志: 进程**复用**是常态, 重启是例外 —— 后者会丢进程内对话记忆,
@@ -2543,6 +2778,7 @@ final class PiRpcTransport: AgentTransport {
                                      "dreamChanged": spawnedDreamSpool != dreamSpool ? "1" : "0",
                                      "attachChanged": spawnedAttachSpool != attachSpool ? "1" : "0",
                                      "followUpChanged": spawnedFollowUpSpool != followUpSpool ? "1" : "0",
+                                     "delegateChanged": spawnedDelegateSpool != delegateSpool ? "1" : "0",
                                      "injectChanged": spawnedExtraSystem != extraSystemPrompt ? "1" : "0",
                                      "fenceChanged": spawnedExecProject != executionGuard?.projectPath ? "1" : "0"])
             teardownProcess()
@@ -2591,6 +2827,10 @@ final class PiRpcTransport: AgentTransport {
         // `ChatStore.beginTurn` 经 `SchedulerService.beginFollowUpTurn` 下发，普通会话是 nil
         // ⇒ 扩展段逐字节不变（同 dream / attach 那条"是'不存在', 不是'挂了但没生效'"）。
         let followUpExtPath = followUpSpool != nil ? Self.ensureFollowUpExtensionFile() : nil
+        // 2026-11-24: 派活扩展**只在 main 的那一轮挂** —— `delegateSpool` 由 `ChatStore.beginTurn`
+        // 经 `SchedulerService.beginDelegationTurn` 下发（判据: 这个任务 role == .main 且配额 > 0）。
+        // worker 拿不到 ⇒ 它连"我还有同事可以派"这件事都看不见，递归扇出在结构上不成立。
+        let delegateExtPath = delegateSpool != nil ? Self.ensureDelegateExtensionFile() : nil
         // P10.1b: 搜索扩展**保底落地**（文件本来由 `ChatStore.scanExtensions` 写好了, 这里只防
         // "列表里有它、文件却不在"——删过 / 换过托管目录 / 首次 spawn 抢在扫掠之前）。
         // 判据 = 它在**启用列表**里（那已经是"用户开着 + 有 key"的交集, 见 `ChatStore.scanExtensions`）
@@ -2647,6 +2887,7 @@ final class PiRpcTransport: AgentTransport {
             dreamExtensionPath: dreamExtPath,
             attachExtensionPath: attachExtPath,
             followUpExtensionPath: followUpExtPath,
+            delegateExtensionPath: delegateExtPath,
             computerExtensionPath: computerExtPath,
             enabled: desiredMode.mountsBusinessExtensions ? desiredExtensions : [])
         if let fork = desiredForkSource {
@@ -2783,6 +3024,14 @@ final class PiRpcTransport: AgentTransport {
             if p.environment == nil { p.environment = ProcessInfo.processInfo.environment }
             p.environment?[Self.followUpEnvKey] = followUpSpool   // nil = 删除该键
         }
+        // 2026-11-24: 派活 spool 的 env —— 同上面那条的双闸门第二半，也同一条守卫:
+        // `p.environment` 可能是 nil（谁都没给过），那时 `?[k] = v` 是静默空操作。
+        // ⚠️ 同样**必须显式删掉**父进程残留的同名变量：export 过再从那个 shell 起 App，
+        //    普通会话就会莫名拿到 `delegate`，而它写的 spool 没有任何一轮会去读。
+        if delegateSpool != nil || ProcessInfo.processInfo.environment[Self.delegateEnvKey] != nil {
+            if p.environment == nil { p.environment = ProcessInfo.processInfo.environment }
+            p.environment?[Self.delegateEnvKey] = delegateSpool   // nil = 删除该键
+        }
         // P19 S6: 执行轮的写围栏 env（扩展侧那一半，见 `approvalExtensionSource`）。
         //
         // ⚠️ 守卫 26 同款: 上面几段都可能没给 `p.environment` 赋值（nil = 继承父环境），
@@ -2851,6 +3100,7 @@ final class PiRpcTransport: AgentTransport {
         spawnedDreamSpool = dreamSpool
         spawnedAttachSpool = attachSpool
         spawnedFollowUpSpool = followUpSpool
+        spawnedDelegateSpool = delegateSpool
         spawnedExtraSystem = extraSystemPrompt
         spawnedExecProject = executionGuard?.projectPath
         self.outPipe = outPipe
@@ -3901,6 +4151,22 @@ final class PiRpcTransport: AgentTransport {
             let mins = (args["after_minutes"] as? Int)
                 ?? (args["after_minutes"] as? NSNumber)?.intValue
             return (why.isEmpty ? name : why, mins.map { "in \($0) min" })
+        }
+        // 2026-11-24: 派活。要留的是**两件事**: 派给谁 + 这一次要干什么（`goal`）。
+        // 走通用式的话 title 会退成工具名 `delegate`、command 变成首个标量参数（按 key 排序是
+        // `acceptance`）—— 卡上就成了"delegate · 差异列单号与金额"，而"派给了谁"整个消失。
+        if Self.delegateToolNames.contains(name) {
+            func trimmed(_ k: String) -> String {
+                (args[k] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            }
+            let worker = trimmed("worker")
+            let goal = trimmed("goal").split(separator: "\n").first.map(String.init) ?? ""
+            let mins = (args["after_minutes"] as? Int)
+                ?? (args["after_minutes"] as? NSNumber)?.intValue
+            let title = goal.isEmpty ? (worker.isEmpty ? name : worker) : goal
+            let head = title.count > 40 ? String(title.prefix(40)) + "…" : title
+            return (head, "to " + (worker.isEmpty ? "?" : worker)
+                    + (mins.map { " · in \($0) min" } ?? ""))
         }
         if Self.attachToolNames.contains(name) {
             let path = (args["path"] as? String) ?? ""

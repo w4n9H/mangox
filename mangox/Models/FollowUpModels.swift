@@ -42,6 +42,25 @@ enum FollowUpStatus: String, Codable {
     static func decode(_ raw: String) -> FollowUpStatus? { FollowUpStatus(rawValue: raw) }
 }
 
+/// 这条唤醒**是谁约的**。
+///
+/// 加上它的唯一原因是**配额口径**（P20 · 2026-11-24）：`followUpCountSince` 数的是"这个任务
+/// 今天约了几条"，而 worker 交活回叫是 App 自己插的 —— 它要是也被算进去，一个带 5 个 worker 的
+/// main 跑一天就把自己的回看配额耗光了，而人看到的是"我没约过这么多次"。
+///
+/// 第二个用处是时间线的分隔行：`回看 · 约的是…` 与 `回叫 · X 交活了` 是两件事，长得一样的话
+/// 三个月后翻日志没人分得清（同 P15.9 给定向 fire 加标签那条理由）。
+enum FollowUpKind: String, Codable {
+    /// 模型自己通过 `follow_up` 工具约的。**占配额**。
+    case selfWake = "self"
+    /// worker 交活之后 App 插的那条（P20）。**不占配额**，也不受"未兑现 3 条"那道闸约束。
+    case callBack = "call_back"
+
+    /// 未知值回落 `selfWake` —— 宁可多算一次配额，也不要把一条来路不明的唤醒当成
+    /// "App 自己插的"从而少算（少算的那一侧会让人设的上限悄悄失效）。
+    static func decode(_ raw: String) -> FollowUpKind { FollowUpKind(rawValue: raw) ?? .selfWake }
+}
+
 /// 一条落库的约定。
 struct FollowUp: Identifiable, Equatable {
     /// **由扩展侧生成**（`randomUUID`），不是 App 分配 —— 这样"同一个 spool 行被 ingest 两次"
@@ -62,6 +81,8 @@ struct FollowUp: Identifiable, Equatable {
     /// 落库的人话原因（"任务已删除" / "并发已满 3 次"）。**恒中文**：它进时间线/日志，
     /// 与 `SchedulerService` 里那些落库文案同一条纪律（那个文件在 L10n 的 `EXCLUDE_FILES` 里）。
     var note: String?
+    /// 谁约的（见 `FollowUpKind`）。缺省 `selfWake` ⇒ 既有构造点与老行都不变。
+    var kind: FollowUpKind = .selfWake
 }
 
 /// 约定的边界 —— 三个数都是**产品判断**，不是实现细节。

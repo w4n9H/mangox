@@ -207,3 +207,212 @@ enum DelegationLimit {
         s.count <= cap ? s : String(s.prefix(cap)) + "…"
     }
 }
+
+// MARK: - 派活请求（spool 的解析口径 + 七条拒绝）
+
+/// 一张**还没被接受**的派活请求 —— 就是扩展写进 spool 的那一行。
+///
+/// 与 `FollowUpSpool.Request` 同一个位置、同一套理由：扩展是哑的（读 env / 校验形状 / 追一行），
+/// **落库、校验归属、算时刻全在 App 侧**。
+///
+/// ⚠️ **七条拒绝理由只在这里判一次**（`DelegationRule.check`），扩展侧不做业务校验。
+/// 为什么不让扩展先挡一遍（那样模型能在本轮就改对，听起来更好）：那要求把"现在有哪些 worker、
+/// 谁手上有活、今天派了几条"塞进子进程的 env，而 env 是**进程级冻结**的（本项目踩过: 改了作用域
+/// 但进程被复用 ⇒ 助手照旧按旧名单拒）。两处判据一旦分叉，"拒了"和"拒对了"就成了两件事。
+/// 代价（明写）: 模型要**下一轮**才知道被拒了 —— 文档 §04 那句"让下一轮能直接改对"就是这个意思。
+struct DelegationAsk: Equatable {
+    /// 扩展侧生成的幂等键（同一个 spool 被 ingest 两次不会派两单）。
+    let id: UUID
+    let worker: String
+    let goal: String
+    let acceptance: String
+    let afterMinutes: Int
+    /// 最晚什么时候要（相对分钟）。可空。
+    let dueInMinutes: Int?
+    let context: String?
+}
+
+/// 被拒的原因。`reason` 恒中文（进时间线、给下一轮的模型读），**不是界面词**
+/// （界面按 case 取词是 P4/P5 的事，见文件头）。
+///
+/// `Error` 只为让 `check` 返回 `Result<UUID, DelegationRefusal>` 读起来是"成 / 不成 + 为什么" ——
+/// 它从不被 `throw`、也没有谁按 `Error` 捕获。别把它接进任何 `catch` 链。
+enum DelegationRefusal: Equatable, Error {
+    case unknownWorker(String)
+    case workerIsMain(String)
+    case workerDisabled(String)
+    /// 手上有活 —— 带"手上那条是什么、什么时候开始的"，否则下一轮还会再派一次。
+    case workerBusy(name: String, goal: String, startedAt: Date?)
+    case timeOutOfRange(minutes: Int)
+    case dueNotAfterStart(after: Int, dueIn: Int)
+    case turnLimit(Int)
+    case dailyLimit(used: Int, quota: Int)
+    /// 派活的不是 main（结构上不该出现：worker 的工具面里没有 `delegate`，这里是兜底）。
+    case notMain
+
+    var reason: String {
+        switch self {
+        case .unknownWorker(let name):
+            return "没有叫「\(name)」的 worker"
+        case .workerIsMain(let name):
+            return "「\(name)」是一支队伍的队长（main），不能当 worker 用"
+        case .workerDisabled(let name):
+            return "「\(name)」被停用了 —— 先启用它，或者换一个人"
+        case .workerBusy(let name, let goal, let startedAt):
+            let when = startedAt.map { Self.hhmm($0) } ?? "刚刚"
+            let what = goal.count > 20 ? String(goal.prefix(20)) + "…" : goal
+            return "「\(name)」手上还有活（\(when) 起：\(what)），不会排队 —— 换人或者等它交活"
+        case .timeOutOfRange(let m):
+            return "after_minutes 要在 \(DelegationLimit.minMinutes)…"
+                + "\(DelegationLimit.maxMinutes) 之间（拿到 \(m)）"
+        case .dueNotAfterStart(let after, let dueIn):
+            return "due_in_minutes（\(dueIn)）必须大于 after_minutes（\(after)）—— "
+                + "先起跑、再要结果，不是反过来"
+        case .turnLimit(let n):
+            return "一轮最多派 \(n) 条（后面那几张没派出去）"
+        case .dailyLimit(let used, let quota):
+            return "今天已经派了 \(used) 条（上限 \(quota)），这条没派出去 —— 改配额在助理设置里"
+        case .notMain:
+            return "只有 main 能派活"
+        }
+    }
+
+    /// `HH:mm` —— 拒绝理由与名单共用这一份格式化。
+    static func hhmm(_ d: Date) -> String {
+        let f = DateFormatter()
+        f.dateFormat = "HH:mm"
+        return f.string(from: d)
+    }
+}
+
+/// 判据本体 —— **纯函数**（不碰 DB、不读时钟，`now` 由调用方给）⇒ 冒烟可以直接造反例。
+enum DelegationRule {
+
+    /// 通过时返回**解析出来的 worker**（名字是给人看的，id 才是身份）。
+    ///
+    /// `busy` 是"这些 worker 手上还没落定的单"（`openDelegations` 的结果），
+    /// `usedToday` / `usedThisTurn` 由调用方数（它们要查库/数循环，不属于纯判据）。
+    ///
+    /// 判据顺序 = 文档 §04 那张表的顺序: 先"这个人存不存在"，再"他是不是能当 worker"，
+    /// 再"他有空吗"，最后才是配额 —— 因为前几条是**事实错误**（改一次就对），配额是**额度**。
+    static func check(_ ask: DelegationAsk, from main: ScheduledTask,
+                      roster: [ScheduledTask], busy: [UUID: Delegation],
+                      usedToday: Int, usedThisTurn: Int) -> Result<UUID, DelegationRefusal> {
+        guard main.role == .main else { return .failure(.notMain) }
+        let name = ask.worker.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let target = roster.first(where: {
+            $0.name.trimmingCharacters(in: .whitespacesAndNewlines) == name
+        }) else {
+            return .failure(.unknownWorker(name))
+        }
+        guard target.role == .worker else { return .failure(.workerIsMain(target.name)) }
+        guard target.enabled else { return .failure(.workerDisabled(target.name)) }
+        if let open = busy[target.id] {
+            return .failure(.workerBusy(name: target.name, goal: open.goal,
+                                        startedAt: open.startedAt))
+        }
+        guard (DelegationLimit.minMinutes...DelegationLimit.maxMinutes).contains(ask.afterMinutes)
+        else { return .failure(.timeOutOfRange(minutes: ask.afterMinutes)) }
+        if let dueIn = ask.dueInMinutes, dueIn <= ask.afterMinutes {
+            return .failure(.dueNotAfterStart(after: ask.afterMinutes, dueIn: dueIn))
+        }
+        // 配额放在最后: 它的文案是"额度用完了"，而前几条是"这张单本身不成立"。
+        // 先报额度会让模型以为改个时间就能过 —— 实际上它派错了人。
+        guard usedThisTurn < DelegationLimit.maxPerTurn else {
+            return .failure(.turnLimit(DelegationLimit.maxPerTurn))
+        }
+        guard usedToday < main.effectiveDelegatesPerDay else {
+            return .failure(.dailyLimit(used: usedToday, quota: main.effectiveDelegatesPerDay))
+        }
+        return .success(target.id)
+    }
+
+    /// 拒绝时附带的可用名单（文档 §04 第 1 条: "回一句可用名单，让下一轮能直接改对"）。
+    ///
+    /// 只列**这个 main 名下的** worker —— 别人的队伍对这个 main 不可见（P3 的【你的队伍】
+    /// 也只列自己的），列出来只会让它去派一个派不了的人。
+    static func rosterLine(_ main: ScheduledTask, roster: [ScheduledTask],
+                           busy: [UUID: Delegation]) -> String {
+        let mine = roster.filter { $0.role == .worker && $0.parentId == main.id }
+        guard !mine.isEmpty else { return "可用名单：（空 —— 这个 main 名下还没有 worker）" }
+        let rows = mine.map { w -> String in
+            let state: String
+            if !w.enabled { state = "已停用" }
+            else if let d = busy[w.id] {
+                state = d.status == .running ? "在跑" : "已排上 \(DelegationRefusal.hhmm(d.dueAt))"
+            } else { state = "空闲" }
+            return "\(w.name)(\(state))"
+        }
+        return "可用名单：" + rows.joined(separator: " / ")
+    }
+}
+
+/// spool 的解析口径 —— **一处定义，扩展侧只写不解析**（同 `FollowUpSpool`）。
+enum DelegationSpool {
+
+    struct Rejection: Equatable {
+        let line: Int
+        let reason: String
+    }
+
+    static func parse(_ text: String) -> (items: [DelegationAsk], rejects: [Rejection]) {
+        var items: [DelegationAsk] = []
+        var rejects: [Rejection] = []
+        for (i, raw) in text.components(separatedBy: "\n").enumerated() {
+            let line = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            if line.isEmpty { continue }
+            do {
+                items.append(try parseLine(line))
+            } catch let e as Reject {
+                rejects.append(Rejection(line: i + 1, reason: e.reason))
+            } catch {
+                rejects.append(Rejection(line: i + 1, reason: "不是合法的 JSON"))
+            }
+        }
+        return (items, rejects)
+    }
+
+    private struct Reject: Error { let reason: String }
+
+    private static func parseLine(_ line: String) throws -> DelegationAsk {
+        guard let data = line.data(using: .utf8),
+              let obj = try? JSONSerialization.jsonObject(with: data) else {
+            throw Reject(reason: "不是合法的 JSON")
+        }
+        guard let dict = obj as? [String: Any] else { throw Reject(reason: "不是 JSON 对象") }
+        guard let rawId = (dict["id"] as? String)?.trimmingCharacters(in: .whitespaces),
+              let id = UUID(uuidString: rawId) else {
+            throw Reject(reason: "缺 id 或 id 不是 UUID")
+        }
+        func text(_ k: String) -> String {
+            ((dict[k] as? String) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        func int(_ k: String) throws -> Int? {
+            guard let n = dict[k] as? NSNumber else { return nil }
+            let v = n.intValue
+            // `NSNumber` 把 `3.5` 也当数字 ⇒ 非整数在这里拒（同 `FollowUpSpool.parseLine`）。
+            guard Double(v) == n.doubleValue else {
+                throw Reject(reason: "\(k) 必须是整数（拿到 \(n.doubleValue)）")
+            }
+            return v
+        }
+        let worker = text("worker")
+        guard !worker.isEmpty else { throw Reject(reason: "worker 是空的") }
+        let goal = text("goal")
+        guard !goal.isEmpty else {
+            // goal 不是装饰: worker 被叫起来时，它就是"这一次要干什么"的全部信息。
+            throw Reject(reason: "goal 是空的")
+        }
+        let acceptance = text("acceptance")
+        guard !acceptance.isEmpty else {
+            // acceptance 进 worker 台账的「完成状态」—— 没有它，交活时谁也不知道算不算干完。
+            throw Reject(reason: "acceptance 是空的（怎么算干完）")
+        }
+        guard let after = try int("after_minutes") else { throw Reject(reason: "缺 after_minutes") }
+        let dueIn = try int("due_in_minutes")
+        let ctx = text("context")
+        return DelegationAsk(id: id, worker: worker, goal: goal, acceptance: acceptance,
+                             afterMinutes: after, dueInMinutes: dueIn,
+                             context: ctx.isEmpty ? nil : ctx)
+    }
+}

@@ -2010,6 +2010,15 @@ final class ChatStore: ObservableObject {
         renameConversation(sid, to: String(firstLine.prefix(10)))
     }
 
+    /// 这一轮该不该挂「发附件」（`feishu_attach`）。**P20 根不变量的落点**:
+    /// 外发的唯一出口属于 main —— 让 worker 能发飞书, 等于派出去的那条活可以越过 main
+    /// 直接对人说话, 而人群里认的只有 main 这一个身份。
+    ///
+    /// 为什么单独成一个函数（而不是内联那个三元）: 这一条是**结构性**的删除, 不是配置项,
+    /// 所以它必须有一格门禁直接指着它。内联时"worker 那一支被删掉"在冒烟里**观测不到** ——
+    /// 非飞书轮本来就拿到 nil, 两边一样的绿。
+    static func attachSpoolAllowed(role: TaskRole?) -> Bool { role != .worker }
+
     /// P4.0.2: 回合启动公共路径 (用户会话与定时 fire 共用)。
     /// spawn 期配置在 send 前逐实例下发 (会话绑定/cwd/审批策略)。
     /// modeOverride (P8-T27): 捕获轮强制 Minimal —— 只覆盖该会话实例,
@@ -2049,7 +2058,14 @@ final class ChatStore: ObservableObject {
         // ⚠️ 同样是**无条件赋值**: 飞书轮之后同一个 transport 还会跑人的手动回合,
         //    不清的话那一轮也能调 `feishu_attach` —— 而它写的 spool 没有任何轮次会去读,
         //    表现是"助理说发了、人什么都没收到"。
-        t.updateAttachSpool(remote.attachSpoolForTurn(sid: sid))
+        // P20: 这一轮**归谁**（main / worker / 不归任务）—— 提前算一次，下面三条 per-turn
+        // 工具面都按它分叉。判据只有一处（`owningTask` 反查），免得三处各算一遍走岔。
+        let turnOwner = followUpOwner ?? scheduler.owningTask(for: sid)
+        // P20: **worker 那一轮结构上没有「发附件」**。这是"外发唯一出口属于 main"的落点 ——
+        // 让 worker 能发飞书, 等于派出去的那条活可以越过 main 直接对人说话, 而人群里认的
+        // 只有 main 这一个身份。与下面两条同一个纪律: 在结构上删掉, 不靠提示词劝。
+        t.updateAttachSpool(Self.attachSpoolAllowed(role: turnOwner?.role)
+                            ? remote.attachSpoolForTurn(sid: sid) : nil)
         // 2026-11-23: follow-up 工具**只给"归某个任务的那一轮"** —— 判据只有一处
         // （`SchedulerService.beginFollowUpTurn`）: fire 轮把任务显式带过来，对话轮 / 执行轮
         // 靠 `logSessionId` 反查。普通会话两边都落空 ⇒ 不给 spool ⇒ 不挂扩展 ⇒
@@ -2057,8 +2073,15 @@ final class ChatStore: ObservableObject {
         // ⚠️ 与上面两条同一个纪律: **无条件赋值**。这个工具只要粘在实例上一次，之后每一轮
         //    都能约 —— 而它写的 spool 只有"归任务的那一轮"收口时会读，表现是
         //    "它说约好了，到点没人叫它"。
-        let followUpOwner = followUpOwner ?? scheduler.owningTask(for: sid)
-        t.updateFollowUpSpool(scheduler.beginFollowUpTurn(sid: sid, owner: followUpOwner))
+        t.updateFollowUpSpool(scheduler.beginFollowUpTurn(sid: sid, owner: turnOwner))
+        // P20: 派活工具**只给"手上有队伍的那个 main"** —— 判据全在
+        // `SchedulerService.beginDelegationTurn`（role == main ∧ 助理 ∧ 非过期待迁移 ∧ 日配额 > 0）。
+        // ⚠️ 同一个纪律: **无条件赋值**。粘在实例上一次, 之后人的手动回合也能派活,
+        //    而它写的 spool 只有 main 那一轮收口时会读 ⇒ "它说派出去了, 那个活从没开始"。
+        // ⚠️ 七条业务判据（名单 / 忙闲 / 配额 / 时间）**一律不在扩展里** —— 名单与
+        //    「谁手上有活」是库里的瞬时事实, 塞进子进程 env 会随进程复用**冻结**成旧值。
+        //    代价: 模型**下一轮**才知道被拒, 时间线里落那几行「派活没成」。
+        t.updateDelegateSpool(scheduler.beginDelegationTurn(sid: sid, owner: turnOwner))
         // P19: 注入段是 per-turn，**无条件赋值**。
         // 巡检轮之后, 同一个 transport 上还会跑人的手动回合; 只用 `if let` 赋值的话,
         // 那次手动回合会**继承巡检注入段**: 表现是"我在会话里问一句, 它却按巡检契约
@@ -2210,6 +2233,12 @@ final class ChatStore: ObservableObject {
         // 2026-11-23: follow-up 的收口。同一条纪律 —— 跑到一半被停也要**收**:
         // "半小时后再看"是这一轮唯一的产出，丢掉它等于让人白等一场。
         scheduler.finishFollowUpIfNeeded(sid: sid)
+        // P20: 派活的收口。两件事分开:
+        // ① `finishDelegateTurn` 把这一轮**派出去的那几条**落库（被拒的也留痕）；
+        // ② `finishDelegationFireIfNeeded` 只在"这一轮是**替某条派活跑**的"时候认领 ——
+        //    手动停掉的 worker 轮, 已经说出来的东西照样算它的产出, 一条活不该白跑。
+        scheduler.finishDelegateTurn(sid: sid)
+        scheduler.finishDelegationFireIfNeeded(sid: sid)
         // P19.2 S15: 被手动停掉的飞书回合也要回一句 —— 那边的人看到的是"消息发出去了、
         // 然后什么都没有"，而这里的"停"是他自己按的，飞书那头看不见这个动作。
         remote.finishRemoteTurn(sid: sid)
@@ -3043,6 +3072,9 @@ extension ChatStore: AgentTransportDelegate {
             scheduler.finishExecFireIfNeeded(sid: sid)   // P19 S6: 执行结果的回写点
             scheduler.finishDialogueTurnIfNeeded(sid: sid)   // P19.2 S12: 对话轮「提议」的落定点
             scheduler.finishFollowUpIfNeeded(sid: sid)   // 2026-11-23: agent 自己约的那几条时刻
+            // P20: 派活的落定点（与 `stopTurn` 那处同一对）。
+            scheduler.finishDelegateTurn(sid: sid)
+            scheduler.finishDelegationFireIfNeeded(sid: sid)
             // P19.2 S15: 从飞书发起的那一轮，把回复发回去。**认领即删**（`remoteTurns`），
             // 所以同一场会话里你在电脑上说的下一轮不会回响到飞书。
             remote.finishRemoteTurn(sid: sid)

@@ -138,6 +138,12 @@ protocol AgentTransport: AnyObject {
     /// "人从飞书来的", 这个是"这一轮属于某个任务" —— 合成一个变量会让三重闸门互相摘掉对方。
     /// 判据在 `SchedulerService.beginFollowUpTurn`（任务反查）, 所以普通会话永远拿不到它。
     func updateFollowUpSpool(_ spool: String?)
+    /// 2026-11-24 (P20): 派活的 spool 下发 (nil = 这一轮不是 main 在派活)。
+    ///
+    /// **per-turn 实例级**, 与前面四个同一层但又是另一件事。判据在
+    /// `SchedulerService.beginDelegationTurn`（role == .main 且配额 > 0）——
+    /// worker 与普通会话永远拿不到它, 所以"worker 再往下派"在结构上不成立。
+    func updateDelegateSpool(_ spool: String?)
     /// P19: 这一回合的 system 注入段（nil = 不注入）。走 `--append-system-prompt`，
     /// **不进 user prompt**（实测: 落成 `role=system` 的 addendum 段，下次 spawn 被替换、
     /// 不累积 —— 见 docs/P19 §02）。spawn 期定格 ⇒ `spawnedExtraSystem` 变了要重启进程。
@@ -283,6 +289,8 @@ extension AgentTransport {
     /// 2026-11-23: follow-up spool 下发 (同 `updateDreamSpool` —— MockTransport 覆盖并记录,
     /// 空实现会让"普通回合有没有把它清回 nil"变成不可断言的一件事)。
     func updateFollowUpSpool(_ spool: String?) {}
+    /// 2026-11-24: 派活 spool 下发 (同 `updateFollowUpSpool` —— MockTransport 覆盖并记录)。
+    func updateDelegateSpool(_ spool: String?) {}
     /// P10.2a-0: 裁决档下发 (Mock 无审批桥, 空实现)。
     func updateApprovalMode(_ mode: ApprovalMode) {}
     /// P10.2b: 拦截记录 (Mock 无审批桥 → 恒空; 冒烟用 MockTransport.autoJudgeBlocks 注入)。
