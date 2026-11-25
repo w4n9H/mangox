@@ -465,6 +465,43 @@ details.fold[open]>summary{margin-bottom:4px}
 </table></div>
 <p>⚠️ 还有一条不属于取舍、但必须写下来的：<b>界面词用 <code>main</code> / <code>worker</code>，不另造「队长 / 队员」</b>。它们在本仓是技术角色名（与 <code>prompt</code> / <code>cron</code> 同族，编辑器的 help 早就写着「prompt 与 cron 为必填」），所以走 <code>Text(verbatim:)</code>、不进词表；两套词会让人以为列表上的 <code>main</code> 和编辑器里的「队长」是两件不同的东西。</p>
 
+<h3 id="p5-notes">实现取舍：P5（团队页 · 泳道）落地时定下的六件事</h3>
+<p>同样是<b>做完之后回写的</b>。头一条是 boss 开工时点名的顾虑 ——「助理少的时候会不会很空旷」。</p>
+<div class="tw"><table class="def">
+  <tr><th>事</th><th>为什么这样定</th></tr>
+  <tr>
+    <td><b>空列折叠: 有卡列 150 / 空列 36</b></td>
+    <td><b>这就是「空旷」的答案，而且它开的是一把更小的刀</b>。上面那句「列宽固定 150px」的理由写得很清楚 —— <i>压窄列会让「名字 + 归属」两行都折行</i>。但那条约束对<b>空列</b>不存在: 空列里没有字可折。于是五列全展开时, 只有两三个助理的场景里有 450~600pt 是「几个大空框在说这里没人」。收窄之后: 一个助理 + 两个 worker 的整片从 798pt 降到 570pt。<b>收窄的是宽度，不是列序</b> —— 五列永远按「在跑 / 已排上 / 等回执 / 空闲 / 停用」排，而位置正是这个页面唯一的导航锚（文档自己那句「每次进来都要重新认人」说的就是这个）。同理<b>不做</b>: 隐藏空列（一有卡就整片右移）、换列动画（点谁都是错的位置）。</td>
+  </tr>
+  <tr>
+    <td><b>纵向的大片留白<b>不填</b></b></td>
+    <td>试过三个填法，都否了: 「最近活动时间线」= 一个新信息面，而这一页的职责是「谁在哪个状态」，塞时间线等于把它变成第二块看板；「按人数切两种布局」= 两套心智；「列宽按可用宽弹性放大」= 每次卡片换列整片重排，位置锚立刻失效。<b>结论：横向上空列已经收掉了 29%，纵向剩下的留白是「数据少」的必然结果</b>（任何看板两三条数据都这样）。真正的补法是 <b>P6 候选</b>：检查器选中态已经给了「最近五次执行」，全队范围的那一块如果要，放 P6 一起做。</td>
+  </tr>
+  <tr>
+    <td><b>Cron 档<b>不进</b>团队页</b></td>
+    <td>样张里混了一张「发版检查」（cron），于是左侧写「全部 6」而泳道里有 <b>7 张卡</b> —— 那个数字对不上。取语义而不是取样张: cron 在存储上也是 <code>role == .main</code>（<code>TaskRole</code> 的缺省值），但它没有队伍这个概念（派不了活、也没人会派它），而且 P4 的列表行已经明确「Cron 任务没有那五档」。<b>去掉它之后 6 = 6，两侧完全对齐</b> —— 数字对不上的界面，人第一眼就会怀疑整页是假的。</td>
+  </tr>
+  <tr>
+    <td><b>泳道<b>不新增任何颜色 token</b></b></td>
+    <td>状态色全部复用已有的 <code>info</code> / <code>toolQueued</code> / <code>thinking</code> / <code>textTertiary</code> / <code>textMuted</code> —— 它们本来就在 <code>palette_probe.py</code> 的 <code>PLATE_TOKENS</code>（图形地板 3.0，两个主题各算一遍）与 <code>LIGHT_BANDS</code> 里。<b>新增一个色名 = 新增一条「未登记就免疫门禁」的缝</b>（那份名单是显式的）。同理，颜色<b>只画在列头那个 5pt 圆点</b>上、卡片一律不上色: 身份走「3px 竖条 + 名字 500」，颜色只表示状态 —— 给卡片再上底色，同一屏就有两套色编码。</td>
+  </tr>
+  <tr>
+    <td><b>卡片第二行有<b>长度上限</b>，而且它被写成了一条判据</b></td>
+    <td>卡片可用宽 = 150 − 左右各 10 − 竖条 3 = <b>127pt</b>，9.5pt 中文每字约 9.5pt ⇒ <b>13 字</b>。第一版写「<code>N 天没派</code> / <code>还没跑过</code>」，出图实测整行被尾部截断 —— 而截掉的正好是后面那个字。<b>改法不是把字号调小</b>，是把时态压回样张的口径（<code>3 天</code> / <code>没跑过</code>）—— 「几天没动」的语义已经由列头「空闲」承担了。⚠️ 这条<b>写进了冒烟 ㊲</b>（<code>allSatisfy { $0.count &lt;= 13 }</code>）: 它是能变红的，谁把措辞写长当场红，不用等人去出图。</td>
+  </tr>
+  <tr>
+    <td><b>检查器未选中时写<b>读数</b>，不是一片空白</b></td>
+    <td>纯展示页的第一眼大概率是「什么都没选中」。那一眼若是一片空白，整页就只剩「左边一列名单 + 中间几张卡」，人会以为这页没做完。所以空态放的是<b>当前范围的真实读数</b>（<code>3 个人 · 1 支队伍 / 手上都没有活</code>）+ 一句怎么用，不是「请选择一项」那种占位。</td>
+  </tr>
+</table></div>
+<p>两条与取舍无关、但落地时定下的结构决定: <b>① 团队页是独立面板</b>（侧栏第五行 + <code>showTeamPanel</code>，与定时页互斥），不是定时页里的一条分段 —— 它是三栏（筛选 / 泳道 / 检查器），定时页是两栏，塞进去会让 <code>ScheduledView</code> 变成「一个容器 + 两套布局」，而它的职责就是「建与改」。<b>② 检查器两个动作的口径</b>: 「打开编辑器」经 <code>pendingTaskFocus</code> 落到定时页（与收件箱那条 <code>pendingFindingFocus</code> 同款、但<b>不同字段</b> —— 两者都是 UUID，合用一个字段时两个消费者会互相把对方的值解读成自己的 id）；「打开会话」<b>只在有 <code>logSessionId</code> 时出现</b>，没有会话就不给一个点了没反应的按钮。</p>
+
+<div class="call warn">
+  <div class="lbl">一条前置条件已经过期（P5 落地时核实）</div>
+  <p>§06 那三条「不许跨阶段提前做的事」里的第三条写着「<b>亮色算例必须先于 P5 的任何颜色改动</b>，因为 <code>run.sh</code> 的视觉算例只认 <code>enum Dark</code>」—— <b>这句话在写 P20 的时候就已经不成立了</b>：P16 给 <code>palette_probe.py</code> 补了 <code>load_light()</code>（解析 <code>adaptive(light: 0x…, dark: …)</code> 的 light 位），<code>run.sh</code> 第 87 行早就在跑它。所以 P5 不需要「先建亮色算例」，它已经在了。</p>
+  <p>实际要防的是另一件事，而且更隐蔽: <code>LIGHT_BANDS</code> / <code>PLATE_TOKENS</code> 是<b>按名字列的显式名单</b> —— 新加一个颜色 token 而不登记，那个色就<b>一条判据都不进</b>，门照样绿。P5 的应对是<b>根本不加新 token</b>（见上表第四条）。</p>
+</div>
+
 <h2><span class="n">04</span>数据与契约<span class="en">DATA &amp; CONTRACT</span></h2>
 
 <h3>助理行新增六列</h3>
@@ -665,8 +702,8 @@ details.fold[open]>summary{margin-bottom:4px}
   </tr>
   <tr>
     <td><b>P5 团队页</b><span class="sub">泳道 · 纯展示</span></td>
-    <td>统计行 + 队伍筛选 + 五条泳道（列内按时间排）+ 检查器 + 「未归属」区</td>
-    <td><b>亮色算例先建</b>，然后亮/暗各看一次 + <code>e2e_probe</code> + 词表</td>
+    <td>统计行 + 队伍筛选 + 五条泳道（<b>空列折叠到 36pt</b>，列内按时间排）+ 检查器 + 「未归属」区</td>
+    <td>视图层无门 ⇒ <b>亮/暗各看一次</b> + <code>e2e_probe</code> + 词表（亮色算例 P16 已建，见下方那条<em>已过期</em>的前置条件）</td>
     <td>可以</td>
   </tr>
   <tr>
@@ -681,7 +718,7 @@ details.fold[open]>summary{margin-bottom:4px}
 <ul class="tight">
   <li><b>表只增列，不删不改名。</b>P1 之后任何一次"改个列名更顺"都会让旧版 App 打开新库直接崩（已发版 tag 的用户还在跑）—— 这条是 P11 立的硬规，不因为这次是新表就放宽。</li>
   <li><b>界面不许先于工具。</b>先把卡片画出来、再补 <code>delegate</code>，中间那几天你会看到"点得动但点了没反应"，而那种状态最容易被当成 bug 报回来，也最容易被顺手用假数据糊过去。</li>
-  <li><b>亮色算例必须先于 P5 的任何颜色改动。</b><code>run.sh</code> 的视觉算例只认 <code>enum Dark</code>（P16 的既有缺口）⇒ 泳道那套颜色在亮色下崩了，门是绿的。</li>
+  <li><del><b>亮色算例必须先于 P5 的任何颜色改动</b></del> —— <b>这条已过期（P5 落地时核实）</b>: P16 给 <code>palette_probe.py</code> 补了 <code>load_light()</code>，<code>run.sh</code> 早就在跑亮色算例。留下的教训换了个形状: <code>LIGHT_BANDS</code> / <code>PLATE_TOKENS</code> 是<b>显式名单</b>，新 token 不登记就一条判据都不进 —— 而 P5 的应对是<b>不新增颜色 token</b>（见 §03 的 P5 取舍表）。</li>
 </ul>
 
 <div class="call warn">

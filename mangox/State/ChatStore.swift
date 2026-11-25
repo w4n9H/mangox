@@ -429,6 +429,17 @@ final class ChatStore: ObservableObject {
     /// 也不能建。所以把"要展开谁"记在 store 上，视图出现/变化时消费掉（一次性）。
     @Published var pendingFindingFocus: UUID? = nil
 
+    /// P20 P5: 团队页检查器里那个「打开编辑器」要落到谁。
+    ///
+    /// 与 `pendingFindingFocus` **同一个理由**（那条注释说的就是这件事）: "打开定时页"是 store
+    /// 的状态，"展开哪一条"是 `ScheduledView` 的局部 `@State` —— 视图可能还没建，中间必须有人
+    /// 拿一下。于是记在 store 上，`ScheduledView` 出现/变化时消费掉（一次性）。
+    ///
+    /// ⚠️ 不复用 `pendingFindingFocus`: 那个是"收件箱里的一条结论"（`finding_actions` 的行），
+    /// 这个是"任务本身"。合用一个字段的话，两个消费者会互相把对方的值解读成自己的 id ——
+    /// 两者都是 UUID，编译期一点提示都没有。
+    @Published var pendingTaskFocus: UUID? = nil
+
     /// P19 S7: 邮箱账号（连接参数）。授权码在 `mailboxCredentials`（Keychain）。
     /// 本版只服务触达的邮件 sink —— 收信是 P19.1 的事。
     @Published var mailboxAccounts: [MailboxAccount] = []
@@ -442,6 +453,11 @@ final class ChatStore: ObservableObject {
     var showScheduledPanel: Bool {
         get { scheduler.showScheduledPanel }
         set { scheduler.showScheduledPanel = newValue }
+    }
+    /// P20 P5: 助理团队页的开关（同样只是转发 —— 真源在 `SchedulerService`）。
+    var showTeamPanel: Bool {
+        get { scheduler.showTeamPanel }
+        set { scheduler.showTeamPanel = newValue }
     }
     /// 子 store 变更转发 (视图仍只订阅 ChatStore)
     private var schedulerCancellable: AnyCancellable?
@@ -648,15 +664,17 @@ final class ChatStore: ObservableObject {
         if showExtensionsPanel {
             showKnowledgePanel = false
             showScheduledPanel = false
+            showTeamPanel = false
             scanExtensions()
         }
     }
 
-    /// 侧栏面板互斥不变量: 主区三块面板 (知识 / 定时 / 插件) **至多一个**为真。
+    /// 侧栏面板互斥不变量: 主区四块面板 (知识 / 定时 / 团队 / 插件) **至多一个**为真。
     /// ⚠️ **不含 `showSettingsPanel`** —— P14 起设置是独立窗口, 本来就能与任一主区面板并存。
     /// 由冒烟守卫 (P14): 任何 toggle 之后都必须成立。
     var panelsExclusive: Bool {
-        [showKnowledgePanel, showScheduledPanel, showExtensionsPanel].filter { $0 }.count <= 1
+        [showKnowledgePanel, showScheduledPanel, showTeamPanel, showExtensionsPanel]
+            .filter { $0 }.count <= 1
     }
 
     // Layout
@@ -919,6 +937,7 @@ final class ChatStore: ObservableObject {
         messages = []
         showKnowledgePanel = false   // 从面板发起新会话 → 回会话视图
         showScheduledPanel = false
+        showTeamPanel = false
         showExtensionsPanel = false
         try? persistence?.insertChatSession(item)
         markLastSession()
@@ -1410,6 +1429,7 @@ final class ChatStore: ObservableObject {
         showKnowledgePanel = false
         showExtensionsPanel = false
         showScheduledPanel = false
+        showTeamPanel = false
         markLastSession()
         syncWorkspaceContext()
     }
@@ -1536,6 +1556,7 @@ final class ChatStore: ObservableObject {
         selectedConversationId = id
         showKnowledgePanel = false   // 点选会话 → 回会话视图
         showScheduledPanel = false
+        showTeamPanel = false
         showExtensionsPanel = false
         // P4.0.2: 切走在途回合会话 → 未落库的流式块/非终态工具卡搬进镜像, 后续事件续投镜像
         if let previous, runningTurns.contains(previous) {
@@ -2436,6 +2457,7 @@ final class ChatStore: ObservableObject {
     func openKnowledgePanel() {
         showKnowledgePanel = true
         showScheduledPanel = false
+        showTeamPanel = false
         showExtensionsPanel = false
     }
 
@@ -2459,6 +2481,7 @@ final class ChatStore: ObservableObject {
         showKnowledgePanel.toggle()
         if showKnowledgePanel {
             showScheduledPanel = false
+            showTeamPanel = false
             showExtensionsPanel = false
         }
     }
@@ -2475,8 +2498,42 @@ final class ChatStore: ObservableObject {
         showScheduledPanel.toggle()
         if showScheduledPanel {
             showKnowledgePanel = false
+            showTeamPanel = false
             showExtensionsPanel = false
         }
+    }
+
+    /// P20 P5: 打开/收起团队页。**与 `toggleScheduledPanel` 逐条对称** ——
+    /// 差异只有"toggle 的是哪一个"，清场那三行一模一样（少清一个 = 两颗胶囊同时亮）。
+    func toggleTeamPanel() {
+        showTeamPanel.toggle()
+        if showTeamPanel {
+            showKnowledgePanel = false
+            showScheduledPanel = false
+            showExtensionsPanel = false
+            // 进来看的第一眼必须是**当下**的状态: 快照的刷新点是"数据变了"与"每分钟一跳"，
+            // 而这个页面是纯展示，人点进来的那一刻值得重算一次（两条 SQL，不是热路径）。
+            scheduler.refreshTeamStates()
+        }
+    }
+
+    /// P20 P5: 团队页检查器 →「打开编辑器」。打开定时页并把那条任务挂上聚焦请求。
+    func focusTask(_ id: UUID) {
+        showScheduledPanel = true
+        showKnowledgePanel = false
+        showTeamPanel = false
+        showExtensionsPanel = false
+        pendingTaskFocus = id
+    }
+
+    /// 视图消费掉聚焦请求（一次性 —— 不清的话每次重进定时页都会重新展开那一条）。
+    /// ⚠️ 清空延到下一轮 runloop，理由与 `consumeFindingFocus` **逐字相同**
+    /// （在视图更新里改 `@Published` 会报 "Publishing changes from within view updates"，
+    /// 而那个警告只在控制台里 —— 界面上什么都看不出来）。
+    func consumeTaskFocus() -> UUID? {
+        guard let id = pendingTaskFocus else { return nil }
+        DispatchQueue.main.async { [weak self] in self?.pendingTaskFocus = nil }
+        return id
     }
 
     // MARK: - Scheduled (P3.6 本地定时任务; P9.1b 起由 SchedulerService 承载, 此处仅转发)
@@ -2519,6 +2576,15 @@ final class ChatStore: ObservableObject {
         return Array(all.filter { $0.status.isVisible }.prefix(limit))
     }
 
+    /// P20 P5: 团队页检查器的「最近五次执行」。
+    ///
+    /// 与 `recentSent` 同一个位置与同一个理由: 视图不直接摸 `persistence`，
+    /// 而且**查库不许发生在 `body` 里** —— 检查器是"选中谁就换一次内容"的栏，
+    /// 在 body 里查就是"每 tick 查一次"。
+    func recentDelegations(taskId: UUID, limit: Int = 5) -> [Delegation] {
+        (try? persistence?.recentDelegations(toTask: taskId, limit: limit)) ?? []
+    }
+
     /// P19 S6: 重读执行落痕（执行收尾 / 回滚之后）。
     func reloadFindingActions() {
         findingActions = (try? persistence?.loadFindingActions()) ?? []
@@ -2535,6 +2601,7 @@ final class ChatStore: ObservableObject {
     func focusFinding(_ findingId: UUID) {
         showScheduledPanel = true
         showKnowledgePanel = false
+        showTeamPanel = false
         showExtensionsPanel = false
         pendingFindingFocus = findingId
     }

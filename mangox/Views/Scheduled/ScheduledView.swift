@@ -140,16 +140,29 @@ struct ScheduledView: View {
                 Text("任务删除后停止调度。工作日志文件始终保留; 日志会话可选删除。")
             }
         }
-        .onAppear { consumeFindingFocus() }
+        .onAppear { consumeFindingFocus(); consumeTaskFocus() }
         // P19 S7: 通知点击可能发生在定时页**已经开着**的时候 ⇒ 那一次 `onAppear` 不会再触发,
         // 要靠 `onChange` 接住（与设置页 `pendingSettingsCategory` 同款）。
         .onChange(of: store.pendingFindingFocus) { _, _ in consumeFindingFocus() }
+        // P20 P5: 团队页检查器的「打开编辑器」—— 同一个形状、**不同字段**
+        // （两个 id 都是 UUID，合用一个字段时两个消费者会互相把对方的值当成自己的）。
+        .onChange(of: store.pendingTaskFocus) { _, _ in consumeTaskFocus() }
     }
 
     /// 取走"展开某条结论"的请求（通知点击放进来）。清空延到下一轮 runloop —— 见 ChatStore 那条注释。
     private func consumeFindingFocus() {
         guard let id = store.consumeFindingFocus() else { return }
         withAnimation(CodexTheme.animFast) { expandedFinding = id }
+    }
+
+    /// 取走"打开某条任务的编辑器"的请求（团队页检查器放进来）。
+    ///
+    /// ⚠️ 找不到就把请求丢掉、**不报错**: 那个人可能刚被删（团队页是先点的卡、后跳的页）。
+    /// 停下来弹一句"任务不存在"，比直接落在列表页更让人以为点了坏的东西。
+    private func consumeTaskFocus() {
+        guard let id = store.consumeTaskFocus(),
+              let t = store.scheduledTasks.first(where: { $0.id == id }) else { return }
+        withAnimation(CodexTheme.animFast) { loadDraft(t) }
     }
 
     // MARK: - 列表

@@ -184,6 +184,13 @@ struct SidebarView: View {
                    active: model.showScheduledPanel) {
                 store.toggleScheduledPanel()
             }
+            // P20 P5: 团队页（纯展示）。**独立入口而不是定时页里的一条分段** ——
+            // 定时页答"这个助理怎么配"，团队页答"谁现在在干什么"；
+            // 前者是表单，后者是一屏看板，放进同一个视图只会两边都别扭。
+            navRow(icon: "person.2", title: L("团队"),
+                   active: model.showTeamPanel) {
+                store.toggleTeamPanel()
+            }
             // P3.11: 插件管理 (pi 扩展托管/启停/导入)
             navRow(icon: "puzzlepiece", title: L("插件"),
                    active: model.showExtensionsPanel) {

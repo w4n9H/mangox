@@ -138,7 +138,7 @@ struct ContentView: View {
     /// 正文此刻是不是主区 —— **只有聊天那条列有 680 上限**（`Tune.chatColumnWidth`），
     /// 也只有它需要为开面板补宽；知识 / 定时 / 插件面板与轨迹视图占了主区时补宽毫无意义。
     private var isChatMainArea: Bool {
-        !store.showKnowledgePanel && !store.showScheduledPanel
+        !store.showKnowledgePanel && !store.showScheduledPanel && !store.showTeamPanel
             && !store.showExtensionsPanel && store.capsuleMode == .chat
     }
 
@@ -173,6 +173,13 @@ struct ContentView: View {
                     .background(CodexTheme.bgChat)
             } else if store.showScheduledPanel {
                 ScheduledView(store: store)
+                    .frame(maxWidth: .infinity)
+                    .background(CodexTheme.bgChat)
+            } else if store.showTeamPanel {
+                // P20 P5: 助理团队页（泳道 · 纯展示）。**不放定时页里当分段** ——
+                // 它是三栏（筛选 / 泳道 / 检查器），定时页是两栏；合在一起会让
+                // ScheduledView 变成"一个容器 + 两套布局"，而它的职责是"建与改"。
+                TeamBoardView(store: store)
                     .frame(maxWidth: .infinity)
                     .background(CodexTheme.bgChat)
             } else if store.showExtensionsPanel {

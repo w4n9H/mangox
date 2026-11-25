@@ -1637,6 +1637,23 @@ final class PersistenceStore {
         return rows.compactMap(decodeDelegation)
     }
 
+    /// P20 P5: 某个 worker **最近几次被派的活**（检查器「最近五次执行」）。
+    ///
+    /// 为什么不复用 `loadDelegations(toTask:)`: 那个按 `due_at ASC` 排（给 tick 和"下一单什么时候起"
+    /// 用的），而这里要的是"最近发生过什么"。排序方向不同 ⇒ 两个方法。改那边的 order
+    /// 会悄悄改掉 due 的消费方（`dueDelegations` 的兄弟语义）。
+    ///
+    /// 按 `created_at` 而不是 `finished_at`: 一条**还没落定**的单（queued / running）在
+    /// 「最近五次」里必须出现 —— 那正是人此刻最想看到的那一行（"它手上正在干什么"）。
+    func recentDelegations(toTask: UUID, limit: Int) throws -> [Delegation] {
+        let rows = try db.query("""
+            SELECT id, from_task, to_task, goal, acceptance, context, due_at, due_by, status,
+                   attempts, note, summary, reported_at, created_at, started_at, finished_at
+            FROM agent_delegations WHERE to_task = ? ORDER BY created_at DESC LIMIT ?
+            """, [.text(toTask.uuidString), .int(Int64(limit))])
+        return rows.compactMap(decodeDelegation)
+    }
+
     /// tick 要的那一批：`queued` 且已到点。
     func dueDelegations(now: Date) throws -> [Delegation] {
         let rows = try db.query("""

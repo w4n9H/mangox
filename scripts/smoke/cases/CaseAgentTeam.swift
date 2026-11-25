@@ -733,5 +733,129 @@ extension SmokeMain {
               "T-TEAM ㉝(doc P4)五档状态(界面版): 在跑 N 分钟 / 已排上 HH:mm / 等回执 N 分钟 /"
               + " 空闲 [N 天] / 已停用 —— 与注入面**同一判据**(`TeamState.of`)、措辞各写各的"
               + " (\(sRun33) / \(sQueue33) / \(sAwait33) / \(sIdle33))")
+
+        // ══ ㉞（doc P5）团队页的范围: 全部 / 一支队 / 未归属 ═══════════════════
+        // 泳道按状态分列之后，"这个人属于哪个范围"就只剩入口那道过滤在管 —— 三条各有独立的坏法:
+        // 全部漏人（有的行哪一列都不进）/ 一支队不含队长本人（左侧写「4」而泳道里只有 3 张卡）/
+        // 未归属把正常 worker 也吞进去（残队吞掉整队，而队长还在，于是"他手下没人"）。
+        var orphan34 = ScheduledTask(id: UUID(), name: "孤儿", prompt: "按派活单干",
+                                     cron: "0 3 * * *", projectId: projId, continuous: false)
+        orphan34.kind = .assistant
+        orphan34.role = .worker
+        orphan34.parentId = UUID()               // main 被删之后留下的悬挂值
+        orphan34.description = "查发票"
+        let roster34 = [lead13, worker13, orphan34]
+        let pAll34 = TeamBoardText.people(.all, all: roster34)
+        let pTeam34 = TeamBoardText.people(.team(lead13.id), all: roster34)
+        let pOrph34 = TeamBoardText.people(.orphans, all: roster34)
+        check(pAll34.count == roster34.count
+              && pTeam34.contains { $0.id == lead13.id }
+              && pTeam34.contains { $0.id == worker13.id }
+              && !pTeam34.contains { $0.id == orphan34.id }
+              && pOrph34.map(\.id) == [orphan34.id],
+              "T-TEAM ㉞(doc P5)团队页范围: 全部不漏人; 一支队**含队长本人**"
+              + "(少了它, 左侧写「4」而泳道里只有 3 张卡); 未归属只装 parent 悬空/为空的 worker"
+              + " (实测 全部 \(pAll34.count) / 本队 \(pTeam34.count) / 未归属 \(pOrph34.count))")
+
+        // ══ ㉟（doc P5）列内排序: 不是按名字, 是按「最该被我看见的」 ════════════
+        // 五档的键各不相同（起跑/到点/交活/最后动过），但都指向同一句人话。这条塌了的后果
+        // 不是"顺序难看": 「三天没派过活」这条信息**只靠排序露面**，顺序一错它就沉底了。
+        let now35 = Date()
+        func person35(_ name: String, age: TimeInterval) -> ScheduledTask {
+            var t = ScheduledTask(id: UUID(), name: name, prompt: "p", cron: "0 3 * * *",
+                                  projectId: projId, continuous: false)
+            t.kind = .assistant
+            t.role = .worker
+            t.description = "d"
+            t.createdAt = now35.addingTimeInterval(age)   // 同键时的 tiebreaker
+            return t
+        }
+        let rA35 = person35("A", age: -60), rB35 = person35("B", age: -120), rC35 = person35("C", age: -180)
+        let runOrder35 = TeamBoardText.order(.running, [rA35, rB35, rC35], states: [
+            rA35.id: .running(since: now35.addingTimeInterval(-5 * 60)),
+            rB35.id: .running(since: now35.addingTimeInterval(-1 * 60)),
+            rC35.id: .running(since: now35.addingTimeInterval(-30 * 60)),
+        ])
+        let qA35 = person35("Q1", age: -60), qB35 = person35("Q2", age: -120)
+        let queuedOrder35 = TeamBoardText.order(.queued, [qA35, qB35], states: [
+            qA35.id: .queued(at: now35.addingTimeInterval(600)),
+            qB35.id: .queued(at: now35.addingTimeInterval(120)),
+        ])
+        let aA35 = person35("W1", age: -60), aB35 = person35("W2", age: -120)
+        let awaitOrder35 = TeamBoardText.order(.awaiting, [aA35, aB35], states: [
+            aA35.id: .awaiting(since: now35.addingTimeInterval(-2 * 60)),
+            aB35.id: .awaiting(since: now35.addingTimeInterval(-20 * 60)),
+        ])
+        let iA35 = person35("I1", age: -60), iB35 = person35("I2", age: -120)
+        let iC35 = person35("I3", age: -180)
+        let idleOrder35 = TeamBoardText.order(.idle, [iA35, iB35, iC35], states: [
+            iA35.id: .idle(lastActive: now35.addingTimeInterval(-3_600)),
+            iB35.id: .idle(lastActive: now35.addingTimeInterval(-10 * 86_400)),
+            iC35.id: .idle(lastActive: nil),          // 从没跑过 = 最久没动 ⇒ 排最前
+        ])
+        let dA35 = person35("D1", age: -60), dB35 = person35("D2", age: -120)
+        let offOrder35 = TeamBoardText.order(.disabled, [dA35, dB35], states: [
+            dA35.id: .disabled, dB35.id: .disabled,
+        ])
+        check(runOrder35.map(\.name) == ["C", "A", "B"]        // 跑得久的浮上来
+              && queuedOrder35.map(\.name) == ["Q2", "Q1"]      // 最快起跑的在上
+              && awaitOrder35.map(\.name) == ["W2", "W1"]       // 等最久的在上
+              && idleOrder35.map(\.name) == ["I3", "I2", "I1"]  // 最久没动的在上（nil = 从没跑过 ⇒ 最前）
+              && offOrder35.map(\.name) == ["D2", "D1"],        // 停用没有停用时刻 ⇒ 按建人顺序（D2 建得早）
+              "T-TEAM ㉟(doc P5)列内排序=最该被看见的在上: 在跑(跑得久)/已排上(到点早)/"
+              + " 等回执(等得久)/空闲(最久没动, `nil` 最前)/停用(无停用时刻 ⇒ 按建人顺序);"
+              + " 同键按 createdAt(tiebreaker 一漏, 同键两张卡每 tick 换位)"
+              + " (实测 \(runOrder35.map(\.name)) / \(queuedOrder35.map(\.name))"
+              + " / \(awaitOrder35.map(\.name)) / \(idleOrder35.map(\.name)))")
+
+        // ══ ㊱（doc P5）空列折叠: 只有一两个助理时, 那四五个空框不该各占 150pt ══════
+        // 文档说"列宽固定 150"的理由是**两行文字折行**，而空列里没有字 —— 所以 150 那条约束
+        // 对空列不存在。收窄的是宽度不是列序（位置仍是这个页面唯一的导航锚）。
+        // 这条判的是"少人时整片真的窄下来了"，不是"36 这个数好看"。
+        let railW36 = TeamBoardText.laneWidth(empty: true)
+        let laneW36 = TeamBoardText.laneWidth(empty: false)
+        let gap36 = Tune.teamLaneGap
+        let oneCard36 = TeamBoardText.boardWidth(cards: [.running: 1])
+        let twoCards36 = TeamBoardText.boardWidth(cards: [.running: 1, .idle: 1])
+        let fiveCards36 = TeamBoardText.boardWidth(cards: [.running: 1, .queued: 1,
+                                                          .awaiting: 1, .idle: 1, .disabled: 1])
+        check(railW36 == Tune.teamRailWidth && laneW36 == Tune.teamLaneWidth
+              && railW36 < laneW36
+              && oneCard36 == laneW36 + railW36 * 4 + gap36 * 4
+              && twoCards36 == laneW36 * 2 + railW36 * 3 + gap36 * 4
+              && fiveCards36 == laneW36 * 5 + gap36 * 4
+              // 只有两张卡的整片必须比全满窄出**一整列以上** —— 否则"折叠"只是个说法。
+              && fiveCards36 - twoCards36 > laneW36,
+              "T-TEAM ㊱(doc P5)空列折叠: 空列 \(Int(railW36))pt / 有卡列 \(Int(laneW36))pt;"
+              + " 两张卡时整片 \(Int(twoCards36))pt、五列全满 \(Int(fiveCards36))pt"
+              + " —— 少人时那四五个大空框不再各占 150(列序不变, 变的是宽度)")
+
+        // ══ ㊲（doc P5）卡片第二行与统计行: 归属是泳道页唯一还能认出"谁是谁的人"的地方 ══
+        // 泳道按状态分列之后，一支队伍被拆到五列里 —— 卡片上不写归属，二十张卡就是认不出。
+        let subLead37 = TeamBoardText.cardSubtitle(
+            lead13, parentName: nil,
+            state: .running(since: now35.addingTimeInterval(-4 * 60)), now: now35)
+        let subWorker37 = TeamBoardText.cardSubtitle(
+            worker13, parentName: lead13.name, state: .disabled, now: now35)
+        let subOrphan37 = TeamBoardText.cardSubtitle(
+            orphan34, parentName: nil, state: .idle(lastActive: nil), now: now35)
+        let stats37 = TeamBoardText.statsLine(total: 6, teams: 2,
+                                              cards: [.running: 2, .idle: 4])
+        let statsOne37 = TeamBoardText.statsLine(total: 3, teams: 1, cards: [.idle: 3])
+        // 卡片可用宽 = 150 − 左右各 10 − 竖条 3 = 127pt，9.5pt 中文每字约 9.5pt ⇒ 13 字。
+        // 超了就是**尾部截断**，而截掉的是时态（"3 天没派"变成"3 天"）甚至归属的后半截 ——
+        // 出图实测过一次（第一版写「%lld 天没派 / 还没跑过」，整行被切）。上限放在这里，
+        // 是因为它是一条**能变红的**约束: 谁把措辞写长，这条当场红，不用等人去出图。
+        let all37 = [subLead37, subWorker37, subOrphan37]
+        check(subLead37 == "main · 4 分钟"
+              && subWorker37.hasPrefix(lead13.name + " · ") && subWorker37.contains("派了会被拒")
+              && subOrphan37.hasPrefix("未归属 · ")
+              && all37.allSatisfy { $0.count <= 13 }
+              && stats37 == "6 个助理 · 2 支队伍 · 2 在跑 · 4 空闲"
+              // 只有一支队伍时不报「1 支队伍」: 那是每个单队伍用户的默认状态，报了就是白占一格。
+              && statsOne37 == "3 个助理 · 3 空闲",
+              "T-TEAM ㊲(doc P5)卡片第二行=归属·时态(队长写 main、worker 写归属名、悬挂写未归属;"
+              + " 停用那一档写「派了会被拒」而不是同义反复); 统计行只列非零档、队伍数 >1 才出现"
+              + " (实测 \(subLead37) / \(subWorker37) / \(subOrphan37) / \(stats37))")
     }
 }

@@ -20,6 +20,8 @@ final class SidebarModel: ObservableObject {
     // 面板互斥四态 (来自 ChatStore / KnowledgeStore / SchedulerService)
     @Published var showKnowledgePanel: Bool = false
     @Published var showScheduledPanel: Bool = false
+    /// P20 P5: 助理团队页（与 `showScheduledPanel` 互斥，两个是同一件事的两个面）。
+    @Published var showTeamPanel: Bool = false
     @Published var showExtensionsPanel: Bool = false
     @Published var showSettingsPanel: Bool = false
     // 徽标数据源
@@ -40,6 +42,7 @@ final class SidebarModel: ObservableObject {
             .map { $0.filter { $0.status == .pending }.count }
             .assign(to: &$knowledgePendingCount)
         store.scheduler.$showScheduledPanel.assign(to: &$showScheduledPanel)
+        store.scheduler.$showTeamPanel.assign(to: &$showTeamPanel)
         store.scheduler.$scheduledTasks.assign(to: &$scheduledTasks)
     }
 }

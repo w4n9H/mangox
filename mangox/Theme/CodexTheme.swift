@@ -612,6 +612,30 @@ enum Tune {
     /// 给身份再配一个色，同一行上就有两套色编码（"正在跑的 main"分不出是身份还是状态）。
     /// ⇒ 竖条本身用中性灰，**不是 accent**。P5 的泳道卡复用同一个数。
     static let teamIdentityBarWidth: CGFloat = 3
+    // P20 P5 助理团队页（泳道 · 纯展示）—— 布局度量。
+    //
+    // ⚠️ 列宽**两个数**，不是一个: 文档 §03 定的是「列宽固定 150px」，那条判据的原文理由是
+    //    "压窄列会让'名字 + 归属'两行都折行"。但那个理由只对**有卡的列**成立 ——
+    //    空列里没有字可折。于是：
+    //      · 有卡列 = `teamLaneWidth`（150，文档值，不动）
+    //      · 空列   = `teamRailWidth`（36，只够竖排列头 + 一个 0）
+    //    这一条是 P5 落地时对着"只有一两个助理"的真空图定的: 五列全展开时，只有两张卡
+    //    的场景里有 450pt 是"四个空框"，那不是留白，是四个框在说"这里没人"。
+    //    收窄后列序与列位语义**完全不变**（变的是宽度，不是顺序）—— 所以"每次进来都要
+    //    重新认人"那条判据没有被破坏。
+    static let teamFilterWidth: CGFloat = 200       // 左列：队伍筛选（全部 / 各 main / 未归属）
+    static let teamLaneWidth: CGFloat = 150         // 有卡列（文档值）
+    static let teamRailWidth: CGFloat = 36          // 空列折叠宽（竖排列头）
+    static let teamLaneGap: CGFloat = 12
+    static let teamInspectorWidth: CGFloat = 272    // 右列：检查器
+    static let teamCardPadH: CGFloat = 10
+    static let teamCardPadV: CGFloat = 9
+    static let teamCardGap: CGFloat = 8
+    /// 检查器里「最近五次执行」那一块的高度上限（内联，超过就内部滚）。
+    /// 与 `scheduleLedgerCardMaxHeight` 同一条理由: 它长在一个会随选中变化重排的栏里，
+    /// 没上界时"某个人被派过特别多的活"会把下面两个动作按钮顶出可视区。
+    static let teamRecentRunsMaxHeight: CGFloat = 168
+
     /// P20 P4: 编辑器里「职责说明」那个多行框的**定高**。
     /// 与 `workLogCard` 同一条理由: 它在 `ScrollView` 里，而 ScrollView 给子视图提的可用高度是
     /// **无限** —— 只给 `minHeight` 时它会撑到整篇文字那么高，说明写长了整页就被它顶没。

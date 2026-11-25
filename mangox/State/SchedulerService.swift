@@ -14,6 +14,13 @@ final class SchedulerService: ObservableObject {
     // P3.6: 本地定时任务 (仅 App 运行期生效, launchd 后置)
     @Published var scheduledTasks: [ScheduledTask] = []
     @Published var showScheduledPanel: Bool = false
+    /// P20 P5: 助理团队页（泳道 · 纯展示）。与 `showScheduledPanel` **互斥** ——
+    /// 它们是同一件事的两个面（建与改 / 看），同时开着只会在侧栏留下两颗亮着的胶囊。
+    ///
+    /// ⚠️ 独立开关而不是在 `ScheduledView` 里加一条分段: 团队页是**三栏**（筛选 / 泳道 /
+    /// 检查器），定时页是**两栏**（列表 / 编辑器）—— 塞进同一个视图会让那个文件变成
+    /// "一个容器 + 两套布局"，而它的职责本来就是"建与改"。
+    @Published var showTeamPanel: Bool = false
     /// P17 · 运行可靠性: 睡眠 / 长挂起期间漏跑的任务（由 `refreshMissedFires` 重算）。
     /// 空 = 侧栏那块 UI 整个不出现。
     @Published var missedFires: [MissedFire] = []
