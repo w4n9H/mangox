@@ -64,7 +64,7 @@ struct DreamConfirmSheet: View {
             //    顺序由这里的 `·` 决定, 译文只管自己那一小段。
             fact(L("正文"), String(format: L("%@ 字"), grouped(preview.materialChars))
                  + " · " + String(format: L("%lld 个回合"), preview.turns))
-            fact(L("归属"), preview.rootLabel)
+            fact(L("去处"), preview.rootLabel)
             fact(L("产出"), L("只出提案，不改任何文件"))
         }
     }

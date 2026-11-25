@@ -13,8 +13,13 @@ protocol ModelKeyStore {
     func deleteKey(account: String) throws
 }
 
+/// 钥匙串实现 —— **走 `SecretVault`（一个条目）**，不再一条 provider 一个条目。
+///
+/// 2026-11-25 boss: 每装一个新版本，首次打开要连着输四次密码（一次一个条目），
+/// 点「集成」再输第五次。macOS 的授权粒度是**每条目一次** ⇒ 条目数就是弹框数，
+/// 所以三类凭据合进一个条目（见 `SecretVault` 的文件头）。这个类型现在只负责
+/// "provider 名 → 逻辑键" 这一层翻译。
 struct KeychainModelKeyStore: ModelKeyStore {
-    let service: String = "com.mangox.model-key"
 
     /// 冒烟注入: **进程级**重定向 key store 的缝 (与 `ImagePipeline.attachmentsRootOverride` 同款)。
     ///
@@ -62,46 +67,14 @@ struct KeychainModelKeyStore: ModelKeyStore {
     nonisolated(unsafe) static var smokeShared = InMemoryModelKeyStore()
     #endif
 
-    private func baseQuery(account: String) -> [String: Any] {
-        [kSecClass as String: kSecClassGenericPassword,
-         kSecAttrService as String: service,
-         kSecAttrAccount as String: account]
-    }
-
-    func key(account: String) -> String? {
-        var query = baseQuery(account: account)
-        query[kSecReturnData as String] = true
-        query[kSecMatchLimit as String] = kSecMatchLimitOne
-        var out: CFTypeRef?
-        guard SecItemCopyMatching(query as CFDictionary, &out) == errSecSuccess,
-              let data = out as? Data else { return nil }
-        return String(data: data, encoding: .utf8)
-    }
+    func key(account: String) -> String? { SecretVault.value(SecretVault.modelKey(account)) }
 
     func setKey(_ newKey: String, account: String) throws {
-        let data = Data(newKey.utf8)
-        if key(account: account) != nil {
-            let update: [String: Any] = [kSecValueData as String: data]
-            let status = SecItemUpdate(baseQuery(account: account) as CFDictionary, update as CFDictionary)
-            guard status == errSecSuccess else {
-                throw NSError(domain: NSOSStatusErrorDomain, code: Int(status))
-            }
-            return
-        }
-        var add = baseQuery(account: account)
-        add[kSecValueData as String] = data
-        add[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlock
-        let status = SecItemAdd(add as CFDictionary, nil)
-        guard status == errSecSuccess else {
-            throw NSError(domain: NSOSStatusErrorDomain, code: Int(status))
-        }
+        try SecretVault.set(newKey, SecretVault.modelKey(account))
     }
 
     func deleteKey(account: String) throws {
-        let status = SecItemDelete(baseQuery(account: account) as CFDictionary)
-        guard status == errSecSuccess || status == errSecItemNotFound else {
-            throw NSError(domain: NSOSStatusErrorDomain, code: Int(status))
-        }
+        try SecretVault.set(nil, SecretVault.modelKey(account))
     }
 }
 

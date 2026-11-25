@@ -111,6 +111,29 @@ enum CodexTheme {
     static let info         = adaptive(light: 0x0969DA, dark: Dark.info)
     static let blocked      = adaptive(light: 0xB07A12, dark: Dark.blocked) // amber awaiting-approval (P8-T26)
 
+    // MARK: - 团队色（P20 P5 · 2026-11-25 boss：「不同的团队，应该有颜色区分」）
+    //
+    // 一支队伍一个颜色，**只画在两处**: 卡片左侧那条 3px 竖条、筛选栏队名前的圆点。
+    //
+    // ⚠️ 与上面那条「颜色只给状态」**不冲突**，但两件事必须分在不同的面片上:
+    //   状态色只画在**列头的 5pt 圆点**上，卡片本身**依旧不上底色**; 卡片上唯一的颜色
+    //   就是"这属于哪支队伍"。两套色画在同一块面片上，人才会读错（"蓝的卡 = 正在跑"）。
+    //
+    // ⚠️ **顺序即色板下标，只许往后加**: 中间插一个 ⇒ 所有队伍换色，而人已经记住
+    //   "对账那支是紫的"。谁用第几个由 `TeamBoardText.tintIndexMap` 定（**同屏的队伍
+    //   互不相同**，与传入顺序无关，也不碰 `hashValue` —— 那个每进程重播种）。
+    //
+    // ⚠️ 这两个值不进 `enum Dark`: 它们不是"面"，是 3px 的图形元素，暗色板的层级链管不到;
+    //   值是拿 `palette_probe.py --contrast` 对各自底色量过的（亮 ≥3.5:1 / 暗 ≥3.5:1）。
+    static let teamTints: [Color] = [
+        adaptive(light: 0x7A5CD0, dark: 0xA991F2),   // 紫
+        adaptive(light: 0x0E7C7F, dark: 0x4EC2C4),   // 青
+        adaptive(light: 0xB8397E, dark: 0xEC7FB4),   // 品红
+        adaptive(light: 0x2F7A3E, dark: 0x6FC784),   // 绿
+        adaptive(light: 0x8A6414, dark: 0xD2B05A),   // 赭
+        adaptive(light: 0x3F6FA8, dark: 0x86AEDC),   // 靛
+    ]
+
     // MARK: - 工具行 / 思考行的竖条（2026-10-21 boss：左侧配色太鲜艳）
     //
     // 判据：**颜色只给状态，不给类别**。
@@ -614,20 +637,27 @@ enum Tune {
     static let teamIdentityBarWidth: CGFloat = 3
     // P20 P5 助理团队页（泳道 · 纯展示）—— 布局度量。
     //
-    // ⚠️ 列宽**两个数**，不是一个: 文档 §03 定的是「列宽固定 150px」，那条判据的原文理由是
-    //    "压窄列会让'名字 + 归属'两行都折行"。但那个理由只对**有卡的列**成立 ——
-    //    空列里没有字可折。于是：
-    //      · 有卡列 = `teamLaneWidth`（150，文档值，不动）
-    //      · 空列   = `teamRailWidth`（36，只够竖排列头 + 一个 0）
-    //    这一条是 P5 落地时对着"只有一两个助理"的真空图定的: 五列全展开时，只有两张卡
-    //    的场景里有 450pt 是"四个空框"，那不是留白，是四个框在说"这里没人"。
-    //    收窄后列序与列位语义**完全不变**（变的是宽度，不是顺序）—— 所以"每次进来都要
-    //    重新认人"那条判据没有被破坏。
+    // ⚠️ 列宽**不写死**，由可用宽算: 五列**永远等宽** =（可用宽 − gap×4）÷ 5，夹在
+    //    [`teamLaneMinWidth`, `teamLaneWidth`] 之间。见 `TeamBoardText.laneWidth(available:)`。
+    //    同一个数改了三版，前两版都是被 boss 出图否掉的（空列特殊化的两条路都走不通）:
+    //      ① 36 + 逐字竖排 ⇒ "又是横字，又是竖字，还有宽度"
+    //      ② 实测最长列名（≈61）⇒ 字横过来了，但空列比有卡列窄 ⇒ "至少要等宽吧"
+    //      ③ 等宽（现在这版）。空列不再有任何特殊处理。
+    //
+    //    为什么不恒 150: 5×150 + gap×4 = 798pt，而窗口中间那一栏只有 700 上下 —— 恒 150
+    //    会**永远**横向滚、最后两列被切在边上。"等宽"的前提是放得下，所以宽度必须跟着可用宽走。
+    //    收窄的**只是宽度，不是列序**: 五列永远按「在跑 / 已排上 / 等回执 / 空闲 / 停用」排，
+    //    位置是这个页面唯一的导航锚。
     static let teamFilterWidth: CGFloat = 200       // 左列：队伍筛选（全部 / 各 main / 未归属）
-    static let teamLaneWidth: CGFloat = 150         // 有卡列（文档值）
-    static let teamRailWidth: CGFloat = 36          // 空列折叠宽（竖排列头）
+    /// 一列的**设计宽（上限）**: 再宽也不会多读出一个字（卡片文字左对齐），只是每张卡右边空一片。
+    static let teamLaneWidth: CGFloat = 150
+    /// 下限: 卡片第二行（`归属 · 时态`）要放得下 9~10 个字 —— 118 是那个下限。
+    static let teamLaneMinWidth: CGFloat = 118
     static let teamLaneGap: CGFloat = 12
-    static let teamInspectorWidth: CGFloat = 272    // 右列：检查器
+    /// 下方检查器那条横栏的**高度**（2026-11-25 boss 定: 它从右栏挪到了下栏）。
+    /// 200 的依据: 三段里最长的一段是「最近五次执行」（5 行 × 约 14pt + 标题），
+    /// 再高就只剩空白、再矮则五行要滚 —— 而"最近五次"滚着看就没有意义了。
+    static let teamInspectorHeight: CGFloat = 200
     static let teamCardPadH: CGFloat = 10
     static let teamCardPadV: CGFloat = 9
     static let teamCardGap: CGFloat = 8

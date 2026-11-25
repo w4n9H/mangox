@@ -105,6 +105,33 @@ def load_light(path=THEME):
     return colors
 
 
+def load_tints(path=THEME):
+    """团队色的六对 —— **数组写法，上面两个 load_* 都看不见它**。
+
+    `static let teamTints: [Color] = [ adaptive(light: 0x…, dark: 0x…), … ]` 与
+    "一个 token 一行"的写法形状不同，`load_dark` / `load_light` 的正则都要求
+    `static let 名字 = adaptive(` ⇒ 一个都匹配不到。**这就是那条老坑的第二次出现**:
+    新颜色不进算例 = 一条「未登记就免疫门禁」的缝（2026-10-14 定过：新 token 不登记就一条判据都不进）。
+    所以这里单开一个解析器，并在 `report_tints` 里给它们一条地板。
+    """
+    text = _read_theme(path)
+    m = re.search(r'static let teamTints: \[Color\] = \[(.*?)\n    \]', text, re.S)
+    if not m:
+        sys.exit('在主题文件里定位不到 teamTints 数组（改了写法就要同步改本脚本）')
+    pairs = re.findall(r'adaptive\(light:\s*0x([0-9A-Fa-f]{6}),\s*dark:\s*0x([0-9A-Fa-f]{6})\)',
+                       m.group(1))
+    if not pairs:
+        sys.exit('teamTints 里解析不到 adaptive(light:dark:) 对 —— 改了写法就要同步改本脚本')
+    return [(int(a, 16), int(b, 16)) for a, b in pairs]
+
+
+# 队伍色的下限。它是**图形元素**（3px 竖条 / 6pt 圆点），按 WCAG 1.4.11 的非文字对比度
+# 本是 3.0；这里抬到 3.5 是因为它要**互相区分**才成立 —— 两个色都贴着地板时，
+# 并排摆着会读成同一个色（那时"不同团队有颜色区分"这句话就不成立了）。
+TINT_FLOOR = 3.5
+# 它画在两种面片上: 卡片左侧的竖条（`bgCard`）与筛选栏队名前的圆点（`contentPanel`）。
+# 两个都要守 —— 只守一个的话，恰好另一个面片上的那一处会静默变淡。
+TINT_BASES = ['bgCard', 'contentPanel']
 # 面层级链 —— 顺序即语义（冒烟守同一条）。改顺序 = 改层次，必须有意为之。
 # ⚠️ **只对暗色成立**：亮色是"白纸 + 灰块"（卡片比纸**暗**），根本没有一条递增链。
 #    别把这条链套到亮色上 —— 会得到"从第一天就是红的"假判据（P16 §3 实测过）。
@@ -327,6 +354,29 @@ def report_inline_face(theme_name, colors, direction, bad):
     print()
 
 
+def report_tints(theme_name, colors, tints, bad):
+    """团队色 —— 图形元素地板，且**两个面片都要过**（卡片竖条 / 筛选栏圆点）。"""
+    if not tints:
+        bad.append(f'{theme_name} 一个队伍色都解析不到')
+        return
+    print(f'  团队色（{theme_name}）—— 3px 竖条 / 6pt 圆点，图形线 {TINT_FLOOR}:')
+    for i, (lv, dv) in enumerate(tints):
+        v = lv if theme_name == '亮色' else dv
+        worst = None
+        for base in TINT_BASES:
+            if base not in colors:
+                bad.append(f'{theme_name} 团队色 #{i} 的基准面 {base} 解析不到')
+                continue
+            c = contrast(v, colors[base])
+            worst = c if worst is None else min(worst, c)
+            if c < TINT_FLOOR:
+                bad.append(f'{theme_name} 团队色 #{i} 在 {base} 上只有 {c:.2f}:1 '
+                           f'< {TINT_FLOOR}（淡到看不出是哪个色）')
+        print(f'    tint{i}    #{v:06X}   最差 {worst:6.2f}:1  '
+              f'{"OK" if worst and worst >= TINT_FLOOR else "跌破"}')
+    print()
+
+
 # ---------------------------------------------------------------- main
 
 def main(argv):
@@ -349,6 +399,7 @@ def main(argv):
     want_light = '--dark' not in argv
 
     print(f'主题真源: {os.path.relpath(THEME, os.getcwd())}\n')
+    TINTS = load_tints()
 
     bad = []
 
@@ -359,6 +410,7 @@ def main(argv):
         report_plate('亮色', light_colors, bad)
         report_rail('亮色', light_colors, bad)
         report_kind_text('亮色', light_colors, bad)
+        report_tints('亮色', light_colors, TINTS, bad)
 
     if want_dark:
         b, _ = report_dark(dark_colors, dark_alphas, argv)
@@ -368,6 +420,7 @@ def main(argv):
         report_plate('暗色', dark_colors, bad)
         report_rail('暗色', dark_colors, bad)
         report_kind_text('暗色', dark_colors, bad)
+        report_tints('暗色', dark_colors, TINTS, bad)
 
     if bad:
         print('不变量破了:')

@@ -181,16 +181,20 @@ struct ScheduledView: View {
                 // 不该是一个随手可切的开关（切换会静默丢掉另一半字段的语义）。
                 Menu {
                     Button("Cron 定时任务") { startNew(kind: .execute) }
-                    Button("助理（目标式）") { startNew(kind: .assistant) }
+                    Button("助理（管理）") { startNew(kind: .assistant) }
                     // P20 P4: worker 在这里建（文档 §03「定时任务页只负责建与改」）。
                     // 它的档恒是助理 —— worker 没有 cron / 飞书入口，Cron 档建出来的 worker
                     // 永远起不来（`schedulerTick` 三处都排除了它）。
                     //
-                    // 用词: `main` / `worker` 在本仓是**技术角色名**，与 `prompt` / `cron`
-                    // 同族（编辑器的 help 早就写着「prompt 与 cron 为必填」）—— 不再另造
-                    // 「队长 / 队员」：两套词会让人以为列表上的 `main` 和编辑器里的「队长」
-                    // 是两件不同的东西。
-                    Button("worker · 只被派活叫起来") { startNew(kind: .assistant, role: .worker) }
+                    // 用词（2026-11-25 boss 定）: 界面上一律 **`助理（管理）` / `助理（执行）`**，
+                    // 列表行与泳道卡用它们的短形式 `管理` / `执行`。
+                    // ⚠️ 这里推翻过 P4 的一条判据: 那版写的是「用 `main` / `worker`、不另造中文」
+                    // （把它们当 `prompt` / `cron` 那样的技术角色名）。boss 的原话是
+                    // 「描述不一致，助理（管理）、助理（执行），按这样命名即可」——
+                    // 菜单里三档并列时 `worker · 只被派活叫起来` 与 `助理（目标式）` 不是一个维度，
+                    // 读起来像三种不相干的东西。现在三档是同一句式: **类型（定位）**。
+                    // 存储与域层的 `main` / `worker` 一个字没动（那是协议，不是界面）。
+                    Button("助理（执行）") { startNew(kind: .assistant, role: .worker) }
                 } label: {
                     Image(systemName: "plus")
                         .font(.system(size: 11))
@@ -201,7 +205,7 @@ struct ScheduledView: View {
                 .menuStyle(.borderlessButton)
                 .menuIndicator(.hidden)
                 .fixedSize()
-                .help("新建：Cron 定时（动作写死）或 助理（目标式，产方案等人批准）")
+                .help("新建：Cron 定时（动作写死）、助理（管理，能派人）、助理（执行，只被派活）")
             }
             .padding(.horizontal, 10)
             .padding(.top, 14)
@@ -212,7 +216,13 @@ struct ScheduledView: View {
                     if !openFindings.isEmpty { inboxSection }
                     if !executedFindings.isEmpty { executedSection }
                     if !store.missedFires.isEmpty { missedSection }
-                    ForEach(store.scheduledTasks) { task in row(task) }
+                    // 行序与分组: 队长在前、它的人紧跟；**组边界由那 3px 竖条画出来**
+                    // （`TeamRowText.listGroups`）。只排不画边界的话，队尾那条 cron 看起来
+                    // 就像这支队的最后一个人 —— boss 实机原话:「一个 cron 为什么会在
+                    // 客户回访的 team 里面」。
+                    ForEach(TeamRowText.listGroups(store.scheduledTasks), id: \.first?.id) { g in
+                        rowGroup(g)
+                    }
                     if store.scheduledTasks.isEmpty {
                         Text("暂无任务\n点右上角 + 新建")
                             .font(CodexTheme.fontTiny)
@@ -582,6 +592,31 @@ struct ScheduledView: View {
         store.scheduledTasks.first { $0.id == id }?.name ?? L("已删除的任务")
     }
 
+    /// 一组行（一个队长 + 它的人，或单独一行），**整组共用一条 3px 竖条**。
+    ///
+    /// 竖条画在**组这一层**而不是每一行里:
+    ///   · 行与行之间原本有 1pt 间距，逐行画会断成几截（看着像虚线）；
+    ///   · 更重要的是**长度就是信息** —— 竖条覆盖几行，就是"这支队伍有几个人"，
+    ///     而队列外的下一行（cron / 别的队 / 孤儿）自然落在竖条外面。
+    /// 组内间距 1pt 保留（改 0 会让相邻两行的 hover 底色粘成一坨），靠 `.overlay` 的
+    /// 满高矩形跨过那条缝。
+    @ViewBuilder
+    private func rowGroup(_ g: [ScheduledTask]) -> some View {
+        let hasTeam = g.count > 1 || (g.first.map { TeamRowText.isTeamLead($0) } ?? false)
+        VStack(spacing: 1) {
+            ForEach(g) { task in row(task) }
+        }
+        .overlay(alignment: .leading) {
+            if hasTeam {
+                // 队长的单人组也画（他就是这支队的全部），所以"有竖条 = 有队伍"这条不变。
+                Rectangle()
+                    .fill(CodexTheme.textMuted.opacity(0.55))
+                    .frame(width: Tune.teamIdentityBarWidth)
+                    .clipShape(RoundedRectangle(cornerRadius: 1.5))
+            }
+        }
+    }
+
     private func row(_ task: ScheduledTask) -> some View {
         let selected = isEditing(task)
         let hovered = hoveringId == task.id
@@ -657,16 +692,9 @@ struct ScheduledView: View {
         .padding(.trailing, 8)
         .padding(.vertical, 5)
         .background {
-            // 3px 身份竖条画在**背景层**，不占布局: 放进 HStack 会让队长那几行整体右移,
-            // 于是整列图标参差不齐（一条 3px 的线不值得付这个代价）。
-            ZStack(alignment: .leading) {
-                selected ? CodexTheme.selected : (hovered ? CodexTheme.hover : Color.clear)
-                if lead {
-                    Rectangle()
-                        .fill(CodexTheme.textMuted.opacity(0.55))
-                        .frame(width: Tune.teamIdentityBarWidth)
-                }
-            }
+            // ⚠️ 3px 身份竖条**不在这里了**（2026-11-25 挪到 `rowGroup`）: 它现在表示
+            // "这一片是一支队伍"而不是"我是队长"，必须跨行连续。这里只剩 hover / 选中底色。
+            selected ? CodexTheme.selected : (hovered ? CodexTheme.hover : Color.clear)
         }
         .clipShape(RoundedRectangle(cornerRadius: CodexTheme.radiusSm))
         .contentShape(Rectangle())
@@ -827,7 +855,7 @@ struct ScheduledView: View {
             Image(systemName: "arrow.down.right")
                 .font(.system(size: 10))
                 .foregroundStyle(CodexTheme.textMuted)
-            Text("不按档期跑 —— 只由它的 main 派活叫起来。派活单到期才起一轮。")
+            Text("不按档期跑 —— 只由它的管理助理派活叫起来。派活单到期才起一轮。")
                 .font(CodexTheme.fontSmall)
                 .foregroundStyle(CodexTheme.textTertiary)
             Spacer(minLength: 0)
@@ -902,7 +930,7 @@ struct ScheduledView: View {
                         draftRole = .main
                         draftParentId = nil
                     }
-                    Button("助理（目标式）") { draftKind = .assistant }
+                    Button("助理") { draftKind = .assistant }
                 } label: { kindPillBody }
                 .menuStyle(.borderlessButton)
                 .menuIndicator(.hidden)
@@ -1258,7 +1286,7 @@ struct ScheduledView: View {
 
     /// P19: 旧条件值守任务的触发条件 —— **只读展示**。
     /// 该档整体停用（无人授权自动执行那条路已拆），所以这里只负责让人看清它当年在等什么；
-    /// 想继续用同一件事，请重建为助理（目标式任务）。
+    /// 想继续用同一件事，请重建为助理（管理）。
     private func legacyConditionCard(_ task: ScheduledTask) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             Text("原触发条件（旧类型 · 已停用，不再值守）")
@@ -1595,16 +1623,18 @@ struct ScheduledView: View {
     /// （`from_task` 指向一个不再能派活的人），而那张单在画板上还会挂着。
     @ViewBuilder
     private var rolePicker: some View {
-        // 词用 `verbatim`: main / worker 是**技术角色名**（与 `prompt` / `cron` 同族），
-        // 中英同形，不进词表 —— 让它们在英文界面上变成另一句话，两边的文档就对不上号了。
-        let text = Text(verbatim: draftRole == .worker ? "worker" : "main")
+        // 2026-11-25 boss 定: 界面词与新建菜单同一句式 —— `助理（管理）` / `助理（执行）`。
+        // ⚠️ 这里原来是 `Text(verbatim:)` + `main` / `worker`（当技术角色名、不进词表）。
+        // 改了词就得进词表: `L()` 取完词再交给 `Text(String)`，后者是 verbatim 语义，
+        // 不会二次本地化（与本仓其它 `Text(L(…))` 同款）。
+        let text = Text(L(draftRole == .worker ? "助理（执行）" : "助理（管理）"))
         if editingId == nil {
             CodexPillMenu {
-                Button(L("main · 自己按班次跑，还能派人")) {
+                Button(L("助理（管理）· 自己按班次跑，还能派人")) {
                     draftRole = .main
                     draftParentId = nil
                 }
-                Button(L("worker · 只被派活叫起来")) { draftRole = .worker }
+                Button(L("助理（执行）· 只被派活叫起来")) { draftRole = .worker }
             } label: {
                 text
                 Image(systemName: "chevron.down").font(.system(size: 8, weight: .semibold))
@@ -1754,12 +1784,12 @@ struct ScheduledView: View {
         case .workerWithoutParent:
             return L("选一个助理当归属")
         case .parentIsWorker:
-            return L("归属不能是另一个 worker")
+            return L("归属只能是一个管理助理")
         case .duplicateName(let n):
-            return String(format: L("已经有一个 worker 叫「%@」"), n)
+            return String(format: L("已经有一个执行助理叫「%@」"), n)
         case .mainHasParent:
             // 归属那一行对 main 根本不显示 ⇒ 到不了这里。留着是为了编译期穷尽。
-            return L("main 不该有归属")
+            return L("管理助理不该有归属")
         }
     }
 

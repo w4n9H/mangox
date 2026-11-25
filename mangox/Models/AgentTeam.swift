@@ -469,14 +469,22 @@ enum TeamState: Equatable {
     /// 闲着。`lastActive` = 上一次自己跑过的时刻（算"几天没派"）。
     case idle(lastActive: Date?)
 
+    /// - Parameters:
+    ///   - busy: 派活单 —— **只有 worker 会出现在这里**（域层不许派给 main）。
+    ///   - live: **自己起的那一轮**的起跑时刻（`nil` = 此刻没在自己跑）。
+    ///     补的是"没有派活单"那条路: main 按班次起来时不产生单据，2026-11-25 之前它的卡
+    ///     永远进不了「在跑」—— boss 实机对比 worker 走满四档、main 一动不动才发现。
     static func of(_ t: ScheduledTask, busy: [UUID: Delegation],
-                   awaiting: Date?) -> TeamState {
+                   awaiting: Date?, live: Date? = nil) -> TeamState {
         // 顺序 = 人的判断顺序: 停用 ⇒ 在跑 ⇒ 已排上 ⇒ 等回执 ⇒ 空闲。
         // 前两档是**硬的**（派不了），后两档是"闲着，但手上有事 / 没事"。
         guard t.enabled else { return .disabled }
+        // 单据优先于"自跑": worker 被派活时两件事同时成立，而单据那一路有**准时刻**
+        // （`started_at` 从认领那一刻算），`live` 只是"这一轮大概什么时候起的"。
         if let d = busy[t.id] {
             return d.status == .running ? .running(since: d.startedAt) : .queued(at: d.dueAt)
         }
+        if let l = live { return .running(since: l) }
         if let a = awaiting { return .awaiting(since: a) }
         return .idle(lastActive: t.lastRunAt)
     }

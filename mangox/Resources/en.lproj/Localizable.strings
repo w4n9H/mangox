@@ -7,7 +7,7 @@
    **本文件由 scripts/l10n/gen_strings.py --write 生成, 别手改** ——
    译文改 scripts/l10n/en_values.py 的 VALUES, 再跑 --write。
 
-   条数: 1214
+   条数: 1217
 */
 
 " (值:\"%@\")" = " (value: %@)";
@@ -54,7 +54,6 @@
 "%@ 落在**别的 App** 的窗口上(不是「%@」) ⇒ 没点。" = "%@ lands on **another app**'s window (not \"%@\") ⇒ nothing was tapped.";
 "%lld %@" = "%lld %@";
 "%lld 个" = "%lld";
-"%lld 个 worker" = "%lld workers";
 "%lld 个人 · %lld 支队伍" = "%lld people · %lld teams";
 "%lld 个人格文件 frontmatter 破损, 未注入且已禁止新建 key: %@" = "%lld persona files have broken frontmatter — not injected, and creating keys is blocked: %@";
 "%lld 个人格文件是「按需」的, 模型不知道它们存在: %@" = "%lld persona files are “on demand” — the model does not know they exist: %@";
@@ -143,8 +142,6 @@
 "git 分支 · %lld 个改动" = "git branch · %lld changes";
 "key 全局唯一" = "keys are globally unique";
 "key 已被另一条占用" = "That key is already taken by another item";
-"main · 自己按班次跑，还能派人" = "main · runs on its own schedule and can delegate";
-"main 不该有归属" = "main cannot belong to anyone";
 "multipart 缺 boundary" = "multipart is missing a boundary";
 "pi 不随 App 发布 —— 需要你自己装好，App 才能发起对话。" = "pi doesn't ship with the app — install it yourself, and the app can start a conversation.";
 "pi 扩展经 spawn 期 --extension 加载, 启停后需重启引擎生效" = "pi extensions are loaded at spawn time via --extension; restart the engine for changes to take effect.";
@@ -155,7 +152,6 @@
 "token / 天" = "tokens / day";
 "tokens" = "tokens";
 "txt / html 没有 frontmatter — 标题就是文件名" = "txt / html have no frontmatter — the filename is the title";
-"worker · 只被派活叫起来" = "worker · only runs when it is delegated to";
 "· %lld 个在途" = "· %lld in flight";
 "· 内层 %lld" = "· Nested %lld";
 "— 变化:" = "— Changes:";
@@ -236,7 +232,7 @@
 "不可操作" = "Read-only";
 "不弹卡, 全部放行 — 定时任务用 (无人点击, 弹卡即死锁)。" = "No prompts, everything allowed — for scheduled tasks (nobody is there to click; a prompt would deadlock).";
 "不归它" = "Unassign";
-"不按档期跑 —— 只由它的 main 派活叫起来。派活单到期才起一轮。" = "No schedule of its own — it runs only when its main delegates, one turn per due ticket.";
+"不按档期跑 —— 只由它的管理助理派活叫起来。派活单到期才起一轮。" = "No schedule of its own — it runs only when its managing assistant delegates, one turn per due ticket.";
 "不支持的类型" = "Unsupported type";
 "不是能写字的地方 ⇒ 我不往里写。" = " is not a field you can type into ⇒ I will not write there.";
 "不用单独给。辅助功能一给，键盘监听就有了 —— 所以系统设置那一页里看不到 MangoX，那是正常的，不是漏装。" = "Nothing to grant separately. Accessibility already covers keyboard listening, so MangoX will not show up on that page of System Settings — that is normal, not a missing install.";
@@ -410,7 +406,10 @@
 "助理巡检住在 App 进程里, 不开 App 就不会巡检。开启后 macOS 可能要求你在「登录项」里批准一次" = "Assistant checks run inside the app process, so nothing runs while it is closed. macOS may ask you to approve it once in Login Items";
 "助理是关着的 —— 打开它才会推" = "The assistant is paused — turn it on and findings will be pushed.";
 "助理结论的邮件通知借它发出。授权码存钥匙串, 不落数据库; 第一个能发的账号就是发件人。" = "Used to send email notifications for assistant findings. The auth code lives in the keychain, not the database; the first sendable account is the sender.";
-"助理（目标式）" = "Assistant (goal-based)";
+"助理（执行）" = "Assistant (execute)";
+"助理（执行）· 只被派活叫起来" = "Assistant (execute) · only runs when it is delegated to";
+"助理（管理）" = "Assistant (manage)";
+"助理（管理）· 自己按班次跑，还能派人" = "Assistant (manage) · runs on its own schedule and can delegate";
 "助理：到点看一轮，产出带编号的方案等你批准（`prompt` 写目标，不是动作）" = "Assistant: takes a look when due and writes a numbered plan that waits for your approval (`prompt` states the goal, not the actions)";
 "单条消息最多 %lld 张图片, 超出请拆条发送" = "Up to %lld images per message — split into several messages if you need more";
 "博查 API Key" = "Bocha API key";
@@ -423,6 +422,7 @@
 "原归属已删除" = "Its lead was deleted";
 "原触发条件（旧类型 · 已停用，不再值守）" = "Original trigger condition (legacy type · disabled, no longer watching)";
 "原队伍已删除" = "Its team was deleted";
+"去处" = "Goes to";
 "去定时任务" = "Open Scheduled";
 "去审核" = "Review";
 "去结算" = "Checkout";
@@ -597,7 +597,7 @@
 "已更新: %lld 家 / %lld 条" = "Updated: %lld providers / %lld models";
 "已注册，但系统要求你批准 —— 系统设置 → 通用 → 登录项 → 允许 MangoX" = "Registered, but macOS needs your approval — System Settings → General → Login Items → allow MangoX";
 "已清空 %lld 条提案" = "Cleared %lld proposals";
-"已经有一个 worker 叫「%@」" = "A worker named 「%@」 already exists";
+"已经有一个执行助理叫「%@」" = "An executing assistant named 「%@」 already exists";
 "已经有同名笔记了" = "A note with that name already exists";
 "已跑 %lld 次" = "Ran %lld times";
 "已采纳 %lld 条" = "Accepted %lld";
@@ -628,7 +628,7 @@
 "归 %@" = "Under %@";
 "归它" = "Assign";
 "归属" = "Under";
-"归属不能是另一个 worker" = "A worker cannot belong to another worker";
+"归属只能是一个管理助理" = "It can only belong to a managing assistant";
 "归：%@" = "Owner: %@";
 "当前" = "Current";
 "当前会话 %lld 轮" = "Current session: %lld turns";
@@ -667,6 +667,7 @@
 "打开编辑器" = "Open editor";
 "打开菜单" = "Open menu";
 "托管" = "Managed";
+"执行" = "Execute";
 "执行中…" = "Running…";
 "执行痕迹" = "Run trace";
 "执行自定义动作" = "Run custom action";
@@ -754,7 +755,7 @@
 "新建条目" = "New entry";
 "新建笔记" = "New note";
 "新建项目（选择目录）…" = "New project (choose a directory)…";
-"新建：Cron 定时（动作写死）或 助理（目标式，产方案等人批准）" = "New: Cron schedule (fixed actions) or Assistant (goal-based, plans wait for approval)";
+"新建：Cron 定时（动作写死）、助理（管理，能派人）、助理（执行，只被派活）" = "New: Cron schedule (fixed actions), assistant (manage, can delegate), assistant (execute, delegated to)";
 "方向键、Home/End、Shift 选字不受这条限制。" = "Arrows, Home/End and Shift-selection are not limited by this rule.";
 "方案 %lld 步" = "plan · %lld steps";
 "无人值守 · 恒开" = "Unattended · always on";
@@ -973,6 +974,8 @@
 "等回执 %lld 分钟" = "Awaiting report · %lld min";
 "等待" = "Waiting";
 "等待审批" = "Awaiting approval";
+"管理" = "Manage";
+"管理助理不该有归属" = "A managing assistant cannot have a lead";
 "系统" = "System";
 "系统权限" = "System permissions";
 "索引宁缺勿残 — 残缺的索引会让你以为资料只有这些; 摘掉或停用一两个库即可恢复" = "A partial index is worse than none — it would read as “these are all the materials”. Unmount or disable a base or two to restore it";
@@ -1097,7 +1100,7 @@
 "还没往外发过东西。它第一次给你发消息之后，这里会出现最近几条。" = "Nothing sent yet. Once it messages you for the first time, the latest few will show up here.";
 "还没有人跟它说过话 —— 先在飞书里给它发一句，之后结论就推到这个私聊" = "Nobody has talked to it yet — send it one message in Feishu and findings will go to that direct message from then on.";
 "还没有列出验收项" = "No acceptance items yet";
-"还没有助理。去「定时任务」新建一个，或把已有的改成 worker" = "No assistants yet. Create one under Scheduled, or turn an existing task into a worker.";
+"还没有助理。去「定时任务」新建一个，或把已有的改成助理（执行）" = "No assistants yet. Create one under Scheduled, or turn an existing task into an assistant (execute).";
 "还没有常驻内容\n点右上角 + 新建条目, 或用常驻区与笔记区的入口放入文件" = "Nothing always-on yet\nUse + in the top right to add an entry, or use the resident and notes section entries to put files in place";
 "还没有归档" = "Nothing archived yet";
 "还没有打开文件" = "No file open";

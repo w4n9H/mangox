@@ -6,8 +6,11 @@
 //
 //  ⚠️ 为什么这些要抽成纯函数: 团队页**视图层没有门**。整个 P5 能被断言的东西，
 //     只有"从数据到文字/顺序/宽度"这几步 —— 它们全部不碰库、不读时钟（`now` 由调用方给），
-//     于是冒烟可以直接喂一组人和一组状态，把列内排序、空列宽度、统计口径逐条钉死。
+//     于是冒烟可以直接喂一组人和一组状态，把列内排序、列宽、统计口径逐条钉死。
 //     与 P4 的 `TeamRowText` 同一款式（视图层无门 ⇒ 把能断言的抽出来）。
+//
+//  ⚠️ 宽度那两个函数**只吃一个数**（可用宽），不再吃"这一列空不空" —— 五列等宽是结构性的，
+//     不是判出来的。见 `laneWidth(available:)` 里那三版的历史。
 //
 
 import Foundation
@@ -41,10 +44,6 @@ enum TeamLane: Int, CaseIterable, Identifiable {
     }
 }
 
-// MARK: - 范围（左侧那列筛选）
-
-/// 左侧筛选的三态。**「未归属」不是"没选"** —— 它是一支残队（worker 的 main 被删了），
-/// 与 `TeamRowText.identityLine` 里那个「未归属」同一个词、同一件事。
 enum TeamBoardScope: Equatable {
     case all
     /// 某支队伍: **含队长本人**（他是这支队伍的人，不是"另外一个人"）。
@@ -115,7 +114,8 @@ enum TeamBoardText {
             // 留空会让这张卡读成"这个人没有队伍这个概念"，而它其实是一支残队的人。
             owner = parentName ?? L("未归属")
         } else {
-            // `main` 是角色名，与 P4 同一条判据（不进词表、`L()` 不碰它）。
+            // 队长自己的卡写它的角色短标记（`管理`）。2026-11-25 起与列表行**同一个函数**取词
+            // （`roleToken`），两处不会漂。
             owner = TeamRowText.roleToken(kind: t.kind, role: t.role)
         }
         return owner + " · " + statePhrase(state, now: now)
@@ -202,25 +202,77 @@ enum TeamBoardText {
         }
     }
 
-    // MARK: 度量
+    // MARK: 队伍色
 
-    /// 一列此刻多宽。**空列折叠**（P5 落地时对"只有一两个助理"的真空图定的）。
+    /// 看板上每支队伍的**色板下标**（key = main 的 id）。
     ///
-    /// 判据只有一句: 文档说"列宽固定 150"的理由是**两行文字折行**，而空列里没有字 ——
-    /// 所以 150 那条约束对空列不存在。收窄的是**宽度，不是列序**:
-    /// 五列永远按 [`在跑` `已排上` `等回执` `空闲` `停用`] 排，位置语义一点没动。
-    ///
-    /// ⚠️ 不做的两件事: ① **不隐藏空列** —— 隐藏会让某一列一有卡就整片右移，而"位置固定"
-    /// 是这个页面唯一的导航锚；② **不做换列/宽度动画** —— 卡片在列间移动的几百毫秒里，
-    /// 点谁都是错的位置（文档同一条理由）。
-    static func laneWidth(empty: Bool) -> CGFloat {
-        empty ? Tune.teamRailWidth : Tune.teamLaneWidth
+    /// 三条都要，缺一条就出"看起来一样"或者"颜色乱跳":
+    ///   · **互不相同**（队伍数 ≤ 色板数时）—— 这条就是 boss 那句「不同的团队，应该有颜色区分」
+    ///     的白话。第一版按 uuid 取哈希取模，六色两支队伍有 1/6 概率**撞成同色**，而撞了之后
+    ///     每一张卡都"看起来是对的"，只有并排摆着才看得出来 ⇒ 拿互不相同当判据。
+    ///   · **同 uuid 同色，且与传入顺序无关**（先按 uuid 排序再取位）—— 排序是确定的，
+    ///     所以 `mains` 这一年的排列怎么变都不影响颜色。
+    ///   · **不随进程重播种** —— 不碰 `hashValue`（Swift 每个进程重播种，重启一次全换色）。
+    /// 代价明写: 队伍数变了（新建/删一支）时，排它后面的那些会挪一个色 —— 要"永不挪"就得容忍
+    /// 撞色（确定性哈希的必然结果），两者只能选一个，这里选**不撞色**。
+    static func tintIndexMap(teamIds: [UUID]) -> [UUID: Int] {
+        let sorted = teamIds.sorted { $0.uuidString < $1.uuidString }
+        var out: [UUID: Int] = [:]
+        for (i, id) in sorted.enumerated() { out[id] = i % CodexTheme.teamTints.count }
+        return out
     }
 
-    /// 整片泳道的宽（含列间 gap）。调用方拿它跟可用宽比: 装得下就居中，装不下就横向滚。
-    static func boardWidth(cards: [TeamLane: Int]) -> CGFloat {
-        let widths = TeamLane.allCases.map { laneWidth(empty: (cards[$0] ?? 0) == 0) }
-        return widths.reduce(0, +) + CGFloat(TeamLane.allCases.count - 1) * Tune.teamLaneGap
+    /// 这张卡的颜色下标 —— **worker 跟它那支队伍同色**（否则一张卡写着"归 X"却与 X 不同色）。
+    ///
+    /// `nil` = 它没有队伍，调用方画中性灰。两种来源: ① 老库里本来就空着的 `parentId`;
+    /// ② **挂在已被删除的 main 上**（`parentId` 是个悬挂值 —— 域层故意不置空，见
+    /// `PersistenceStore` 那段「删 main 之后故意不置空」）。第二种只有调用方知道，
+    /// 所以 `parentIsAlive` 从外面传进来 —— 与卡片第二行那个「未归属」用同一个判据，
+    /// 不能一处说"没队伍"、另一处还给它上队伍色。第三种是"自己的 id 不在表里"——
+    /// 那只可能是**筛选后没列出来的那支**，同样按"没队伍"处理，别现编一个色出来。
+    static func cardTintIndex(_ t: ScheduledTask, parentIsAlive: Bool,
+                              tintMap: [UUID: Int]) -> Int? {
+        if t.role == .worker {
+            guard let pid = t.parentId, parentIsAlive else { return nil }
+            return tintMap[pid]
+        }
+        return tintMap[t.id]
+    }
+
+    // MARK: 度量
+
+    /// 五列的宽度 —— **永远等宽**，由可用宽算出来，夹在 [`teamLaneMinWidth`, `teamLaneWidth`] 之间。
+    ///
+    /// 2026-11-25 boss 两次出图，把这个数改了三次。前两版都错在同一个念头上: **给空列开特例**。
+    ///   ① `36 + 逐字竖排` —— 四个空列收成四根字柱，与旁边 150pt 的「空闲」并排
+    ///      ⇒「又是横字，又是竖字，还有宽度」（竖排不是 SwiftUI 的折行，是我自己加的渲染方式）;
+    ///   ② `实测最长列名 ≈ 61` —— 字横过来了、五列都一行，但**空列比有卡列窄**
+    ///      ⇒「至少要等宽吧」;
+    ///   ③ **等宽**（现在这版）。空列不再有任何特殊处理 —— 列头一份画法、宽度一个来源。
+    ///
+    /// 为什么不是恒 150: 5×150 + gap×4 = 798pt，而窗口中间那一栏只有 700 上下 ⇒ 恒 150 会
+    /// **永远**横向滚、最后两列被切在边上。"等宽"的前提是**放得下**，所以宽度跟着可用宽走:
+    ///   · 宽窗口 ⇒ 封顶 150（再宽不多读一个字，只是每张卡右边空一片）;
+    ///   · 常见窗口（≈700）⇒ 均分后 130 左右，整片刚好放满;
+    ///   · 窄窗口 ⇒ 落到下限 118（卡片第二行要放得下 9~10 个字），再窄才横向滚。
+    ///
+    /// ⚠️ 仍然不做的两件事: ① **不隐藏空列** —— 隐藏会让某一列一有卡就整片右移，而"位置固定"
+    /// 是这个页面唯一的导航锚；② **不做换列/宽度动画** —— 卡片在列间移动的几百毫秒里，
+    /// 点谁都是错的位置（文档同一条理由）。
+    static func laneWidth(available: CGFloat) -> CGFloat {
+        let count = CGFloat(TeamLane.allCases.count)
+        let gaps = Tune.teamLaneGap * (count - 1)
+        // **向下取整**: 让"刚好放得下"那一档不会因为 0.4pt 的余数滚出一像素（滚出来了就是
+        // 一条永远擦不掉的渐隐 + 最后一列被切）。
+        let fit = ((available - gaps) / count).rounded(.down)
+        return min(Tune.teamLaneWidth, max(Tune.teamLaneMinWidth, fit))
+    }
+
+    /// 整片泳道的宽（含列间 gap）。调用方拿它跟可用宽比: **只有窄到下限**时才装不下、才横向滚。
+    /// 同一个 `laneWidth` 算出来的，所以"布局多宽"与"要不要渐隐"不会各说各话。
+    static func boardWidth(available: CGFloat) -> CGFloat {
+        let count = CGFloat(TeamLane.allCases.count)
+        return laneWidth(available: available) * count + Tune.teamLaneGap * (count - 1)
     }
 
     // MARK: 统计行
@@ -266,6 +318,6 @@ enum TeamBoardText {
     /// 判据: 空态必须给出**下一步去哪**，而不是只说"还没有"。这个页面的入口在侧栏，
     /// 而人可以是从定时任务页点过来的 —— 只写"还没有助理"，他下一步会去翻设置。
     static func emptyBoardLine() -> String {
-        L("还没有助理。去「定时任务」新建一个，或把已有的改成 worker")
+        L("还没有助理。去「定时任务」新建一个，或把已有的改成助理（执行）")
     }
 }

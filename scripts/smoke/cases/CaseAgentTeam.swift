@@ -704,8 +704,11 @@ extension SmokeMain {
         // ⚠️ 人数只判"有这一格"，不判具体几: 具体那个数归 `workerCount`（列表直接用它），
         // 在这里把数字写死会让本条的红色**依赖 ㉛ 的夹具**（实测过: 职责那道判一去掉，
         // 多长出来的那个 worker 会把这里一起染红，而它本身没有错）。
-        check(lineLead.contains("main") && lineLead.contains(" 个 worker")
-              && lineWorker.hasPrefix("worker") && lineWorker.contains("归 \(lead13.name)")
+        // ⚠️ 界面词（2026-11-25 boss 定）: `管理` / `执行` 是两个身份在列表行上的短形式。
+        // 这里判的是"认得出谁是队长、谁是谁的人"，所以只认这两枚**短标记**，不认完整名字
+        // （`助理（管理）`那是菜单与身份胶囊的写法，240pt 的行里放不下）。
+        check(lineLead.contains("管理") && lineLead.contains(" 个助理")
+              && lineWorker.hasPrefix("执行") && lineWorker.contains("归 \(lead13.name)")
               // worker 在 tick / 漏跑 / 补跑三处都被排除了 ⇒ cron 对它是占位值,
               // 写出来就是承诺一件永远不会发生的事。
               && !lineWorker.contains("每天")
@@ -715,8 +718,8 @@ extension SmokeMain {
               // Cron 档在存储上也是 main, 但它在队伍系统外面 —— 竖条给它就等于把
               // "这里有个队长"说给每一条 Cron 任务听。
               && !TeamRowText.isTeamLead(cron13),
-              "T-TEAM ㉜(doc P4)列表行: worker 独立一行, 靠「归 X」认人(没有归属就写「未归属」);"
-              + " worker 不写周期; 3px 竖条只给队长(\(lineLead) / \(lineWorker) / \(lineOrphan))")
+              "T-TEAM ㉜(doc P4)列表行: 执行助理独立一行, 靠「归 X」认人(没有归属就写「未归属」);"
+              + " 执行助理不写周期; 3px 竖条只给管理助理(\(lineLead) / \(lineWorker) / \(lineOrphan))")
 
         // ══ ㉝（doc P4）五档状态: 界面版四档各自说得清，「等回执」**不折叠** ═══════
         // 注入面把 `.awaiting` 说成"空闲"（能不能派的角度它确实闲着）; 界面上它必须说出来,
@@ -808,27 +811,26 @@ extension SmokeMain {
               + " (实测 \(runOrder35.map(\.name)) / \(queuedOrder35.map(\.name))"
               + " / \(awaitOrder35.map(\.name)) / \(idleOrder35.map(\.name)))")
 
-        // ══ ㊱（doc P5）空列折叠: 只有一两个助理时, 那四五个空框不该各占 150pt ══════
-        // 文档说"列宽固定 150"的理由是**两行文字折行**，而空列里没有字 —— 所以 150 那条约束
-        // 对空列不存在。收窄的是宽度不是列序（位置仍是这个页面唯一的导航锚）。
-        // 这条判的是"少人时整片真的窄下来了"，不是"36 这个数好看"。
-        let railW36 = TeamBoardText.laneWidth(empty: true)
-        let laneW36 = TeamBoardText.laneWidth(empty: false)
+        // ══ ㊱（doc P5）五列**等宽**: 宽度跟着可用宽走, 夹在 [下限, 150] ══════════════
+        // 同一个数改了三版，前两版都被 boss 出图否掉: ① 空列 36pt + 逐字竖排（"又是横字，
+        // 又是竖字"）; ② 空列按实测列名收到 61pt（"至少要等宽吧"）。两版都错在给空列开特例 ——
+        // 现在是**五列同一个宽度**，宽度由这一栏的可用宽均分而来。
+        // 这条判的是"等宽 + 夹取 + 整片宽与列宽同源"，不是"130 这个数好看"。
         let gap36 = Tune.teamLaneGap
-        let oneCard36 = TeamBoardText.boardWidth(cards: [.running: 1])
-        let twoCards36 = TeamBoardText.boardWidth(cards: [.running: 1, .idle: 1])
-        let fiveCards36 = TeamBoardText.boardWidth(cards: [.running: 1, .queued: 1,
-                                                          .awaiting: 1, .idle: 1, .disabled: 1])
-        check(railW36 == Tune.teamRailWidth && laneW36 == Tune.teamLaneWidth
-              && railW36 < laneW36
-              && oneCard36 == laneW36 + railW36 * 4 + gap36 * 4
-              && twoCards36 == laneW36 * 2 + railW36 * 3 + gap36 * 4
-              && fiveCards36 == laneW36 * 5 + gap36 * 4
-              // 只有两张卡的整片必须比全满窄出**一整列以上** —— 否则"折叠"只是个说法。
-              && fiveCards36 - twoCards36 > laneW36,
-              "T-TEAM ㊱(doc P5)空列折叠: 空列 \(Int(railW36))pt / 有卡列 \(Int(laneW36))pt;"
-              + " 两张卡时整片 \(Int(twoCards36))pt、五列全满 \(Int(fiveCards36))pt"
-              + " —— 少人时那四五个大空框不再各占 150(列序不变, 变的是宽度)")
+        let normal36 = TeamBoardText.laneWidth(available: 700)    // 常见窗口: 装得下 ⇒ 均分
+        let wide36 = TeamBoardText.laneWidth(available: 1400)     // 很宽: 封顶 150，不再撑
+        let tiny36 = TeamBoardText.laneWidth(available: 400)      // 很窄: 落到下限
+        let board36 = TeamBoardText.boardWidth(available: 700)
+        check(normal36 == 130                                     // (700 − 4×12) ÷ 5 = 130.4 ⇒ 向下取整
+              && wide36 == Tune.teamLaneWidth
+              && tiny36 == Tune.teamLaneMinWidth
+              && board36 == normal36 * 5 + gap36 * 4
+              // 装得下那一档必须**刚好放满**: 余量不到一个 gap，否则"等宽"会留出一条
+              // 永远擦不掉的空白（或反过来滚出一像素，右边挂一条不该有的渐隐）。
+              && board36 <= 700 && 700 - board36 < gap36,
+              "T-TEAM ㊱(doc P5)五列等宽: 可用 700 ⇒ 列宽 \(Int(normal36))pt/整片 \(Int(board36))pt;"
+              + " 可用 1400 ⇒ \(Int(wide36))pt(封顶); 可用 400 ⇒ \(Int(tiny36))pt(下限);"
+              + " 列宽只有一个来源, 空列与有卡列同宽")
 
         // ══ ㊲（doc P5）卡片第二行与统计行: 归属是泳道页唯一还能认出"谁是谁的人"的地方 ══
         // 泳道按状态分列之后，一支队伍被拆到五列里 —— 卡片上不写归属，二十张卡就是认不出。
@@ -842,20 +844,114 @@ extension SmokeMain {
         let stats37 = TeamBoardText.statsLine(total: 6, teams: 2,
                                               cards: [.running: 2, .idle: 4])
         let statsOne37 = TeamBoardText.statsLine(total: 3, teams: 1, cards: [.idle: 3])
-        // 卡片可用宽 = 150 − 左右各 10 − 竖条 3 = 127pt，9.5pt 中文每字约 9.5pt ⇒ 13 字。
+        // 卡片可用宽 = 列宽 − 左右各 10 − 竖条 3。列宽现在是 [118, 150] 之间由窗口决定的
+        // （㊱），按**设计宽 150** 算就是 127pt，9.5pt 中文每字约 9.5pt ⇒ 13 字。
+        // 这条钉的是 13 这个**措辞上界**（列宽最宽时也放得下）；窗口窄到 118 列时可用宽 95pt，
+        // 尾巴按 `lineLimit(1)` 截断 —— 那是布局的降级，不是措辞写长了。
         // 超了就是**尾部截断**，而截掉的是时态（"3 天没派"变成"3 天"）甚至归属的后半截 ——
         // 出图实测过一次（第一版写「%lld 天没派 / 还没跑过」，整行被切）。上限放在这里，
         // 是因为它是一条**能变红的**约束: 谁把措辞写长，这条当场红，不用等人去出图。
         let all37 = [subLead37, subWorker37, subOrphan37]
-        check(subLead37 == "main · 4 分钟"
+        check(subLead37 == "管理 · 4 分钟"
               && subWorker37.hasPrefix(lead13.name + " · ") && subWorker37.contains("派了会被拒")
               && subOrphan37.hasPrefix("未归属 · ")
               && all37.allSatisfy { $0.count <= 13 }
               && stats37 == "6 个助理 · 2 支队伍 · 2 在跑 · 4 空闲"
               // 只有一支队伍时不报「1 支队伍」: 那是每个单队伍用户的默认状态，报了就是白占一格。
               && statsOne37 == "3 个助理 · 3 空闲",
-              "T-TEAM ㊲(doc P5)卡片第二行=归属·时态(队长写 main、worker 写归属名、悬挂写未归属;"
+              "T-TEAM ㊲(doc P5)卡片第二行=归属·时态(管理助理写「管理」、执行助理写归属名、悬挂写未归属;"
               + " 停用那一档写「派了会被拒」而不是同义反复); 统计行只列非零档、队伍数 >1 才出现"
               + " (实测 \(subLead37) / \(subWorker37) / \(subOrphan37) / \(stats37))")
+
+        // ══ ㊳（2026-11-25）"自己起的那一轮"也算在跑 —— 补的是**没有派活单**的那条路 ══════
+        // boss 实机对比: worker 走满 已排上 → 在跑 → 等回执 → 空闲，而 main 的卡一动不动。
+        // 根因: 五档判据只读派活单，而 main 永远不会成为单据的 `to`（域层不许派给 main）。
+        // 但事实系统里是有的 —— 它那场日志会话在 `runningTurns` 里（派活闸门用的同一个判据）。
+        // 真链路那一半（下面最后一条）判的是**起点落库的顺序**: 起点写在 `runningTurns.insert`
+        // 之后的话，`didSet` 那一拍算出来是空闲，而下一次刷新要等到收口 ⇒ 整轮都停在空闲上。
+        let liveAt38 = now35.addingTimeInterval(-7 * 60)
+        var dRun38 = delegate(from: lead13.id, to: worker13.id)
+        dRun38.status = .running
+        dRun38.startedAt = liveAt38
+        var off38 = lead13
+        off38.enabled = false
+        // 真链路: 一场助理日志会话起跑 ⇒ 团队页这一刻就该翻到「在跑」（不等收口）
+        let log38 = UUID()
+        store.scheduler.bindLogSession(taskId: lead13.id, logId: log38)
+        store.beginTurn(sid: log38, prompt: "安排一下今天", ephemeral: false, cwd: nil,
+                        unattended: false)
+        let start38 = store.turnStartedAt(sessionId: log38)
+        let wired38 = store.scheduler.teamState(of: lead13.id)
+        check(TeamState.of(lead13, busy: [:], awaiting: nil, live: liveAt38)
+                == .running(since: liveAt38)
+              // 单据优先: worker 被派活时"单据在跑"与"它的会话在跑"同时成立 ⇒ 取单据那个准时刻
+              // （`started_at` 从认领那一刻算，`live` 只是"这一轮什么时候起的"）。
+              && TeamState.of(worker13, busy: [worker13.id: dRun38], awaiting: nil, live: now35)
+                == .running(since: liveAt38)
+              // 停用压过一切 —— 它就是「派了会被拒」那一档
+              && TeamState.of(off38, busy: [:], awaiting: nil, live: liveAt38) == .disabled
+              // 没在自己跑 ⇒ 还是空闲（守"别把 live 写成恒真"那一面）
+              && TeamState.of(lead13, busy: [:], awaiting: nil, live: nil)
+                == .idle(lastActive: lead13.lastRunAt)
+              // 真链路(起跑 ⇒ 刷新 ⇒ 翻档), 起点就是 `beginTurn` 记的那个
+              && start38 != nil && wired38 == .running(since: start38!),
+              "T-TEAM ㊳(2026-11-25)自己那一轮也算在跑: 无派活单 + 会话在跑 ⇒ 在跑(起点 = 起跑时刻);"
+              + " 单据在跑时取单据的时刻; 停用压过在跑; 没跑仍是空闲;"
+              + " 真起跑一场 ⇒ 团队页当场翻档(实测 \(wired38))")
+
+        // ══ ㊴（2026-11-25）队伍色: 同队同色 / 没有队伍就没色 / **同屏的队两两不同色** ══════
+        // boss: 「不同的团队，应该有颜色区分」。判据里**刻意不含**"某队等于某个色" ——
+        // 那是配色不是判据，写进去以后加一个颜色就全红。
+        // 第一版按 uuid 哈希取模，六色两支队伍有 1/6 概率撞成同色 ⇒ 改成"同屏排位"，
+        // 于是"互不相同"本身可以当判据（撞了就是用户提的那件事没做到）。
+        let teamIds39 = (0..<5).map { _ in UUID() }
+        let ids39 = [lead13.id] + teamIds39
+        let map39 = TeamBoardText.tintIndexMap(teamIds: ids39)
+        // 六支（色板也是六）⇒ 六个下标两两不同；超过六支才回绕
+        let map39Full = TeamBoardText.tintIndexMap(teamIds: (0..<CodexTheme.teamTints.count).map { _ in UUID() })
+        let map39More = TeamBoardText.tintIndexMap(
+            teamIds: (0..<(CodexTheme.teamTints.count + 3)).map { _ in UUID() })
+        check(TeamBoardText.cardTintIndex(worker13, parentIsAlive: true, tintMap: map39)
+                == map39[lead13.id]
+              && TeamBoardText.cardTintIndex(lead13, parentIsAlive: false, tintMap: map39)
+                == map39[lead13.id]
+              // 悬挂的 parentId（main 被删）⇒ 没色，与卡片第二行的「未归属」同一个判据
+              && TeamBoardText.cardTintIndex(orphan13, parentIsAlive: false, tintMap: map39) == nil
+              // **互不相同**: 队伍数没超色板就该一张脸一个色（守"退化成恒 0 / 撞色"两种改法）
+              && Set(map39.values).count == min(ids39.count, CodexTheme.teamTints.count)
+              && Set(map39Full.values).count == CodexTheme.teamTints.count
+              && map39More.values.allSatisfy { (0..<CodexTheme.teamTints.count).contains($0) }
+              // 与**传入顺序**无关（看板按创建序排 `mains`，新建一支不该让别人换色）
+              && TeamBoardText.tintIndexMap(teamIds: ids39.reversed()) == map39,
+              "T-TEAM ㊴(2026-11-25)队伍色: 下属与队长同色、孤儿无色、"
+              + " \(ids39.count) 支队伍 \(Set(map39.values).count) 个互不相同的色"
+              + "（色板 \(CodexTheme.teamTints.count) 个）、与传入顺序无关")
+
+        // ══ ㊵（2026-11-25）列表行序 + 分组: 队长在前 / 它的人紧跟 / 孤儿原地不动 ══════════
+        // boss 实机: 「助理 Main」被它自己的两个 worker 压在下面。源顺序是
+        // `created_at DESC`（新的在上），而 **worker 一定比它的队长晚建** ⇒ 必然排在队长上面，
+        // 而它头顶那个 `↳` 说的是"我属于上面那个人" ⇒ 读起来是"归上一个队的最后一行"。
+        // 与 ㉜（行**措辞**）/ ㉝ 不同: 这条判的是"谁挨着谁"，措辞一个字都不改。
+        // 后来又补了第二半（同一件事）: **只排序不画边界**等于瞎认亲 —— 排完之后队尾那条 cron
+        // 紧贴着队员，看起来就是这支队的第三个人（boss:「一个 cron 为什么会在客户回访的 team 里面」）。
+        // 所以判据落在**组**上: 组边界才是那 3px 竖条能画出来的东西。
+        let raw40 = [worker13, orphan13, lead13]      // 源顺序: 两个 worker 都在队长上面
+        let ord40 = TeamRowText.listOrder(raw40)
+        let groups40 = TeamRowText.listGroups(raw40)
+        check(ord40.map(\.id) == [orphan13.id, lead13.id, worker13.id]
+              // 不丢不增: 输出必须是输入的**一个排列**（这条守的是"重排顺手吃掉了行"）
+              && Set(ord40.map(\.id)) == Set(raw40.map(\.id)) && ord40.count == raw40.count
+              // 空表 / 单行不炸（列表空态与只有一个队长时走同一个 ForEach）
+              && TeamRowText.listOrder([]).isEmpty
+              && TeamRowText.listOrder([lead13]).map(\.id) == [lead13.id]
+              // 组: 第一个恒是队长，除非这一组就它自己一行（独行侠 / cron / 孤儿）
+              && groups40.allSatisfy { g in !g.isEmpty && (g.count == 1 || TeamRowText.isTeamLead(g[0])) }
+              // 队长的组里**只有他自己的人**，且都在他后面 —— 竖条画的就是这一段
+              && groups40.contains { $0.first?.id == lead13.id && $0.dropFirst().map(\.id) == [worker13.id] }
+              // 平铺回来必须与 `listOrder` 逐位相同（两个入口、一份判据，不许分叉）
+              && groups40.flatMap { $0 }.map(\.id) == ord40.map(\.id),
+              "T-TEAM ㊵(2026-11-25)列表行序: 队长在前、它的人紧跟其后、孤儿原地不动;"
+              + " 分组: 组首是队长、组尾到此为止（实测 \(ord40.map(\.name).joined(separator: " / "))"
+              + " · \(groups40.map { $0.count }.map(String.init).joined(separator: "+")) 行/组）")
     }
 }

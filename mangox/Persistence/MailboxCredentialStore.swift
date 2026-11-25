@@ -16,9 +16,10 @@ protocol MailboxCredentialStore: AnyObject {
     func setSentinelSecret(_ value: String?, sentinelId: UUID) throws
 }
 
-/// Keychain 实现: service = com.mangox.mailbox, account = 文档约定键名。
+/// 钥匙串实现 —— **走 `SecretVault`（一个条目）**，不再一个账号一个条目（2026-11-25）。
+/// 键名沿用老的 account 名（`mailbox.acct.<id>.auth` / `mailbox.sentinel.<id>.secret`），
+/// 迁移时直接拿它去读老位置，不需要第二张对照表。
 final class KeychainMailboxCredentialStore: MailboxCredentialStore {
-    let service = "com.mangox.mailbox"
 
     /// 冒烟注入缝（与 `KeychainModelKeyStore.keyStoreOverride` 同款）。
     /// 无签名的冒烟二进制读钥匙串会弹授权框 + `SecItemCopyMatching` 一直等答复 ⇒ 挂死。
@@ -37,58 +38,20 @@ final class KeychainMailboxCredentialStore: MailboxCredentialStore {
     nonisolated(unsafe) static var smokeShared = InMemoryMailboxCredentialStore()
     #endif
 
-    static func accountKey(_ id: UUID) -> String { "mailbox.acct.\(id.uuidString).auth" }
-    static func secretKey(_ id: UUID) -> String { "mailbox.sentinel.\(id.uuidString).secret" }
+    static func accountKey(_ id: UUID) -> String { SecretVault.mailboxAccountKey(id) }
+    static func secretKey(_ id: UUID) -> String { SecretVault.mailboxSentinelKey(id) }
 
-    private func baseQuery(_ account: String) -> [String: Any] {
-        [kSecClass as String: kSecClassGenericPassword,
-         kSecAttrService as String: service,
-         kSecAttrAccount as String: account]
+    func accountAuth(accountId: UUID) -> String? {
+        SecretVault.value(Self.accountKey(accountId))
     }
-
-    private func read(_ account: String) -> String? {
-        var query = baseQuery(account)
-        query[kSecReturnData as String] = true
-        query[kSecMatchLimit as String] = kSecMatchLimitOne
-        var out: CFTypeRef?
-        guard SecItemCopyMatching(query as CFDictionary, &out) == errSecSuccess,
-              let data = out as? Data else { return nil }
-        return String(data: data, encoding: .utf8)
-    }
-
-    private func write(_ value: String?, account: String) throws {
-        guard let value, !value.isEmpty else {
-            let status = SecItemDelete(baseQuery(account) as CFDictionary)
-            guard status == errSecSuccess || status == errSecItemNotFound else {
-                throw NSError(domain: NSOSStatusErrorDomain, code: Int(status))
-            }
-            return
-        }
-        let data = Data(value.utf8)
-        if read(account) != nil {
-            let status = SecItemUpdate(baseQuery(account) as CFDictionary,
-                                       [kSecValueData as String: data] as CFDictionary)
-            guard status == errSecSuccess else {
-                throw NSError(domain: NSOSStatusErrorDomain, code: Int(status))
-            }
-            return
-        }
-        var add = baseQuery(account)
-        add[kSecValueData as String] = data
-        add[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlock
-        let status = SecItemAdd(add as CFDictionary, nil)
-        guard status == errSecSuccess else {
-            throw NSError(domain: NSOSStatusErrorDomain, code: Int(status))
-        }
-    }
-
-    func accountAuth(accountId: UUID) -> String? { read(Self.accountKey(accountId)) }
     func setAccountAuth(_ value: String?, accountId: UUID) throws {
-        try write(value, account: Self.accountKey(accountId))
+        try SecretVault.set(value, Self.accountKey(accountId))
     }
-    func sentinelSecret(sentinelId: UUID) -> String? { read(Self.secretKey(sentinelId)) }
+    func sentinelSecret(sentinelId: UUID) -> String? {
+        SecretVault.value(Self.secretKey(sentinelId))
+    }
     func setSentinelSecret(_ value: String?, sentinelId: UUID) throws {
-        try write(value, account: Self.secretKey(sentinelId))
+        try SecretVault.set(value, Self.secretKey(sentinelId))
     }
 }
 

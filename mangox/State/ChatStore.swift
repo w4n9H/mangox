@@ -43,6 +43,11 @@ final class ChatStore: ObservableObject {
             // 锁屏运行 (2026-10-27): 只有真的有回合在途才按住"别睡"的断言。
             // ⚠️ 这里**每次变动都会调**(并发任务进出很频繁) ⇒ `SleepGuard.apply` 必须幂等。
             SleepGuard.shared.apply(mode: lockScreenMode, busy: !runningTurns.isEmpty)
+            // 2026-11-25: 五档状态的「在跑」判据读的就是这个集合 ⇒ 回合起落时**顺手重算一次**。
+            // 为什么挂在这里而不是逐个改点加: 改点有四处（起跑 / 正常收口 / 停止 / 异常收口），
+            // 漏一个的表现是"卡停在在跑上不动"或"已经跑完还显示在跑"—— 一分钟一跳才自己好。
+            // 代价是每次进出各两条 SELECT，相对一次回合可以忽略。
+            scheduler.refreshTeamStates()
         }
     }
     /// 兼容视图: 当前选中会话是否有回合在途。
@@ -2157,12 +2162,15 @@ final class ChatStore: ObservableObject {
             if let thinking = m.thinking { t.setThinkingLevel(thinking) }
         }
         liveTurns[sid] = liveTurns[sid] ?? []   // 镜像容器就位 (视图会话事件直进 messages)
+        // ⚠️ 起点必须在 `insert` **之前**落：`runningTurns.didSet` 会就地重算团队页状态，
+        // 而「在跑」的起点读的就是这一格 —— 顺序反了那一拍算出来是"没在跑"（= 卡片不动），
+        // 而下一次刷新要等到收口，整轮都停在空闲上（2026-11-25 实测）。
+        turnStartAt[sid] = Date()   // P4.1: 回合计时起点
         runningTurns.insert(sid)
         // ⚠️ 这一行是整个白屏链条的**转折点**: 它让 `store.isStreaming` 变 true, 而它跑在
         // `ChatView` 那次 `onChange(messagesRevision)` 的 `main.async` **之前** ⇒ 视图滚第一拍时
         // 读到的已经是"流式中"(先锚指示器、不量尾块)。日志里 `stream=1` 与 `mat=0` 同时出现就是它。
         Log.send("running", ["stream": isStreaming ? "1" : "0", "running": "\(runningTurns.count)"])
-        turnStartAt[sid] = Date()   // P4.1: 回合计时起点
         if injectedTransport != nil { injectedTurnSid = sid }   // 注入实例: 记录串行回合归属
         t.send(prompt: prompt, images: images)
     }
@@ -3218,6 +3226,14 @@ extension ChatStore: AgentTransportDelegate {
     func turnTitle(_ sid: UUID) -> String {
         allConversations.first { $0.id == sid }?.displayTitle ?? L("任务")
     }
+
+    /// 这一场会话**这一轮的起跑时刻**（`nil` = 没在跑）。
+    ///
+    /// 团队页「在跑」那一档用它当起点 —— 起跑只有一个地方（`beginTurn` 里那一行），
+    /// 所以这里也就是**唯一的事实源**：定时轮 / 回看轮 / 派活轮 / 飞书轮 / 人手动点，
+    /// 五条入口最后都落到 `beginTurn`，拿到的都是同一份时刻，不用各路口自己记一份。
+    /// 收口那三条路（自然收尾 / 手动停 / 异常）都会把它清掉 ⇒ 它只要非 nil 就是真的在跑。
+    func turnStartedAt(sessionId sid: UUID) -> Date? { turnStartAt[sid] }
 
     /// 迷你条 L1: 回合计时 (mm:ss)。
     func turnElapsedText(_ sid: UUID) -> String {

@@ -24,10 +24,11 @@ protocol RemoteSecretStore: AnyObject {
     func set(secret: String?, for botId: UUID) throws
 }
 
-/// Keychain 实现: service = com.mangox.remote, account = `feishu.bot.<uuid>.secret`。
+/// 钥匙串实现 —— **走 `SecretVault`（一个条目）**，不再一个机器人一个条目（2026-11-25）。
+/// 逻辑键 = `remote.feishu.bot.<uuid>.secret`，迁移时去掉 `remote.` 前缀就是老位置上的 account。
 final class KeychainRemoteSecretStore: RemoteSecretStore {
-    static let keychainService = "com.mangox.remote"
-    let service = KeychainRemoteSecretStore.keychainService
+    /// 老 service 名。**只读，不再写** —— `LegacyFeishuCredential` 的搬家按钮还靠它找老条目。
+    static let keychainService = SecretVault.legacyRemoteService
 
     /// 冒烟注入缝（与 `KeychainNotifySecretStore.override` 同款）：
     /// 无签名的冒烟二进制读钥匙串会弹授权框并一直等答复 ⇒ 挂死。
@@ -50,54 +51,14 @@ final class KeychainRemoteSecretStore: RemoteSecretStore {
     static let legacyAppIdAccount = "feishu.app_id"
     static let legacyAppSecretAccount = "feishu.app_secret"
 
-    static func account(for botId: UUID) -> String { "feishu.bot.\(botId.uuidString).secret" }
+    static func account(for botId: UUID) -> String { SecretVault.remoteBotKey(botId) }
 
-    private func baseQuery(_ account: String) -> [String: Any] {
-        [kSecClass as String: kSecClassGenericPassword,
-         kSecAttrService as String: service,
-         kSecAttrAccount as String: account]
+    func secret(for botId: UUID) -> String? {
+        SecretVault.value(Self.account(for: botId))
     }
-
-    private func read(_ account: String) -> String? {
-        var query = baseQuery(account)
-        query[kSecReturnData as String] = true
-        query[kSecMatchLimit as String] = kSecMatchLimitOne
-        var out: CFTypeRef?
-        guard SecItemCopyMatching(query as CFDictionary, &out) == errSecSuccess,
-              let data = out as? Data else { return nil }
-        return String(data: data, encoding: .utf8)
-    }
-
-    private func write(_ value: String?, account: String) throws {
-        guard let value, !value.isEmpty else {
-            let status = SecItemDelete(baseQuery(account) as CFDictionary)
-            guard status == errSecSuccess || status == errSecItemNotFound else {
-                throw NSError(domain: NSOSStatusErrorDomain, code: Int(status))
-            }
-            return
-        }
-        let data = Data(value.utf8)
-        if read(account) != nil {
-            let status = SecItemUpdate(baseQuery(account) as CFDictionary,
-                                       [kSecValueData as String: data] as CFDictionary)
-            guard status == errSecSuccess else {
-                throw NSError(domain: NSOSStatusErrorDomain, code: Int(status))
-            }
-            return
-        }
-        var add = baseQuery(account)
-        add[kSecValueData as String] = data
-        add[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlock
-        let status = SecItemAdd(add as CFDictionary, nil)
-        guard status == errSecSuccess else {
-            throw NSError(domain: NSOSStatusErrorDomain, code: Int(status))
-        }
-    }
-
-    func secret(for botId: UUID) -> String? { read(Self.account(for: botId)) }
 
     func set(secret: String?, for botId: UUID) throws {
-        try write(secret, account: Self.account(for: botId))
+        try SecretVault.set(secret, Self.account(for: botId))
     }
 }
 

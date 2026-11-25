@@ -164,6 +164,28 @@ count_code() {
     awk '!/^[ \t]*\/\//' "$1" | grep -cE -- "$2" || true
 }
 
+# ③c′ 凭据保险库的 **SMOKE 段里不许出现钥匙串调用**（2026-11-25 实测事故）。
+#     `SecretVault.persist()` 第一版写在 `#if SMOKE` 外面 ⇒ 冒烟跑一次就在用户**真实**登录钥匙串里
+#     建出了 `com.mangox.vault` 条目（`security find-generic-password -s com.mangox.vault` 的 cdat
+#     就是那一跑的分钟）。而它**零红灯**：写内存条目和写真条目在任何断言上长得一模一样。
+#     ⇒ 判据只能是源码事实 —— `#if SMOKE` 与 `#else` 之间那一段里，一个 `SecItem` 都不许有。
+#     ⚠️ 覆盖"写"而不只是"读"：三次同类事故（0.1.16 挂死 / 0.1.20 门禁卡住 / 本次写脏）里
+#        前两次都是**读**，所以第一版的守卫只管了读。
+#    ⚠️ 跳过整行注释（与 `has_code` 同一条纪律）: SMOKE 段里那段说明文字本身就要写 `SecItemCopyMatching`
+#       来交代"为什么不能碰"—— 不跳的话门是对着自己的注释点头（第一版就这么红了）。
+SECITEM_IN_SMOKE=$(awk '
+    /^[[:space:]]*#if SMOKE/ { s=1; next }
+    /^[[:space:]]*#else/     { s=0; next }
+    /^[[:space:]]*#endif/    { s=0; next }
+    /^[[:space:]]*\/\//     { next }
+    s && /SecItem/           { print FILENAME ":" NR ": " $0 }
+' mangox/Persistence/SecretVault.swift)
+if [ -n "$SECITEM_IN_SMOKE" ]; then
+    echo "FAIL - 保险库的 SMOKE 段里有钥匙串调用（冒烟会写用户真实钥匙串）:" >&2
+    echo "$SECITEM_IN_SMOKE" >&2
+    exit 1
+fi
+
 # ③d 「滚到底」的锚点必须是**恒实例化**的末尾哨兵 (2026-10-23 boss 报「打开后默认会话不在最底、
 #     ｜也没有《跳转最新》按钮，切一次会话才正常」)。
 #     锚在 `LazyVStack` 的行 id 上时，那个行在初屏**还没实例化** ⇒ `scrollTo` 只能按**估算**的

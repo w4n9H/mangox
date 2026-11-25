@@ -828,7 +828,10 @@ VALUES = {
     '这是单独一次，不会移动每日 dream 的时间窗口。': 'One-off run — it will not shift the daily dream window.',
     '%@ 字': '%@ chars',
     '%lld 个回合': '%lld turns',
-    '归属': 'Goes to',
+    # ⚠️ 这里不能写 `归属`: 那个 key 已被 P20 的队伍归属占着（值 `Under`）。同一份字典里
+    #    两个同名 key 会让**后一个静默覆盖前一个** —— 实测踩过: Dream 那张确认卡英文显示成
+    #    `Under: ~/.mangox/note`。语义是「这条提案落到哪个笔记根」，故用 `去处`。
+    '去处': 'Goes to',
     '产出': 'Output',
     '只出提案，不改任何文件': 'Proposals only, no files touched',
     '送入 %@ 字': '%@ chars in',
@@ -1230,10 +1233,9 @@ VALUES = {
     'Cron 定时任务': 'Cron scheduled task',
     'Cron 定时：到点执行 `prompt` 里写好的动作': 'Cron schedule: runs the actions written in `prompt` when due',
     '助理': 'Assistant',
-    '助理（目标式）': 'Assistant (goal-based)',
     '助理：到点看一轮，产出带编号的方案等你批准（`prompt` 写目标，不是动作）': 'Assistant: takes a look when due and writes a numbered plan that waits for your approval (`prompt` states the goal, not the actions)',
     '外部来源（邮件）本版未接入 —— 它的只读采集要等「不置已读」验证通过。': 'External sources (mail) are not wired up yet — read-only collection waits for a proven "never marks as read" path.',
-    '新建：Cron 定时（动作写死）或 助理（目标式，产方案等人批准）': 'New: Cron schedule (fixed actions) or Assistant (goal-based, plans wait for approval)',
+    '新建：Cron 定时（动作写死）、助理（管理，能派人）、助理（执行，只被派活）': 'New: Cron schedule (fixed actions), assistant (manage, can delegate), assistant (execute, delegated to)',
     '外部来源': 'External source',
     '不支持的类型': 'Unsupported type',
     '待处理': 'Pending',
@@ -1439,14 +1441,22 @@ VALUES = {
     '有文件没能发出去：': 'Some files could not be sent:',
 
     # P20 P4 列表页（建与改）—— 身份 / 归属 / 职责 / 五档状态。
-    # ⚠️ `main` / `worker` / `cron` 三个**角色词**不在这里: 它们是技术角色名（与 `prompt` /
-    #    `cron` 同族），中英同形，界面用 `Text(verbatim:)` 直接写。
+    # ⚠️ 2026-11-25 boss 定: 界面上一律 `助理（管理）` / `助理（执行）`，短形式 `管理` /
+    #    `执行`（列表行与泳道卡）。**推翻了 P4 那版**（`main` / `worker`、`Text(verbatim:)`、
+    #    不进词表）—— 菜单里三档并列时角色词与类型词不是一个维度，同一个东西三处三个名字。
+    #    存储与域层仍是 `main` / `worker`（协议，改了旧库读不出来）；`cron` 仍不进词表。
+    # ⚠️ 英文两份形态是**同一个词**: 括号里用 `Assistant (manage)` / `Assistant (execute)`
+    #    （与菜单同款），句子里作定语用 `managing` / `executing assistant`（英文要 -ing）。
     '身份': 'Standing',
     '归属': 'Under',
     '职责': 'Role',
     '说明': 'Details',
-    'main · 自己按班次跑，还能派人': 'main · runs on its own schedule and can delegate',
-    'worker · 只被派活叫起来': 'worker · only runs when it is delegated to',
+    '助理（管理）': 'Assistant (manage)',
+    '助理（执行）': 'Assistant (execute)',
+    '助理（管理）· 自己按班次跑，还能派人': 'Assistant (manage) · runs on its own schedule and can delegate',
+    '助理（执行）· 只被派活叫起来': 'Assistant (execute) · only runs when it is delegated to',
+    '管理': 'Manage',
+    '执行': 'Execute',
     '选一个助理': 'Pick an assistant',
     '原归属已删除': 'Its lead was deleted',
     '它负责什么，一句话（会进每一轮注入）': 'What it handles, in one line (this goes into every turn)',
@@ -1459,11 +1469,10 @@ VALUES = {
     '职责必填 —— 名单与注入段只读这一行':
         'Role is required — the roster and the injection read only this line',
     '选一个助理当归属': 'Pick the assistant it belongs to',
-    '归属不能是另一个 worker': 'A worker cannot belong to another worker',
-    '已经有一个 worker 叫「%@」': 'A worker named 「%@」 already exists',
-    'main 不该有归属': 'main cannot belong to anyone',
+    '归属只能是一个管理助理': 'It can only belong to a managing assistant',
+    '已经有一个执行助理叫「%@」': 'An executing assistant named 「%@」 already exists',
+    '管理助理不该有归属': 'A managing assistant cannot have a lead',
     '没保存上：有一条任务规则不满足': 'Not saved: one of the task rules is not satisfied',
-    '%lld 个 worker': '%lld workers',
     '归 %@': 'Under %@',
     '未归属': 'Unassigned',
     '在跑 %lld 分钟': 'Running · %lld min',
@@ -1476,7 +1485,7 @@ VALUES = {
     '%lld 个人 · %lld 支队伍': '%lld people · %lld teams',
     '%lld 个助理': '%lld assistants',
     '%lld 支队伍': '%lld teams',
-    '不按档期跑 —— 只由它的 main 派活叫起来。派活单到期才起一轮。': 'No schedule of its own — it runs only when its main delegates, one turn per due ticket.',
+    '不按档期跑 —— 只由它的管理助理派活叫起来。派活单到期才起一轮。': 'No schedule of its own — it runs only when its managing assistant delegates, one turn per due ticket.',
     '作废': 'Voided',
     '停用': 'Paused',
     '全部': 'All',
@@ -1500,7 +1509,7 @@ VALUES = {
     '等回执': 'Awaiting report',
     '职责说明': 'Role details',
     '跟随默认': 'Follows default',
-    '还没有助理。去「定时任务」新建一个，或把已有的改成 worker': 'No assistants yet. Create one under Scheduled, or turn an existing task into a worker.',
+    '还没有助理。去「定时任务」新建一个，或把已有的改成助理（执行）': 'No assistants yet. Create one under Scheduled, or turn an existing task into an assistant (execute).',
     '还没被派过活': 'Never delegated to',
     '这一行早于「职责必填」，去编辑器补一句。': 'This row predates the required role — add one in the editor.',
     '这个范围里没有人。': 'Nobody in this scope.',

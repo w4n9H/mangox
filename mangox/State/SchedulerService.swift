@@ -1174,6 +1174,8 @@ final class SchedulerService: ObservableObject {
                 scheduledTasks[idx].lastRunAt = now
                 scheduledTasks[idx].runCount += 1   // P3.10: 执行次数
             }
+            // 起跑时刻**不记在这里** —— 四种 fire 都会往下走 `store.beginTurn`，那里记一次
+            // 就覆盖了全部入口（含人手动点、飞书）；在这里另记一份只会让两条路给出两个起点。
             scheduledTasks[idx].logSessionId = logId
             try? store.persistence?.upsertScheduled(scheduledTasks[idx])
         }
@@ -1322,7 +1324,18 @@ final class SchedulerService: ObservableObject {
         let awaiting = (try? p.latestUnreportedByWorker()) ?? [:]
         var out: [UUID: TeamState] = [:]
         for t in scheduledTasks {
-            out[t.id] = TeamState.of(t, busy: busy, awaiting: awaiting[t.id])
+            // 「此刻在自己跑」= 它那场日志会话在 `runningTurns` 里。这就是派活闸门用的同一个判据
+            // （`main.logSessionId` + `runningTurns`，见"main 这一轮还在跑 ⇒ 顺延"那一处）——
+            // 两处同源，不会出现"界面说在跑、闸门说空闲"。
+            // 起点取 `turnStartedAt`（`beginTurn` 里那一行）：定时 / 回看 / 派活 / 飞书 / 人手动点
+            // 五条入口**都从那儿过**，所以这里不用按入口分别记 —— 早先那版在本文件里另存一张
+            // task 键的表，结果漏了"人在会话里手动叫它跑"和"飞书触发"两条路（会画成空闲）。
+            let live: Date? = {
+                guard let log = t.logSessionId,
+                      store?.runningTurns.contains(log) == true else { return nil }
+                return store?.turnStartedAt(sessionId: log)
+            }()
+            out[t.id] = TeamState.of(t, busy: busy, awaiting: awaiting[t.id], live: live)
         }
         teamStates = out
     }

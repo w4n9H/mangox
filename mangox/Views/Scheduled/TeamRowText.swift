@@ -20,13 +20,20 @@ enum TeamRowText {
 
     // MARK: - 身份
 
-    /// main / worker 这两个词**不进词表**（与 `SentKind.tag` 同族: 它们是这个产品里的**角色名**,
-    /// 中英同形 —— 文档样张里就是这么写的）。
+    /// 列表行 / 泳道卡上的**角色短标记**。
     ///
-    /// `cron` 不是角色而是**档**: Cron 任务没有队伍, 把它的身份写成 `main` 会让人以为它手底下有人。
+    /// 2026-11-25 boss 定: `助理（管理）` / `助理（执行）` 是完整名字（新建菜单与身份胶囊用），
+    /// 这一行只有 240pt，取短形式 `管理` / `执行`。
+    ///
+    /// ⚠️ 这里推翻过 P4 的判据（那版是 `main` / `worker`、`Text(verbatim:)`、不进词表）。
+    /// 推翻的理由不是"中文更好看": 菜单里三档并列时 `worker · 只被派活叫起来` 和
+    /// `助理（目标式）` 不是一个维度，而列表又写着 `main` —— 同一个东西三处三个名字。
+    /// **存储与域层仍是 `main` / `worker`**（那是协议，改了会让旧库读不出来）。
+    ///
+    /// `cron` 不是角色而是**档**: Cron 任务没有队伍, 把它写成「管理」会让人以为它手底下有人。
     static func roleToken(kind: TaskKind, role: TaskRole) -> String {
         if kind != .assistant { return "cron" }
-        return role == .worker ? "worker" : "main"
+        return role == .worker ? L("执行") : L("管理")
     }
 
     /// 这一行是不是**队伍队长**（列表上那条 3px 竖条 + 名字加粗的唯一判据）。
@@ -41,7 +48,7 @@ enum TeamRowText {
     /// L2 · 身份行 —— 「谁 · 多久一次 · 手底下几个人 / 归谁」。
     ///
     /// ⚠️ 文档 §03 那句「类型与周期移到右侧同一列」在 240pt 的侧栏里落成了**名字下一行的一条**:
-    /// 真排成第二列时 `main · 每天 09:00 · 4 个 worker`（约 120pt）会把名字挤成两行 ——
+    /// 真排成第二列时 `管理 · 每天 09:00 · 4 个助理`（约 120pt）会把名字挤成两行 ——
     /// 而文档自己反对的正是"名字 + 归属两行都折行"（那句本来是说团队页的列宽）。
     ///
     /// ⚠️ **worker 不写周期**: 它在 `schedulerTick` / `漏跑` / `补跑` 三处都被排除了,
@@ -65,7 +72,9 @@ enum TeamRowText {
         case .main:
             if t.isAssistant {
                 if workers > 0 {
-                    parts.append(String(format: L("%lld 个 worker"), workers))
+                    // 「N 个助理」不是笔误: 这一行是**管理助理**的身份行，"4 个助理"= 它带的 4 个。
+                    // 写成「4 个执行」在中文里不成立（执行是动词），而「4 个下属」又引入了第五个词。
+                    parts.append(String(format: L("%lld 个助理"), workers))
                 } else if t.activeSourceCount > 0 {
                     parts.append(String(format: L("%lld 个来源"), t.activeSourceCount))
                 }
@@ -144,5 +153,56 @@ enum TeamRowText {
         }
         f.dateFormat = "M/d HH:mm"
         return f.string(from: date)
+    }
+
+    // MARK: - 行的相对顺序（2026-11-25）
+
+    /// 列表的**行序**: 队长在前、它的人紧跟在它下面；其余行原地不动。
+    ///
+    /// boss 实机: 「助理 Main」被自己的两个 worker 压在下面。根因是源顺序 ——
+    /// `PersistenceStore.loadScheduled` 是 `ORDER BY created_at DESC`（新的在上，这一列
+    /// 二十多条都靠它），而 **worker 一定比它的队长晚建** ⇒ 它必然排在队长上面。
+    ///
+    /// 为什么这不是"换个排序"，而是**只挪 worker 一种行**:
+    ///   · 主干（助理队长 / cron / 没有活的 worker）保持**原相对顺序** —— 整列换个口径重排，
+    ///     所有行都会跳位置，而这页唯一的导航锚就是"那一行在哪"。
+    ///   · **孤儿原地不动**（`parentId` 指向一个已经不在列表里的队长）: 它没有可跟的人，
+    ///     挪到任何地方都是替它编一个归属出来。它的行上写着「未归属」，位置要跟那句话一致。
+    ///   · `↳` 这个记号本身就在说"我属于上面那个人" —— 队长在它下面时，那个箭头指向的是
+    ///     **上一个队的最后一行**，读起来是"它归那个人"，比不缩进更错。
+    ///
+    /// 判据（冒烟 T-TEAM ㊵）: 输出恒是输入的一个**排列**（id 多重集相等 —— 不丢不增），
+    /// 队长在它的人之前，孤儿的相对位置不变。
+    static func listOrder(_ tasks: [ScheduledTask]) -> [ScheduledTask] {
+        listGroups(tasks).flatMap { $0 }
+    }
+
+    /// 同一个行序，但**按组分**（每组 = 一个队长 + 它的人；其余行各成一组）。
+    ///
+    /// 视图必须拿到组、而不能只拿到一列平铺的行 —— 因为**分组不画边界就等于瞎认亲**:
+    /// 排完之后「客户回访」的两个人下面紧跟着一条 cron，中间什么记号都没有，看起来就是
+    /// 这支队的第三个人（boss 2026-11-25 的原话:「一个 cron 为什么会在客户回访的 team 里面」）。
+    /// 组边界就是那条 3px 竖条: 它从队长那一行**连到最后一个队员**，队外那一行自然在竖条外面。
+    ///
+    /// ⚠️ 这条竖条的含义因此变了: 原来是"我是队长"（只画在自己那一行），现在是
+    /// "这一片是这支队伍"。谁是队长仍由**名字加粗 + `管理`** 说，竖条不再承担那件事。
+    static func listGroups(_ tasks: [ScheduledTask]) -> [[ScheduledTask]] {
+        let leads = Set(tasks.filter { isTeamLead($0) }.map(\.id))
+        // 只有"**队还在**的执行助理"才跟着队长走；悬挂的 `parentId` 与空 `parentId` 都返回 nil。
+        func leadOf(_ t: ScheduledTask) -> UUID? {
+            guard t.role == .worker, let pid = t.parentId, leads.contains(pid) else { return nil }
+            return pid
+        }
+        var children: [UUID: [ScheduledTask]] = [:]
+        for t in tasks {
+            guard let pid = leadOf(t) else { continue }
+            children[pid, default: []].append(t)
+        }
+        var out: [[ScheduledTask]] = []
+        for t in tasks {
+            guard leadOf(t) == nil else { continue }   // 它已经挪到队长下面去了
+            out.append([t] + (children[t.id] ?? []))
+        }
+        return out
     }
 }

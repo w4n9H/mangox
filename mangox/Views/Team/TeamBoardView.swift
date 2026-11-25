@@ -4,7 +4,14 @@
 //
 //  设计来源: `docs/P20-functional-design.html` §03「助理团队 · 状态泳道 · 纯展示」。
 //
-//  三栏: 左 = 队伍筛选 / 中 = 五条泳道 / 右 = 检查器。
+//  布局（2026-11-25 boss 定）: **左栏 + 上下两栏**。
+//     · 左栏 = 队伍筛选（200pt，固定）
+//     · 上栏 = 统计行 + 五条泳道（吃掉剩下的**全部宽度与高度**）
+//     · 下栏 = 检查器（横条，定高 200pt，三段并排: 身份职责 / 最近五次执行 / 台账 + 动作）
+//  ⚠️ 检查器原来是**右栏**（272pt 竖条）。改到下方是因为两条: ① 五列等宽要求横向有整幅
+//  可用宽 —— 右栏一占 272，中间只剩 400 出头，五列连 90pt 都分不到；② 这一页纵向本来
+//  就空（"几个人"的数据撑不满一屏），把检查器放到下面正好把那份空填掉。
+//
 //  这一页**不可编辑**（归属与职责都在定时任务页改）—— 它不是第二个入口，
 //  是同一批数据的另一种看法: 列表页答"这个助理怎么配"，这里答"谁现在在干什么"。
 //
@@ -32,13 +39,14 @@ struct TeamBoardView: View {
                 .frame(width: Tune.teamFilterWidth)
                 .background(CodexTheme.bgSidebar)
             Divider().overlay(CodexTheme.divider)
-            boardPane
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background(CodexTheme.bgChat)
-            Divider().overlay(CodexTheme.divider)
-            inspectorPane
-                .frame(width: Tune.teamInspectorWidth)
-                .background(CodexTheme.bgChat)
+            // 上下两栏: 上面是泳道（吃掉全部剩余宽度与高度），下面那条横的检查器。
+            VStack(spacing: 0) {
+                boardPane
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                Divider().overlay(CodexTheme.divider)
+                inspectorBar
+            }
+            .background(CodexTheme.bgChat)
         }
         .onAppear { refreshInspector() }
         .onChange(of: selectedId) { _, _ in refreshInspector() }
@@ -63,6 +71,12 @@ struct TeamBoardView: View {
 
     private var orphans: [ScheduledTask] {
         TeamBoardText.people(.orphans, all: allPeople)
+    }
+
+    /// 每支队伍一个色，**整块板子算一次**（见 `TeamBoardText.tintIndexMap` 里那三条）。
+    /// 卡片竖条与左栏图例读的是同一份映射 —— 分两处各算一次，改一处就会对不上。
+    private var tintMap: [UUID: Int] {
+        TeamBoardText.tintIndexMap(teamIds: mains.map(\.id))
     }
 
     private var scoped: [ScheduledTask] {
@@ -119,7 +133,12 @@ struct TeamBoardView: View {
                     scopeRow(.all, title: L("全部"), count: allPeople.count)
                     ForEach(mains) { m in
                         scopeRow(.team(m.id), title: m.name,
-                                 count: 1 + store.scheduler.workerCount(of: m.id))
+                                 count: 1 + store.scheduler.workerCount(of: m.id),
+                                 // 与卡片竖条**同一个下标**（同一支队伍 ⇒ 同一个颜色）:
+                                 // 这一列同时是图例 —— 卡片上那条 3px 的色，在这里能查到是谁。
+                                 tint: TeamBoardText.cardTintIndex(
+                                     m, parentIsAlive: true, tintMap: tintMap)
+                                     .map { CodexTheme.teamTints[$0] })
                     }
                     if !orphans.isEmpty {
                         Divider()
@@ -135,10 +154,18 @@ struct TeamBoardView: View {
         }
     }
 
-    private func scopeRow(_ s: TeamBoardScope, title: String, count: Int) -> some View {
+    private func scopeRow(_ s: TeamBoardScope, title: String, count: Int,
+                          tint: Color? = nil) -> some View {
         let active = scope == s
         return Button { scope = s; selectedId = nil } label: {
             HStack(spacing: 6) {
+                // 队伍色的小圆点 —— 只有队伍行有（「全部」「未归属」不是队伍）。
+                // 它顺带把队伍行**缩进**一级，读起来是"全部 > 各队"的层级。
+                if let tint {
+                    Circle()
+                        .fill(tint)
+                        .frame(width: 6, height: 6)
+                }
                 Text(title)
                     .font(.system(size: 12, weight: active ? .medium : .regular))
                     .foregroundStyle(active ? CodexTheme.textPrimary : CodexTheme.textSecondary)
@@ -183,20 +210,29 @@ struct TeamBoardView: View {
                     .padding(.top, 24)
             } else {
                 GeometryReader { geo in
+                    // 五列**等宽**，宽度由这一栏的可用宽算出来（`laneWidth(available:)`）。
+                    // 常见窗口下它正好是"均分后放满"—— 既不横向滚，也不留一截空白。
+                    let laneW = TeamBoardText.laneWidth(available: geo.size.width)
                     ScrollView(.horizontal, showsIndicators: false) {
-                        HStack(alignment: .top, spacing: Tune.teamLaneGap) {
-                            ForEach(TeamLane.allCases) { lane in laneColumn(lane) }
+                        // `spacing: 0` —— 列间距改由 `laneRule` 自己占（12pt 的槽中间画 1px 线），
+                        // 于是"五列 + 四条线"的实际宽仍然是 `laneWidth × 5 + gap × 4`，
+                        // `boardWidth` 那个判据不用改。
+                        HStack(alignment: .top, spacing: 0) {
+                            ForEach(TeamLane.allCases) { lane in
+                                if lane != TeamLane.allCases.first { laneRule }
+                                laneColumn(lane, width: laneW)
+                            }
                         }
-                        // 装得下就**居中**（不是靠左）: 只有两个助理时，
-                        // 整片看板挤在左上角、右边一大片空 —— 那比空列更显得"这页没什么内容"。
-                        // 居中之后空白被分成两份，读起来是"一小片看板浮在中间"。
+                        // 宽窗口下列宽封顶 150、整片会窄于这一栏 —— 那时居中（不是靠左）:
+                        // 靠左会让"看板只有右边一半空"，居中读起来是"一片看板浮在中间"。
                         .frame(minWidth: geo.size.width, alignment: .center)
                         .padding(.bottom, 12)
                     }
                     // 溢出时右缘渐隐。**不用原生滚动指示器**: 亮色下它是横贯底部的一条
                     // 白杠（出图实测），既难看又占掉一行 —— 而它要说的只有一句"右边还有"。
+                    // 只有**窄到列宽下限**时才会溢出，判据与布局同一个 `laneWidth`。
                     .overlay(alignment: .trailing) {
-                        if TeamBoardText.boardWidth(cards: cards) > geo.size.width {
+                        if TeamBoardText.boardWidth(available: geo.size.width) > geo.size.width {
                             LinearGradient(
                                 colors: [CodexTheme.bgChat.opacity(0), CodexTheme.bgChat],
                                 startPoint: .leading, endPoint: .trailing
@@ -229,57 +265,52 @@ struct TeamBoardView: View {
         .padding(.horizontal, 40)
     }
 
-    private func laneColumn(_ lane: TeamLane) -> some View {
-        let people = TeamBoardText.order(lane, scoped, states: store.scheduler.teamStates)
-        let empty = people.isEmpty
-        return VStack(alignment: empty ? .center : .leading, spacing: Tune.teamCardGap) {
-            laneHeader(lane, count: people.count, collapsed: empty)
-            if !empty {
-                ForEach(people) { t in cardView(t, lane: lane) }
-            }
-            Spacer(minLength: 0)
-        }
-        .frame(width: TeamBoardText.laneWidth(empty: empty), alignment: .top)
+    /// 列与列之间那条**淡线**（2026-11-25 boss：「能不能在不同的列之间有一条淡淡的分割线」）。
+    ///
+    /// 三条分寸:
+    ///   · **1px** —— 再粗就变成格子边框，而这五格里四格是空的，边框会强调"空";
+    ///   · **`divider` 的 60%** —— 与面板分割线（筛选 / 检查器那两条）用同一个色，但更弱:
+    ///     它们分的是"不同的东西"，这条分的只是"同一种东西的五份";
+    ///   · **整条高度到底** —— 只画在有卡的那几行就回到"列头漂浮"的老问题; 到底才读成五条道。
+    private var laneRule: some View {
+        Rectangle()
+            .fill(CodexTheme.divider.opacity(0.6))
+            .frame(width: 1)
+            // 外面这层把 12pt 的列间距接过来 —— 线正好落在间距正中，整片宽度不变。
+            .frame(width: Tune.teamLaneGap)
     }
 
-    /// 列头。**空列收窄成竖排列头 + 一个 0**（`TeamBoardText.laneWidth` 的注释解释了为什么
-    /// 收窄宽度而不隐藏列: 位置是这个页面唯一的导航锚）。
-    private func laneHeader(_ lane: TeamLane, count: Int, collapsed: Bool) -> some View {
-        Group {
-            if collapsed {
-                VStack(spacing: 3) {
-                    // ⚠️ 定高 36（三行 10pt 字）: 列名有 2 字（在跑）也有 3 字（已排上），
-                    // 不定高时那个 `0` 会跟着列名长短上下错位 —— 出图实测五列的数字参差不齐。
-                    VStack(spacing: 0) {
-                        ForEach(Array(TeamBoardText.laneTitle(lane).enumerated()), id: \.offset) { _, ch in
-                            Text(String(ch))
-                                .font(.system(size: 10))
-                                .foregroundStyle(CodexTheme.textMuted)
-                        }
-                    }
-                    .frame(height: 36, alignment: .top)
-                    Text("0")
-                        .font(CodexFonts.monoFont(9))
-                        .foregroundStyle(CodexTheme.textMuted.opacity(0.7))
-                }
-                .frame(maxWidth: .infinity)
-                .padding(.top, 2)
-            } else {
-                HStack(spacing: 5) {
-                    Circle()
-                        .fill(laneTint(lane))
-                        .frame(width: 5, height: 5)
-                    Text(TeamBoardText.laneTitle(lane))
-                        .font(.system(size: 10.5, weight: .medium))
-                        .foregroundStyle(CodexTheme.textSecondary)
-                    Spacer(minLength: 0)
-                    Text("\(count)")
-                        .font(CodexFonts.monoFont(9))
-                        .foregroundStyle(CodexTheme.textMuted)
-                }
-                .padding(.horizontal, 2)
-            }
+    private func laneColumn(_ lane: TeamLane, width: CGFloat) -> some View {
+        let people = TeamBoardText.order(lane, scoped, states: store.scheduler.teamStates)
+        return VStack(alignment: .leading, spacing: Tune.teamCardGap) {
+            laneHeader(lane, count: people.count)
+            ForEach(people) { t in cardView(t, lane: lane) }
+            Spacer(minLength: 0)
         }
+        .frame(width: width, alignment: .top)
+    }
+
+    /// 列头。**只有一份画法**：圆点 + 列名一行 + 数字右对齐。空列与有卡列长得一模一样，
+    /// 区别只有"下面有没有卡"—— 宽度是五列共用的（`TeamBoardText.laneWidth(available:)`）。
+    ///
+    /// ⚠️ 这里推翻过两版（2026-11-25 两次出图）: ① 空列把列名**按字符竖排** + 定高 36
+    /// ⇒「又是横字，又是竖字」; ② 空列按实测列名收窄到 61pt ⇒「至少要等宽吧」。
+    /// 两版都错在"给空列开特例"这个念头上 —— 这一页是**五条等宽的泳道**，空的那条只是没人。
+    private func laneHeader(_ lane: TeamLane, count: Int) -> some View {
+        HStack(spacing: 5) {
+            Circle()
+                .fill(laneTint(lane))
+                .frame(width: 5, height: 5)
+            Text(TeamBoardText.laneTitle(lane))
+                .font(.system(size: 10.5, weight: .medium))
+                .foregroundStyle(CodexTheme.textSecondary)
+                .lineLimit(1)
+            Spacer(minLength: 0)
+            Text("\(count)")
+                .font(CodexFonts.monoFont(9))
+                .foregroundStyle(CodexTheme.textMuted)
+        }
+        .padding(.horizontal, 2)
     }
 
     /// 状态色 —— **只画在列头那个小圆点上**，卡片本身不上色。
@@ -301,12 +332,19 @@ struct TeamBoardView: View {
         let selected = selectedId == t.id
         let hovered = hoveringId == t.id
         let lead = TeamRowText.isTeamLead(t)
+        let parentName = store.scheduler.parentName(of: t)
         let subtitle = TeamBoardText.cardSubtitle(
             t,
-            parentName: store.scheduler.parentName(of: t),
+            parentName: parentName,
             state: store.scheduler.teamState(of: t.id),
             now: Date()
         )
+        // 这张卡属于哪支队伍 —— `nil` = 没有队伍（悬挂的 parentId 也算），中性灰。
+        // ⚠️ `parentIsAlive` 与上面那个 `parentName` 是**同一个判据**（`parentName(of:)` 查不到人
+        // 就返回 nil）—— 一处说"未归属"、另一处还给上队伍色，是最容易犯的那种不一致。
+        let tint: Color? = TeamBoardText
+            .cardTintIndex(t, parentIsAlive: parentName != nil, tintMap: tintMap)
+            .map { CodexTheme.teamTints[$0] }
         return Button { selectedId = t.id } label: {
             VStack(alignment: .leading, spacing: 2) {
                 Text(t.name)
@@ -328,11 +366,15 @@ struct TeamBoardView: View {
                     RoundedRectangle(cornerRadius: CodexTheme.radiusSm)
                         .fill(selected ? CodexTheme.bgElevated : CodexTheme.bgCard)
                     if hovered && !selected { CodexTheme.hover }
-                    if lead {
-                        Rectangle()
-                            .fill(CodexTheme.textMuted.opacity(0.55))
-                            .frame(width: Tune.teamIdentityBarWidth)
-                    }
+                    // 竖条 = **队伍色**（2026-11-25 boss：「不同的团队，应该有颜色区分」）。
+                    // ⚠️ 它原来只画给队长（"竖条一旦到处都是就什么也不表示"）—— 那条判据在
+                    // **只有一支队伍**时成立; 多队并存时，卡片上没有一个东西说得出"我属于谁"，
+                    // 而 worker 的第二行写的是归属**名字**，扫读要逐卡看字。
+                    // 现在竖条人人都有、且同队同色 ⇒ 队长改由**名字 500 + 身份行里的「管理」**认。
+                    // 孤儿（main 被删）没有队伍 ⇒ 中性灰，与自己那行「未归属」对得上。
+                    Rectangle()
+                        .fill(tint ?? CodexTheme.textMuted.opacity(0.45))
+                        .frame(width: Tune.teamIdentityBarWidth)
                 }
                 .clipShape(RoundedRectangle(cornerRadius: CodexTheme.radiusSm))
             }
@@ -350,21 +392,99 @@ struct TeamBoardView: View {
         .onHover { hoveringId = $0 ? t.id : nil }
     }
 
-    // MARK: - 右栏：检查器
+    // MARK: - 下栏：检查器（横条）
 
-    private var inspectorPane: some View {
+    /// 横过来的检查器 —— 定高 `Tune.teamInspectorHeight`，内部**四格**并排。
+    ///
+    /// 四格的切法是按语义，不是按"平均": ① 是谁 + 现在什么状态 ② 配了什么（职责 / 说明 / 模型）
+    /// ③ 最近五次执行 ④ 台账 + 动作。
+    /// ⚠️ 第一版是三格（①②合一），出图当场被否: 一格里摞着名字、身份、状态、职责、说明、模型，
+    /// 高度顶穿 200pt，最后一行「模型」正好被底边切掉一半 —— 而它又不在滚动位置的起点上，
+    /// 看上去就是"这里坏了"。**一格里最多摞三行**是这条横栏的体量纪律。
+    ///
+    /// 四格宽度**等分**（`maxWidth: .infinity`）而不是固定宽: 这一页要跟着窗口缩放走 ——
+    /// 固定宽在窄窗口里会把最后一格挤成一条缝，等分则每格都能摊开、文字自然折行。
+    /// 内容仍超高时整条一起纵向滚（四格同时滚，比各自滚更不容易看丢对照关系）。
+    private var inspectorBar: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 14) {
+            Group {
                 if let t = selectedTask {
-                    selectedInspector(t)
+                    HStack(alignment: .top, spacing: 16) {
+                        whoBlock(t)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        Divider().overlay(CodexTheme.divider)
+                        dutyBlock(t)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        Divider().overlay(CodexTheme.divider)
+                        recentBlock
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        Divider().overlay(CodexTheme.divider)
+                        VStack(alignment: .leading, spacing: 12) {
+                            ledgerBlock
+                            actionsBlock(t)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    }
                 } else {
                     scopeInspector
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, 16)
-            .padding(.top, 16)
-            .padding(.bottom, 20)
+            .padding(.vertical, 14)
+        }
+        .frame(height: Tune.teamInspectorHeight)
+        .background(CodexTheme.bgChat)
+    }
+
+    /// 第 ① 格 —— 是谁、现在什么状态。
+    private func whoBlock(_ t: ScheduledTask) -> some View {
+        let state = store.scheduler.teamState(of: t.id)
+        return VStack(alignment: .leading, spacing: 4) {
+            Text(t.name)
+                .font(.system(size: 15, weight: .medium))
+                .foregroundStyle(CodexTheme.textPrimary)
+                .lineLimit(2)
+            Text(TeamRowText.identityLine(
+                t,
+                workers: store.scheduler.workerCount(of: t.id),
+                parentName: store.scheduler.parentName(of: t)
+            ))
+            .font(.system(size: 10.5))
+            .foregroundStyle(CodexTheme.textSecondary)
+            .fixedSize(horizontal: false, vertical: true)
+            Text(TeamRowText.stateWord(state, now: Date()))
+                .font(CodexFonts.monoFont(10))
+                .foregroundStyle(laneTint(TeamLane.of(state)))
+        }
+    }
+
+    /// 第 ② 格 —— 它被配成什么样: 职责 / 职责说明 / 模型。
+    private func dutyBlock(_ t: ScheduledTask) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if !t.description.isEmpty {
+                inspectorBlock(L("职责"), t.description)
+            } else if t.role == .worker {
+                // 域层不许 worker 空着职责，所以走到这里说明是**老库里的行**
+                // （P4 之前建的）。说出来，别让它读成"这个人没有职责"。
+                inspectorBlock(L("职责"), L("这一行早于「职责必填」，去编辑器补一句。"))
+            }
+            if !t.descriptionDetail.isEmpty {
+                inspectorBlock(L("职责说明"), t.descriptionDetail)
+            }
+            inspectorBlock(L("模型"), modelLabel(t))
+        }
+    }
+
+    /// 第 ④ 格的下半 —— 两个动作。它们是**对这一行数据的下一步**，
+    /// 而这条横栏已经是"这一行的全部读数"。
+    private func actionsBlock(_ t: ScheduledTask) -> some View {
+        HStack(spacing: 8) {
+            actionButton(L("打开编辑器")) { store.focusTask(t.id) }
+            if let sid = t.logSessionId {
+                actionButton(L("打开会话")) { store.selectConversation(sid) }
+            }
+            Spacer(minLength: 0)
         }
     }
 
@@ -394,52 +514,6 @@ struct TeamBoardView: View {
                 .font(.system(size: 11))
                 .foregroundStyle(CodexTheme.textMuted)
                 .fixedSize(horizontal: false, vertical: true)
-        }
-    }
-
-    private func selectedInspector(_ t: ScheduledTask) -> some View {
-        let state = store.scheduler.teamState(of: t.id)
-        return VStack(alignment: .leading, spacing: 14) {
-            VStack(alignment: .leading, spacing: 3) {
-                Text(t.name)
-                    .font(.system(size: 15, weight: .medium))
-                    .foregroundStyle(CodexTheme.textPrimary)
-                    .lineLimit(2)
-                Text(TeamRowText.identityLine(
-                    t,
-                    workers: store.scheduler.workerCount(of: t.id),
-                    parentName: store.scheduler.parentName(of: t)
-                ))
-                .font(.system(size: 10.5))
-                .foregroundStyle(CodexTheme.textSecondary)
-                .fixedSize(horizontal: false, vertical: true)
-                Text(TeamRowText.stateWord(state, now: Date()))
-                    .font(CodexFonts.monoFont(10))
-                    .foregroundStyle(laneTint(TeamLane.of(state)))
-            }
-
-            if !t.description.isEmpty {
-                inspectorBlock(L("职责"), t.description)
-            } else if t.role == .worker {
-                // 域层不许 worker 空着职责，所以走到这里说明是**老库里的行**
-                // （P4 之前建的）。说出来，别让它读成"这个人没有职责"。
-                inspectorBlock(L("职责"), L("这一行早于「职责必填」，去编辑器补一句。"))
-            }
-            if !t.descriptionDetail.isEmpty {
-                inspectorBlock(L("职责说明"), t.descriptionDetail)
-            }
-            inspectorBlock(L("模型"), modelLabel(t))
-
-            recentBlock
-            ledgerBlock
-
-            HStack(spacing: 8) {
-                actionButton(L("打开编辑器")) { store.focusTask(t.id) }
-                if let sid = t.logSessionId {
-                    actionButton(L("打开会话")) { store.selectConversation(sid) }
-                }
-            }
-            .padding(.top, 2)
         }
     }
 
