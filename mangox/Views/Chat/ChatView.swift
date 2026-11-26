@@ -50,11 +50,33 @@ enum ChatFollowBeats {
 ///
 /// ⚠️ 判据必须能分辨"真的短"和"塌了"：短会话（3 条消息装不满一屏）`doc < vp` 是**正常**的，
 ///    拿 `doc < vp` 直接判会把每个新会话都追一遍。所以用**本会话见过的最高一档**当基准（`peak`）。
+///
+/// ── 2026-11-26 复核: 对话区的 html 预览卡会不会把这个修复拆掉 ──────────────────
+/// boss 问的。结论：**不会**, 而且三条判据刚好各接住卡带来的一个跳变 —— 但要说清代价与那处窄窗口:
+///
+/// ① **卡插进来**（这一轮的产物出现在正文下面）: 行高 +430, 而上一拍的 `scrollToTail` 已经落定
+///    ⇒ `gap` 又变成 ~400 > 240 ⇒ **② 欠冲**接住, 0.6 秒后补一拍到底。所以"每轮出卡必多一次
+///    retry"是设计内行为（`Tune.htmlPreviewCardHeight` 上的注释也写了）。健康态实测 gap p90=172,
+///    400 是它的两倍多, 不可能是误判。
+/// ② **卡降级**（下一轮来时, 上一轮的卡从 430 塌成 30 的行头）: 文档矮 400, 而 `peak` 不清零
+///    ⇒ ① 的比值判据会**变敏感**。量化: 降幅固定 ~400, 要 `doc < peak/2` 才误判 ⇒ 得
+///    `doc_before < 800pt` 才发生 —— 也就是"刚出第一张卡、正文很短"的那种会话。**后果无害**:
+///    那一刻用户刚按回车, 本来就该贴底; 多追一拍的落点就是底。**故意不修**: 要修就得让
+///    `peak` 感知"这个下降是有来源的", 然后把卡的账也算进基准 —— 那会削弱①对真塌陷的灵敏度,
+///    拿一条救命的判据换一次无害的多余追拍, 不划算。
+/// ③ **`peak` 被抬高 400** ⇒ ① 的阈值跟着抬 200 ⇒ 方向是**更不敏感**（会漏报、不会误报）。
+///    真塌陷的量级是 453 vs 2162（差 4.7 倍）, 抬 200 不影响它触发。
+/// ④ **LazyVStack 的估算失真**——白屏真正的根因（见 `ChatFoldRule` 注释里 `32,389 → 93,333`
+///    那份实测）—— **被卡的高度写死挡在门外**。行高确定, 估算就不会失真。这条是本轮评估里
+///    唯一"一旦破了就会复发"的点, 所以 `Tune.htmlPreviewCardHeight` 上写死"不许自适应"。
 enum ChatFollowWatchdog {
     /// 退避节拍（秒）。首拍 0.6 起 —— 四拍已铺到 0.30，别和它们叠在一起。
     static let retryPlan: [Double] = [0.6, 1.2, 2.4, 4.0, 6.0]
 
     /// 健康跟随的欠冲上限。实测 p50 = **98** / p90 = **172**（同一份日志），取 240 留一档。
+    ///
+    /// ⚠️ 这个数与 `Tune.htmlPreviewCardHeight`(400) 的大小关系是**有意**的: 见那个常量上的注释
+    ///    —— 卡撑开 400 靠这里接住。
     static let healthyGap: CGFloat = 240
 
     /// 读一次数，回答"要不要再追"。
@@ -815,8 +837,13 @@ struct ChatView: View {
         /// ⚠️ 子卡**不出顶层行**，由父卡在自己的展开区里画（与 pi 官方 TUI 同一口径）。
         ///    它们仍住在 `store.messages` 里 —— 审批、落库、轮末账单都要看到它们。
         let children: [UUID: [ToolCall]]
+        /// 宿主消息 id → 这一轮的 html 产物（2026-11-26）。
+        ///
+        /// 与账单同一个宿主、同一份 `touched` 口径（`AgentTouched.paths`，工作区也在用它）。
+        /// **键是宿主消息而不是轮**: 消息跟着行住，换会话 / 懒加载都不用额外索引。
+        let htmlPreviews: [UUID: HtmlPreviewHint]
 
-        static let empty = ProjectedChat(blocks: [], bills: [:], children: [:])
+        static let empty = ProjectedChat(blocks: [], bills: [:], children: [:], htmlPreviews: [:])
     }
 
     private var projectedChat: ProjectedChat {
@@ -922,6 +949,10 @@ struct ChatView: View {
         // 组末若是工具卡（模型崩在工具后面、没有收尾正文）⇒ 这一组没有宿主 ⇒ 没有账单。
         // 一处残缺好过一处撒谎。
         var bills: [UUID: TurnBill] = [:]
+        // 2026-11-26: 这一轮写过 html ⇒ 在宿主下面挂一张预览卡。**只有最后一轮真渲染**
+        // （`isLive`）—— 理由见 `HtmlPreview.swift` 文件头 ①：LazyVStack 会销毁屏外行，
+        // 每张活卡都挂一个 WKWebView 会让滚动变成反复重载。
+        var htmlPreviews: [UUID: HtmlPreviewHint] = [:]
         let sid = store.selectedConversationId
         let lastGroup = groups.count - 1
         for (gi, group) in groups.enumerated() {
@@ -939,8 +970,16 @@ struct ChatView: View {
                                             elapsed: elapsed,
                                             root: store.activeProjectPath)
             if !bill.isEmpty { bills[host.message.id] = bill }
+            if let hint = HtmlPreviewTarget.hint(
+                isLastGroup: gi == lastGroup,
+                turnRunning: store.isStreaming,
+                pick: HtmlPreviewTarget.pick(in: group.map(\.message),
+                                             root: store.activeProjectPath)) {
+                htmlPreviews[host.message.id] = hint
+            }
         }
-        return ProjectedChat(blocks: out, bills: bills, children: children)
+        return ProjectedChat(blocks: out, bills: bills, children: children,
+                             htmlPreviews: htmlPreviews)
     }
 
     /// `You` / `MangoX` 是**角色标签, 原样保留英文**（与 Chat / Trace 同族，见 `Tune.authorLabelSpacing`）。
@@ -966,7 +1005,8 @@ struct ChatView: View {
                         if row.isAuthorHead && !headTaken { authorLabel(isUser: row.message.role == .user) }
                         MessageBlockView(message: row.message, store: store,
                                          bill: proj.bills[row.message.id],
-                                         children: proj.children[row.message.id] ?? [])
+                                         children: proj.children[row.message.id] ?? [],
+                                         htmlPreview: proj.htmlPreviews[row.message.id])
                     }
                     // 回合首间距同理：收据那一步已经加过了，这里再加就是双份。
                     .padding(.top, (row.isTurnStart && !headTaken)
@@ -1171,6 +1211,8 @@ struct MessageBlockView: View {
     /// 这张工具卡的**嵌套调用**（codemode 脚本里的 `tools.bash(...)`）—— 由 `ChatView.projectedChat`
     /// 按 `ToolCall.parentId` 归组进来。它们不出顶层行, 在这一行的展开区里画。
     var children: [ToolCall] = []
+    /// 这一轮写过的 html（2026-11-26）—— 与 `bill` 同一个宿主，理由也同一个：跟着行走。
+    var htmlPreview: HtmlPreviewHint? = nil
     @State private var hovering: Bool = false
     /// P7-M6c: 大图预览 (sheet, 不开独立 NSWindow — P4.2 尺寸控制坑)。
     @State private var previewAttachment: Attachment?
@@ -1192,6 +1234,16 @@ struct MessageBlockView: View {
                 attachmentRow(atts)
             }
             content
+            // 这一轮的 html 产物（2026-11-26）—— **夹在正文和账单之间**。
+            //
+            // 位置是 boss 定的（第一版放在最末、账单下面，被否）: 正文讲的是"我做了什么"，
+            // 卡就是那件事**本身**，两者要连着看；而账单（footer 右侧那个 chip）是"花了多少"，
+            // 属于收尾信息。卡放到账单后面会被那行小字隔开，读起来像附注。
+            if let htmlPreview, let root = store.activeProjectPath, !root.isEmpty {
+                HtmlPreviewCard(hint: htmlPreview, root: root)
+                    .padding(.top, 10)
+                    .padding(.bottom, 6)
+            }
             if let raw = rawText {
                 // 这一行**同时**装两样东西 —— 左：「复制 / 分享 / 记忆 / 重新生成」（hover 才现）,
                 // 右：这一轮的账（常驻）。

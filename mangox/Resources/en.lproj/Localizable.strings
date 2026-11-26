@@ -7,7 +7,7 @@
    **本文件由 scripts/l10n/gen_strings.py --write 生成, 别手改** ——
    译文改 scripts/l10n/en_values.py 的 VALUES, 再跑 --write。
 
-   条数: 1222
+   条数: 1226
 */
 
 " (值:\"%@\")" = " (value: %@)";
@@ -492,6 +492,7 @@
 "在「文件」或「改动」里点一行" = "Pick a row under File or Changes";
 "在工作区打开" = "Open in workspace";
 "在当前项目下开一个新会话, 它会拿到最新的工具表" = "Start a new conversation in this project — it will see the latest tool list";
+"在浏览器打开" = "Open in browser";
 "在跑" = "Running";
 "在跑 %lld 分钟" = "Running · %lld min";
 "在跟踪" = "Tracking";
@@ -734,6 +735,7 @@
 "改动未生效 · 重启引擎" = "Changes not live · restart the engine";
 "改完要点保存 —— 自动保存会把写了一半的句子也落盘, 还会跟你在外部编辑器里的改动抢。" = "Save explicitly — autosave would persist half-written sentences and race with your edits in an external editor.";
 "改归本助理" = "Move to this assistant";
+"放大" = "Enlarge";
 "教训" = "Lesson";
 "数据" = "Data";
 "数据库拷贝失败: %@" = "Copying the database failed: %@";
@@ -741,6 +743,7 @@
 "整场" = "Entire session";
 "整篇拿走 —— markdown 预览里的选中是逐块的, 没有一次选完整篇的选法" = "Take the whole thing — selection in the markdown preview is per block, so there is no way to select it all in one go";
 "文件" = "File";
+"文件不在了（可能这一轮又把它删了）" = "The file is gone (this turn may have deleted it again)";
 "文件不存在: %@" = "No such file: %@";
 "文件将从托管区移除, 此操作不可撤销。" = "The file will be removed from the managed area; this cannot be undone.";
 "文件类型构成 (共 %lld 个已识别文件)" = "File types (out of %lld recognized files)";
@@ -1138,6 +1141,7 @@
 "这个目录里没有可读的文档" = "No readable documents in this directory";
 "这个范围里没有人。" = "Nobody in this scope.";
 "这个路径不在笔记目录里" = "That path is outside the notes directory";
+"这个页面没能加载出来（文件太大或编码不对）" = "This page could not be loaded (file too large or wrong encoding)";
 "这么长的东西多半是搞错了对象。" = "That much text usually means the wrong field was picked.";
 "这份快照没记窗口位置 ⇒ 判不了 %@ 是对着哪个窗口的 ⇒ 没点。" = "This snapshot did not record the window frame ⇒ cannot tell which window %@ is against ⇒ nothing was tapped.";
 "这份快照里没有 #%@(一共 %@ 项) ⇒ 没动。" = "This snapshot has no #%@ (it has %@ items) ⇒ nothing was done.";

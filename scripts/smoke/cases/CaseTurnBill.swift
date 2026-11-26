@@ -174,5 +174,55 @@ extension SmokeMain {
         check(after.count == 2 && after.map(\.tokens) == [1_200, 3_400],
               "T-BILL ⑪同一轮重放 ⇒ 覆盖而不是累加 (累加 = 一次重放让那一轮凭空翻倍)"
               + " (实测 \(after.map(\.tokens)))")
+
+        // ⑫ 这一轮的 html 产物（2026-11-26）: 「最后写完的那一份」。
+        //    ⚠️ 判据走**真实管道**（`ChatMessage` → `pick(in:root:)`），不给它手编一个路径数组
+        //    —— 后者会把"谁排在前 / 谁已经写完"这两个最关键的前提从判据里抹掉（那才是会错的地方）。
+        let htmlTurn = [textMsg("写一份报告", role: .user),
+                        toolMsg("docs/a.html", .write),
+                        toolMsg("notes/x.md", .write),
+                        toolMsg("docs/b.html", .write),
+                        textMsg("写好了")]
+        let picked = HtmlPreviewTarget.pick(in: htmlTurn, root: root)
+        // 多份 html 只取最后改的那份 —— 模型可能一次产出报告 + 图 + 工具页,
+        // 没有依据知道用户要看哪个, "最后修改"是唯一说得通的选择。
+        check(picked == "docs/b.html",
+              "T-BILL ⑫一轮改了两份 html ⇒ 取**最后写的**那份(.md 不算) "
+              + "(实测 \(String(describing: picked)))")
+
+        // 扩展名判据: 只认 html/htm、大小写不敏感; 其它一个都不许"看着像"就放过。
+        // 空数组并进这条 —— 同一个判据的边界。
+        check(HtmlPreviewTarget.pick(in: [toolMsg("x.md"), toolMsg("Page.HTML"), toolMsg("y.svg")],
+                                     root: root) == "Page.HTML"
+              && HtmlPreviewTarget.pick(in: [toolMsg("x.md"), toolMsg("y.png")], root: root) == nil
+              && HtmlPreviewTarget.pick(in: [], root: root) == nil,
+              "T-BILL ⑫只认 html/htm (大小写不敏感), md/png/svg/空 都不算 —— "
+              + "内容嗅探不是判据 (模型也会写 page.txt)")
+
+        // ⑬ **还没写完的那份不算产物**（2026-11-26 评估空白屏时揪出来的真 bug）:
+        //    `queued`/`running` 的工具卡已经在 `messages` 里，而文件这时还不存在 ——
+        //    不过滤就会先弹一张卡、报"文件不在了"，且路径不变 ⇒ 永远不自己恢复。
+        let inFlight = HtmlPreviewTarget.pick(in: [toolMsg("docs/a.html", .write),
+                                                   toolMsg("docs/b.html", .write, phase: .running)],
+                                              root: root)
+        let onlyInFlight = HtmlPreviewTarget.pick(in: [toolMsg("docs/b.html", .write, phase: .queued)],
+                                                  root: root)
+        check(inFlight == "docs/a.html" && onlyInFlight == nil,
+              "T-BILL ⑬正在写/排队中的 html 不算产物(退回到上一份已写完的; 一份都没有就不出卡)"
+              + " (实测 \(String(describing: inFlight)) / \(String(describing: onlyInFlight)))")
+
+        // ⑭ **一轮结束才上屏**（2026-11-26 boss 定）: 预览是"做完了给我看结果", 不是边做边直播。
+        //    ⚠️ 判据是**回合在途**(`isStreaming`), 不是"文件写完了没" —— 文件写完模型往往还要
+        //    接着写正文。历史轮次不受这条影响(在途的永远是最后一组), 一律降级成一行。
+        let running = HtmlPreviewTarget.hint(isLastGroup: true, turnRunning: true, pick: "docs/a.html")
+        let settled = HtmlPreviewTarget.hint(isLastGroup: true, turnRunning: false, pick: "docs/a.html")
+        let history = HtmlPreviewTarget.hint(isLastGroup: false, turnRunning: true, pick: "docs/a.html")
+        check(running == nil
+              && settled == HtmlPreviewHint(path: "docs/a.html", isLive: true)
+              && history == HtmlPreviewHint(path: "docs/a.html", isLive: false)
+              && HtmlPreviewTarget.hint(isLastGroup: false, turnRunning: false, pick: nil) == nil,
+              "T-BILL ⑭回合在途 ⇒ 不出卡; 落定 ⇒ 出活卡; 历史轮 ⇒ 出降级行; 没产物 ⇒ 什么都不出"
+              + " (实测 \(String(describing: running)) / \(String(describing: settled))"
+              + " / \(String(describing: history)))")
     }
 }

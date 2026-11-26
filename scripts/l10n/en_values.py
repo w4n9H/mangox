@@ -889,6 +889,11 @@ VALUES = {
     #  git 算, 同屏并排, 英文不能都叫 Changes, 否则看不出它们是两笔账。
     '改动': 'Changes',
     '预览': 'Preview',
+    # 2026-11-26: 对话区的 html 预览卡（生成完当场看得见效果）。
+    '放大': 'Enlarge',
+    '在浏览器打开': 'Open in browser',
+    '文件不在了（可能这一轮又把它删了）': 'The file is gone (this turn may have deleted it again)',
+    '这个页面没能加载出来（文件太大或编码不对）': 'This page could not be loaded (file too large or wrong encoding)',
     '工作区改动': 'Working tree',
     #  两段是**不重叠**的两笔账: 上段是 agent 这轮碰过的, 下段是"其余的脏文件"。
     #  所以英文不能也叫 Changes —— 并列时看不出它们是两笔账。
