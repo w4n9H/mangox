@@ -36,6 +36,46 @@ enum ChatFollowBeats {
     static let plan: [Double] = [0, 0.04, 0.12, 0.30]
 }
 
+/// 跟随的**看门狗**：四拍打完还不贴底，就按退避把同一个动作再发几次（2026-11-25）。
+///
+/// ── 为什么需要它 ─────────────────────────────────────────────────────────────
+/// `ChatFollowBeats` 到 **0.30 秒**就收手，而现场那三段空白正好落在"读数不可信"的窗口里：
+/// `~/.mangox/log/mangox-20261125-155126.log` 里 `doc` 被量成 **158 / 453 / 1892**
+/// （40 条消息的会话真实高度是 8000+），随后要 **7.4 / 13.6 / 22.6 秒**才出现可信读数。
+/// 0.30 秒的节拍必然在那个窗口里放弃 ⇒ 视口停在空白，**自己不会好**。
+///
+/// 关键证据：那两次都是**外力**救回来的 —— 切会话走 `switch-conv`、滚轮强制真实布局；
+/// 而 `switch-conv` 与 `follow` 走的是**同一条 `scrollToTail`**。
+/// ⇒ 所以这里补的**不是新动作**，是"把同一个动作晚一点再发几次"。
+///
+/// ⚠️ 判据必须能分辨"真的短"和"塌了"：短会话（3 条消息装不满一屏）`doc < vp` 是**正常**的，
+///    拿 `doc < vp` 直接判会把每个新会话都追一遍。所以用**本会话见过的最高一档**当基准（`peak`）。
+enum ChatFollowWatchdog {
+    /// 退避节拍（秒）。首拍 0.6 起 —— 四拍已铺到 0.30，别和它们叠在一起。
+    static let retryPlan: [Double] = [0.6, 1.2, 2.4, 4.0, 6.0]
+
+    /// 健康跟随的欠冲上限。实测 p50 = **98** / p90 = **172**（同一份日志），取 240 留一档。
+    static let healthyGap: CGFloat = 240
+
+    /// 读一次数，回答"要不要再追"。
+    /// - Parameters:
+    ///   - `peak`: 本会话见过的最高 `doc`（换会话 / 消息变少时清零）。
+    static func needsRetry(doc: CGFloat, vp: CGFloat, gap: CGFloat,
+                           bottom: CGFloat, probeAgeMs: Double?, peak: CGFloat) -> Bool {
+        guard vp > 0, doc > 0 else { return false }
+        // ① 文档塌陷：比本会话见过的最高一档还矮一半 ⇒ 行在重新实例化，这个 `doc` 不可信。
+        //    （2026-11-25 实测 453 vs peak 2162、158 vs peak 8000+；`bottom` 也跟着缩到一行高，
+        //      所以内容底探针**也**不能用来反驳它 —— 两个读数一起错。）
+        if peak > vp, doc < peak * 0.5 { return true }
+        // ② 欠冲超过半屏。流式期正常 lag 不会到 240（p90 = 172），到了就是没贴住。
+        if gap > healthyGap { return true }
+        // ③ 越界：文档比视口长，而**新鲜**的探针说内容底落在视口上半截。
+        //    实测那一拍 `bottom=438 / vp=754`（健康态 666）⇒ 视口底部 316pt 没有内容。
+        if doc > vp, let age = probeAgeMs, age < 1500, bottom > 0, bottom < vp * 0.75 { return true }
+        return false
+    }
+}
+
 /// 尾块实体化的**账本** —— 只记录“真的已经滚过去量过”的那个块。
 ///
 /// ⚠️ 候选与消费必须拆成两步：`candidate` 只回答“这一拍该不该先锚真实行”，
@@ -166,6 +206,13 @@ struct ChatView: View {
     /// ⚠️ 初值是 `nil`（"从没报过"）而不是 `Date.distantPast`：后者算出来的 age 是 2027 年那种
     ///    天文数字，而第一拍恰恰还没量到 —— 那会让 `void` 在**每一次初屏**都谎报一次白屏。
     @State private var lastBottomAt = RefBox<Date?>(nil)
+
+    /// 本会话见过的**最高一档**文档高（看门狗的基准，见 `ChatFollowWatchdog`）。
+    /// 换会话、消息变少（压缩 / 清空）时清零 —— 否则"切到一个短会话"会被判成文档塌陷。
+    /// ⚠️ 引用盒子：它只在滚动闭包里读写，进 `@State` 本体就会让每次读数都失效一次 body。
+    @State private var docPeak = RefBox<CGFloat>(0)
+    /// 上一次看到的 `messages.count`（只为"变少"那一判定，见上）。
+    @State private var lastMsgCount = RefBox(0)
 
     /// 同帧合并的跟随调度：正在排队的那一次的**意图**（见 `requestFollow`）。
     @State private var pendingOrigin = RefBox("")
@@ -427,6 +474,37 @@ struct ChatView: View {
                 logBeat(origin + ".settle", Self.followBeats.count, "-")
             }
         }
+        // 四拍打完 + 读数仍然不可信 ⇒ 继续追（见 `ChatFollowWatchdog`）。
+        // ⚠️ `retry` 自己**不许**再铺一条看门狗链，否则每次重试都开一条新的，指数级。
+        if origin != "retry" { armRetry(proxy, step: 0, veto: veto) }
+    }
+
+    /// 看门狗的一步：到点 → 读一次数 → 仍然不可信就**把同一个 `scrollToTail` 再发一次**，然后排下一步。
+    ///
+    /// ⚠️ 为什么复用 `scrollToTail` 而不是自己 `proxy.scrollTo`：
+    ///    现场那两次恢复（切会话、滚轮）走的就是这条路径，**动作本身没问题，是时机问题**
+    ///    （`switch-conv` 在 16:30:04 一次就落对，而 `follow` 在 16:29:56 落了 7.4 秒都没落对）。
+    ///    自己另写一套 = 又一份没人验证过的滚动逻辑。
+    private func armRetry(_ proxy: ScrollViewProxy, step: Int, veto: @escaping () -> Bool) {
+        let plan = ChatFollowWatchdog.retryPlan
+        guard step < plan.count else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + plan[step]) {
+            guard veto() else { return }                  // 用户上滑了 ⇒ 不许拽回（P9-#9 红线）
+            guard let s = scrollMetrics.snapshot() else { return }
+            let gap = s.doc - s.y - s.vp
+            let bottom = lastBottomY.value
+            let age: Double? = lastBottomAt.value.map { Date().timeIntervalSince($0) * 1000 }
+            guard ChatFollowWatchdog.needsRetry(doc: s.doc, vp: s.vp, gap: gap,
+                                                bottom: bottom, probeAgeMs: age,
+                                                peak: docPeak.value) else { return }
+            Log.scroll("retry", ["step": "\(step)",
+                                 "doc": String(format: "%.0f", s.doc),
+                                 "gap": String(format: "%.0f", gap),
+                                 "band": String(format: "%.0f", s.vp - bottom),
+                                 "peak": String(format: "%.0f", docPeak.value)])
+            scrollToTail(proxy, origin: "retry", veto: veto)
+            armRetry(proxy, step: step + 1, veto: veto)
+        }
     }
 
     /// 同帧合并的跟随请求口 —— **一次换会话只允许产生一次 `scrollToTail`**。
@@ -493,6 +571,13 @@ struct ChatView: View {
             f["doc"] = String(format: "%.0f", s.doc)
             f["vp"] = String(format: "%.0f", s.vp)
             f["gap"] = String(format: "%.0f", gap)
+            // 看门狗的基准（2026-11-25）：**必须在下面那道"健康拍不记"的过滤之前记** ——
+            // 健康拍才是"文档真的有多高"的样本，过滤之后再记就只剩塌陷值了。
+            if s.doc > docPeak.value { docPeak.value = s.doc }
+            // 视口底部那条**空带**有多高（`vp - bottom`）。健康态实测 88（底部留白）。
+            // 加这一格是因为 `void` 只抓"整片白"（`bottom <= 0`），抓不到
+            // "内容底落在视口上半截、下面空出 316pt"这种半白（2026-11-25 实测 `bottom=438`）。
+            if bottom > 0 { f["band"] = String(format: "%.0f", s.vp - bottom) }
             // 白屏判据（2026-11-06 补）: 视口是 `[y, y+vp]`，而 `bottom` 是**内容底距视口顶**的 y。
             // `bottom <= 0` ⇒ 内容底已经在视口之上 ⇒ 视口里一个像素内容都没有 = **整片白**。
             // ⚠️ 三种取值，别压成两种:
@@ -590,6 +675,8 @@ struct ChatView: View {
             // ⚠️ 这里**不用**手工置位"要量"—— 尾块 id 变了，`scrollToTail` 自己会认（见 `ChatTailLedger`）
             // ⚠️ 走 `requestFollow` 而不是直接调：紧随其后的 `messagesRevision` 那次会把
             //    这里的复核拍作废（2026-11-06 实证），两条必须合并成一拍。
+            // 看门狗基准必须跟着换：新会话往往比旧会话短 ⇒ 留着旧峰值会把"短"判成"塌了"。
+            docPeak.value = 0
             requestFollow(proxy, origin: "switch-conv")
         }
         .onChange(of: store.messagesRevision) { _, _ in
@@ -609,6 +696,9 @@ struct ChatView: View {
             let newLast = store.messages.last
             let previousID = lastTailID.value
             lastTailID.value = newLast?.id
+            // 消息变少 = 压缩 / 清空 / replay ⇒ 文档该变矮，旧的峰值不再能当基准。
+            if store.messages.count < lastMsgCount.value { docPeak.value = 0 }
+            lastMsgCount.value = store.messages.count
             let justSent = newLast?.role == .user && previousID != newLast?.id
             // 诊断日志: 提交那一拍必记（白屏就发生在它之后）；"被拦掉"只记一次（见 `vetoLogged`）。
             if justSent {

@@ -47,6 +47,42 @@ extension SmokeMain {
         check(CompactTextEditor.measuredHeight(
                 scrollView: empty, minHeight: minH, maxHeight: maxH) == nil,
               "T-CCOMP 无文本容器时返回 nil（不再强制解包 textContainer）")
+
+        // ② 项目 pill 的数据源（2026-11-26，boss 实拍：进了项目会话，pill 仍写「选择项目」）。
+        //
+        // 病根是**视图绕过了兜底**：pill 自己拼 `projects.first { $0.id == selectedProjectId }`，
+        // 而 `selectedProjectId` 只在"从菜单里点过"才有值 ⇒ 从侧栏点进项目会话时它是 nil。
+        // 兜底（跟随选中会话的归属）一直住在 `ChatStore.activeProject` 里，`activeProjectPath`
+        // 也走它 ⇒ **pi 的 cwd 一直是对的，只有那行字是错的**。
+        // 现在两处共用 `resolveActiveProject` 这一个纯函数，本节钉住它的四条语义。
+        let convInBetty = ConversationItem(title: "在 B 里的会话")
+        let projA = ProjectGroup(title: "A 项目", path: "/tmp/a", items: [])
+        let projB = ProjectGroup(title: "B 项目", path: "/tmp/b", items: [convInBetty])
+        let allProjects = [projA, projB]
+
+        let followed = ChatStore.resolveActiveProject(projects: allProjects,
+                                                      selectedProjectId: nil,
+                                                      selectedConversationId: convInBetty.id)
+        check(followed?.id == projB.id,
+              "T-CCOMP 没从菜单选过项目时, pill 必须跟随会话归属 (实测 \(followed?.title ?? "nil"))")
+
+        let explicit = ChatStore.resolveActiveProject(projects: allProjects,
+                                                      selectedProjectId: projA.id,
+                                                      selectedConversationId: convInBetty.id)
+        check(explicit?.id == projA.id,
+              "T-CCOMP 从菜单显式选过项目时, 显式选择优先于会话归属")
+
+        let orphan = ChatStore.resolveActiveProject(projects: allProjects,
+                                                    selectedProjectId: nil,
+                                                    selectedConversationId: UUID())
+        check(orphan == nil,
+              "T-CCOMP 会话不属于任何项目时返回 nil (pill 才该显示「选择项目」占位)")
+
+        let dangling = ChatStore.resolveActiveProject(projects: allProjects,
+                                                      selectedProjectId: UUID(),
+                                                      selectedConversationId: convInBetty.id)
+        check(dangling == nil,
+              "T-CCOMP 显式选择指向已删除的项目时返回 nil, 不许回落到会话归属 (语义不变)")
     }
 
     /// 与 `CompactTextEditor.makeNSView` 同结构的最小夹具。

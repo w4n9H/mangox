@@ -258,10 +258,22 @@ final class ChatStore: ObservableObject {
 
     /// 当前生效的 project: 显式选择优先, 否则跟随选中会话的归属。
     var activeProject: ProjectGroup? {
+        Self.resolveActiveProject(projects: projects,
+                                  selectedProjectId: selectedProjectId,
+                                  selectedConversationId: selectedConversationId)
+    }
+
+    /// 抽成纯函数是为了能被断言（`T-CCOMP`）。**它必须只有这一份**：
+    /// ⚠️ 2026-11-26 实拍 —— 输入框上方那枚 pill 自己拼了 `projects.first { $0.id == selectedProjectId }`，
+    ///    绕过了下面这条兜底 ⇒ 从侧栏点进一个项目会话时，pill 照样写「选择项目」。
+    ///    （`activeProjectPath` 走的是这同一份逻辑，所以 pi 的 cwd 一直是对的 —— 只有显示错了。）
+    static func resolveActiveProject(projects: [ProjectGroup], selectedProjectId: UUID?,
+                                     selectedConversationId: UUID?) -> ProjectGroup? {
         if let pid = selectedProjectId {
             return projects.first { $0.id == pid }
         }
-        return projects.first { $0.items.contains { $0.id == selectedConversationId } }
+        guard let cid = selectedConversationId else { return nil }
+        return projects.first { $0.items.contains { $0.id == cid } }
     }
 
     /// 当前工作目录 (nil = 无项目会话, Work 不可用)。

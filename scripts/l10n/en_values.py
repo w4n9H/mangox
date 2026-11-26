@@ -429,6 +429,7 @@ VALUES = {
     '选择模型': 'Choose a model',
     '选择目录…': 'Choose a directory…',
     '选择要附加的文件': 'Choose files to attach',
+    '家目录': 'Home',
     '选择项目': 'Choose a project',
     '选择项目文件夹 (将作为 Agent 工作目录)': "Choose the project folder (used as the agent's working directory)",
     '选择预设, 填 Key 后测试连接': 'Pick a preset, enter the key and test the connection',
@@ -1062,7 +1063,11 @@ VALUES = {
     '不可截图': 'No image',
     '口令 / 系统设置类应用: 一张都不拍 —— 像素会绕过输入框的遮蔽': 'Password / system-settings apps: never captured - pixels would bypass the mask on input fields',
     '开了它我才能看这个应用的屏幕：文字读不出来时按图数编号, 文字读得出时图只用来补颜色和图标。默认关, 因为截图带的是整个窗口的像素': 'With this on I am allowed to look at this app\'s screen: when the text read comes back empty I number things from the picture, and when it works the picture only fills in colours and icons. Off by default, because a screenshot carries the whole window as pixels',
-    '⚠️ 这一档没有语义闸: 读不出文字时我只能凭坐标点、往焦点里写字 —— 点错当场发生, 回车发出去的消息撤不回': '⚠️ This tier has no semantic gate: when I cannot read the text I click by coordinates and type into whatever has focus - a misclick lands immediately, and a message sent with Return cannot be recalled',
+    # 2026-11-26: 这句原来带 `⚠️ ` 前缀、整行铺在三列开关之间 ⇒ 把「视觉」挤到左边、
+    # 整列勾选框错位。现在拆成一个图标 + 一行短句挂在开关行下方, **句子本身不带 emoji**
+    # (图标由 `Image(systemName:)` 出, 文字只留内容); 全文进 tooltip。
+    '读不出文字：只能凭坐标点，回车发出去的消息撤不回': 'Without readable text the only option is clicking by coordinates, and a message sent with Return cannot be recalled',
+    '这一档没有语义闸：读不出文字时我只能凭坐标点、往焦点里写字 —— 点错当场发生，回车发出去的消息撤不回': 'This tier has no semantic gate: when I cannot read the text I click by coordinates and type into whatever has focus - a misclick lands immediately, and a message sent with Return cannot be recalled',
     '全局开关: 开 = 常规与完整模式的会话都能读你勾过的应用的界面, 不是只对当前会话生效 (极简与 codemode 档看不到这些工具)。再给某个 App 勾上「可操作」它才能按按钮/填输入框 —— 勾上就是允许, 不再逐次问你; 没勾的一律只读。再给某个 App 勾上「视觉」, 它才允许看这个应用的屏幕 —— 文字读得出来时按文字走(图只补颜色和图标), 读不出来时按图数编号; 默认关, 因为图里是像素, 会绕过输入框的遮蔽。让助手打开一个 App 只需要「可读」或「视觉」(那等于替你点一下图标)': 'Global switch: on means sessions in the standard and full modes can read the apps you ticked, not just the current conversation (the minimal and codemode modes do not see these tools). Ticking "Act" for an app is what lets it press buttons and fill fields - a tick is permission, it will not ask again; anything unticked is read-only. Ticking "Vision" is what allows me to look at that app\'s screen - when the text read works I go by the text (the picture only fills in colours and icons), and when it comes back empty I number things from the picture; off by default because a picture is pixels and pixels bypass the mask on input fields. Opening an app only needs "Read" or "Vision" (it is the same as clicking its icon for you)',
     '读不动': "Can't read",
     '超时': 'timed out',

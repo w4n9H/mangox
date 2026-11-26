@@ -7,7 +7,7 @@
    **本文件由 scripts/l10n/gen_strings.py --write 生成, 别手改** ——
    译文改 scripts/l10n/en_values.py 的 VALUES, 再跑 --write。
 
-   条数: 1217
+   条数: 1219
 */
 
 " (值:\"%@\")" = " (value: %@)";
@@ -165,7 +165,6 @@
 "⚠️ 未找到 pi CLI, 无法发送。请确认已安装 pi 并重启 MangoX (或检查 pi 安装路径)。" = "⚠️ pi CLI not found, cannot send. Make sure pi is installed and restart MangoX (or check its install path).";
 "⚠️ 本地库写入失败 (%@), 数据可能未保存" = "⚠️ Writing to the local database failed (%@); data may not be saved.";
 "⚠️ 系统通知未授权 —— 请到 系统设置 → 通知 → MangoX 开启" = "⚠️ Notifications are not authorized — enable them in System Settings → Notifications → MangoX.";
-"⚠️ 这一档没有语义闸: 读不出文字时我只能凭坐标点、往焦点里写字 —— 点错当场发生, 回车发出去的消息撤不回" = "⚠️ This tier has no semantic gate: when I cannot read the text I click by coordinates and type into whatever has focus - a misclick lands immediately, and a message sent with Return cannot be recalled";
 "✓ 完成 · 耗时 %02d:%02d" = "✓ Done · took %02d:%02d";
 "✓ 已保存" = "✓ Saved";
 "✓ 连接正常" = "✓ Connection OK";
@@ -542,6 +541,7 @@
 "定时任务" = "Scheduled";
 "审批流关闭, 点击开启" = "Approval off, click to enable";
 "审批流开启, 点击关闭" = "Approval on, click to disable";
+"家目录" = "Home";
 "对话" = "Chat";
 "导入 .ts/.js 到托管区" = "Import .ts / .js into the managed area";
 "导入到托管区" = "Import into the managed area";
@@ -1057,6 +1057,7 @@
 "请直接改那个文件" = "Please edit that file directly";
 "请看图" = "See the image";
 "读" = "Read";
+"读不出文字：只能凭坐标点，回车发出去的消息撤不回" = "Without readable text the only option is clicking by coordinates, and a message sent with Return cannot be recalled";
 "读不到了" = "unreadable";
 "读不到它的大小（没有权限？）: %@" = "Cannot read its size (missing permission?): %@";
 "读不动" = "Can't read";
@@ -1113,6 +1114,7 @@
 "这一条只是问你 / 告诉你，没有可执行的方案 —— 没有「同意」这个动作。回「先别动」可以把它搁置。" = "This one only asks you something — there is no plan to run, so there is nothing to approve. Reply 「先别动」 to shelve it.";
 "这一格没有自定义动作, 想按它的话用 press。" = "This cell declares no custom actions; use press if you only meant to click it.";
 "这一格要提交, 请先看它支持哪个动作; 一个都不支持就如实告诉用户," = "To submit this field, look at which actions it actually offers; if it offers none, tell the user plainly,";
+"这一档没有语义闸：读不出文字时我只能凭坐标点、往焦点里写字 —— 点错当场发生，回车发出去的消息撤不回" = "This tier has no semantic gate: when I cannot read the text I click by coordinates and type into whatever has focus - a misclick lands immediately, and a message sent with Return cannot be recalled";
 "这一档用的是**真鼠标**, 我不能在人手上抢 —— 稍等一下再说一次。" = "This mode uses the real mouse, and I will not take it out of your hand — try again in a moment.";
 "这一步是永久删除(不进废纸篓), 无法恢复 ⇒ 我不点。要删的话请你自己来, 或者告诉我改用「移到废纸篓」。" = "This deletes permanently (it skips the Trash) and cannot be undone, so I will not click it. Delete it yourself, or tell me to move it to the Trash instead.";
 "这一步涉及付款/下单 ⇒ 我不点。金额与对象要你自己确认过才行。" = "This is a payment or an order, so I will not click it. You need to confirm the amount and the recipient yourself.";

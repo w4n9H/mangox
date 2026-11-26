@@ -80,5 +80,56 @@ extension SmokeMain {
               + "锚它 = 按估算的文档高落进空白区 = 白屏, 且几何判据全绿)")
         check(ChatView.followTarget(origin: "follow", isStreaming: true) == ChatView.streamingAnchor,
               "T-CSCROLL 真正流式跟随时仍然锚流式指示器 (它会把前面的行量出来, 落点是真的)")
+
+        // ⑦ 看门狗：四拍打完读数还不可信就继续追（2026-11-25，`mangox-20261125-155126.log`）。
+        //
+        // 病根不是"动作错"而是"**时机**错"：`ChatFollowBeats` 到 0.30 秒收手，而那一刻
+        // 滚动容器正处在过渡态 —— 同一份日志里 `doc` 被量成 158 / 453 / 1892（真实 8000+），
+        // 之后 7.4 / 13.6 / 22.6 秒才出现可信读数。boss 那两次都是靠外力救回来的（切会话 / 滚轮），
+        // 而 `switch-conv` 与 `follow` 走的是同一条 `scrollToTail` ⇒ 补的是**时机**。
+        //
+        // ⚠️ 三条正例各自针对一个**不同**的失败形态（文档塌陷 / 欠冲 / 越界半白），
+        //    三个反例各自对应一个**会误伤**的简化写法（见下）。
+        let W = ChatFollowWatchdog.self
+
+        // 正例① 文档塌陷（16:29:56 现场原数）。`bottom=813 > doc=453` —— 探针也跟着缩到一行高，
+        // 所以"内容底还在视口里"这句话不能用来反驳它：两个读数是一起错的。
+        check(W.needsRetry(doc: 453, vp: 902, gap: -397, bottom: 813,
+                           probeAgeMs: 1886, peak: 2162),
+              "T-CSCROLL 文档塌成一行高(453 vs 峰值 2162)时必须继续追")
+
+        // 正例② 欠冲（17:11:54 现场原数）：doc 正常、峰值也正常，只有 gap 406 说了实话。
+        check(W.needsRetry(doc: 5214, vp: 754, gap: 406, bottom: 665,
+                           probeAgeMs: 1_851_189, peak: 5214),
+              "T-CSCROLL 欠冲超过半屏时必须继续追 (与塌陷是两条独立的路)")
+
+        // 正例③ 越界半白（17:12:01 现场原数）：gap=0 说"贴底了"，而新鲜探针说内容底只到
+        // 视口 438/754 处 ⇒ 底部空 316pt。只信 gap 的写法会漏掉这一种。
+        check(W.needsRetry(doc: 2951, vp: 754, gap: 0, bottom: 438,
+                           probeAgeMs: 2, peak: 2951),
+              "T-CSCROLL 视口越过内容底(内容底只到 438/754)时必须继续追, 哪怕 gap 读作 0")
+
+        // 反例① 健康态（17:12:06 settle 现场原数）：一个都不许追。
+        check(!W.needsRetry(doc: 3053, vp: 754, gap: 0, bottom: 666,
+                            probeAgeMs: 100, peak: 3053),
+              "T-CSCROLL 贴底且探针新鲜时不许再追 (追了就是每秒抖一次)")
+
+        // 反例② **短会话装得下**：`doc < vp` 是正常的。如果谁把判据简化成 `doc < vp`，
+        // 每个新建会话都会被追五遍 —— 这条就是拦那个简化的。
+        check(!W.needsRetry(doc: 453, vp: 902, gap: -449, bottom: 400,
+                            probeAgeMs: 50, peak: 453),
+              "T-CSCROLL 短会话(doc 比视口还小但没有塌陷史)不许判成塌陷")
+
+        // 反例③ 探针**陈旧**时不许拿它定罪：`age` 决定 `bottom` 还能不能当证据
+        // （那三段空白里 `age` 一度是 1_851_189ms = 30 分钟前的读数）。
+        check(!W.needsRetry(doc: 3000, vp: 754, gap: 100, bottom: 300,
+                            probeAgeMs: 60_000, peak: 3000),
+              "T-CSCROLL 探针陈旧时不许用 bottom 判越界 (30 分钟前的读数会一直说白)")
+
+        // 节拍：必须在四拍（0.30 秒）之后才开始，且递增 —— 否则和复核拍抢同一帧。
+        check(W.retryPlan.first! > ChatFollowBeats.plan.last!,
+              "T-CSCROLL 看门狗首拍必须晚于复核末拍(0.30s), 否则和它抢同一帧")
+        check(zip(W.retryPlan, W.retryPlan.dropFirst()).allSatisfy { $0 < $1 },
+              "T-CSCROLL 看门狗节拍必须递增(退避), 不许固定间隔猛刷")
     }
 }

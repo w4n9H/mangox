@@ -814,7 +814,10 @@ enum Copy {
     static var composerPlaceholder: String { L("给 MangoX 发消息…") }
     // ⚠️ 必须是 `static var` + `L()`: 若写成 `static let`，取词只在**首次访问**时发生，
     //    之后切语言这两个 pill 就冻在旧语言里（本地化门 ②「冻结取词」要红的那一类）。
-    static var chooseProjectFallback: String { L("选择项目") }   // 未选项目时 pill 的占位
+    /// 无项目会话在 pill 上的名字（2026-11-26 boss：`没绑定项目的会话记得要区分一下`）。
+    /// 依据是事实而不是措辞：无项目 ⇒ `cwd` 为 nil ⇒ 引擎 `desiredCwd ?? NSHomeDirectory()`
+    /// （`PiRpcTransport.swift:2870`）⇒ 它确实在家目录里跑，所以写「家目录」+ `~`。
+    static var homeDirLabel: String { L("家目录") }
     static var chooseProjectMenu: String { L("选择项目…") }      // pill 菜单里的"取消选择"
 
     // 附件与目录选择面板

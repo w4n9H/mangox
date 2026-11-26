@@ -1098,107 +1098,120 @@ struct SettingsView: View {
         // 是"上次读它花了 N 秒还没完"的**实测记录**, 读成功一次就自动消失)。
         let health = computerHealth[app.bundle]
         let blocked = health?.isBlocking ?? false
-        return HStack(spacing: 8) {
-            VStack(alignment: .leading, spacing: 1) {
-                HStack(spacing: 6) {
-                    Text(verbatim: app.name)
-                        .font(.system(size: 12))
-                        .foregroundStyle(CodexTheme.textPrimary)
-                    // ⚠️ 只标"在跑"的: 几百行都写"未运行"是噪音，而"现在就能读"才是要突出的。
-                    if app.running {
-                        Text("运行中")
-                            .font(.system(size: 9))
-                            .foregroundStyle(CodexTheme.toolDone)
+        // ⚠️ 外层必须是 VStack: 下面那条"无兜底"提示**不许进 HStack** ——
+        //    它一进去就吃掉「视觉」与「可操作」之间的横向空间, 把勾选框整列往左挤,
+        //    于是勾了的行跟没勾的行开关不对齐(2026-11-26 截图实锤)。
+        //    三列对齐靠**结构**保证, 不靠文案恰好够短。
+        return VStack(alignment: .leading, spacing: 3) {
+            HStack(spacing: 8) {
+                VStack(alignment: .leading, spacing: 1) {
+                    HStack(spacing: 6) {
+                        Text(verbatim: app.name)
+                            .font(.system(size: 12))
+                            .foregroundStyle(CodexTheme.textPrimary)
+                        // ⚠️ 只标"在跑"的: 几百行都写"未运行"是噪音，而"现在就能读"才是要突出的。
+                        if app.running {
+                            Text("运行中")
+                                .font(.system(size: 9))
+                                .foregroundStyle(CodexTheme.toolDone)
+                        }
+                        // 文案走词表、数字 verbatim 拼上(`L()` 里不许插值 —— 见本地化那条禁令)。
+                        if blocked, let h = health {
+                            Text(L("读不动") + " · \(max(1, h.elapsedMs / 1000))s")
+                                .font(.system(size: 9))
+                                .foregroundStyle(CodexTheme.toolRunning)
+                        }
                     }
-                    // 文案走词表、数字 verbatim 拼上(`L()` 里不许插值 —— 见本地化那条禁令)。
-                    if blocked, let h = health {
-                        Text(L("读不动") + " · \(max(1, h.elapsedMs / 1000))s")
-                            .font(.system(size: 9))
-                            .foregroundStyle(CodexTheme.toolRunning)
+                    // 「靠什么读」= **只读标注, 不是开关**。
+                    // 用户判断不了"这个 App 的 AX 有 42 行还是 3 行", 让他选等于让他替我做技术
+                    // 选型; 而选错的后果不对称(选纯视觉去动 = 点错且无撤销) ⇒ 由后台按 App 现判,
+                    // 这里只把结果写出来。用大白话, 不出现 AX / OCR 这些词。
+                    HStack(spacing: 5) {
+                        Text(verbatim: app.bundle)
+                            .font(.system(size: 10))
+                            .foregroundStyle(CodexTheme.textMuted)
+                        Text(verbatim: "·")
+                            .font(.system(size: 10))
+                            .foregroundStyle(CodexTheme.textMuted)
+                        Text(verbatim: readPathText(health))
+                            .font(.system(size: 10))
+                            // 读不出东西的那一行要**看得出来**(黄色), 否则"能读"和"只能看图"
+                            // 在列表里长得一样 —— 而它们能不能动手, 差的是整整一档。
+                            .foregroundStyle(ComputerSettings.unaddressable(health: health,
+                                                                           hasVision: shootable)
+                                             ? CodexTheme.toolRunning : CodexTheme.textMuted)
                     }
                 }
-                // 「靠什么读」= **只读标注, 不是开关**。
-                // 用户判断不了"这个 App 的 AX 有 42 行还是 3 行", 让他选等于让他替我做技术
-                // 选型; 而选错的后果不对称(选纯视觉去动 = 点错且无撤销) ⇒ 由后台按 App 现判,
-                // 这里只把结果写出来。用大白话, 不出现 AX / OCR 这些词。
-                HStack(spacing: 5) {
-                    Text(verbatim: app.bundle)
+                Spacer(minLength: 0)
+                // 两档权限**正交但有序**: 操作面必须在读面之下 —— 没勾读时"可操作"整格灰掉，
+                // 而不是"勾了之后悄悄帮你把读也勾上"(那会让人以为自己只开了一档)。
+                Toggle(L("可读"), isOn: Binding(get: { readable },
+                                               set: { _ in computer.toggle(app.bundle) }))
+                    .toggleStyle(.checkbox)
+                    // 上次读爆了 ⇒ **不许再勾上**(勾了也只是再等一次 12 秒);
+                    // 但已经勾着的仍可取消 —— 否则人想去掉它都去不掉。
+                    .disabled(!readable && blocked)
+                // 第三档: **视觉**（原「图片」, 2026-11-10 boss 改名）。
+                //
+                // ⚠️ 它**不依附于「可读」**: 这一档管的是"允许我看它的屏幕", 而看屏幕不需要 AX
+                //    树 —— 微信那种 AX 恒为 0 行的 App, 挂着 `disabled(!readable)` 就等于永远勾不上,
+                //    而它恰恰是唯一能用的那条路。
+                // ⚠️ 勾上之后才允许走「ax视觉 / 纯视觉」两种读法: 一条是用 AX 树当骨架、图只补
+                //    颜色与图标; 一条是纯粹看图数编号。由后台按 App 现判(见 `readPathText`),
+                //    不让人选 —— 选错的代价不对称(纯视觉去动 = 点错且无撤销)。
+                if mayShoot {
+                    Toggle(L("视觉"), isOn: Binding(get: { shootable },
+                                                   set: { computer.setImage(app.bundle, $0) }))
+                        .toggleStyle(.checkbox)
+                        .help(L("开了它我才能看这个应用的屏幕：文字读不出来时按图数编号, 文字读得出时图只用来补颜色和图标。默认关, 因为截图带的是整个窗口的像素"))
+                } else {
+                    Text(L("不可截图"))
                         .font(.system(size: 10))
                         .foregroundStyle(CodexTheme.textMuted)
-                    Text(verbatim: "·")
+                        .help(L("口令 / 系统设置类应用: 一张都不拍 —— 像素会绕过输入框的遮蔽"))
+                }
+                if mayAct {
+                    // ⚠️ 两个前提, 缺一不可:
+                    //    ① **有一条能给编号的路** —— 读 AX 或 视觉, 都没有时勾了也是空的
+                    //       (2026-11-10 起这两个是并列的两条来源, 不再是"读 ⊃ 视觉");
+                    //    ② 上次读出来 0 行**且没勾视觉** ⇒ 没有可寻址的东西。
+                    //    做不到的事不给勾, 比勾了之后失败好(同"只列量过的应用")。
+                    let dead = ComputerSettings.unaddressable(health: health, hasVision: shootable)
+                    let sourced = readable || shootable
+                    Toggle(L("可操作"), isOn: Binding(get: { actable },
+                                                    set: { computer.setAct(app.bundle, $0) }))
+                        .toggleStyle(.checkbox)
+                        .disabled(!sourced || dead)
+                        .help(!sourced ? L("先给它一条读法：勾「可读」或「视觉」—— 没有编号就没有能点的东西")
+                              : dead ? L("上次读出来 0 行 —— 这个应用没有可寻址的东西, 勾了也动不了")
+                              : "")
+                } else {
+                    // ⚠️ 口令/系统类应用占**同一个位置**的禁用态，而不是干脆不显示:
+                    //    不显示的话用户会以为"这批功能不支持这个 App"，于是去别处找开关。
+                    Text(L("不可操作"))
                         .font(.system(size: 10))
                         .foregroundStyle(CodexTheme.textMuted)
-                    Text(verbatim: readPathText(health))
-                        .font(.system(size: 10))
-                        // 读不出东西的那一行要**看得出来**(黄色), 否则"能读"和"只能看图"
-                        // 在列表里长得一样 —— 而它们能不能动手, 差的是整整一档。
-                        .foregroundStyle(ComputerSettings.unaddressable(health: health,
-                                                                       hasVision: shootable)
-                                         ? CodexTheme.toolRunning : CodexTheme.textMuted)
+                        .help(L("口令 / 系统设置类应用: 只读, 永远不给操作权限"))
                 }
             }
-            Spacer(minLength: 0)
-            // 两档权限**正交但有序**: 操作面必须在读面之下 —— 没勾读时"可操作"整格灰掉，
-            // 而不是"勾了之后悄悄帮你把读也勾上"(那会让人以为自己只开了一档)。
-            Toggle(L("可读"), isOn: Binding(get: { readable },
-                                           set: { _ in computer.toggle(app.bundle) }))
-                .toggleStyle(.checkbox)
-                // 上次读爆了 ⇒ **不许再勾上**(勾了也只是再等一次 12 秒);
-                // 但已经勾着的仍可取消 —— 否则人想去掉它都去不掉。
-                .disabled(!readable && blocked)
-            // 第三档: **视觉**（原「图片」, 2026-11-10 boss 改名）。
-            //
-            // ⚠️ 它**不依附于「可读」**: 这一档管的是"允许我看它的屏幕", 而看屏幕不需要 AX
-            //    树 —— 微信那种 AX 恒为 0 行的 App, 挂着 `disabled(!readable)` 就等于永远勾不上,
-            //    而它恰恰是唯一能用的那条路。
-            // ⚠️ 勾上之后才允许走「ax视觉 / 纯视觉」两种读法: 一条是用 AX 树当骨架、图只补
-            //    颜色与图标; 一条是纯粹看图数编号。由后台按 App 现判(见 `readPathText`),
-            //    不让人选 —— 选错的代价不对称(纯视觉去动 = 点错且无撤销)。
-            if mayShoot {
-                Toggle(L("视觉"), isOn: Binding(get: { shootable },
-                                               set: { computer.setImage(app.bundle, $0) }))
-                    .toggleStyle(.checkbox)
-                    .help(L("开了它我才能看这个应用的屏幕：文字读不出来时按图数编号, 文字读得出时图只用来补颜色和图标。默认关, 因为截图带的是整个窗口的像素"))
-                // ⚠️ 风险必须**常驻**, 不能只写在 `.help()` 里(悬停才看见)也不能只写在设计文档里。
-                //    这一档在微信这种 AX 恒空的 App 上**没有语义闸** —— 第十三道"恒拒词"闸读不到
-                //    文字就永远不命中 ⇒ 那个 App 上剩下的只有"授权 + 前台 + 人静 + 窗口没挪"。
-                //    后果不是"点歪了看得见", 而是"凭坐标点 + 往焦点里写字 + 回车能发出一条撤不回
-                //    的消息"。只在勾着的时候显示: 没勾就没有这个风险, 文字也不该常驻在那儿。
-                if shootable {
-                    Text(L("⚠️ 这一档没有语义闸: 读不出文字时我只能凭坐标点、往焦点里写字 —— 点错当场发生, 回车发出去的消息撤不回"))
+            // ⚠️ 风险必须**常驻**, 不能只写在 `.help()` 里(悬停才看见)也不能只写在设计文档里。
+            //    这一档在微信这种 AX 恒空的 App 上**没有语义闸** —— 第十三道"恒拒词"闸读不到
+            //    文字就永远不命中 ⇒ 那个 App 上剩下的只有"授权 + 前台 + 人静 + 窗口没挪"。
+            //    后果不是"点歪了看得见", 而是"凭坐标点 + 往焦点里写字 + 回车能发出一条撤不回
+            //    的消息"。只在勾着的时候显示: 没勾就没有这个风险, 文字也不该常驻在那儿。
+            //    **形状**: 一行小字挂在开关行下方(不再横插进三列之间), 全文进 tooltip ——
+            //    既保住常驻, 又不让文案长度决定列宽; 勾着的那一档正下方也才看得懂"说的是它"。
+            if mayShoot, shootable {
+                HStack(alignment: .firstTextBaseline, spacing: 4) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .font(.system(size: 9))
+                        .foregroundStyle(CodexTheme.toolRunning)
+                    Text(L("读不出文字：只能凭坐标点，回车发出去的消息撤不回"))
                         .font(.system(size: 10))
                         .foregroundStyle(CodexTheme.textMuted)
                         .fixedSize(horizontal: false, vertical: true)
-                        .padding(.top, 2)
                 }
-            } else {
-                Text(L("不可截图"))
-                    .font(.system(size: 10))
-                    .foregroundStyle(CodexTheme.textMuted)
-                    .help(L("口令 / 系统设置类应用: 一张都不拍 —— 像素会绕过输入框的遮蔽"))
-            }
-            if mayAct {
-                // ⚠️ 两个前提, 缺一不可:
-                //    ① **有一条能给编号的路** —— 读 AX 或 视觉, 都没有时勾了也是空的
-                //       (2026-11-10 起这两个是并列的两条来源, 不再是"读 ⊃ 视觉");
-                //    ② 上次读出来 0 行**且没勾视觉** ⇒ 没有可寻址的东西。
-                //    做不到的事不给勾, 比勾了之后失败好(同"只列量过的应用")。
-                let dead = ComputerSettings.unaddressable(health: health, hasVision: shootable)
-                let sourced = readable || shootable
-                Toggle(L("可操作"), isOn: Binding(get: { actable },
-                                                set: { computer.setAct(app.bundle, $0) }))
-                    .toggleStyle(.checkbox)
-                    .disabled(!sourced || dead)
-                    .help(!sourced ? L("先给它一条读法：勾「可读」或「视觉」—— 没有编号就没有能点的东西")
-                          : dead ? L("上次读出来 0 行 —— 这个应用没有可寻址的东西, 勾了也动不了")
-                          : "")
-            } else {
-                // ⚠️ 口令/系统类应用占**同一个位置**的禁用态，而不是干脆不显示:
-                //    不显示的话用户会以为"这批功能不支持这个 App"，于是去别处找开关。
-                Text(L("不可操作"))
-                    .font(.system(size: 10))
-                    .foregroundStyle(CodexTheme.textMuted)
-                    .help(L("口令 / 系统设置类应用: 只读, 永远不给操作权限"))
+                .help(L("这一档没有语义闸：读不出文字时我只能凭坐标点、往焦点里写字 —— 点错当场发生，回车发出去的消息撤不回"))
             }
         }
         // ⚠️ 总开关关着时勾不了: 否则会出现"勾了但这一轮并没开放"，而界面上没有任何地方

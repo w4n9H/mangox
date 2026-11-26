@@ -48,8 +48,29 @@ struct ChatComposer: View {
 
     // MARK: - Choose project pill (左对齐, 紧贴输入卡)
 
+    /// ⚠️ 数据源必须是 `store.activeProject` —— 它会**跟随选中会话的归属**。
+    ///    第一版这里自己拼的是 `projects.first { $0.id == selectedProjectId }`，
+    ///    而 `selectedProjectId` 只在"从菜单里点过"才有值 ⇒ 从侧栏点进一个项目会话时，
+    ///    pill 仍然写着「选择项目」（2026-11-26 实拍）。
+    private var currentProject: ProjectGroup? { store.activeProject }
+
     private var currentProjectName: String {
-        store.projects.first { $0.id == store.selectedProjectId }?.title ?? Copy.chooseProjectFallback
+        currentProject?.title ?? Copy.homeDirLabel
+    }
+
+    /// 目录路径的短形式（家目录缩成 `~`）。跟着名字显示 —— 同名项目靠它才分得清。
+    /// 无项目会话固定写 `~`：那时引擎的 cwd 就是家目录（`PiRpcTransport.swift:2870` 的
+    /// `desiredCwd ?? NSHomeDirectory()`），写别的都是在骗人。
+    private var currentProjectPathLabel: String? {
+        if let path = currentProject?.path, !path.isEmpty {
+            return (path as NSString).abbreviatingWithTildeInPath
+        }
+        return currentProject == nil ? "~" : nil
+    }
+
+    /// 有项目 = 文件夹；无项目 = 房子。图标比文字更早被看到，所以两者都要变。
+    private var currentProjectIcon: String {
+        currentProject == nil ? "house" : "folder"
     }
 
     private var projectPill: some View {
@@ -57,8 +78,8 @@ struct ChatComposer: View {
             Button(Copy.chooseProjectMenu) { store.selectedProjectId = nil }
             Divider()
             Button("新建项目（选择目录）…") { pickNewProjectDirectory() }
-            if store.selectedProjectId != nil {
-                Button("为「\(currentProjectName)」设置目录…") { pickProjectDirectory(for: store.selectedProjectId!) }
+            if let cur = currentProject {
+                Button("为「\(cur.title)」设置目录…") { pickProjectDirectory(for: cur.id) }
             }
             Divider()
             ForEach(store.projects) { project in
@@ -66,18 +87,26 @@ struct ChatComposer: View {
             }
         } label: {
             HStack(spacing: 5) {
-                Image(systemName: "folder")
+                Image(systemName: currentProjectIcon)
                     .font(.system(size: 10))
                     .foregroundStyle(CodexTheme.textTertiary)
                 Text(currentProjectName)
                     .font(CodexTheme.fontSmall)
                     .foregroundStyle(CodexTheme.textSecondary)
+                if let pathLabel = currentProjectPathLabel {
+                    Text(pathLabel)
+                        .font(CodexTheme.fontSmall)
+                        .foregroundStyle(CodexTheme.textTertiary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)   // 长路径砍中间，首尾两端（父目录 + 末级）都留着
+                }
                 Spacer()
             }
             .contentShape(Rectangle())
         }
         .menuStyle(.borderlessButton)
         .menuIndicator(.hidden)
+        .help(currentProject?.path ?? currentProjectName)   // 完整路径给 tooltip，pill 里只放缩写
         // 通栏浅灰圆角条 (对齐 Codex); 样式必须挂 Menu 外层, label 内部会被菜单样式吞掉
         .padding(.horizontal, Tune.projectPillHPadding)
         .padding(.vertical, Tune.projectPillVPadding)
