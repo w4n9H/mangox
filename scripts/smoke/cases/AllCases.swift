@@ -35,6 +35,7 @@ extension SmokeMain {
             caseFollowBeats,
             caseFoldRule,
             caseTimeline,
+            caseKnowledgeWeight,
             caseTurnBill,
             caseChatScroll,
             caseChatComposer,

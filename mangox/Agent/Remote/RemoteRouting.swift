@@ -58,16 +58,23 @@ struct RemoteRouteInput: Equatable {
 enum RemoteCommand: Equatable {
     case approve
     case dismiss
+    /// 「这件事结束了」—— 作废这个助理名下还等着叫的回看（2026-11-26）。
+    case stopFollowUps
 
     /// 批准。**刻意不含「可以」**：那一句在聊天里太常见，且它不等于"按这份方案去做"。
     static let approveWords: Set<String> = ["同意", "批准", "执行", "采纳", "ok", "yes", "approve"]
     /// 搁置。
     static let dismissWords: Set<String> = ["先别动", "忽略", "搁置", "不批准", "算了", "no", "dismiss"]
+    /// 叫停回看。**整句匹配**（同上面两组）—— 「不用再问了」是能把话说清的最短形式；
+    /// 含「结束」「搞定」这类词的日常句子太多，不做 contains 判据。
+    static let stopWords: Set<String> = ["这件事结束了", "这个结束了", "不用再问了",
+                                         "不用跟了", "别跟了", "已经搞定了"]
 
     static func parse(_ text: String) -> RemoteCommand? {
         let t = text.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         if approveWords.contains(t) { return .approve }
         if dismissWords.contains(t) { return .dismiss }
+        if stopWords.contains(t) { return .stopFollowUps }
         return nil
     }
 }
@@ -90,6 +97,8 @@ enum RemoteRoute: Equatable {
     case noPending
     /// 他想批的那条**没有方案**（那是一条提问 / 通报）—— 执行不了，得说清楚。
     case noPlan
+    /// 「这件事结束了」：作废这个助理名下还等着叫的回看（2026-11-26）。
+    case stopFollowUps(taskId: UUID)
 
     static func decide(_ i: RemoteRouteInput) -> RemoteRoute {
         if i.duplicate { return .ignore("duplicate") }
@@ -106,13 +115,20 @@ enum RemoteRoute: Equatable {
         // "执行没起来（回合还在跑）"，而不是"上一个回合还在跑，等它结束再发" —— 后者
         // 会让他以为**同意这件事本身**没被收到。
         if let cmd = RemoteCommand.parse(i.inbound.text) {
-            guard let fid = i.pendingFinding else { return .noPending }
+            // ⚠️ 每个指令各自判"它需要的前提"，**不再统一过 `pendingFinding`**（2026-11-26）：
+            //    「这件事结束了」说的是**回看**，与"手上有没有等着批的结论"毫无关系 ——
+            //    共用一个 `guard let fid` 会让他在没有待批结论时收到一句"现在没有等你批的事"，
+            //    而他根本没在批什么东西。
             switch cmd {
             case .approve:
+                guard let fid = i.pendingFinding else { return .noPending }
                 guard i.pendingHasPlan else { return .noPlan }
                 return .approve(taskId: taskId, findingId: fid)
             case .dismiss:
+                guard let fid = i.pendingFinding else { return .noPending }
                 return .dismiss(taskId: taskId, findingId: fid)
+            case .stopFollowUps:
+                return .stopFollowUps(taskId: taskId)
             }
         }
         guard !i.sessionBusy else { return .busy(taskId: taskId) }

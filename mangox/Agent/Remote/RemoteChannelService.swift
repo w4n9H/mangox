@@ -456,6 +456,19 @@ final class RemoteChannelService: ObservableObject {
         case .dismiss(_, let findingId):
             store.setFindingStatus(findingId, status: .dismissed)
             notice(inbound, L("已搁置（那条结论本身还在 App 里）。"), force: true)
+        case .stopFollowUps(let taskId):
+            // 两件事都要做，缺一件就还是坏的（2026-11-26）:
+            //   ① **作废**还等着叫的回看 —— 不做，那条约定照旧到点把人叫起来问一遍已经解决的事；
+            //   ② 把这句原话**照旧投给助理** —— 不投，它下一轮 cron 里看不到"用户说结束了"，
+            //      会把同一件事重新约一遍，于是这个病只是晚几天复发。
+            // 顺序: 先作废再投递。反过来的话，投出去那一轮自己约的新回看会被紧接着的作废扫掉。
+            let task = store.scheduler.scheduledTasks.first { $0.id == taskId }
+            let n = store.scheduler.cancelPendingFollowUps(
+                taskId: taskId, note: SchedulerService.feishuStopNote, sid: task?.logSessionId)
+            Log.event("feishu-stop-followups", ["task": String(taskId.uuidString.prefix(8)),
+                                                "n": String(n)])
+            deliver(taskId: taskId, prompt: inbound.text.trimmingCharacters(in: .whitespacesAndNewlines),
+                    chatId: inbound.chatId, botId: inbound.botId)
         case .deliver(let taskId, let prompt):
             deliver(taskId: taskId, prompt: prompt,
                     chatId: inbound.chatId, botId: inbound.botId)

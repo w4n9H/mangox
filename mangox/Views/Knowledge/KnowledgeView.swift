@@ -322,6 +322,15 @@ struct KnowledgeView: View {
                     text: String(format: L("常驻超限: %lld 条未进本轮 prompt (按 priority 从低到高降级): %@"),
                                  titles.count, namesBrief(titles)),
                     help: L("去调 priority, 或把它改成「需要时才查」"))
+            case .residentHeavy(let chars, let total):
+                // 两个数一起说: 单说"4200 字"没有参照, 单说占比又看不出绝对量。
+                // ⚠️ 措辞不许写成"超预算" —— 它没超, 恰恰是**都进去了**才有的问题;
+                //    写成超预算会把人引去做降级(那是 overflow 的解法), 而他该做的是改按需。
+                return WarningLine(
+                    id: "residentHeavy",
+                    text: String(format: L("每轮都在场: 常驻知识 %lld 字, 本轮注入共 %lld 字"),
+                                 chars, total),
+                    help: L("它们没超预算、也没被丢掉 —— 只是每一轮都会被读一遍。把不常用到的改成「需要时才查」，它就不再整篇进场"))
             case .onDemandPackFiles(let files):
                 // §3.2: 这类文件**不进 prompt 是对的**, 病在于它们同时进不了索引 ⇒ 对模型隐形。
                 // 所以措辞不许写成"不注入" (那听着正常), 必须点破"模型不知道它存在"。

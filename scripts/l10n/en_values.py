@@ -478,6 +478,12 @@ VALUES = {
     '常驻超限: %lld 条未进本轮 prompt (按 priority 从低到高降级): %@': "Over resident budget: %lld items skipped this turn's prompt (lowest priority dropped first): %@",
     '%lld 条与 persona pack 的 key 冲突, 已跳过注入: %@': '%lld items collide with a persona pack key and were skipped: %@',
     '去调 priority, 或把它改成「需要时才查」': 'Raise its priority, or switch it to “On demand”',
+    # 2026-11-26: 常驻条目太重的建议条（不是闸 —— 注入照旧）。措辞刻意不写"超预算"，
+    # 那会把人引去做降级，而他该做的是改按需。
+    '每轮都在场: 常驻知识 %lld 字, 本轮注入共 %lld 字': 'Always in the room: %lld chars of resident knowledge out of %lld injected this turn',
+    '它们没超预算、也没被丢掉 —— 只是每一轮都会被读一遍。把不常用到的改成「需要时才查」，它就不再整篇进场': 'Nothing overflowed and nothing was dropped — they are simply read again every single turn. Switch the rarely used ones to “On demand” and they stop coming in whole',
+    # 2026-11-26: 状态栏那格的 tooltip —— `↑/↓` 是进程内的数, 这个数是跨重启的。
+    '今日这一场已用 %lld token（这一轮的量逐轮落库，重启后仍在）': '%lld tokens spent in this conversation today (every turn is recorded, so it survives a restart)',
 
     # ---- P11.2a: persona pack 只读面 + 组装自检 ----
     # 自检告警 (①稳定段缺条 / ③静默丢弃 / ⑤persona 不在偏移 0)

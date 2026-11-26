@@ -144,5 +144,35 @@ extension SmokeMain {
                              textMsg("跑完了")]
         check(TurnBillBuilder.bill(group: withoutParent, elapsed: nil, root: root).calls == 1,
               "T-BILL 反例: 没 parentId 的同一条 bash 照样计数 (钉住上一条不是假绿)")
+
+        // ⑪ 落痕（2026-11-26）: 一轮一行, 重启后仍读得出来。
+        //    ⚠️ 判据读**每一轮各自的量**而不是汇总: 汇总对得上也可能是把某一行算了两遍,
+        //    而"我这两轮各花了多少"正是这个功能要回答的问题。
+        let dir = fixtureDir("turnbill")
+        guard let db = try? PersistenceStore(path: dir + "/bill.db") else {
+            check(false, "T-BILL ⑪前置: 库能打开"); return
+        }
+        // ⚠️ `init` **不建表**（只开连接）—— 不调 `migrate()` 的话第一条 INSERT 会报
+        // "no such table"，而 `try?` 会把它吞成"读到空"。这正是本用例第一版踩的坑。
+        try? db.migrate()
+        let sid = UUID()
+        let t0 = Date(timeIntervalSince1970: 1_800_000_000)
+        let t1 = t0.addingTimeInterval(600)
+        // 写失败**不许被 `try?` 吞掉**: 吞掉之后这条判据只知道"读到空", 而不知道为什么。
+        var writeErr = "none"
+        do { try db.recordTurnTokens(sessionId: sid, startedAt: t0, tokens: 1_200) }
+        catch { writeErr = "\(error)" }
+        try? db.recordTurnTokens(sessionId: sid, startedAt: t1, tokens: 3_400)
+        let rows = (try? db.turnTokenRows(sessionId: sid, since: t0.addingTimeInterval(-1))) ?? []
+        let sum = (try? db.sumTurnTokens(sessionId: sid, since: t0.addingTimeInterval(-1))) ?? 0
+        check(rows.map(\.tokens) == [1_200, 3_400] && sum == 4_600,
+              "T-BILL ⑪两轮各落一行、按时间升序、合计 = 两者之和 (实测 \(rows.map(\.tokens)) / 合计 \(sum) / 写错 \(writeErr))")
+        // 同一轮再来一次（落定点重入 / 重放）⇒ **覆盖**, 不是再加一遍。
+        // 累加的话, 一次重放就能让"这一轮花了多少"凭空翻倍, 而屏幕上没有任何东西会变。
+        try? db.recordTurnTokens(sessionId: sid, startedAt: t1, tokens: 3_400)
+        let after = (try? db.turnTokenRows(sessionId: sid, since: t0.addingTimeInterval(-1))) ?? []
+        check(after.count == 2 && after.map(\.tokens) == [1_200, 3_400],
+              "T-BILL ⑪同一轮重放 ⇒ 覆盖而不是累加 (累加 = 一次重放让那一轮凭空翻倍)"
+              + " (实测 \(after.map(\.tokens)))")
     }
 }

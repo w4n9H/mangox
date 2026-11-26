@@ -7,7 +7,7 @@
    **本文件由 scripts/l10n/gen_strings.py --write 生成, 别手改** ——
    译文改 scripts/l10n/en_values.py 的 VALUES, 再跑 --write。
 
-   条数: 1219
+   条数: 1222
 */
 
 " (值:\"%@\")" = " (value: %@)";
@@ -269,6 +269,7 @@
 "今天做点什么？" = "What should we do today?";
 "今日已用 %lld" = "Used today: %lld";
 "今日已约 %lld 次" = "%lld booked today";
+"今日这一场已用 %lld token（这一轮的量逐轮落库，重启后仍在）" = "%lld tokens spent in this conversation today (every turn is recorded, so it survives a restart)";
 "仍然覆盖" = "Overwrite anyway";
 "从待处理里移除（不是解决 —— 结论本身留着）" = "Remove from the pending list (this does not resolve it — the finding stays)";
 "从托管区删除" = "Remove from managed area";
@@ -523,6 +524,7 @@
 "它一个动作都不提供" = "it offers no actions at all";
 "它一个自定义动作都没有" = "it declares no custom actions at all";
 "它们不进 prompt, 也进不了笔记索引 (pack 目录不在任何根的扫描路径下)。把内容写成一篇笔记即可" = "They enter neither the prompt nor the notes index (the pack directory is outside every root scan path). Write the content as a note instead";
+"它们没超预算、也没被丢掉 —— 只是每一轮都会被读一遍。把不常用到的改成「需要时才查」，它就不再整篇进场" = "Nothing overflowed and nothing was dropped — they are simply read again every single turn. Switch the rarely used ones to “On demand” and they stop coming in whole";
 "它攒的" = "It gathered this";
 "它支持的是：" = "it offers ";
 "它有的是：" = "what it does declare: ";
@@ -878,6 +880,7 @@
 "每小时" = "Hourly";
 "每轮把进展留在工作日志里，下一轮接着它干" = "Each run leaves its progress in the work log; the next run picks up from there";
 "每轮最多约 1 条。约来的那一轮照常算进日预算。" = "At most one booking per run. The run it wakes up still counts against the daily token budget.";
+"每轮都在场: 常驻知识 %lld 字, 本轮注入共 %lld 字" = "Always in the room: %lld chars of resident knowledge out of %lld injected this turn";
 "每轮都带上" = "Every turn";
 "每轮都带上 %lld 条 · %lld 字 / %lld 字" = "%lld every turn · %lld / %lld chars";
 "永久删除" = "Erase";

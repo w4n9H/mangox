@@ -330,6 +330,35 @@ final class ChatStore: ObservableObject {
         turnElapsed[sid]?[messageId]
     }
 
+    /// 今日已花的 token（按会话）。**快照**, 不在 `body` 里查库 —— 一次滚动会求值几十次，
+    /// 与 `teamStates` / `sessionStats` 同一条纪律。刷新点只有两个: 一轮落定 + 切会话。
+    @Published private(set) var turnTokensToday: [UUID: Int] = [:]
+
+    /// 从库里重算某会话的今日累计。
+    func refreshTurnTokensToday(sid: UUID) {
+        guard let persistence else { return }
+        let since = Calendar.current.startOfDay(for: Date())
+        turnTokensToday[sid] = (try? persistence.sumTurnTokens(sessionId: sid, since: since)) ?? 0
+    }
+
+    /// 一轮的 token 数落痕（2026-11-26）。
+    ///
+    /// ⚠️ **口径与轮末账单同源**: 直接调 `TurnBillBuilder.bill(...)`，不在这里另写一遍
+    /// `reduce`。两处各算一份的后果是——屏幕上那个数与库里那个数**各自都"对得上"**，
+    /// 但彼此不等，而没有任何一处会报错（比只有一个数更糟）。
+    ///
+    /// 时间轴判据用 `turnStart` 而不是"这一轮的消息集合": 落定点手里只有 projection，
+    /// 而 projection 是**整场会话**（同 `recordScheduledUsage` 的理由）。
+    private func recordTurnTokens(sid: UUID, turnStart: Date?, projection: [ChatMessage]) {
+        guard let turnStart, let persistence else { return }
+        let group = projection.filter { $0.timestamp >= turnStart }
+        guard !group.isEmpty else { return }
+        let tokens = TurnBillBuilder.bill(group: group, elapsed: nil, root: nil).tokens
+        guard tokens > 0 else { return }
+        try? persistence.recordTurnTokens(sessionId: sid, startedAt: turnStart, tokens: tokens)
+        refreshTurnTokensToday(sid: sid)
+    }
+
     /// 落定点记一笔耗时。挂载点是「该轮最后一条 assistant 正文」——判据与视图侧**同源**
     /// （`ChatView.projectedChat` 里挑账单宿主用的是同一条件），否则账会挂在一条看不见的行上。
     private func noteTurnElapsed(sid: UUID, projection: [ChatMessage], seconds: TimeInterval) {
@@ -769,6 +798,9 @@ final class ChatStore: ObservableObject {
                allConversations.contains(where: { $0.id == last }) {
                 selectedConversationId = last
                 messages = replayMessages(for: last)
+                // 2026-11-26: 启动时把今日 token 快照读一次 —— 不读的话状态栏那格会在
+                // 第一轮之前一直显示 0（而它明明有钱已经花出去了）。
+                refreshTurnTokensToday(sid: last)
                 if let cfg = store.loadSessionConfig(id: last) {
                     applySessionConfig(cfg)
                 } else if let def = appDefaultConfig {
@@ -1601,6 +1633,7 @@ final class ChatStore: ObservableObject {
         }
         loadMessagesForSwitch(id)
         markLastSession()
+        refreshTurnTokensToday(sid: id)   // 2026-11-26: 状态栏那格跟着会话走
         syncWorkspaceContext()   // 选中会话变化 → 工作区上下文跟随 (P3.4)
         // P6.1.2: 过程态跟随选中会话 (在途 = streaming 粗粒度; 精细相位仅前台会话事件归并)
         runtimePhase = runningTurns.contains(id) ? .streaming : .idle
@@ -3143,6 +3176,8 @@ extension ChatStore: AgentTransportDelegate {
                 // 轮末账单的耗时记账 —— 必须赶在 `liveTurns[sid] = nil` 之前（下面几行就地清镜像）。
                 // 只记实测值；手动停止那条路 `elapsed` 是 nil（turnStartAt 已被清）⇒ 不记，账单少一格。
                 noteTurnElapsed(sid: sid, projection: proj, seconds: elapsed)
+                // 2026-11-26: 这一轮花了多少 —— 落痕（状态栏那格与"回看"都读它）。
+                recordTurnTokens(sid: sid, turnStart: turnStart, projection: proj)
                 // P19 S7: 日预算的事实来源。放在这里而不另找落定点: 同一份 projection、
                 // 同一个"镜像还没清"的窗口 —— 下面几行就把 `liveTurns[sid]` 清掉了。
                 scheduler.recordScheduledUsage(sid: sid, turnStart: turnStart, projection: proj)

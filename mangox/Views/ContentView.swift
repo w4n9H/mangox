@@ -201,7 +201,9 @@ struct ContentView: View {
                     }
                     BottomStatusBar(phase: store.runtimePhase,
                                     turnCount: store.currentTurnCount,
-                                    stats: store.sessionStats)
+                                    stats: store.sessionStats,
+                                    todayTokens: store.selectedConversationId
+                                        .flatMap { store.turnTokensToday[$0] } ?? 0)
                 }
                 // P10.8b: 底档整块用**内容面** —— 这段是"正文坐的纸"，不是页面底。
                 // 页面底 (bgChat) 只留给顶栏与面板最外圈；正文/轨迹/状态栏都在这层之上。

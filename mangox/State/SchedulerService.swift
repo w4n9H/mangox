@@ -1211,6 +1211,41 @@ final class SchedulerService: ObservableObject {
         return spool
     }
 
+    /// 飞书上叫停时落进 `note` 的那句话。**恒中文**（本文件在 L10n 的 `EXCLUDE_FILES` 里，
+    /// 落库文案不本地化）。放在这里而不是调用现场: `RemoteChannelService` 不在排除名单里,
+    /// 在那儿写中文字面量会让三道 l10n 门当场变红。
+    static let feishuStopNote = "用户在飞书上说这件事结束了"
+
+    /// 作废某任务名下**所有还等着叫的**约定（2026-11-26）。
+    ///
+    /// 为什么要有这个: 在这之前 `cancelled` 只有两个产生者 —— "任务被删除"与"任务被停用"
+    /// （见 `fireDueFollowUps`）。用户说一句「这件事搞定了」**不会**作废任何约定，于是
+    /// 几天后它还照旧到点把人叫起来问一遍已经解决了的事 —— 那正是"主动性"最坏的一种表现
+    /// （要被追问的人重新交代一次现状）。
+    ///
+    /// ⚠️ **只动 `pending`**。`fired` 是"已经叫过一轮"这个事实，`missed` 是"试了三次没起来"，
+    /// 两个都是**已经发生过的历史** —— 回滚它们等于改写历史，而人回头看时间线时会找不到
+    /// 那几轮到底还在不在。作废的语义只有"将来不要再叫"，不包含"把过去撤销"。
+    ///
+    /// - Returns: 真的作废了几条（0 = 本来就没有排着的，调用方据此决定怎么回话）。
+    @discardableResult
+    func cancelPendingFollowUps(taskId: UUID, note: String, sid: UUID? = nil) -> Int {
+        guard let p = store?.persistence else { return 0 }
+        let pending = (try? p.loadFollowUps(taskId: taskId, status: .pending)) ?? []
+        guard !pending.isEmpty else { return 0 }
+        for f in pending {
+            try? p.settleFollowUp(id: f.id, status: .cancelled, firedAt: nil, note: note)
+        }
+        reloadFollowUps()
+        if let sid {
+            appendTimeline("── 作废了 \(pending.count) 条回看：\(note) ──", to: sid)
+        }
+        Log.event("follow-up-cancel", ["task": String(taskId.uuidString.prefix(8)),
+                                       "n": String(pending.count)])
+        return pending.count
+    }
+
+
     /// 一轮结束时把 spool 收进 `agent_followups`，然后删掉 spool。
     ///
     /// 两条路都要收: **落定**（`agentSettled`）与**手动停**（`stopTurn`）——「跑不完不算失败」，
@@ -1232,8 +1267,18 @@ final class SchedulerService: ObservableObject {
             return
         }
         guard let text = try? String(contentsOfFile: ctx.spool, encoding: .utf8) else { return }
-        let parsed = FollowUpSpool.parse(text)
+        let batch = FollowUpSpool.parseBatch(text)
         let now = Date()
+        // ── 作废 **先于** 新约（2026-11-26）──
+        // 顺序不是随便排的: 同一轮里写"原来的不用了，改看另一件事"是合法写法；反过来的话
+        // 新约那条会先插进去、紧接着被自己的作废扫掉 —— 表现是"它说约好了，到点没人叫它"。
+        // ⚠️ 作废**不吃三道配额闸**（它不产生唤醒）。吃掉一条配额等于让"叫停"这件事
+        //    在"今天已经约满"的那天变成不可能 —— 而那恰恰是最该叫停的时候。
+        for c in batch.cancels {
+            _ = cancelPendingFollowUps(taskId: ctx.taskId,
+                                       note: "用户说这件事结束了：" + c.why,
+                                       sid: sid)
+        }
         // ── 三道配额闸，全部**只在 App 侧判**（扩展不知道今天用了多少、也不该知道）──
         //  ① 每轮最多 `followUpsPerTurn` 条：一轮里写出两个以上的未来时刻 = 它在给自己排班；
         //  ② 每天最多 `effectiveFollowUpsPerDay` 条：人手里那个旋钮，拦"每轮都约"；
@@ -1246,9 +1291,9 @@ final class SchedulerService: ObservableObject {
         var pending = (try? p.pendingFollowUpCount(taskId: ctx.taskId)) ?? 0
         var inThisTurn = 0
         var added: [FollowUp] = []
-        var problems = parsed.rejects.map { "第 \($0.line) 行: \($0.reason)" }
+        var problems = batch.rejects.map { "第 \($0.line) 行: \($0.reason)" }
         var duplicates = 0
-        for r in parsed.items {
+        for r in batch.items {
             guard inThisTurn < Self.followUpsPerTurn else {
                 problems.append("一轮只能约 \(Self.followUpsPerTurn) 条（这一轮后面那几条没记上）")
                 continue

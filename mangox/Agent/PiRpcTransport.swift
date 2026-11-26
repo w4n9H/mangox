@@ -998,7 +998,11 @@ final class PiRpcTransport: AgentTransport {
     nonisolated static let followUpEnvKey = "MANGOX_FOLLOWUP_SPOOL"
 
     /// 扩展注册出来的工具名（面板展开用；与源码同源同改，同 `dreamToolNames` 那条守）。
-    nonisolated static let followUpToolNames: [String] = ["follow_up"]
+    ///
+    /// 2026-11-26 起是**两个**: 约定 + 作废。两者同生同死（同一个 spool、同一条挂载闸门），
+    /// 所以仍然一个扩展 —— 但**必须分开注册**：模型对"约"和"撤约"的触发条件不同，
+    /// 合成一个工具带 `cancel` 参数，它会在约不上时拿开关当退路。
+    nonisolated static let followUpToolNames: [String] = ["follow_up", "follow_up_cancel"]
 
     /// spool 的**生产形状**: `~/.mangox/followup-spool/`。
     ///
@@ -1151,6 +1155,79 @@ final class PiRpcTransport: AgentTransport {
                             type: "text",
                             text: "Recorded: this task will be woken up about " + String(n) + " minutes after"
                                 + " this run ends. Carrying on now -- nothing is blocked on it.",
+                        }],
+                        details: undefined,
+                    };
+                },
+            });
+
+            // 2026-11-26: 「这件事结束了，别再叫了」。**第二个工具而不是给 follow_up 加一个
+            // cancel 参数**: 一个是"约"，一个是"撤约"，后者不产生唤醒、不吃配额 —— 混在一个
+            // 工具里，模型容易在"约不上"（配额满了）时顺手把参数改成 cancel 蒙过去。
+            //
+            // ⚠️ 触发条件写死成"用户明确说"：它**不是**给模型"我判断目标已达成"用的。
+            //    自动作废会把用户还在等的回看悄悄吞掉，而"少叫一次"这件事用户永远看不见。
+            pi.registerTool({
+                name: "follow_up_cancel",
+                label: "Cancel scheduled follow-ups",
+                description: [
+                    "Cancel the wake-ups you already scheduled for THIS task.",
+                    "",
+                    "Call it ONLY when the user said this is finished or no longer worth following:",
+                    "  - \"this is done\" / \"already handled it\" / \"stop asking me about it\".",
+                    "",
+                    "Do NOT call it because you judge the goal to be met. A wake-up the user still",
+                    "expects is worth far more than one wasted run; silently dropping it means he",
+                    "keeps waiting for something that will never come.",
+                    "",
+                    "why: one line kept on the cancelled wake-ups -- write what the user actually said.",
+                    "You cannot cancel one wake-up by id; this clears all still-waiting ones for this",
+                    "task. Ones that already fired are history and stay.",
+                ].join("\n"),
+                parameters: Type.Object({
+                    why: Type.String({
+                        description: "One line: what the user said that makes this finished.",
+                    }),
+                }),
+
+                async execute(_toolCallId, params, _signal, _onUpdate, _ctx) {
+                    const spool = process.env[SPOOL_ENV];
+                    if (!spool) {
+                        return {
+                            content: [{ type: "text", text: "follow_up_cancel is not available in this session." }],
+                            details: undefined,
+                        };
+                    }
+                    const why = String(params.why || "").trim();
+                    if (!why) {
+                        return {
+                            content: [{
+                                type: "text",
+                                text: "Rejected: why is empty. Write what the user said -- that line is the"
+                                    + " only record of why these wake-ups were dropped. Call again with it.",
+                            }],
+                            details: undefined,
+                        };
+                    }
+                    const line = JSON.stringify({
+                        op: "cancel",
+                        id: randomUUID(),
+                        why: why,
+                    });
+                    try {
+                        mkdirSync(dirname(spool), { recursive: true });
+                        appendFileSync(spool, line + "\n");
+                    } catch (e) {
+                        return {
+                            content: [{ type: "text", text: "Failed to record the cancellation: " + String(e) }],
+                            details: undefined,
+                        };
+                    }
+                    return {
+                        content: [{
+                            type: "text",
+                            text: "Recorded: this task's still-waiting wake-ups are cancelled when this run"
+                                + " ends. Ones that already fired stay in the log as history.",
                         }],
                         details: undefined,
                     };

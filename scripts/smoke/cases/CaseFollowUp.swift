@@ -83,6 +83,22 @@ extension SmokeMain {
               "T-FOLLOWUP ①空 why 拒(醒来时它只有这一句话), 超长截到 \(FollowUpLimit.maxWhyChars) 字"
               + " (实测 \(wItems.first?.why.count ?? -1) 字, 拒 \(wRejects.count) 条)")
 
+        // ①b 作废行（2026-11-26）: 与约定同一份 spool，但**不进约定、不吃配额**。
+        // 四种形状一起喂，因为"分得清两支"才是这条判据的内容:
+        //   合法作废 / 缺 why / op 写错 / **没有 op 的老行**（老扩展写的，必须仍按约定收）。
+        let cancelOK = #"{"op":"cancel","id":"11111111-2222-3333-4444-555555555555","why":"用户说搞定了"}"#
+        let cancelNoWhy = #"{"op":"cancel","id":"11111111-2222-3333-4444-555555555555"}"#
+        let addNoOp = #"{"id":"11111111-2222-3333-4444-555555555555","after_minutes":30,"why":"老扩展写的行"}"#
+        let badOp = #"{"op":"cancelx","id":"11111111-2222-3333-4444-555555555555","why":"x"}"#
+        let mixed = FollowUpSpool.parseBatch([cancelOK, cancelNoWhy, addNoOp, badOp]
+            .joined(separator: "\n"))
+        check(mixed.cancels.count == 1 && mixed.items.count == 1 && mixed.rejects.count == 2
+              && mixed.cancels.first?.why == "用户说搞定了"
+              && mixed.rejects.map(\.line) == [2, 4],
+              "T-FOLLOWUP ①b 作废行走另一支(缺 why 拒、op 写错拒), 而**没有 `op` 的老行仍按约定收**"
+              + " —— 判成坏行会让磁盘上已有的残留一次性全废"
+              + " (实测 作废 \(mixed.cancels.count) / 约定 \(mixed.items.count) / 拒 \(mixed.rejects.count))")
+
         // ══ ② 落库往返 ═════════════════════════════════════════════════════
         let mock = MockTransport()
         mock.scriptedReply = { _ in "NO_FINDING" }
@@ -295,6 +311,45 @@ extension SmokeMain {
         check(left.isEmpty,
               "T-FOLLOWUP ⑤删任务把它的约定一起删 (留着的话 tick 每分钟扫一次指向不存在任务的 pending,"
               + " 实测剩 \(left.count) 条)")
+
+        // ══ ⑥ 叫停: 「这件事结束了」只撤该任务**还等着叫的**（2026-11-26）════════
+        // 三个对象必须同时在场，这条判据才说得清"半径":
+        //   甲 两条 pending（要撤）/ 乙 一条 pending（不许牵连）/ 甲 一条已 fired（历史，不许回滚）。
+        // 少任何一个，"作废得太宽"或"作废得太窄"都测不出来。
+        let stopA = freshAssistant("叫停 甲", perDay: nil)
+        let stopB = freshAssistant("叫停 乙", perDay: nil)
+        let s6 = freshSession("叫停")
+        _ = try? p.insertFollowUpIfAbsent(followUp(120, why: "甲 一", task: stopA.id))
+        _ = try? p.insertFollowUpIfAbsent(followUp(180, why: "甲 二", task: stopA.id))
+        let firedRow = followUp(60, why: "甲 已叫过", task: stopA.id)
+        _ = try? p.insertFollowUpIfAbsent(firedRow)
+        try? p.settleFollowUp(id: firedRow.id, status: .fired, firedAt: now, note: nil)
+        _ = try? p.insertFollowUpIfAbsent(followUp(120, why: "乙 一", task: stopB.id))
+
+        let n6 = store.scheduler.cancelPendingFollowUps(taskId: stopA.id,
+                                                       note: "用户说这件事结束了", sid: s6)
+        let aRows = (try? p.loadFollowUps(taskId: stopA.id)) ?? []
+        let bPending = (try? p.loadFollowUps(taskId: stopB.id, status: .pending)) ?? []
+        let aCancelled = aRows.filter { $0.status == .cancelled }.count
+        let aFired = aRows.filter { $0.status == .fired }.count
+        check(n6 == 2 && aCancelled == 2 && aFired == 1 && bPending.count == 1
+              && timeline(s6).contains("作废了 2 条回看"),
+              "T-FOLLOWUP ⑥叫停只撤该任务**还等着叫的**: 两条 pending 变 cancelled、已 fired 的"
+              + "**仍是历史**、别的任务一条都不牵连、时间线说得出撤了几条"
+              + " (实测 撤 \(n6) / 甲 cancelled \(aCancelled) / 甲 fired \(aFired) / 乙 pending \(bPending.count))")
+
+        // 同一轮里"原来的不用了，改看另一件事" —— 顺序必须是**先撤后约**。
+        // 反过来新的那条会被自己的作废扫掉，表现是"它说约好了，到点没人叫它"。
+        let stopC = freshAssistant("叫停+新约", perDay: nil)
+        _ = try? p.insertFollowUpIfAbsent(followUp(120, why: "旧的", task: stopC.id))
+        let s6b = freshSession("叫停+新约")
+        runFollowUpTurn(owner: stopC, sid: s6b,
+                        lines: [#"{"op":"cancel","id":"\#(UUID().uuidString)","why":"用户说搞定了"}"#,
+                                spoolLine("新的那件事")])
+        let cPending = pendingOf(stopC.id)
+        check(cPending.count == 1 && cPending.first?.why == "新的那件事",
+              "T-FOLLOWUP ⑥同一轮里 撤约 + 新约: 旧的作废、**新约活着**(顺序反了新的会被自己扫掉)"
+              + " (实测 pending \(cPending.map(\.why)))")
 
         PiRpcTransport.followUpSpoolRootOverride = nil
     }

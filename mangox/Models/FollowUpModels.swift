@@ -124,35 +124,76 @@ enum FollowUpSpool {
         let why: String
     }
 
+    /// 一行 = 「这件事结束了，别叫了」（2026-11-26）。
+    ///
+    /// 为什么与 `Request` 分开而不是加一个 `cancel: true` 字段：两者的**配额待遇完全不同** ——
+    /// 约定吃「一轮一条 / 每天 N 条 / 未兑现 3 条」三道闸，作废一条都不吃（它不产生唤醒）。
+    /// 塞进同一个结构，三道闸就得在里面再分叉一次，而那种 if 是这类 bug 的老家。
+    ///
+    /// `id` 照旧是幂等键（扩展侧生成）：收口崩在"落库都落完、文件还没删"之间时，
+    /// 第二次 ingest 会重放这一行 —— 而作废的对象是 `pending` 集合，第二次已经是空集，
+    /// **重复执行一次是安全的**（代价只有时间线上可能多一行，见 `finishFollowUpIfNeeded`）。
+    struct Cancel: Equatable {
+        let id: UUID
+        /// 人原话 / 为什么结束了。落进那条约定的 `note`，三个月后回看时它是唯一线索。
+        let why: String
+    }
+
     /// 被拒的行。**带行号**：人（和日志）要能回到那一行去看模型到底写了什么。
     struct Rejection: Equatable {
         let line: Int
         let reason: String
     }
 
+    /// 一批请求的解析结果。
+    ///
+    /// 单独成结构而不是三元组：`parse` 的两个老消费点（含冒烟里四处解构）都按
+    /// `(items, rejects)` 取，改成三元组会**静默**改变它们的语义位置。
+    struct Batch: Equatable {
+        let items: [Request]
+        let cancels: [Cancel]
+        let rejects: [Rejection]
+    }
+
     /// 逐行解析。空行不是错（尾部换行会造出一行），其余每一行要么产出、要么带行号被拒。
     ///
     /// 纯函数（不碰磁盘、不碰 DB、不读时钟）⇒ 冒烟可以直接喂字符串造反例，不需要真跑一轮。
     static func parse(_ text: String) -> (items: [Request], rejects: [Rejection]) {
+        let batch = parseBatch(text)
+        return (batch.items, batch.rejects)
+    }
+
+    /// 带「作废」的那一版。`op` 缺省 = `add` —— 老扩展写的行**没有这个字段**，
+    /// 把它们判成"形状不对"会让已经在磁盘上的残留文件一次性全废。
+    static func parseBatch(_ text: String) -> Batch {
         var items: [Request] = []
+        var cancels: [Cancel] = []
         var rejects: [Rejection] = []
         for (i, raw) in text.components(separatedBy: "\n").enumerated() {
             let line = raw.trimmingCharacters(in: .whitespacesAndNewlines)
             if line.isEmpty { continue }
             do {
-                items.append(try parseLine(line))
+                switch try classify(line) {
+                case .add(let r):    items.append(r)
+                case .cancel(let c): cancels.append(c)
+                }
             } catch let e as Reject {
                 rejects.append(Rejection(line: i + 1, reason: e.reason))
             } catch {
                 rejects.append(Rejection(line: i + 1, reason: "不是合法的 JSON"))
             }
         }
-        return (items, rejects)
+        return Batch(items: items, cancels: cancels, rejects: rejects)
     }
 
     private struct Reject: Error { let reason: String }
 
-    private static func parseLine(_ line: String) throws -> Request {
+    private enum Line {
+        case add(Request)
+        case cancel(Cancel)
+    }
+
+    private static func classify(_ line: String) throws -> Line {
         guard let data = line.data(using: .utf8),
               let obj = try? JSONSerialization.jsonObject(with: data) else {
             throw Reject(reason: "不是合法的 JSON")
@@ -160,6 +201,31 @@ enum FollowUpSpool {
         guard let dict = obj as? [String: Any] else {
             throw Reject(reason: "不是 JSON 对象")
         }
+        switch (dict["op"] as? String) ?? "add" {
+        case "add":    return .add(try parseLine(dict))
+        case "cancel": return .cancel(try parseCancel(dict))
+        default:       throw Reject(reason: "op 只认 add / cancel（拿到 \(dict["op"] ?? "nil")）")
+        }
+    }
+
+    private static func parseCancel(_ dict: [String: Any]) throws -> Cancel {
+        guard let rawId = (dict["id"] as? String)?.trimmingCharacters(in: .whitespaces),
+              let id = UUID(uuidString: rawId) else {
+            throw Reject(reason: "缺 id 或 id 不是 UUID")
+        }
+        var why = ((dict["why"] as? String) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !why.isEmpty else {
+            // 与约定那边同一条：作废也要留下"为什么"。没有理由的作废三个月后没人说得清
+            // 是"用户说的"还是"它自己判断的"—— 而这两件事的可信度差着一整个量级。
+            throw Reject(reason: "why 是空的")
+        }
+        if why.count > FollowUpLimit.maxWhyChars {
+            why = String(why.prefix(FollowUpLimit.maxWhyChars)) + "…"
+        }
+        return Cancel(id: id, why: why)
+    }
+
+    private static func parseLine(_ dict: [String: Any]) throws -> Request {
         guard let rawId = (dict["id"] as? String)?.trimmingCharacters(in: .whitespaces),
               let id = UUID(uuidString: rawId) else {
             // id 由扩展侧生成、用来做幂等键。缺了就没法"插入两次只算一次" ⇒ 拒。

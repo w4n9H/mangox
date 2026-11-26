@@ -460,6 +460,14 @@ final class KnowledgeStore: ObservableObject {
         /// pack 里有 `layer: ondemand` 的文件 (§3.2): 不进 prompt 是对的, 但它们**也进不了索引**
         /// (pack 目录不是任何库的扫描根) ⇒ 对模型**隐形**。带文件名 —— "把哪一份迁去知识库"才是可行动信息。
         case onDemandPackFiles(files: [String])
+        /// 常驻**知识条目**太重 (2026-11-26): 它们没超预算、每条都进了 prompt, 但合起来
+        /// 已经大到"每轮都在读、而大部分与当前这件事无关"。带字数与本轮注入总量 ——
+        /// "4200 字 / 共 6100 字"是可行动信息, "太胖了"不是。
+        ///
+        /// ⚠️ 与 `.residentOverflow` 是**两件事**, 不能合成一条: overflow 是"有东西没进去"
+        /// (解法是调 priority), 这条是"都进去了但太重"(解法是改成按需)。合起来之后,
+        /// 用户看到的永远是同一条红条, 而他该做的事完全不同。
+        case residentHeavy(chars: Int, total: Int)
 
         /// 分类键 —— 供断言与事件流去重 (与文案无关)。
         var kind: Kind {
@@ -475,6 +483,7 @@ final class KnowledgeStore: ObservableObject {
             case .indexSkipped:             return .indexSkipped
             case .indexSilentlyDropped:     return .indexSilentlyDropped
             case .onDemandPackFiles:        return .onDemandPackFiles
+            case .residentHeavy:            return .residentHeavy
             }
         }
         enum Kind: Equatable {
@@ -482,6 +491,7 @@ final class KnowledgeStore: ObservableObject {
             case stableSegmentMissing, silentlyDropped, personaNotAtOffsetZero
             case personaPackEmpty, personaUnreadableFiles
             case indexSkipped, indexSilentlyDropped, onDemandPackFiles
+            case residentHeavy
         }
     }
 
@@ -783,6 +793,14 @@ final class KnowledgeStore: ObservableObject {
         }
         if injection.overflowed {
             out.append(.residentOverflow(titles: injection.degraded.map(\.title)))
+        }
+        // 常驻知识条目太重（2026-11-26）—— 判据是**绝对字数**, 不是占比 (理由见
+        // `Tune.knowledgeResidentAdviceChars`)。排在 overflow **之后**: 那条是"有东西没进来",
+        // 这条是"都进来了但太重"; 先报丢了什么, 再报太重, 与人的处理顺序一致。
+        let residentKnowledge = injection.stableChars + injection.volatileChars
+        if residentKnowledge >= Tune.knowledgeResidentAdviceChars {
+            out.append(.residentHeavy(chars: residentKnowledge,
+                                      total: (injection.text ?? "").count))
         }
         // 索引段整段缺席 —— 排在"条目降级"之后: 它是**结构性缺席**, 不是单条内容丢了。
         // pack 里的按需文件排在这里: 它的**解法**就是"把它挂成知识库", 与下面几条同类 (要用户动手)。

@@ -11,6 +11,11 @@ struct BottomStatusBar: View {
     let phase: RuntimePhase
     let turnCount: Int
     let stats: SessionStats?
+    /// 今日这一场已花的 token（`ChatStore.turnTokensToday` 的快照）。
+    ///
+    /// 为什么要在 `↑/↓` 旁边再给一个数: 那两个是**pi 这一进程**的计数, 进程一换就归零;
+    /// 而"我今天在这事上花了多少"是跨重启的问题（2026-11-26, 文章 #34：评测不能只看做成没做成）。
+    let todayTokens: Int
 
     var body: some View {
         HStack(spacing: 10) {
@@ -40,6 +45,8 @@ struct BottomStatusBar: View {
             Text("Token ↑\(tokenText(stats?.inputTokens)) / ↓\(tokenText(stats?.outputTokens))")
                 .font(CodexFonts.monoFont(10))
                 .foregroundStyle(CodexTheme.textSecondary)
+                .help(String(format: L("今日这一场已用 %lld token（这一轮的量逐轮落库，重启后仍在）"),
+                             todayTokens))
 
             dot
 

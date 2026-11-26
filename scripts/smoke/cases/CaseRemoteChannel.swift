@@ -157,6 +157,14 @@ extension SmokeMain {
               "T-REMOTE ④「同意」但手上没有待批的 ⇒ 明确回一句")
         check(RemoteRoute.decide(input(text: "先别动", pending: fid)) == .dismiss(taskId: taskId, findingId: fid),
               "T-REMOTE ④「先别动」⇒ 搁置（不需要方案）")
+        // 「这件事结束了」说的是**回看**，与"手上有没有待批的结论"无关（2026-11-26）——
+        // 所以它不能过 `pendingFinding` 那道共用的 guard：共用了的话，没有待批结论的人
+        // 会收到一句「现在没有等你批的事」，而他根本没在批东西。
+        check(RemoteRoute.decide(input(text: "这件事结束了")) == .stopFollowUps(taskId: taskId),
+              "T-REMOTE ④「这件事结束了」⇒ 撤回看（没有待批结论时也要认）")
+        check(RemoteRoute.decide(input(busy: true, text: "不用再问了", pending: fid, hasPlan: true))
+                == .stopFollowUps(taskId: taskId),
+              "T-REMOTE ④叫停排在「会话正忙」之前（正在跑的那一轮往往正是该被叫停的那一轮）")
         // 忙碌时也要能批：正确的回答是"执行没起来"而不是"等它结束再发"——
         // 后者会让他以为**同意本身**没被收到。
         check(RemoteRoute.decide(input(busy: true, text: "同意", pending: fid, hasPlan: true))

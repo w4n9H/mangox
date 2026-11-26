@@ -391,6 +391,20 @@ final class PersistenceStore {
             PRIMARY KEY (task_id, day)
         )
         """)
+        // 2026-11-26: 单轮 token 落痕。`agent_token_daily` 是**任务 × 日**的账（预算闸要问的），
+        // 这张是**会话 × 轮**的账 —— 两个维度问的问题不一样:
+        //   前者"这个助理今天还敢不敢跑"，后者"这一次问答到底花了多少"。
+        // ⚠️ 主键用**这一轮的起点**而不是消息 id: 轮是 `beginTurn` 造出来的, 它只有一个时刻;
+        //    而消息 id 允许重放/回填, 拿它当键会让同一轮在库里长成两行。
+        try db.run("""
+        CREATE TABLE IF NOT EXISTS turn_tokens (
+            session_id TEXT NOT NULL,
+            started_at REAL NOT NULL,
+            tokens     INTEGER NOT NULL,
+            PRIMARY KEY (session_id, started_at)
+        )
+        """)
+        try db.run("CREATE INDEX IF NOT EXISTS idx_turn_tokens_session ON turn_tokens(session_id, started_at)")
         // 2026-11-23: follow-up —— agent 给自己约的定时唤醒。
         //
         // **独立一张表**，不借 `scheduled_tasks` 造一次性任务：那张表的每一行都会进任务列表、
@@ -670,6 +684,9 @@ final class PersistenceStore {
     func deleteSession(id: UUID) throws {
         try db.run("DELETE FROM sessions WHERE id = ?", [.text(id.uuidString)])
         try db.run("DELETE FROM events WHERE session_id = ?", [.text(id.uuidString)])
+        // 2026-11-26: 单轮 token 与事件同寿 —— 会话删了还留着它，状态栏那格会继续加
+        // **一个已经不存在的会话**的花销，而明细一行都点不开。
+        try db.run("DELETE FROM turn_tokens WHERE session_id = ?", [.text(id.uuidString)])
         dropReplayCache(id)   // P9-#10: 写路径失效 (P10.6a: 三处状态同源清)
         seqCursor[id] = nil
     }
@@ -1489,6 +1506,42 @@ final class PersistenceStore {
             INSERT INTO agent_token_daily (task_id, day, tokens) VALUES (?,?,?)
             ON CONFLICT(task_id, day) DO UPDATE SET tokens = tokens + excluded.tokens
             """, [.text(taskId.uuidString), .text(day), .int(Int64(tokens))])
+    }
+
+    // MARK: - 单轮 token 落痕（2026-11-26）
+
+    /// 记一轮的 token 数。**覆盖而不是累加** —— 同一条 `(会话, 起点)` 只可能是同一轮
+    /// （重放 / 回填都该是同一个数）。与 `addTokenUsage` 的"累加"相反，那边一天里确实有多次 fire。
+    func recordTurnTokens(sessionId: UUID, startedAt: Date, tokens: Int) throws {
+        guard tokens > 0 else { return }
+        try db.run("""
+            INSERT INTO turn_tokens (session_id, started_at, tokens) VALUES (?,?,?)
+            ON CONFLICT(session_id, started_at) DO UPDATE SET tokens = excluded.tokens
+            """, [.text(sessionId.uuidString), .real(startedAt.timeIntervalSince1970),
+                  .int(Int64(tokens))])
+    }
+
+    /// 某会话从 `since` 起的每一轮（升序）。判据读这个 —— **不读汇总**:
+    /// "两轮各自的量"只有这个形状说得出来，汇总读出来是对的也可能是把一行算了两遍。
+    func turnTokenRows(sessionId: UUID, since: Date) throws -> [(startedAt: Date, tokens: Int)] {
+        let rows = try db.query("""
+            SELECT started_at, tokens FROM turn_tokens
+            WHERE session_id = ? AND started_at >= ? ORDER BY started_at ASC
+            """, [.text(sessionId.uuidString), .real(since.timeIntervalSince1970)])
+        return rows.compactMap { row in
+            guard case .real(let t) = row["started_at"] ?? .null else { return nil }
+            return (Date(timeIntervalSince1970: t), Int(int(row["tokens"] ?? .null)))
+        }
+    }
+
+    /// 同一批行的合计（状态栏那一格用）。
+    func sumTurnTokens(sessionId: UUID, since: Date) throws -> Int {
+        let rows = try db.query("""
+            SELECT COALESCE(SUM(tokens), 0) AS total FROM turn_tokens
+            WHERE session_id = ? AND started_at >= ?
+            """, [.text(sessionId.uuidString), .real(since.timeIntervalSince1970)])
+        guard let row = rows.first else { return 0 }
+        return Int(int(row["total"] ?? .null))
     }
 
     // MARK: - follow-up（agent 给自己约定时器, 2026-11-23）
