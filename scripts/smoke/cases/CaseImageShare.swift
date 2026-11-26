@@ -13,6 +13,7 @@
 import Foundation
 import AppKit
 import CoreGraphics
+import SwiftUI
 
 extension SmokeMain {
     @MainActor
@@ -72,5 +73,45 @@ extension SmokeMain {
               "T-ISHARE 集成: 从剪贴板能读出 TIFF（⚠️ 自动转换也会绿, 真写入由上面的 writer 计数钉住）")
         check(pb.types?.contains(.png) == true && pb.types?.contains(.tiff) == true,
               "T-ISHARE 声明的两种类型都与实际数据一致 (实测 \(pb.types ?? []))")
+
+        // ④ 分享图里的「网页预览」三种形态的高度（2026-11-26）。
+        //    判据是**单调**：无预览 < 降级条 < 真截图。它守的是两件事 ——
+        //    ① 降级成条**确实占了位置**（而不是什么都没画、文案报"网页预览"却看不出来）；
+        //    ② 真截图那块真的按 `shareHtmlPreviewHeight` 撑开了（不然图会被裁成一条）。
+        //    ⚠️ 只量 `fittingSize`，不建离屏窗口、不出位图：那条路要 `NSApplication`，
+        //       冒烟进程里没有（这也是 png 本身一直没被端到端断言的原因）。
+        let base = shareCardHeight(nil)
+        let bar = shareCardHeight(.init(name: "report.html", snapshot: nil))
+        let shot = shareCardHeight(.init(name: "report.html", snapshot: twoByTwo))
+        // ⚠️ 比的是**相对不带预览**的增量（不是相对条块）：条块自己也有标题行与间距，
+        //    拿 `shot - bar` 当图块高度会少算一截，而那一截恰好就是"图有没有撑满"的判据。
+        let barGrow = bar - base, shotGrow = shot - base
+        check(shot > bar && bar > base
+              && barGrow >= Tune.shareHtmlBarHeight
+              && shotGrow >= Tune.shareHtmlPreviewHeight - 1,
+              "T-ISHARE 网页预览三档高度单调: 无 < 条(+\(Int(barGrow))) < 图(+\(Int(shotGrow)))"
+              + " —— 条必须真占位, 图必须按 shareHtmlPreviewHeight 撑开")
+    }
+
+    /// 只排版量高度（不建窗口、不出图）。`nil` = 不带预览那块。
+    @MainActor
+    private static func shareCardHeight(_ preview: ShareCardText.ShareHtmlPreview?) -> CGFloat {
+        let card = AnyView(
+            ShareCardText(text: "一句话的回复。", basePath: nil, caption: nil, htmlPreview: preview)
+                .frame(width: Tune.shareWidth, alignment: .topLeading)
+        )
+        let host = NSHostingView(rootView: card)
+        host.layoutSubtreeIfNeeded()
+        return host.fittingSize.height
+    }
+
+    /// 2×2 的占位图 —— 尺寸无所谓，只用来触发 `.snapshot` 那条分支。
+    private static var twoByTwo: NSImage? {
+        guard let ctx = CGContext(data: nil, width: 2, height: 2,
+                                  bitsPerComponent: 8, bytesPerRow: 0,
+                                  space: CGColorSpaceCreateDeviceRGB(),
+                                  bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue),
+              let cg = ctx.makeImage() else { return nil }
+        return NSImage(cgImage: cg, size: NSSize(width: 2, height: 2))
     }
 }

@@ -69,8 +69,21 @@ extension SmokeMain {
         let explicit = ChatStore.resolveActiveProject(projects: allProjects,
                                                       selectedProjectId: projA.id,
                                                       selectedConversationId: convInBetty.id)
-        check(explicit?.id == projA.id,
-              "T-CCOMP 从菜单显式选过项目时, 显式选择优先于会话归属")
+        // ⑭ 显式选择与会话归属**打架**时以会话为准（2026-11-26 第二次实拍: 切到任意会话,
+        //    pill 一律写 `tihu-test`）。原来这条断言的是"显式优先" —— 那正是 bug 的判据:
+        //    `selectedProjectId` 一旦被菜单点过就再没人清, 之后每个会话都顶着它。
+        //    会话在项目里 ⇒ 项目必须跟着会话走; 否则界面(cwd)与那行字会各走一边。
+        check(explicit?.id == projB.id,
+              "T-CCOMP 显式选的 A 与会话所在的 B 冲突时, 必须跟会话(否则切会话还顶着上一个项目名)"
+              + " (实测 \(explicit?.title ?? "nil"))")
+
+        // ⑮ 会话**不在任何项目里**时, 显式选择照旧生效 —— 这是新建项目时的真实路径
+        //    (`addProject` 先选项目再开话题, 那时还没有会话归属可跟)。
+        let fresh = ChatStore.resolveActiveProject(projects: allProjects,
+                                                   selectedProjectId: projA.id,
+                                                   selectedConversationId: nil)
+        check(fresh?.id == projA.id,
+              "T-CCOMP 无归属会话时显式选择仍然生效 (新建项目就靠这条) (实测 \(fresh?.title ?? "nil"))")
 
         let orphan = ChatStore.resolveActiveProject(projects: allProjects,
                                                     selectedProjectId: nil,
@@ -78,6 +91,8 @@ extension SmokeMain {
         check(orphan == nil,
               "T-CCOMP 会话不属于任何项目时返回 nil (pill 才该显示「选择项目」占位)")
 
+        // ⑯ 显式选择与**当前会话无关**（会话不在任何项目里）时，冲突无从谈起 —— 显式照旧生效；
+        //    会话在别的项目里时以会话为准（⑭）。两种都钉住，才算把"跟随归属"这条讲完整。
         let dangling = ChatStore.resolveActiveProject(projects: allProjects,
                                                       selectedProjectId: UUID(),
                                                       selectedConversationId: convInBetty.id)

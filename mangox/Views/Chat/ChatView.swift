@@ -1220,8 +1220,10 @@ struct MessageBlockView: View {
     /// 滚出屏再滚回来、或换会话, 都回到折叠态。有意如此 —— 同 `ThinkingCardView` 的取舍,
     /// "上次点开过"不该变成全局默认。
     @State private var userExpanded = false
-    /// 「分享」按钮的四态 —— 点了立刻回报, **失败不许静默** (失败是一个词, 不是没反应)。
-    private enum ShareState { case idle, copied, tooLong, failed }
+    /// 「分享」按钮的五态 —— 点了立刻回报, **失败不许静默** (失败是一个词, 不是没反应)。
+    /// `rendering` 是 2026-11-26 加的: 这一轮带网页产物时要先离屏截一张图（异步，几百毫秒），
+    /// 中间**必须**有个反馈 —— 否则点下去几百毫秒什么都不变，用户会以为没点上再点一次。
+    private enum ShareState { case idle, rendering, copied, tooLong, failed }
     @State private var shareState: ShareState = .idle
     /// 分享图的配色跟随当前外观 (`adaptive()` 是动态色, 离屏渲染必须显式给环境)。
     @Environment(\.colorScheme) private var colorScheme
@@ -1489,6 +1491,7 @@ struct MessageBlockView: View {
     private var shareIcon: String {
         switch shareState {
         case .idle:                    return "photo.on.rectangle"
+        case .rendering:               return "hourglass"
         case .copied:                  return "checkmark"
         case .tooLong, .failed:        return "exclamationmark.triangle"
         }
@@ -1500,27 +1503,57 @@ struct MessageBlockView: View {
     private var shareLabel: String {
         switch shareState {
         case .idle:      return L("分享")
+        case .rendering: return L("出图中…")
         case .copied:    return L("已复制图片")
         case .tooLong:   return L("太长 · 改用复制")
         case .failed:    return L("出图失败")
         }
     }
 
-    /// 出图 + 进剪贴板。实测同步 **180ms(短回复) ~ 460ms(顶到 2100pt 上限)** —— **不拆 async**:
-    /// 拆了只是把卡顿藏到下一帧, 这段时间里 UI 一行都不变; 真嫌顿再加"生成中"态 (代价是多一条文案)。
-    /// ⚠️ 上限从 750 抬到 2100 之后, 最坏耗时翻了一倍多 —— 上面这行数字要跟着 `shareMaxHeight` 走。
+    /// 出图 + 进剪贴板。实测同步 **180ms(短回复) ~ 460ms(顶到 2100pt 上限)**。
+    ///
+    /// 2026-11-26 起这一条**可能**是异步的: 这一轮带网页产物时要先离屏截一张图
+    /// （`HtmlSnapshot`，异步、几百毫秒）。所以先置 `rendering`，抓图与出图都在 `Task` 里跑。
+    /// 没有网页产物时行为与原来完全一致（不进 Task 的那段耗时）。
     private func shareAsImage(_ raw: String) {
-        switch MessageImageShare.copyImage(
-            text: raw,
-            basePath: store.activeProjectPath,
-            caption: message.timestamp.formatted(date: .numeric, time: .shortened),
-            dark: colorScheme == .dark) {
+        let hint = htmlPreview
+        guard let hint, let root = store.activeProjectPath, !root.isEmpty else {
+            // 老路径：纯正文，同步出图。
+            apply(MessageImageShare.copyImage(
+                text: raw, basePath: store.activeProjectPath,
+                caption: message.timestamp.formatted(date: .numeric, time: .shortened),
+                dark: colorScheme == .dark))
+            return
+        }
+        shareState = .rendering
+        let basePath = store.activeProjectPath
+        let caption = message.timestamp.formatted(date: .numeric, time: .shortened)
+        let dark = colorScheme == .dark
+        let name = (hint.path as NSString).lastPathComponent
+        Task { @MainActor in
+            // 快照尺寸 = 卡片里那块图的逻辑尺寸；2x 位图由 `HtmlSnapshot` 自己出。
+            let snap = await HtmlSnapshot.capture(
+                fileURL: URL(fileURLWithPath: root).appendingPathComponent(hint.path),
+                readAccessRoot: URL(fileURLWithPath: root),
+                size: CGSize(width: Tune.shareWidth - Tune.sharePadding * 2,
+                             height: Tune.shareHtmlPreviewHeight))
+            // 快照失败（nil）不报错 —— 降级成文件名条, 图照样出（判据在 `MessageImageShare.png`）。
+            apply(MessageImageShare.copyImage(
+                text: raw, basePath: basePath, caption: caption, dark: dark,
+                htmlName: name, htmlSnapshot: snap))
+        }
+    }
+
+    private func apply(_ result: MessageImageShare.Result) {
+        switch result {
         case .copied:   shareState = .copied
         case .tooLong:  shareState = .tooLong
         case .failed:   shareState = .failed
         }
         // 1.8 秒回常态 —— 按钮 hover 才现, 不回落的话下次 hover 还挂着上一句话
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.8) { shareState = .idle }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.8) {
+            if shareState != .rendering { shareState = .idle }
+        }
     }
 
     // MARK: - 用户消息块

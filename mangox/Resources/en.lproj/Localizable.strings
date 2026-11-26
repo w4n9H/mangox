@@ -7,7 +7,7 @@
    **本文件由 scripts/l10n/gen_strings.py --write 生成, 别手改** ——
    译文改 scripts/l10n/en_values.py 的 VALUES, 再跑 --write。
 
-   条数: 1226
+   条数: 1228
 */
 
 " (值:\"%@\")" = " (value: %@)";
@@ -357,6 +357,7 @@
 "写盘失败 — 检查目录权限与磁盘空间" = "Write failed — check directory permissions and free space";
 "凭据只进钥匙串，不进库、不写日志。填完保存后桥会按新清单整条重起（几秒钟）。" = "Credentials go to the keychain only — never to the database or the logs. Saving restarts the bridge with the new list (a few seconds).";
 "出厂指令 · 随版本更新；本任务能改的是档期、开关与执行配置" = "Factory instruction · ships with the app version; what you can change for this task is its schedule, toggle and run configuration";
+"出图中…" = "Rendering…";
 "出图失败" = "Could not create the image";
 "分" = "Min";
 "分 时 日 月 周" = "min hour day month weekday";
@@ -868,6 +869,7 @@
 "模式档位: 决定 agent 可用的工具与扩展 (下回合生效)" = "Mode: decides which tools and extensions the agent gets (applies next turn)";
 "正在连接…" = "Connecting…";
 "正文" = "Body";
+"正文太长 · 网页未出图" = "Text too long · web page not rendered";
 "此刻不在 prompt 里 —— 索引整段进或整段不进, 它超出了本轮预算" = "Not in the prompt right now — the index goes in whole or not at all, and this one exceeded the round budget";
 "此操作需要你的批准才能执行" = "This needs your approval to run";
 "每" = "Every";

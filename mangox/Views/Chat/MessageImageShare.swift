@@ -66,18 +66,68 @@ enum MessageImageShare {
     /// `dark` 决定配色: `CodexTheme.adaptive()` 是 NSColor **动态色**, 离屏渲染时按
     /// **环境 `colorScheme`** 解析 (`.environment(\.colorScheme, …)`); 换 `NSAppearance` 那招
     /// 实测不生效 —— 见 `md_preview.py` 里同一条注释。
-    static func png(text: String, basePath: String?, caption: String?, dark: Bool) throws -> Data {
+    ///
+    /// `htmlName` / `htmlSnapshot` (2026-11-26): 这一轮的网页产物。**两块预算冲突的解法**：
+    /// 先按"带图"排一次，超上限就把图降级成文件名条、再排一次（只降一次，不递归）。
+    /// 降级而不是直接拒 —— 分享的主体是正文，网页那块是附赠；整张图不出是最差的结果。
+    /// 两条都超 ⇒ 还是拒（"不出半张图"这条没松）。
+    static func png(text: String, basePath: String?, caption: String?,
+                    htmlName: String? = nil, htmlSnapshot: NSImage? = nil,
+                    dark: Bool) throws -> Data {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { throw Failure.empty }
         // 密到极致也装不下 ⇒ 连排版都别做（下界，不会误拒；见 `certainlyTooLong`）。
+        // ⚠️ 这个下界**只算正文**，不含网页那块 —— 所以它依旧成立（是下界，不是预估）。
         guard !certainlyTooLong(trimmed) else {
             throw Failure.tooLong(height: lowerBoundHeight(trimmed))
         }
 
-        let card = ShareCardText(text: trimmed, basePath: basePath, caption: caption)
-            .frame(width: Tune.shareWidth, alignment: .topLeading)
-            .background(CodexTheme.bgChat)
-            .environment(\.colorScheme, dark ? .dark : .light)
+        var preview = htmlName.map { ShareCardText.ShareHtmlPreview(name: $0, snapshot: htmlSnapshot) }
+        var laid = layout(trimmed, basePath: basePath, caption: caption, preview: preview, dark: dark)
+        if laid.height > Tune.shareMaxHeight, preview?.snapshot != nil {
+            preview?.snapshot = nil
+            laid = layout(trimmed, basePath: basePath, caption: caption, preview: preview, dark: dark)
+        }
+        // ⚠️ **长图上限: 超了就不出图** (2026-10-22 boss「超过 3 屏的就可以不出了」)。
+        // 只能在**这里**判 —— 高度只有真排版才准 (折行/表格/图片都算在里头), 按字符数预估会说谎,
+        // 症状是"按钮说能出、点下去被拒"。
+        guard laid.height <= Tune.shareMaxHeight else {
+            throw Failure.tooLong(height: laid.height)
+        }
+
+        // 定值 2x —— **没有"超长就降 1x"的分支**: 要么出清楚的图, 要么不出。
+        let scale: CGFloat = 2
+        let pxW = Int(Tune.shareWidth * scale), pxH = Int(laid.height * scale)
+        guard let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: pxW, pixelsHigh: pxH,
+                                         bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true,
+                                         isPlanar: false, colorSpaceName: .deviceRGB,
+                                         bytesPerRow: 0, bitsPerPixel: 0) else {
+            throw Failure.renderFailed
+        }
+        rep.size = NSSize(width: Tune.shareWidth, height: laid.height)
+        laid.host.cacheDisplay(in: laid.host.bounds, to: rep)
+        withExtendedLifetime(laid.win) {}   // 窗口要活到这一行: 提前释放会让 display 通道拿到空内容
+        guard let png = rep.representation(using: .png, properties: [:]) else {
+            throw Failure.renderFailed
+        }
+        return png
+    }
+
+    /// 排一次版，回来时高度是**落定后**的。
+    ///
+    /// 抽出来是为了加网页预览时能排**两遍**（带图 / 降级成条）而不把下面这套
+    /// "4 拍 RunLoop + 重取高度"抄第二份 —— 那几条注释每一条都是踩坑踩出来的。
+    private static func layout(_ text: String, basePath: String?, caption: String?,
+                               preview: ShareCardText.ShareHtmlPreview?,
+                               dark: Bool)
+        -> (host: NSHostingView<AnyView>, win: NSWindow, height: CGFloat) {
+
+        let card = AnyView(
+            ShareCardText(text: text, basePath: basePath, caption: caption, htmlPreview: preview)
+                .frame(width: Tune.shareWidth, alignment: .topLeading)
+                .background(CodexTheme.bgChat)
+                .environment(\.colorScheme, dark ? .dark : .light)
+        )
 
         let host = NSHostingView(rootView: card)
         var height = max(host.fittingSize.height, 1)
@@ -104,30 +154,7 @@ enum MessageImageShare {
             host.layoutSubtreeIfNeeded()
             host.displayIfNeeded()
         }
-
-        // ⚠️ **长图上限: 超了就不出图** (2026-10-22 boss「超过 3 屏的就可以不出了」)。
-        // 只能在**这里**判 —— 高度只有真排版才准 (折行/表格/图片都算在里头), 按字符数预估会说谎,
-        // 症状是"按钮说能出、点下去被拒"。
-        guard height <= Tune.shareMaxHeight else {
-            throw Failure.tooLong(height: height)
-        }
-
-        // 定值 2x —— **没有"超长就降 1x"的分支**: 要么出清楚的图, 要么不出。
-        let scale: CGFloat = 2
-        let pxW = Int(Tune.shareWidth * scale), pxH = Int(height * scale)
-        guard let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: pxW, pixelsHigh: pxH,
-                                         bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true,
-                                         isPlanar: false, colorSpaceName: .deviceRGB,
-                                         bytesPerRow: 0, bitsPerPixel: 0) else {
-            throw Failure.renderFailed
-        }
-        rep.size = NSSize(width: Tune.shareWidth, height: height)
-        host.cacheDisplay(in: host.bounds, to: rep)
-        withExtendedLifetime(win) {}   // 窗口要活到这一行: 提前释放会让 display 通道拿到空内容
-        guard let png = rep.representation(using: .png, properties: [:]) else {
-            throw Failure.renderFailed
-        }
-        return png
+        return (host, win, height)
     }
 
     // MARK: - 出口
@@ -159,10 +186,15 @@ enum MessageImageShare {
     }
 
     /// 一步到位 —— 按钮直接调它。返回值决定按钮那三态, **失败不许静默**。
+    ///
+    /// 网页那张快照是**在外面**抓好的（`HtmlSnapshot` 是异步的，而这里是同步的排版+出图）——
+    /// 快照失败传 nil 即可，那会降级成文件名条，不会让整张图失败。
     static func copyImage(text: String, basePath: String?, caption: String?, dark: Bool,
+                          htmlName: String? = nil, htmlSnapshot: NSImage? = nil,
                           to pb: NSPasteboard = .general) -> Result {
         do {
-            let png = try png(text: text, basePath: basePath, caption: caption, dark: dark)
+            let png = try png(text: text, basePath: basePath, caption: caption,
+                              htmlName: htmlName, htmlSnapshot: htmlSnapshot, dark: dark)
             try copyToPasteboard(png, to: pb)
             return .copied
         } catch Failure.tooLong(let height) {

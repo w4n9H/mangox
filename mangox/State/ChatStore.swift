@@ -267,13 +267,32 @@ final class ChatStore: ObservableObject {
     /// ⚠️ 2026-11-26 实拍 —— 输入框上方那枚 pill 自己拼了 `projects.first { $0.id == selectedProjectId }`，
     ///    绕过了下面这条兜底 ⇒ 从侧栏点进一个项目会话时，pill 照样写「选择项目」。
     ///    （`activeProjectPath` 走的是这同一份逻辑，所以 pi 的 cwd 一直是对的 —— 只有显示错了。）
+    ///
+    /// ⚠️ **显式选择只在"它就是当前会话所在的项目"时才作数**（2026-11-26 第二次实拍：
+    ///    boss 在侧栏切到任意会话，pill 一律写 `tihu-test`）。病根是 `selectedProjectId` 一旦被
+    ///    菜单点过就再没人清 —— 而它和选中会话一样活到进程退出 ⇒ 之后每个会话都顶着它。
+    ///    所以判据不能是"两个不同来源各说各话"，而要满足一条不变式：
+    ///    **显式选择必须与当前会话的归属一致，否则以会话为准。**
+    ///    - 会话在 A 项目里 ⇒ 显式选了 B 也不算（界面与 cwd 一起跟着会话，它们不会各走一边）
+    ///    - 会话不在任何项目里（普通 / 助手会话）⇒ 没有"归属"可跟随，显式选择照旧生效 ——
+    ///      那是新建项目时的真实用法（`addProject` 先选项目再开话题）
+    ///    - 显式选择悬空（指向已删项目）⇒ nil，不回落到归属（语义不变）
     static func resolveActiveProject(projects: [ProjectGroup], selectedProjectId: UUID?,
                                      selectedConversationId: UUID?) -> ProjectGroup? {
-        if let pid = selectedProjectId {
-            return projects.first { $0.id == pid }
+        guard let pid = selectedProjectId else {
+            return selectedConversationId.flatMap { cid in
+                projects.first { $0.items.contains { $0.id == cid } }
+            }
         }
-        guard let cid = selectedConversationId else { return nil }
-        return projects.first { $0.items.contains { $0.id == cid } }
+        // 悬空 id（指向已删项目）⇒ nil。**必须先于下面是另一条**：落到"跟随归属"就等于
+        // 把用户显式做的选择悄悄改义了（他选的是一个已经不存在的项目，不该被读成"没选过"）。
+        guard let explicit = projects.first(where: { $0.id == pid }) else { return nil }
+        if let owner = selectedConversationId.flatMap({ cid in
+            projects.first { $0.items.contains { $0.id == cid } }
+        }), owner.id != pid {
+            return owner
+        }
+        return explicit
     }
 
     /// 当前工作目录 (nil = 无项目会话, Work 不可用)。

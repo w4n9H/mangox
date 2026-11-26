@@ -881,6 +881,9 @@ VALUES = {
     '太长 · 改用复制': 'Too long · copy text',
     '出图失败': 'Could not create the image',
     '把这条回复存成图片放进剪贴板': 'Save this reply as an image on the clipboard',
+    #  2026-11-26 带网页预览: 第五态是「正在截那一张图」; 另一条是降级时的说明。
+    '出图中…': 'Rendering…',
+    '正文太长 · 网页未出图': 'Text too long · web page not rendered',
 
     # ── 2026-10-22 工作区重设计 (文件 / 改动 / 预览 三个固定 tab) ──
     #  tab 名**独立取词**: `文件` 复用既有 key (那里是"这行是个文件"的名词标记,
