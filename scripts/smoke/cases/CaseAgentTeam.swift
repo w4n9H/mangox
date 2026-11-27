@@ -938,12 +938,15 @@ extension SmokeMain {
         let subLead37 = TeamBoardText.cardSubtitle(lead13, parentName: nil)
         let subWorker37 = TeamBoardText.cardSubtitle(worker13, parentName: lead13.name)
         let subOrphan37 = TeamBoardText.cardSubtitle(orphan34, parentName: nil)
-        // 状态行 = `cardStateLine`，不是 `TeamRowText.stateWord` 直通 —— 差别只在停用那一档:
-        // 后者写标签（"已停用"），前者写**后果**（"派了会被拒"）。判据在 `TeamRule`。
-        let stateRun37 = TeamBoardText.cardStateLine(
+        // 状态行**就是** `TeamRowText.stateWord` —— 中间那层 `cardStateLine` 2026-11-27 出图后删了。
+        // 它当初只为给停用档多带一句后果（「停用 · 派了会被拒」），可待命态一屏三张卡就是
+        // 同一句后果复读三遍。现在卡片只写标签，后果句搬进检查器（`whoBlock`）。
+        // ⚠️ 后果那句是**视图里的 `L()`**，冒烟测不到；它靠 `scan_wiring` 保"接了线"，
+        //    人读靠出图。别在这条里假装守住了它。
+        let stateRun37 = TeamRowText.stateWord(
             .running(since: now35.addingTimeInterval(-4 * 60)), now: now35)
-        let stateOff37 = TeamBoardText.cardStateLine(.disabled, now: now35)
-        let stateIdle37 = TeamBoardText.cardStateLine(.idle(lastActive: nil), now: now35)
+        let stateOff37 = TeamRowText.stateWord(.disabled, now: now35)
+        let stateIdle37 = TeamRowText.stateWord(.idle(lastActive: nil), now: now35)
         // 统计行改版后是**分块 chip**（要分色），所以断言的是结构不是一句话。
         // ⚠️ 这条同时钉住"只列非零档 / 队伍数 >1 才出现"，以及"颜色只给状态档"——
         //    前两条迁自旧 `statsLine` 的判据，第三条是 chip 化之后新增的（否则 chip 全一个色，
@@ -967,7 +970,7 @@ extension SmokeMain {
               && !subLead37.contains("分钟") && !subOrphan37.contains("分钟")
               && all37.allSatisfy { $0.count <= 13 }
               && stateRun37 == "在跑 4 分钟"
-              && stateOff37 == "停用 · 派了会被拒"        // 后果，不是 stateWord 的"已停用"
+              && stateOff37 == "已停用"                   // 只写标签；后果句在检查器里
               && stateIdle37 == "空闲"
               && allState37.allSatisfy { $0.count <= 12 }
               && chipsText37 == ["6 个助理", "2 支队伍", "2 在跑", "4 空闲"]
@@ -977,7 +980,8 @@ extension SmokeMain {
               && chips37.filter { $0.stage != nil }.map(\.label) == ["在跑", "空闲"],
               "T-TEAM ㊲(doc P5)卡片第二行=**只写归属**(队长写「管理」、执行助理写归属名、"
               + " 悬挂写未归属) —— 时态已分家到状态行，同一张卡不说两遍时长;"
-              + " 状态行停用那一档写后果「派了会被拒」而不只写标签; 顶栏 chip 只列非零档、"
+              + " 状态行只写标签「已停用」（后果句搬进检查器 —— 一屏三张停用卡不许复读三遍同一句后果）;"
+              + " 顶栏 chip 只列非零档、"
               + " 队伍数 >1 才出现、颜色只给状态档"
               + " (实测 \(subLead37) / \(subWorker37) / \(subOrphan37)"
               + " / \(stateRun37) / \(stateOff37) / \(stateIdle37) / \(chipsText37))")

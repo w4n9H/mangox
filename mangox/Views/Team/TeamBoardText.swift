@@ -129,17 +129,12 @@ enum TeamBoardText {
         return TeamRowText.roleToken(kind: t.kind, role: t.role)
     }
 
-    /// 卡片上那行**状态**（第三通道）。
-    ///
-    /// 停用那一档要多带一句后果 —— "停用"只说了一个标签，而人真正要知道的是"派了会怎样"。
-    /// 这句话是**后果**不是同义反复（`TeamRule` 的 `.workerDisabled` 分支会硬拒），
-    /// 原来住在 `cardSubtitle` 里，2026-11-27 归属与状态分家后搬到这里。
-    static func cardStateLine(_ state: TeamState, now: Date) -> String {
-        if case .disabled = state {
-            return L("停用 · 派了会被拒")
-        }
-        return TeamRowText.stateWord(state, now: now)
-    }
+    // 卡片上那行**状态** = `TeamRowText.stateWord`，本文件**不再有 `cardStateLine`**。
+    //
+    // ⚠️ 2026-11-27 出图后改回单标签：上一版让停用档多带一句后果（「停用 · 派了会被拒」），
+    //    而一屏三张停用卡就是**同一句后果复读三遍**，同时顶栏 chip 还写着「3 停用」。
+    //    后果本身没丢，搬去了检查器（`whoBlock`）—— 点开那一栏有整行空间把它说完。
+    //    判据：**卡片是扫视面，一句话只许出现一次；要解释的话去检查器说。**
 
     // MARK: 组内排序
 
@@ -358,4 +353,9 @@ struct TeamCardStat: Equatable {
     var tokenLabel: String { TeamBoardText.tokenLabel(tokens) }
     /// 交活数: 0 显示 `—`（与 token 同一条理由 —— 没交过就是没交过，写 `0` 会被读成"交了但记成 0"）。
     var doneLabel: String { doneDelegations > 0 ? "\(doneDelegations)" : "—" }
+
+    // ⚠️ 曾经有过一个 `isQuiet`（三项全零）用来"待命卡省掉那一行"，2026-11-27 已删:
+    //    boss 的判据是**版式不许随状态变形** —— 同一张卡今天一句话、明天三格，
+    //    读的人每次都得重新认一次版式，比「— 0 —」那点噪声难受得多。
+    //    所以三格**恒在**，别再为"空"加特判。
 }

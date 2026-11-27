@@ -1506,7 +1506,7 @@ VALUES = {
     '不按档期跑 —— 只由它的管理助理派活叫起来。派活单到期才起一轮。': 'No schedule of its own — it runs only when its managing assistant delegates, one turn per due ticket.',
     '作废': 'Voided',
     '停用': 'Paused',
-    '停用 · 派了会被拒': 'Paused · delegation would be refused',
+    '派了会被拒 —— 先在编辑器里启用它。': 'Delegation would be refused — enable it in the editor first.',
     '全部': 'All',
     '卡住 %lld': 'Blocked %lld',
     '去定时任务': 'Open Scheduled',

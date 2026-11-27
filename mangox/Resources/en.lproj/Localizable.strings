@@ -319,7 +319,6 @@
 "停止 (⌘.)" = "Stop (⌘.)";
 "停止该任务" = "Stop this task";
 "停用" = "Paused";
-"停用 · 派了会被拒" = "Paused · delegation would be refused";
 "允许" = "Allow";
 "允许发送组合按键" = "Allow sending key combinations";
 "允许按坐标点击" = "Allow clicking by position";
@@ -911,6 +910,7 @@
 "注入量" = "PAYLOAD";
 "注册失败: %@" = "Registration failed: %@";
 "注销失败: %@" = "Unregistration failed: %@";
+"派了会被拒 —— 先在编辑器里启用它。" = "Delegation would be refused — enable it in the editor first.";
 "浅色" = "Light";
 "测试中…" = "Testing…";
 "测试连接" = "Test connection";

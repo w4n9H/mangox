@@ -329,11 +329,18 @@ struct TeamBoardView: View {
         case .idle:
             return CardLook(surface: CodexTheme.bgCard,
                             border: CodexTheme.border,
-                            bar: stageTint(stage), textDim: 0.90, avatarDim: 0.72, avatarGray: true)
+                            bar: stageTint(stage), textDim: 0.90, avatarDim: 0.88, avatarGray: false)
         case .disabled:
-            return CardLook(surface: CodexTheme.teamCardRecessed,
+            // ⚠️ 2026-11-27 出图后改了两处（原来 `teamCardRecessed` + `avatarDim 0.42` + 灰）：
+            //    ① **卡面回 `bgCard`**。沉下那一档（暗 0x1C1C24）和页面底色几乎同值，一屏
+            //       三张停用卡整个融进背景，读起来是"这页没有卡"而不是"这些人在待命"。
+            //       停用的语义是**不被派活**，不是"这个人不存在"。
+            //    ② **头像不再去饱和**。灰 + 0.42 透明度是两层压制，emoji 在暗底上几乎看不见 ——
+            //       而头像的全部用处就是"一屏里分得开谁是谁"，压掉它等于把这一列还回原样。
+            //       "沉"已经由卡面、文字（0.82）、左条三处说了，不需要第四处。
+            return CardLook(surface: CodexTheme.bgCard,
                             border: CodexTheme.border,
-                            bar: stageTint(stage), textDim: 0.78, avatarDim: 0.42, avatarGray: true)
+                            bar: stageTint(stage), textDim: 0.82, avatarDim: 0.66, avatarGray: false)
         }
     }
 
@@ -387,11 +394,16 @@ struct TeamBoardView: View {
                 //    时长只在这里出现一次（2026-11-27：上一版两行都说时长，读起来像复读）。
                 HStack(spacing: 4) {
                     Circle().fill(card.bar).frame(width: 5, height: 5)
-                    Text(TeamBoardText.cardStateLine(state, now: Date()))
+                    // 只写**标签**（「停用」），后果句在检查器里 —— 见 `TeamBoardText` 里那段注释。
+                    Text(TeamRowText.stateWord(state, now: Date()))
                         .font(.system(size: 10.5, weight: stage == .running || stage == .awaiting
                                       ? .medium : .regular))
+                        // ⚠️ 停用 / 空闲都用 `textSecondary`（不是 `textTertiary`）：待命态是**常态**，
+                        //    而截图里「已停用」在暗底上几乎读不出来 —— 状态行读不出，这张卡就只剩
+                        //    名字和职责，看不出它是不是被停了。压暗那是"沉"的意思，
+                        //    已经由卡面、头像 dim、左条三处说了，不必把字也压到看不清。
                         .foregroundStyle(stage == .idle || stage == .disabled
-                                         ? CodexTheme.textTertiary : card.bar)
+                                         ? CodexTheme.textSecondary : card.bar)
                         .lineLimit(1)
                 }
                 .padding(.top, 7)
@@ -410,6 +422,12 @@ struct TeamBoardView: View {
                 Spacer(minLength: 0)
 
                 // ④ 三格数字 —— **全部来自 db 聚合**，一格都不读盘（见 `TeamCardStat` 的注释）。
+                //
+                // ⚠️ 2026-11-27 试过两种"让待命卡少点噪声"的写法，都被 boss 否掉了：
+                //    ① 组内全空 ⇒ **整行不画**：卡短半截，一页里还长得不一样，像没画完。
+                //    ② 全空 ⇒ 换一句「还没被派过活」：**形态在两种之间切换**更别扭 ——
+                //       同一张卡今天是一句话、明天是三格，读的人每次都得重新认一次版式。
+                //    ⇒ 结论：**三格恒在**，空就写「— 0 —」。零信息也好过不稳定的版式。
                 HStack(spacing: 0) {
                     numCell(stat.tokenLabel, L("token"), dim: card.textDim)
                     numCell("\(stat.turns)", L("回合"), dim: card.textDim)
@@ -562,6 +580,14 @@ struct TeamBoardView: View {
             Text(TeamRowText.stateWord(state, now: Date()))
                 .font(CodexFonts.monoFont(10))
                 .foregroundStyle(stageTint(TeamStage.of(state)))
+            // 停用的后果句从卡片搬到这儿了（卡片上只留「停用」两个字，见 `TeamBoardText`）。
+            // 这一栏是**点开之后**才看的，有整行空间把话说完整，不必压成半句塞进扫视面。
+            if case .disabled = state {
+                Text(L("派了会被拒 —— 先在编辑器里启用它。"))
+                    .font(.system(size: 10.5))
+                    .foregroundStyle(CodexTheme.textTertiary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
     }
 
