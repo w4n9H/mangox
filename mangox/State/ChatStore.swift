@@ -476,6 +476,9 @@ final class ChatStore: ObservableObject {
 
     // P9.1b: 定时任务域抽离至 SchedulerService, 同名 facade 转发 (冒烟/视图零改动)
     let scheduler = SchedulerService()
+    /// 启动序列的进度真源（启动页的数据来源，见 `BootTrace` 文件头三条判据）。
+    /// ⚠️ **不转发进本类的 `objectWillChange`** —— 理由写在 `BootTrace` 的类型注释里。
+    let boot = BootTrace()
     /// P19.2 S15: 飞书对话通道。**入口**（人在飞书里说话）而非触达 ——
     /// 它收到的东西最终投进某场会话，与 S7 那个只发不收的 sink 是两件事。
     let remote = RemoteChannelService()
@@ -755,7 +758,8 @@ final class ChatStore: ObservableObject {
         // 常规路径只建能力探测实例, 会话实例在首次 send 时按需拉起。
         let probe = transport ?? Self.makeTransport()
         capabilityProbe = probe
-        engineMissing = probe is PiRpcTransport && !PiRpcTransport.available()
+        let engineGone = probe is PiRpcTransport && !PiRpcTransport.available()
+        engineMissing = engineGone
         // 无默认值的 let 需最先初始化 (两阶段: 赋值前不可访问 self)
         self.injectedTransport = transport
         self.managedExtensionsDir = managedExtensionsDir ?? (NSHomeDirectory() + "/.mangox/extensions")
@@ -764,6 +768,13 @@ final class ChatStore: ObservableObject {
         //    `SecItemCopyMatching` 一直等答复 ⇒ 冒烟挂死）。见 `KeychainModelKeyStore.current`。
         self.modelKeyStore = modelKeyStore ?? KeychainModelKeyStore.current
         self.mailboxCredentials = mailboxCredentials ?? KeychainMailboxCredentialStore.current
+
+        // 启动页第 1 行: 没装 pi ⇒ 这一步**根本没有发生**, 如实留空 (既不算失败, 也不算做完)。
+        // 装了的话这里**不**打勾 —— "引擎起来了"的判据是 pi 真的答了话 (`Process.run` 返回
+        // 只说明 fork 成功, 起完立刻死的 pi 一样会返回), 见 `didUpdateModelState`。
+        // ⚠️ 必须排在上面那几个 `self.xxx =` **之后**: 两阶段初始化里, 存储属性没填满之前
+        //    连读都不能读, `boot.skip()` 这种"访问 self 属性"的调用会直接编译不过。
+        if engineGone { boot.skip(.engine) }
 
         // P3.1: 首启播种 SampleSession, 之后全部从 SQLite 加载; 打不开库则回退纯 mock
         // dbPath: smoke 注入独立库文件用 (默认 ~/.mangox/mangox.db)
@@ -778,6 +789,7 @@ final class ChatStore: ObservableObject {
                                 messages: [])   // mock 演示数据已移除, 首启即空库
             }
             projects = (try? store.loadProjects()) ?? []
+            boot.finish(.workspace, n: projects.count)   // 启动页第 3 行
             chats = (try? store.loadChats()) ?? []
             knowledgeItems = (try? store.loadKnowledge()) ?? []
             // P11.4: 知识库挂载记录 (用户挂的那批)。固定根(两个笔记根)不落库、由笔记目录现算。
@@ -902,6 +914,11 @@ final class ChatStore: ObservableObject {
         // (上一行 492 已经载完) 与 settings KV; 摆在 attach 外面是**刻意的** ——
         // `attach` 是纯接线, 种数据不该藏在接线里（同"一件事只有一个地方做"那条）。
         scheduler.seedDreamTaskIfNeeded()
+        // 启动页第 4 行。刻意排在 `seedDreamTaskIfNeeded()` **之后** ——
+        // dream 那条预置任务也是"定时任务表"的一部分, 先打勾再种数据就是谎报。
+        // 读数取的是**助理**（`kind == .assistant`）而不是任务总数: 那一行写的是
+        // 「助理与定时」, 拿一堆 cron 任务去充"助理"是另一回事。
+        boot.finish(.assistants, n: scheduledTasks.filter(\.isAssistant).count)
         knowledge.reloadProposals()   // P15.3: 提案列表的首屏数据 (收口处会再刷)
         // 侧问快照的孤儿回收: 开机扫一次 —— 判据是"有没有主"而不是"放了几天" (见函数注释)。
         // ⚠️ 必须在**任何新侧问**之前跑: 此刻 `pendingForkTemp` 恒空, 所以还躺着的
@@ -914,11 +931,28 @@ final class ChatStore: ObservableObject {
         // P7-M3: 物化产物先于探测拉目录 — probe 首次 spawn 带上 PI_CODING_AGENT_DIR,
         // get_available_models 只报自管模型 (顺序反了会先拉到全量目录)
         refreshPIConfig()
+        // 启动页第 2 行。放在这里而不是更早: 凭据是**物化配置时**才真去钥匙串读的
+        // (`refreshPIConfig` → `ModelMaterializer`), 上一行跑完才有那个读数。
+        boot.finish(.model, n: SecretVault.vaultReadCount)
+        // 引擎那一行从这一刻起算"在跑": 下面那句才会真去 spawn。放得更早（比如 init 开头）
+        // 就是拿"还没开始"装作"正在进行" —— 而那 150ms 恰恰是 sqlite 在干活的时候。
+        boot.begin(.engine)
         probe.refreshCapabilities()   // P3.5: 模型/effort 上报 (pi 拉起 + get_state/models)
         scheduler.startScheduler()   // P3.6: 每秒 tick, 分钟对齐检查到期任务
         // P19.2 S15: 飞书通道。**排在调度器之后** —— 它收到的一句话要投进某个助理的会话，
         // 而那场会话由 `scheduler.ensureLogSession` 建出来（调度器没就位就没有会话可投）。
         remote.autostart()
+
+        // 启动页第 5 行。**这一行是启动页存在的理由** —— 它等的是"上次那场会话回放完
+        // 并且真的贴到底", 实测 1023 条会话从这一刻到贴底还有 ~2.4s, 而那 2.4s 正是
+        // 用户会看见"窗口在、画面还在跳"的那段。判据不放这里: 落底是**视图**事实
+        // (只有 `ChatView` 知道文档多高), 由它那一拍的读数回报 (`ChatView.logBeat`)。
+        // 没有要回放的会话 ⇒ 没什么可等, 当场收。
+        if messages.isEmpty || selectedConversationId == nil {
+            boot.finish(.sessions, n: chats.count)
+        } else {
+            boot.begin(.sessions)
+        }
 
         // WAL 落盘 + 杀在途 pi: 强杀/exit 不跑 deinit, 数据滞留 -wal 会在下次清库时全丢;
         // 在途回合的 pi 若不终止会变孤儿进程继续烧 LLM token
@@ -3384,6 +3418,10 @@ extension ChatStore: AgentTransportDelegate {
     func transport(_ transport: any AgentTransport,
                    didUpdateModelState provider: String, modelId: String, thinkingLevel: String) {
         guard transport === capabilityProbe else { return }
+        // 启动页第 1 行: 探测实例**答了话**才算"引擎起来了"。
+        // 只认探测实例 (`guard` 上面那道): 会话实例的上报要等到用户真发一句话, 拿它当判据
+        // 会让启动页永远等不到。
+        boot.finish(.engine, n: 1)
         captureAppDefault(provider: provider, modelId: modelId, thinkingLevel: thinkingLevel)
         if currentProvider.isEmpty { currentProvider = provider }
         if currentModelId.isEmpty { currentModelId = modelId }

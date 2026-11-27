@@ -700,6 +700,8 @@ struct CompactTextEditor: NSViewRepresentable {
         textView.onImagePaste = onImagePaste
         textView.onFocusChange = onFocusChange
         textView.delegate = context.coordinator
+        // 转场 C 的落点 (弱引用, 见 ComposerAnchor 文件头) —— 只要输入框还在, 光标就有地方落
+        ComposerAnchor.textView = textView
         scrollView.documentView = textView
 
         return scrollView

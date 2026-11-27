@@ -73,6 +73,13 @@ enum SecretVault {
 
     private static let lock = NSLock()
     nonisolated(unsafe) private static var cache: [String: String]?
+
+    /// 本进程**真去碰过钥匙串几次**（只在真身那段自增，冒烟替身不算）。
+    ///
+    /// 唯一消费者 = 启动页第 2 行的读数「已授权 N 次」—— 它要说的正是这件事：
+    /// 这一屏背后问了你**几次**钥匙串。⛔️ 别拿它当业务判据（"有没有配过 key" 是
+    /// `get(...) != nil`），它是**计数**不是状态。
+    nonisolated(unsafe) static var vaultReadCount = 0
     /// **载入那一刻**条目就在（= 早就搬完了）。它决定还要不要去读老位置 ——
     /// 老位置读一次就是一次授权框；而且我们**从不删老条目**，所以"没搬完"这个状态
     /// 一旦松掉，被删掉的键会被老条目**复活**（`set(nil)` 之后下次启动又读回来）。
@@ -188,6 +195,7 @@ enum SecretVault {
     }
     #else
     private static func readRaw() -> Data? {
+        vaultReadCount += 1
         var query = baseQuery()
         query[kSecReturnData as String] = true
         query[kSecMatchLimit as String] = kSecMatchLimitOne

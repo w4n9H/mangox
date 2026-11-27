@@ -65,6 +65,7 @@ extension SmokeMain {
             caseFollowUp,
             caseSentMemory,
             caseAgentTeam,
+            caseBoot,
             caseSecretVault,
         ]
     }

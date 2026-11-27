@@ -650,6 +650,16 @@ struct ChatView: View {
             } else {
                 f["void"] = (age ?? -1) > 400 ? "1" : "na"
             }
+            // 启动页第 5 行（对话记录）的完成判据 = **这一屏真的贴底、而且有内容**。
+            //
+            // ⚠️ 复用看门狗那两个读数（`gap` + `void`），不另起一套"窗口出现就算好"：
+            //    42.349 那一拍实测 `gap=0` 而 `bottom=0`（`bottom` 是 12.9 秒前的旧读数、
+            //    `doc` 与 `gap` 还是同一次估算算出来的）—— 单看 gap 会判绿，屏幕整块是底色。
+            //    `void == "0"` 那一条恰好就是"最后读数说内容底还在视口里"。
+            if store.boot.phase(.sessions) == .running,
+               f["void"] == "0", gap <= 60 {
+                store.boot.finish(.sessions, n: store.chats.count)
+            }
             // ⚠️ 流式跟随只在"没贴住"时记，但**末拍永远记**（`i == count-1` 与 settle）：
             //    末拍是"这次跟随最终落在哪"的唯一证据。11-06 的现场就是被这条过滤吞掉的。
             if origin == "follow", abs(gap) <= 60, i < Self.followBeats.count - 1 { return }

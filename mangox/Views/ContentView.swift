@@ -10,6 +10,10 @@ import SwiftUI
 
 struct ContentView: View {
     @StateObject private var store = ChatStore()
+    /// 启动页的开关。判据在 `BootGate`（只播一次 / 版本号变了才再播 / DEBUG 恒播）。
+    /// ⚠️ 初值必须**同步**求出来（不能用 `onAppear` 再决定）：晚一帧就是"先看见主界面、
+    ///    再被盖住"，闪一下。
+    @State private var showBoot = BootGate.shouldPlay()
 
     var body: some View {
         Group {
@@ -129,6 +133,13 @@ struct ContentView: View {
                 if !store.miniMode {
                     TopBarWorkButton(store: store)
                 }
+            }
+        }
+        // 启动页（`BootView`）。**盖在整棵树最外层** —— 它要罩住侧栏/正文/工作区，
+        // 而不是某一列。窗口壳（红绿灯 + 工具栏）由 `BootChrome` 一起让开。
+        .overlay {
+            if showBoot, !store.miniMode {
+                BootView(trace: store.boot) { showBoot = false }
             }
         }
         // P14: 把当前窗口的 store 递给菜单命令 —— AppCommands 用 @FocusedValue(\.chatStore) 取它

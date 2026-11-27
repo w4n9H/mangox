@@ -7,7 +7,7 @@
    **本文件由 scripts/l10n/gen_strings.py --write 生成, 别手改** ——
    译文改 scripts/l10n/en_values.py 的 VALUES, 再跑 --write。
 
-   条数: 1232
+   条数: 1247
 */
 
 " (值:\"%@\")" = " (value: %@)";
@@ -63,7 +63,9 @@
 "%lld 个文件" = "%lld files";
 "%lld 个来源" = "%lld sources";
 "%lld 个模型因缺元数据未列出: %@" = "%lld models not listed — no metadata available: %@";
+"%lld 个项目" = "%lld projects";
 "%lld 人" = "%lld people";
+"%lld 位助理" = "%lld assistants";
 "%lld 分 %lld 秒" = "%lldm %llds";
 "%lld 分钟" = "%lldm";
 "%lld 天" = "%lldd";
@@ -77,6 +79,7 @@
 "%lld 条常驻条目被静默丢弃: %@" = "%lld always-on items were silently dropped: %@";
 "%lld 次工具调用" = "%lld tool calls";
 "%lld 次调用" = "%lld calls";
+"%lld 段会话" = "%lld sessions";
 "%lld 秒" = "%llds";
 "%lld 项" = "%lld items";
 "(无注入内容)" = "(no injected content)";
@@ -143,8 +146,10 @@
 "key 全局唯一" = "keys are globally unique";
 "key 已被另一条占用" = "That key is already taken by another item";
 "multipart 缺 boundary" = "multipart is missing a boundary";
+"pi · %lld 个子进程" = "pi · %lld subprocess";
 "pi 不随 App 发布 —— 需要你自己装好，App 才能发起对话。" = "pi doesn't ship with the app — install it yourself, and the app can start a conversation.";
 "pi 扩展经 spawn 期 --extension 加载, 启停后需重启引擎生效" = "pi extensions are loaded at spawn time via --extension; restart the engine for changes to take effect.";
+"pi 未安装" = "pi not installed";
 "prompt 与 cron 为必填" = "prompt and cron are required";
 "provider (自定义)" = "provider (custom)";
 "scroll 要说清往哪滚(up / down) ⇒ 没动。" = "scroll must say which way (up / down) ⇒ nothing was done.";
@@ -405,6 +410,7 @@
 "助手" = "Assistant";
 "助理" = "Assistant";
 "助理「%@」连同它的工作会话与账本文件一起删除；巡检停止，账本无法恢复。" = "Assistant “%@” will be deleted together with its working session and ledger file. Its patrols stop and the ledger cannot be restored.";
+"助理与定时" = "Assistants";
 "助理关着 —— 打开助理它才会连" = "The assistant is paused — turn it on and this bot connects.";
 "助理巡检住在 App 进程里, 不开 App 就不会巡检。开启后 macOS 可能要求你在「登录项」里批准一次" = "Assistant checks run inside the app process, so nothing runs while it is closed. macOS may ask you to approve it once in Login Items";
 "助理是关着的 —— 打开它才会推" = "The assistant is paused — turn it on and findings will be pushed.";
@@ -550,6 +556,7 @@
 "审批流开启, 点击关闭" = "Approval on, click to disable";
 "家目录" = "Home";
 "对话" = "Chat";
+"对话记录" = "Sessions";
 "导入 .ts/.js 到托管区" = "Import .ts / .js into the managed area";
 "导入到托管区" = "Import into the managed area";
 "导出 HTML 并在 Finder 显示" = "Export HTML and reveal it in Finder";
@@ -597,6 +604,7 @@
 "已执行" = "ran";
 "已拒绝" = "Denied";
 "已挂载的知识库 %lld 个没进索引: %@" = "%lld mounted knowledge bases did not make it into the index: %@";
+"已授权 %lld 次" = "authorized %lld×";
 "已排上" = "Scheduled";
 "已排上 %@" = "Scheduled · %@";
 "已推给「%@」的私聊" = "Pushed into the direct message of 「%@」";
@@ -631,6 +639,7 @@
 "引擎没起来（找不到 pi CLI），这句没跑。" = "The engine is not up (pi CLI not found) — this message was not run.";
 "引擎返回了空回合 · 引擎没有返回任何内容, 请检查模型与凭据" = "The engine returned an empty turn — nothing came back; check the model and credentials";
 "引擎返回了空回合 · 模型 %@ 可能不存在或已下线" = "The engine returned an empty turn · model %@ may not exist or is no longer available";
+"引擎进程" = "Engine process";
 "引用工作区文件" = "Reference a workspace file";
 "归 %@" = "Under %@";
 "归它" = "Assign";
@@ -658,6 +667,7 @@
 "思考 %lld" = "thinking %lld";
 "思考中…" = "Thinking…";
 "思考过程" = "Reasoning";
+"恢复中" = "restoring";
 "我必须怎么做" = "My Rules";
 "我是谁" = "Who I Am";
 "手上都没有活" = "Nothing in hand right now";
@@ -864,6 +874,7 @@
 "标题（可留空）" = "Title (optional)";
 "格式化" = "Format";
 "模型" = "Model";
+"模型与凭据" = "Model & key";
 "模型与思考强度 (选中即期望, 下一回合生效)" = "Model and reasoning effort (a preference; applies to the next turn)";
 "模型与模式配置" = "Model and mode configuration";
 "模型与模式配置为必填" = "Model and mode configuration is required";
@@ -872,6 +883,7 @@
 "模型自主调度" = "Model self-scheduling";
 "模式" = "Mode";
 "模式档位: 决定 agent 可用的工具与扩展 (下回合生效)" = "Mode: decides which tools and extensions the agent gets (applies next turn)";
+"正在恢复工作区…" = "Restoring workspace…";
 "正在连接…" = "Connecting…";
 "正文" = "Body";
 "正文太长 · 网页未出图" = "Text too long · web page not rendered";
@@ -1092,9 +1104,11 @@
 "跟随系统 = 由 macOS 的语言设置决定; 切换立即生效, 影响全 App (含迷你台与快速捕获)。系统级文案 (菜单栏 / 系统弹窗) 仍随系统语言, 重启后完全一致。" = "Follow system = decided by the macOS language setting; switching applies immediately across the app (task bar and quick capture included). System-level text (menu bar, system dialogs) still follows the system language and matches after a restart.";
 "跟随默认" = "Follows default";
 "路径是空的" = "The path is empty.";
+"跳过启动页" = "Skip boot sequence";
 "身份" = "Standing";
 "轨迹" = "Trace";
 "轮次" = "Turns";
+"载入中" = "loading";
 "辅助功能" = "Accessibility";
 "输入" = "In";
 "输入监控" = "Input Monitoring";
@@ -1229,6 +1243,7 @@
 "需要时才查 %lld 条 · 不占预算" = "%lld on demand · off budget";
 "非只读命令" = "non-read-only command";
 "项目" = "Project";
+"项目与工作区" = "Workspace";
 "项目操作" = "Project actions";
 "预算 %@ 字" = "budget %@ chars";
 "预览" = "Preview";
