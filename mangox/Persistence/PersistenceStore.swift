@@ -299,6 +299,10 @@ final class PersistenceStore {
         addColumnIfMissing("scheduled_tasks", "delegate_per_day", "INTEGER")
         // 1 = "它是因为 main 停用才跟着停的"。唯一读者是"启 main ⇒ 恢复谁"。
         addColumnIfMissing("scheduled_tasks", "disabled_by_parent", "INTEGER NOT NULL DEFAULT 0")
+        // 头像（内置 emoji 之一，存的是字符本身，见 `TeamAvatar`）。NULL = 没设过 ⇒ 按 id 自动分配。
+        // ⚠️ 可空且**不回填**：老行读出来是 NULL，团队页自动摊一个；一旦回填成实值，
+        //    "自动"就永远追不到图案表的调整（而自动分配合法的全部意义就是它是派生的）。
+        addColumnIfMissing("scheduled_tasks", "avatar", "TEXT")
         // P19.2 S15: 飞书单聊绑定的 chat_id。**列只增不删**（旧版 App 打开新库会崩那一条）。
         // ⚠️ S15b 起这一列**没人读了**（绑定改在 `remote_bots.assistant_id` 上）。留着是为了
         // "旧版打开新库不崩"，以及迁移时一次性把它收成机器人行（见 `migrateLegacyRemoteBindings`）。
@@ -1383,7 +1387,8 @@ final class PersistenceStore {
     func loadScheduled() throws -> [ScheduledTask] {
         let rows = try db.query("""
             SELECT id, name, prompt, cron, project_id, enabled, last_run_at, log_session_id, continuous, condition, unattended, completed_at, run_count, created_at, config, kind, sources, notify, daily_token_budget, follow_ups_per_day,
-                   role, parent_id, description, description_detail, delegate_per_day, disabled_by_parent
+                   role, parent_id, description, description_detail, delegate_per_day, disabled_by_parent,
+                   avatar
             FROM scheduled_tasks ORDER BY created_at DESC
             """)
         return rows.map { row in
@@ -1433,6 +1438,9 @@ final class PersistenceStore {
                 // 空串 = 没写（不是 NULL：两段都是 NOT NULL DEFAULT ''，少一层"空串还是 null"的分叉）。
                 description: text(row, "description"),
                 descriptionDetail: text(row, "description_detail"),
+                // 头像: NULL / 空串 / 脏值一律当"没设过"（`TeamAvatar.isBuiltIn` 判）。
+                // 脏值不当错的理由同 `sources`: 一个字符坏了不该让整行读不出来。
+                avatar: optionalText(row, "avatar").flatMap { TeamAvatar.isBuiltIn($0) ? $0 : nil },
                 delegatesPerDay: optionalInt(row, "delegate_per_day"),
                 disabledByParent: int(row["disabled_by_parent"] ?? .null) == 1)
         }
@@ -1453,8 +1461,8 @@ final class PersistenceStore {
         // 这是有意的: 两个真源里活的那一个在 `remote_bots`，留着旧列同步只会让两边有机会不一致。
         try db.run("""
             INSERT OR REPLACE INTO scheduled_tasks
-            (id, name, prompt, cron, project_id, enabled, last_run_at, log_session_id, continuous, condition, unattended, completed_at, run_count, created_at, config, kind, sources, notify, daily_token_budget, follow_ups_per_day, role, parent_id, description, description_detail, delegate_per_day, disabled_by_parent)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            (id, name, prompt, cron, project_id, enabled, last_run_at, log_session_id, continuous, condition, unattended, completed_at, run_count, created_at, config, kind, sources, notify, daily_token_budget, follow_ups_per_day, role, parent_id, description, description_detail, delegate_per_day, disabled_by_parent, avatar)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             """, [.text(t.id.uuidString),
                   .text(t.name),
                   .text(t.prompt),
@@ -1485,7 +1493,10 @@ final class PersistenceStore {
                   .text(t.description),
                   .text(t.descriptionDetail),
                   t.delegatesPerDay.map { .int(Int64(max(0, $0))) } ?? .null,
-                  .int(t.disabledByParent ? 1 : 0)])
+                  .int(t.disabledByParent ? 1 : 0),
+                  // 头像: 没设过写 NULL（= 走自动分配）。⚠️ 这一行不能省 ——
+                  // 上面是 `INSERT OR REPLACE`，整行重建；少了它，每次保存都会把用户选的头像抹掉。
+                  t.avatar.flatMap { TeamAvatar.isBuiltIn($0) ? DBValue.text($0) : nil } ?? .null])
     }
 
     // MARK: - P19 S7 日 token 账本
@@ -1542,6 +1553,53 @@ final class PersistenceStore {
             """, [.text(sessionId.uuidString), .real(since.timeIntervalSince1970)])
         guard let row = rows.first else { return 0 }
         return Int(int(row["total"] ?? .null))
+    }
+
+    /// 每个人**交过几次活** —— `status = 'done'` 的条数，按 `to_task` 分（团队页卡片第三格）。
+    ///
+    /// 为什么要它: 卡片那三格原本第三格是「台账 · 验收 7/9」，而台账只存在交接文件里
+    /// ⇒ 每人一次读盘 + 逐行 parse。那是团队页唯一碰文件系统的地方。换成这个之后
+    /// **三格全是 db 聚合**（2026-11-27 boss：「换成别的可以从 db 获取的指标」）。
+    ///
+    /// ⚠️ 只数 `done`，不数 `failed` / `cancelled`: 这一格回答的是"它一共交出过多少活"，
+    ///    把失败折进去就成了一个既不是成功率也不是总量的数。失败在检查器「最近五次执行」里
+    ///    逐条带状态词 —— 那里才是看"这一单成没成"的地方。
+    func doneDelegationCounts() throws -> [UUID: Int] {
+        let rows = try db.query("""
+            SELECT to_task, COUNT(*) AS n FROM agent_delegations
+            WHERE status = 'done' GROUP BY to_task
+            """)
+        var out: [UUID: Int] = [:]
+        for r in rows {
+            guard let id = UUID(uuidString: text(r, "to_task")) else { continue }
+            out[id] = Int(int(r["n"] ?? .null))
+        }
+        return out
+    }
+
+    /// 一批会话的 **token 累计 + 回合数**（团队页卡片底部那两格，2026-11-27）。
+    ///
+    /// 一条 `GROUP BY` 取全员 —— 不用 `sumTurnTokens(sessionId:since:)` 循环: 那个是"今天"口径，
+    /// 而且一人一次往返；卡片要的是**累计**（这台机器上它一共花了多少），所以不带 since。
+    /// 回合数天然就是 `turn_tokens` 的行数（一回合一行），不用再查第三张表。
+    ///
+    /// ⚠️ **这不是"花过的全部"**: 删会话会连带删掉它的 `turn_tokens`（`deleteSession` 那一行）
+    ///    ⇒ 卡片上的数读作"还留着的那些日志会话的累计"。界面不声称它是账单。
+    /// ⚠️ `IN` 里塞多少个: SQLite 的变量上限远大于此（默认 999），而这一页是"3 支队伍 × 3~5 人"
+    ///    的量级；真到几百人再分片，现在不分。
+    func turnTotals(sessionIds: [UUID]) throws -> [UUID: (tokens: Int, turns: Int)] {
+        guard !sessionIds.isEmpty else { return [:] }
+        let marks = Array(repeating: "?", count: sessionIds.count).joined(separator: ",")
+        let rows = try db.query("""
+            SELECT session_id, COALESCE(SUM(tokens), 0) AS tok, COUNT(*) AS turns
+            FROM turn_tokens WHERE session_id IN (\(marks)) GROUP BY session_id
+            """, sessionIds.map { .text($0.uuidString) })
+        var out: [UUID: (tokens: Int, turns: Int)] = [:]
+        for r in rows {
+            guard let id = UUID(uuidString: text(r, "session_id")) else { continue }
+            out[id] = (Int(int(r["tok"] ?? .null)), Int(int(r["turns"] ?? .null)))
+        }
+        return out
     }
 
     // MARK: - follow-up（agent 给自己约定时器, 2026-11-23）

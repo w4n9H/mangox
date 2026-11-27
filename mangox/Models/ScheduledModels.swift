@@ -101,6 +101,14 @@ struct ScheduledTask: Identifiable {
     /// 从不进常驻注入段（12 × 240 字每轮付费 = 违反 context rot 那条）。
     var descriptionDetail: String = ""
 
+    /// 头像 —— 内置 10 个 emoji 之一（`TeamAvatar.all`）。`nil` = **没设过**，按 id 自动分配。
+    ///
+    /// ⚠️ 存 emoji 字符串本身，不存下标：下标是"容器里的位置"那族键（2026-10-08 判据），
+    ///    `all` 里插一个图案就会让所有存过的人**静默换脸**。
+    /// ⚠️ 三态与 `followUpsPerDay` 不同: 这里只有「没设过（nil）」与「设成了某个值」两态 ——
+    ///    没有"明确关掉头像"这个需求，所以不需要第三个值。
+    var avatar: String? = nil
+
     /// 一天最多派几次活。`nil` = 没配过（按出厂 `factoryDelegatesPerDay`）／`0` = 人明确关掉／
     /// `n` = 上限。⚠️ 与 `followUpsPerDay` 同一族的坑：塌成两态就再也分不开"他没看过"与
     /// "他关掉了"—— 前者会让将来改出厂值时**悄悄改掉他的选择**。

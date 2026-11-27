@@ -109,7 +109,33 @@ extension SmokeMain {
                            probeAgeMs: 2, peak: 2951),
               "T-CSCROLL 视口越过内容底(内容底只到 438/754)时必须继续追, 哪怕 gap 读作 0")
 
-        // 反例① 健康态（17:12:06 settle 现场原数）：一个都不许追。
+        // 正例④ 探针**一次都没报过**（2026-11-27 现场原数，
+        // `mangox-20261127-092811.log` 開屏 1023 条消息）。
+        //
+        // 那次的日志是一条完整的"判绿收手"链:
+        //   `mat=1 msgs=1023` → 四拍全 `bottom=0 age=na` → `retry step=0 gap=3107` →
+        //   重试落到 `gap=0` → `.settle gap=0`，然后屏幕整块是底色（boss 截图）。
+        // ①②③ 都接不住: ①`doc == peak` 不塌、②`gap` 归零后不再超限、
+        // ③ 的前置就是 `bottom > 0`（把"从没报过"排除在外）。
+        // ⚠️ 这一条判的是"内容底探针从未实例化"，**不是**"内容底在 0 处" —— 前提是
+        //    `probeAgeMs == nil`（`lastBottomAt` 的初值，见 `ChatView` 里那段注释）。
+        check(W.needsRetry(doc: 40192, vp: 754, gap: 0, bottom: 0,
+                           probeAgeMs: nil, peak: 40192),
+              "T-CSCROLL 内容底探针从没报过(bottom=0 age=na)而文档比视口长时, 必须继续追 "
+              + "—— 这是唯一一种'几何读数全绿、屏幕全空'的组合, 漏掉它就只能靠切会话救")
+
+        // 反例④ 内容**不满一屏**的短会话: `doc` 有值但比 `vp` 小，探针同样"从没报过" ⇒ **不许**追。
+        // 拦的是"只判 `probeAgeMs == nil` 而丢掉 `doc > vp`"那个简化写法 ——
+        // 少了这半个条件，每一个内容不满一屏的会话都会被看门狗追满五拍（0.6~6.0 秒）。
+        //
+        // ⚠️ 这条**必须**用 `doc > 0 且 doc < vp`，不能用 `doc: 0`：`needsRetry` 开头有
+        //    `guard vp > 0, doc > 0`，`doc: 0` 在进门就被挡掉 ⇒ 那条反例对"去掉 doc > vp 的简化"
+        //    毫无区分度（2026-11-27 实测：喂 doc 0 时那个简化照样全绿，反例是假门）。
+        check(!W.needsRetry(doc: 400, vp: 754, gap: -354, bottom: 0,
+                            probeAgeMs: nil, peak: 400),
+              "T-CSCROLL 内容不满一屏(doc 400 < vp 754, 探针也没报过)不许追 "
+              + "—— 判据必须同时要求 doc 比视口长, 只判 age==nil 会把每个短会话追五遍")
+
         check(!W.needsRetry(doc: 3053, vp: 754, gap: 0, bottom: 666,
                             probeAgeMs: 100, peak: 3053),
               "T-CSCROLL 贴底且探针新鲜时不许再追 (追了就是每秒抖一次)")

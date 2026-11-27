@@ -1383,6 +1383,43 @@ final class SchedulerService: ObservableObject {
             out[t.id] = TeamState.of(t, busy: busy, awaiting: awaiting[t.id], live: live)
         }
         teamStates = out
+        refreshTeamCardStats()
+    }
+
+    /// 卡片底部那三格数字（token / 回合 / 交活）的**快照** —— 2026-11-27 团队页改成分组卡片时加的。
+    ///
+    /// ⚠️ 为什么挂在 `refreshTeamStates` 里而不是自己开一个时点: 两张快照说的是同一批人的同一件事，
+    ///    分开刷就会出现"状态说在跑、数字还是上一轮的"。同一个函数 = 同一口气。
+    /// ⚠️ 成本: **两条 `GROUP BY`**（`turn_tokens` / `agent_delegations`），**一个文件都不读**。
+    ///    第一版第三格是「台账」，那要每人读一次交接文件再逐行 parse —— 七个人七次读盘。
+    ///    量不大（≤4420 字的小文件），但它是这一页**唯一碰文件系统**的地方，2026-11-27 换掉了
+    ///    （boss：「台账计算有点麻烦，能不能换成别的可以从 db 获取的指标」）。
+    @Published private(set) var teamCardStats: [UUID: TeamCardStat] = [:]
+
+    func cardStat(of taskId: UUID) -> TeamCardStat {
+        teamCardStats[taskId] ?? .empty
+    }
+
+    private func refreshTeamCardStats() {
+        guard let p = store?.persistence else { teamCardStats = [:]; return }
+        // 与团队页 `allPeople` 同一个口径（助理档、且不是只读归档）—— Cron 档不进这一页。
+        let people = scheduledTasks.filter { $0.isAssistant && !$0.isLegacyWaiting }
+        guard !people.isEmpty else { teamCardStats = [:]; return }
+        // 一次取全员: 一人一条 SQL 在七个人时也还行，但没理由那么干。
+        let totals = (try? p.turnTotals(sessionIds: people.compactMap(\.logSessionId))) ?? [:]
+        let done = (try? p.doneDelegationCounts()) ?? [:]
+        var out: [UUID: TeamCardStat] = [:]
+        out.reserveCapacity(people.count)
+        for t in people {
+            var s = TeamCardStat()
+            if let log = t.logSessionId, let tt = totals[log] {
+                s.tokens = tt.tokens
+                s.turns = tt.turns
+            }
+            s.doneDelegations = done[t.id] ?? 0
+            out[t.id] = s
+        }
+        teamCardStats = out
     }
 
     /// 一个人现在的状态（没算过 = 空闲，界面不会因此画错一行）。

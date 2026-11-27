@@ -192,8 +192,11 @@ enum SecretVault {
         query[kSecReturnData as String] = true
         query[kSecMatchLimit as String] = kSecMatchLimitOne
         var out: CFTypeRef?
-        guard SecItemCopyMatching(query as CFDictionary, &out) == errSecSuccess,
-              let data = out as? Data else { return nil }
+        let st = SecItemCopyMatching(query as CFDictionary, &out)
+        // 一行定案「一次启动弹几个框」：`status != 0` ⇒ 条目没读到 ⇒ 下面每个键都会去读老位置
+        // （每个老 service + account 一个框）。这一行就是"退化"的开关读数。
+        Log.store("vault-read", ["st": "\(st)", "hit": st == errSecSuccess ? "1" : "0"])
+        guard st == errSecSuccess, let data = out as? Data else { return nil }
         return data
     }
 
@@ -204,14 +207,19 @@ enum SecretVault {
                                     kSecReturnData as String: true,
                                     kSecMatchLimit as String: kSecMatchLimitOne]
         var out: CFTypeRef?
-        guard SecItemCopyMatching(query as CFDictionary, &out) == errSecSuccess,
-              let data = out as? Data else { return nil }
+        let st = SecItemCopyMatching(query as CFDictionary, &out)
+        // ⚠️ account 只记前 8 个字符（邮箱账号那条的 account 可能带地址，日志不该落明文）。
+        Log.store("vault-legacy", ["svc": loc.service,
+                                   "acc": String(loc.account.prefix(8)),
+                                   "st": "\(st)"])
+        guard st == errSecSuccess, let data = out as? Data else { return nil }
         return String(data: data, encoding: .utf8)
     }
 
     /// 整条重写: 先 update、条目没了再 add。**写的是全部键** —— 调用方保证 `cache` 是全量。
     private static func persist() throws {
         let dict = cache ?? [:]
+        Log.store("vault-write", ["mode": itemExists ? "update" : "add", "keys": "\(dict.count)"])
         if dict.isEmpty {
             if itemExists {
                 let status = SecItemDelete(baseQuery() as CFDictionary)

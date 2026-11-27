@@ -28,6 +28,9 @@ struct ScheduledView: View {
     /// ⚠️ 两段的**消费者不同**: 职责每轮进【你的队伍】原文照搬，说明只被 `list_workers` 按需读。
     @State private var draftDescription: String = ""
     @State private var draftDescriptionDetail: String = ""
+    /// 头像草稿。`nil` = **自动**（不写库，按 id 分配）—— 编辑页需要一个"未指定"态，
+    /// 而 `ScheduledTask.avatar` 恰好也是 `nil`，两边同一个含义，不用再折一次。
+    @State private var draftAvatar: String? = nil
     @State private var draftPrompt: String = ""
     @State private var draftCron: String = "0 9 * * *"
     @State private var draftProjectId: UUID?
@@ -1611,11 +1614,76 @@ struct ScheduledView: View {
             }
             dutyField
             dutyDetailField
+            avatarPicker
         }
         .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(CodexTheme.bgElevated)
         .clipShape(RoundedRectangle(cornerRadius: 8))
+    }
+
+    // MARK: - 头像
+
+    /// 头像选择器 —— 「自动」+ 10 个内置 emoji（`TeamAvatar.all`，唯一定义处在那）。
+    ///
+    /// ⚠️ 「自动」是**一个可选项**，不是"没选"的兜底：它存 NULL，团队页按 id 派生。
+    ///    做成"必须选一个才能保存"会逼每个用户做一次没必要的决定，而自动分配在 ≤10 人的
+    ///    队伍里本来就不重复（`TeamAvatar.assign` 的规则②）。
+    /// ⚠️ 只出现在 `teamCard` 里 ⇒ 只有助理档看得到。Cron 任务不在队伍系统里，
+    ///    给它一个"头像"就跟给它职责输入框一样：写了没有任何读者。
+    private var avatarPicker: some View {
+        HStack(spacing: 6) {
+            Text(L("头像"))
+                .font(CodexTheme.fontTiny)
+                .foregroundStyle(CodexTheme.textMuted)
+            autoAvatarChip
+            ForEach(TeamAvatar.all, id: \.self) { a in
+                avatarChip(a)
+            }
+            Spacer(minLength: 0)
+        }
+    }
+
+    private var autoAvatarChip: some View {
+        let on = draftAvatar == nil
+        return Button { draftAvatar = nil } label: {
+            Text(L("自动"))
+                .font(.system(size: 10.5, weight: on ? .semibold : .regular))
+                .foregroundStyle(on ? CodexTheme.accent : CodexTheme.textSecondary)
+                .padding(.horizontal, 7)
+                .padding(.vertical, 3)
+                .background {
+                    Capsule().fill(on ? CodexTheme.accent.opacity(0.14) : CodexTheme.bgPill)
+                }
+                .overlay {
+                    Capsule().strokeBorder(on ? CodexTheme.accent.opacity(0.55) : Color.clear,
+                                           lineWidth: 1)
+                }
+        }
+        .buttonStyle(.plain)
+        .help(L("按 id 派生一个，不写进设置；想固定成某一张再挑"))
+    }
+
+    private func avatarChip(_ a: String) -> some View {
+        let on = draftAvatar == a
+        return Button {
+            // 再点一次已选中的 = 退回自动（不必先点「自动」再取消，少一步）。
+            draftAvatar = on ? nil : a
+        } label: {
+            Text(a)
+                .font(.system(size: 13))
+                .frame(width: 25, height: 22)
+                .background {
+                    RoundedRectangle(cornerRadius: 6)
+                        .fill(on ? CodexTheme.accent.opacity(0.16) : CodexTheme.bgPill)
+                }
+                .overlay {
+                    RoundedRectangle(cornerRadius: 6)
+                        .strokeBorder(on ? CodexTheme.accent.opacity(0.6) : Color.clear,
+                                      lineWidth: 1)
+                }
+        }
+        .buttonStyle(.plain)
     }
 
     /// 身份。**已保存的任务不可改**（与 `kindPill` 同一条理由: 换身份等于换一种东西）——
@@ -2062,6 +2130,7 @@ struct ScheduledView: View {
         t.parentId = draftRole == .worker ? draftParentId : nil
         t.description = draftDescription
         t.descriptionDetail = draftDescriptionDetail
+        t.avatar = draftAvatar
         return t
     }
 
@@ -2169,6 +2238,7 @@ struct ScheduledView: View {
         draftParentId = nil
         draftDescription = ""
         draftDescriptionDetail = ""
+        draftAvatar = nil
         draftSources = []
         draftBotId = nil
         draftBudget = ""
@@ -2307,6 +2377,7 @@ struct ScheduledView: View {
         draftParentId = task.parentId
         draftDescription = task.description
         draftDescriptionDetail = task.descriptionDetail
+        draftAvatar = task.avatar
         draftSources = task.sources
         // 归属从机器人那一侧反查（`remote_bots.assistant_id` 是唯一真源）。
         // 1:1 ⇒ 最多一个；`first` 而不是 `last` 只是为了"万一库里有两条"时行为可预期。
@@ -2406,6 +2477,7 @@ struct ScheduledView: View {
             existing.parentId = draftRole == .worker ? draftParentId : nil
             existing.description = duty
             existing.descriptionDetail = dutyDetail
+            existing.avatar = draftAvatar
             // 来源照写: 本版界面不能改来源, 但库里已有的行必须原样留住, 否则一次编辑就静默清空。
             existing.sources = draftSources
             existing.dailyTokenBudget = budget
@@ -2430,6 +2502,7 @@ struct ScheduledView: View {
                 store.scheduledTasks[idx].config = buildDraftConfig()   // P10.4
                 store.scheduledTasks[idx].dailyTokenBudget = budget
                 store.scheduledTasks[idx].followUpsPerDay = savedFollowUpsPerDay(draftKind)
+                store.scheduledTasks[idx].avatar = draftAvatar
                 // 这一条 `updateScheduled` **不参与 saved 判定**: 它写的是同一行,
                 // 而团队不变量已经在上面那条探头里过了 —— 让它的返回值把"存下去了"翻成 false,
                 // 人会看到"没保存"却找不到原行（那一行其实已经在库里了）。
@@ -2489,6 +2562,7 @@ struct ScheduledView: View {
         draftParentId = nil
         draftDescription = ""
         draftDescriptionDetail = ""
+        draftAvatar = nil
         draftLog = ""
         handoffUpdatedAt = nil
         showWorkLog = false

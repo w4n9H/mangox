@@ -774,94 +774,213 @@ extension SmokeMain {
             return t
         }
         let rA35 = person35("A", age: -60), rB35 = person35("B", age: -120), rC35 = person35("C", age: -180)
-        let runOrder35 = TeamBoardText.order(.running, [rA35, rB35, rC35], states: [
+        let runOrder35 = TeamBoardText.order([rA35, rB35, rC35], states: [
             rA35.id: .running(since: now35.addingTimeInterval(-5 * 60)),
             rB35.id: .running(since: now35.addingTimeInterval(-1 * 60)),
             rC35.id: .running(since: now35.addingTimeInterval(-30 * 60)),
         ])
         let qA35 = person35("Q1", age: -60), qB35 = person35("Q2", age: -120)
-        let queuedOrder35 = TeamBoardText.order(.queued, [qA35, qB35], states: [
+        let queuedOrder35 = TeamBoardText.order([qA35, qB35], states: [
             qA35.id: .queued(at: now35.addingTimeInterval(600)),
             qB35.id: .queued(at: now35.addingTimeInterval(120)),
         ])
         let aA35 = person35("W1", age: -60), aB35 = person35("W2", age: -120)
-        let awaitOrder35 = TeamBoardText.order(.awaiting, [aA35, aB35], states: [
+        let awaitOrder35 = TeamBoardText.order([aA35, aB35], states: [
             aA35.id: .awaiting(since: now35.addingTimeInterval(-2 * 60)),
             aB35.id: .awaiting(since: now35.addingTimeInterval(-20 * 60)),
         ])
         let iA35 = person35("I1", age: -60), iB35 = person35("I2", age: -120)
         let iC35 = person35("I3", age: -180)
-        let idleOrder35 = TeamBoardText.order(.idle, [iA35, iB35, iC35], states: [
+        let idleOrder35 = TeamBoardText.order([iA35, iB35, iC35], states: [
             iA35.id: .idle(lastActive: now35.addingTimeInterval(-3_600)),
             iB35.id: .idle(lastActive: now35.addingTimeInterval(-10 * 86_400)),
             iC35.id: .idle(lastActive: nil),          // 从没跑过 = 最久没动 ⇒ 排最前
         ])
         let dA35 = person35("D1", age: -60), dB35 = person35("D2", age: -120)
-        let offOrder35 = TeamBoardText.order(.disabled, [dA35, dB35], states: [
+        let offOrder35 = TeamBoardText.order([dA35, dB35], states: [
             dA35.id: .disabled, dB35.id: .disabled,
         ])
+        // **档位是第一级键**（2026-11-27 泳道退役后新加的）: 混着喂进去，出来的次序必须是
+        // 在跑 → 已排上 → 等回执 → 空闲 → 停用。泳道时代这件事由"人站在哪一列"物理保证，
+        // 现在列没了，只能靠排序 —— 所以这条必须单独钉，否则同一组里"停用的排在在跑的前面"
+        // 也没有任何东西会红。
+        var all35: [UUID: TeamState] = [:]
+        all35[rA35.id] = .running(since: now35.addingTimeInterval(-5 * 60))
+        all35[qA35.id] = .queued(at: now35.addingTimeInterval(600))
+        all35[aA35.id] = .awaiting(since: now35.addingTimeInterval(-2 * 60))
+        all35[iA35.id] = .idle(lastActive: now35.addingTimeInterval(-3_600))
+        all35[dA35.id] = .disabled
+        let mixed35 = TeamBoardText.order([dA35, iA35, aA35, qA35, rA35], states: all35)
         check(runOrder35.map(\.name) == ["C", "A", "B"]        // 跑得久的浮上来
               && queuedOrder35.map(\.name) == ["Q2", "Q1"]      // 最快起跑的在上
               && awaitOrder35.map(\.name) == ["W2", "W1"]       // 等最久的在上
               && idleOrder35.map(\.name) == ["I3", "I2", "I1"]  // 最久没动的在上（nil = 从没跑过 ⇒ 最前）
-              && offOrder35.map(\.name) == ["D2", "D1"],        // 停用没有停用时刻 ⇒ 按建人顺序（D2 建得早）
-              "T-TEAM ㉟(doc P5)列内排序=最该被看见的在上: 在跑(跑得久)/已排上(到点早)/"
-              + " 等回执(等得久)/空闲(最久没动, `nil` 最前)/停用(无停用时刻 ⇒ 按建人顺序);"
-              + " 同键按 createdAt(tiebreaker 一漏, 同键两张卡每 tick 换位)"
+              && offOrder35.map(\.name) == ["D2", "D1"]         // 停用没有停用时刻 ⇒ 按建人顺序（D2 建得早）
+              // 混排: 喂进去的次序是 停用/空闲/等回执/已排上/在跑（故意的倒序），
+              // 出来必须正过来 —— 这一条要是只靠"各档内部自己排"，永远会绿。
+              && mixed35.map(\.name) == ["A", "Q1", "W1", "I1", "D1"],
+              "T-TEAM ㉟(P5 定稿)组内排序=最该被看见的在上: **档位是第一级键**"
+              + "(在跑→已排上→等回执→空闲→停用, 泳道退役后由排序保证, 原来由列位置保证);"
+              + " 同档内: 在跑(跑得久)/已排上(到点早)/等回执(等得久)/空闲(最久没动, `nil` 最前)"
+              + "/停用(无停用时刻 ⇒ 按建人顺序); 同键按 createdAt(tiebreaker 一漏, 同键两张卡每 tick 换位)"
               + " (实测 \(runOrder35.map(\.name)) / \(queuedOrder35.map(\.name))"
-              + " / \(awaitOrder35.map(\.name)) / \(idleOrder35.map(\.name)))")
+              + " / \(awaitOrder35.map(\.name)) / \(idleOrder35.map(\.name))"
+              + " / 混排 \(mixed35.map(\.name)))")
 
-        // ══ ㊱（doc P5）五列**等宽**: 宽度跟着可用宽走, 夹在 [下限, 150] ══════════════
-        // 同一个数改了三版，前两版都被 boss 出图否掉: ① 空列 36pt + 逐字竖排（"又是横字，
-        // 又是竖字"）; ② 空列按实测列名收到 61pt（"至少要等宽吧"）。两版都错在给空列开特例 ——
-        // 现在是**五列同一个宽度**，宽度由这一栏的可用宽均分而来。
-        // 这条判的是"等宽 + 夹取 + 整片宽与列宽同源"，不是"130 这个数好看"。
-        let gap36 = Tune.teamLaneGap
-        let normal36 = TeamBoardText.laneWidth(available: 700)    // 常见窗口: 装得下 ⇒ 均分
-        let wide36 = TeamBoardText.laneWidth(available: 1400)     // 很宽: 封顶 150，不再撑
-        let tiny36 = TeamBoardText.laneWidth(available: 400)      // 很窄: 落到下限
-        let board36 = TeamBoardText.boardWidth(available: 700)
-        check(normal36 == 130                                     // (700 − 4×12) ÷ 5 = 130.4 ⇒ 向下取整
-              && wide36 == Tune.teamLaneWidth
-              && tiny36 == Tune.teamLaneMinWidth
-              && board36 == normal36 * 5 + gap36 * 4
-              // 装得下那一档必须**刚好放满**: 余量不到一个 gap，否则"等宽"会留出一条
-              // 永远擦不掉的空白（或反过来滚出一像素，右边挂一条不该有的渐隐）。
-              && board36 <= 700 && 700 - board36 < gap36,
-              "T-TEAM ㊱(doc P5)五列等宽: 可用 700 ⇒ 列宽 \(Int(normal36))pt/整片 \(Int(board36))pt;"
-              + " 可用 1400 ⇒ \(Int(wide36))pt(封顶); 可用 400 ⇒ \(Int(tiny36))pt(下限);"
-              + " 列宽只有一个来源, 空列与有卡列同宽")
+        // ══ ㊱（定稿 P5）卡列数: **够几个摆几个, 卡片宽度恒定** ══════════════════
+        // 2026-11-27 泳道退役，这条从"五列等宽怎么算"改成"一行摆几张"。
+        // 判据只有一条: `teamCardWidth` 是**定稿宽度**，永不压缩 —— 宽度不够就少摆一张。
+        // 压到 190 就会出现名字被省略号吃掉（"巡检北区"→"巡检北…"），所以列数不能靠挤。
+        // 三个数是三个真实窗口算出来的（减侧栏 257、减内边距 32），不是凑的:
+        //   1053 最窄 ⇒ 764 可用 ⇒ 3 张；1280 默认 ⇒ 991 ⇒ 4 张；≥1040 ⇒ 5 张（封顶）。
+        let cols764 = TeamBoardText.cardColumns(available: 764)
+        let cols991 = TeamBoardText.cardColumns(available: 991)
+        let colsCap = TeamBoardText.cardColumns(available: 1040)
+        let colsJustUnder = TeamBoardText.cardColumns(available: 1039)  // 差 1pt 就掉回 4 张
+        let colsWide = TeamBoardText.cardColumns(available: 1400)
+        let colsTiny = TeamBoardText.cardColumns(available: 150)        // 极窄：兜底 1，不是 0
+        check(cols764 == 3 && cols991 == 4 && colsCap == 5 && colsJustUnder == 4
+              && colsWide == 5 && colsTiny == 1
+              && Tune.teamCardWidth == 200,
+              "T-TEAM ㊱(P5 定稿)一行摆几张: 卡片固定 \(Int(Tune.teamCardWidth))pt **永不压缩**;"
+              + " 可用 764(最窄窗口)⇒\(cols764) 张 / 991(默认窗口)⇒\(cols991) 张 /"
+              + " 1040⇒\(colsCap) 张(封顶) / 1039⇒\(colsJustUnder) 张(临界就在这 1pt) /"
+              + " 1400⇒\(colsWide) 张(不再多摆) / 150⇒\(colsTiny) 张(兜底, 不许是 0)")
 
-        // ══ ㊲（doc P5）卡片第二行与统计行: 归属是泳道页唯一还能认出"谁是谁的人"的地方 ══
-        // 泳道按状态分列之后，一支队伍被拆到五列里 —— 卡片上不写归属，二十张卡就是认不出。
-        let subLead37 = TeamBoardText.cardSubtitle(
-            lead13, parentName: nil,
-            state: .running(since: now35.addingTimeInterval(-4 * 60)), now: now35)
-        let subWorker37 = TeamBoardText.cardSubtitle(
-            worker13, parentName: lead13.name, state: .disabled, now: now35)
-        let subOrphan37 = TeamBoardText.cardSubtitle(
-            orphan34, parentName: nil, state: .idle(lastActive: nil), now: now35)
-        let stats37 = TeamBoardText.statsLine(total: 6, teams: 2,
-                                              cards: [.running: 2, .idle: 4])
-        let statsOne37 = TeamBoardText.statsLine(total: 3, teams: 1, cards: [.idle: 3])
-        // 卡片可用宽 = 列宽 − 左右各 10 − 竖条 3。列宽现在是 [118, 150] 之间由窗口决定的
-        // （㊱），按**设计宽 150** 算就是 127pt，9.5pt 中文每字约 9.5pt ⇒ 13 字。
-        // 这条钉的是 13 这个**措辞上界**（列宽最宽时也放得下）；窗口窄到 118 列时可用宽 95pt，
-        // 尾巴按 `lineLimit(1)` 截断 —— 那是布局的降级，不是措辞写长了。
-        // 超了就是**尾部截断**，而截掉的是时态（"3 天没派"变成"3 天"）甚至归属的后半截 ——
-        // 出图实测过一次（第一版写「%lld 天没派 / 还没跑过」，整行被切）。上限放在这里，
-        // 是因为它是一条**能变红的**约束: 谁把措辞写长，这条当场红，不用等人去出图。
+        // ══ ㊶（P5 定稿）卡片三格数字与台账的退役 ══════════════════════════════
+        // 2026-11-27 boss:「台账计算有点麻烦，能不能换成别的可以从 db 获取的指标」
+        // ⇒ 第三格从「台账 · 验收 7/9」换成「交活」（`agent_delegations` 里 status='done' 的条数）。
+        // 这条钉的是**格式化档位**（一个独立失败模式: 换档位写错，数字就从小变大或从大变小）:
+        // 卡宽只有 200，三格并排每格约 58pt ⇒ 七位数会撑破格子并把邻格挤歪。
+        // ⚠️ `0 → "—"` 与 `done → "—"` 是**同一条判据的另一面**（没发生过 ≠ 结果是 0），并在这里。
+        let tokLabel = [TeamBoardText.tokenLabel(0), TeamBoardText.tokenLabel(860),
+                        TeamBoardText.tokenLabel(1_200), TeamBoardText.tokenLabel(41_200),
+                        TeamBoardText.tokenLabel(1_500_000)]
+        var doneStat = TeamCardStat()
+        let doneZero = doneStat.doneLabel
+        doneStat.doneDelegations = 7
+        check(tokLabel == ["—", "860", "1.20k", "41.2k", "1.5m"]
+              && doneZero == "—" && doneStat.doneLabel == "7",
+              "T-TEAM ㊶(P5 定稿)卡片三格: token 按量级换档(0⇒—, 860⇒860, 1200⇒1.20k,"
+              + " 41200⇒41.2k, 1500000⇒1.5m)、交活 0⇒— / 7⇒7;"
+              + " **第三格已从「台账」换成「交活」**（台账要每人读一次交接文件 + parse，"
+              + " 是这一页唯一碰文件系统的地方 ⇒ 三格现在全是 db 聚合）"
+              + " (实测 \(tokLabel) / \(doneZero) / \(doneStat.doneLabel))")
+
+        // ══ ㊷（2026-11-27）头像：内置 10 个 emoji，显式优先、组内不重复、与数组顺序无关 ══
+        // boss 现场: 助理全叫「助理 X」⇒ 名字首字恒是"助"，三张卡长得一模一样。
+        // ⚠️ 这一组判的是**分配算法**（`TeamAvatar.assign`），不是"画出来了没有" ——
+        //    算法错了的症状很轻（两张一样的脸），但根因是"某个键用了容器里的位置"或
+        //    "用了 hashValue"，两者都不会崩、不会报错，只会静默换脸。
+        func person(_ name: String, _ at: TimeInterval, avatar: String? = nil) -> ScheduledTask {
+            var t = ScheduledTask(id: UUID(), name: name, prompt: "", cron: "0 9 * * *",
+                                  projectId: nil, continuous: false)
+            t.createdAt = Date(timeIntervalSince1970: at)
+            t.avatar = avatar
+            return t
+        }
+        let ten = (0..<10).map { person("助理\($0)", Double($0)) }
+        let tenMap = TeamAvatar.assign(ten)
+        let tenFaces = ten.compactMap { tenMap[$0.id] }
+        check(TeamAvatar.all.count == 10 && Set(TeamAvatar.all).count == 10
+              && tenFaces.count == 10 && Set(tenFaces).count == 10,
+              "T-TEAM ㊷头像: 内置正好 10 个且互不相同; **10 个人的组内头像两两不同**"
+              + " (越界就顺延而不是撞在一起) (实测 \(tenFaces))")
+
+        // 显式设置优先，且自动的让路 —— 否则"我亲手选了 🐧，它却显示成别的"。
+        //
+        // ⚠️ **人数必须 ≤ 9**（表只有 10 张脸，钉住一张就剩 9 张）。第一版拿 `ten`（10 个）
+        //    再钉一个 ⇒ 11 个人抢 10 张脸，**必然有一张重脸**，断言时红时绿 ——
+        //    UUID 是随机的，撞不撞全看运气（2026-11-27 实测翻红：🐧 出现 2 次）。
+        //    那是判据写错了，不是算法错了：`assign` 的契约本来就只保证 ≤ 张数时互不相同。
+        let six = Array(ten.prefix(6))
+        let pinned = person("钉住的", 99, avatar: "🐧")
+        let pinnedMap = TeamAvatar.assign(six + [pinned])
+        let pinnedAutos = six.compactMap { pinnedMap[$0.id] }
+        check(pinnedMap[pinned.id] == "🐧"
+              && pinnedMap.values.filter { $0 == "🐧" }.count == 1
+              && pinnedAutos.count == 6 && Set(pinnedAutos).count == 6
+              // 单张那条路（检查器 / 不在组里）也要认显式值，否则"卡片上是企鹅、检查器里是别的"。
+              && TeamAvatar.of(pinned) == "🐧",
+              "T-TEAM ㊷头像: 显式设置的那张必须归它, 且自动分配的**不许再撞上去**"
+              + " (实测 \(pinnedMap[pinned.id] ?? "nil"), 🐧 出现 "
+              + "\(pinnedMap.values.filter { $0 == "🐧" }.count) 次 / 自动 \(pinnedAutos))")
+
+        // 与**数组顺序**无关 —— 团队页那份 `order(_:)` 是按状态排的：
+        // 拿它分配的话，"谁在跑"会改变"谁是猫"，而人靠图案认人，图案不许跟着状态跑。
+        //
+        // ⚠️ 这条**测不出**"用了 hashValue"：Hashable 的随机种子是**每进程一次**的，
+        //    同进程内 `hashValue` 稳定，所以单次冒烟永远绿。那半全靠 `TeamAvatar.seed`
+        //    上的注释禁止 + 代码评审 —— 别在这里假装守住它。
+        //    能守的是"输入顺序不许影响结果"，以及 seed 落在合法区间（防越界崩溃）。
+        let reversedMap = TeamAvatar.assign(ten.reversed())
+        check(ten.allSatisfy { tenMap[$0.id] == reversedMap[$0.id] }
+              && ten.allSatisfy { (0..<TeamAvatar.all.count).contains(TeamAvatar.seed(for: $0.id)) },
+              "T-TEAM ㊷头像: 换输入顺序不许换脸 "
+              + "(分配只许读任务自己的 id, 不许读它在数组里排第几), seed 必须落在表内")
+
+        // 脏值（老库手改 / 以后删掉某个图案）⇒ 当没设过、回落自动，**不许崩也不许留空**。
+        let dirty = person("脏的", 50, avatar: "🦄")
+        let dirtyFace = TeamAvatar.assign([dirty])[dirty.id]
+        check(dirtyFace != nil && TeamAvatar.isBuiltIn(dirtyFace ?? "")
+              && !TeamAvatar.isBuiltIn("🦄"),
+              "T-TEAM ㊷头像: 库里存了不认识的图案(🦄)时回落自动分配, 不崩、不留空"
+              + " (实测 \(dirtyFace ?? "nil"))")
+
+
+        // ══ ㊲（doc P5）卡片第二行与统计行: 归属是卡片上唯一还能认出"谁是谁的人"的地方 ══
+        // 一支队伍的卡和"未归属"的卡混在一屏里 —— 卡片上不写归属，二十张卡就是认不出。
+        //
+        // ⚠️ 2026-11-27 出图实测后**归属与状态分家**（这是本条被改写的原因）:
+        //    旧 `cardSubtitle` 返回「归属 · 时态」（"管理 · 4 分钟"），而它下面紧接着
+        //    还有一行状态「在跑 4 分钟」—— 同一件事在同一张卡上说了两遍，读起来是复读。
+        //    现在: 归属行只写归属，时长只在状态行出现一次。
+        let subLead37 = TeamBoardText.cardSubtitle(lead13, parentName: nil)
+        let subWorker37 = TeamBoardText.cardSubtitle(worker13, parentName: lead13.name)
+        let subOrphan37 = TeamBoardText.cardSubtitle(orphan34, parentName: nil)
+        // 状态行 = `cardStateLine`，不是 `TeamRowText.stateWord` 直通 —— 差别只在停用那一档:
+        // 后者写标签（"已停用"），前者写**后果**（"派了会被拒"）。判据在 `TeamRule`。
+        let stateRun37 = TeamBoardText.cardStateLine(
+            .running(since: now35.addingTimeInterval(-4 * 60)), now: now35)
+        let stateOff37 = TeamBoardText.cardStateLine(.disabled, now: now35)
+        let stateIdle37 = TeamBoardText.cardStateLine(.idle(lastActive: nil), now: now35)
+        // 统计行改版后是**分块 chip**（要分色），所以断言的是结构不是一句话。
+        // ⚠️ 这条同时钉住"只列非零档 / 队伍数 >1 才出现"，以及"颜色只给状态档"——
+        //    前两条迁自旧 `statsLine` 的判据，第三条是 chip 化之后新增的（否则 chip 全一个色，
+        //    "有几件事在动"就得逐个读字）。
+        let chips37 = TeamBoardText.statChips(total: 6, teams: 2, cards: [.running: 2, .idle: 4])
+        let chipsOne37 = TeamBoardText.statChips(total: 3, teams: 1, cards: [.idle: 3])
+        let chipsText37 = chips37.map { "\($0.value) \($0.label)" }
+        let chipsOneText37 = chipsOne37.map { "\($0.value) \($0.label)" }
+        // ⚠️ 13 这个**措辞上界**是泳道时代按最窄列宽 118 定的（可用 95pt）。
+        // 2026-11-27 卡片固定 200、可用约 176pt ⇒ 能放 18 字左右，上限于是**偏保守**。
+        // 没放宽是有意的: 归属行的价值在"一眼认出谁是谁的人"，不是把格子塞满；
+        // 而卡宽将来若再收，措辞不用跟着返工。超了就是尾部截断，截掉的恰恰是名字后半截。
+        // 留在冒烟里是因为它是一条**能变红的**约束: 谁把措辞写长，这条当场红，不用等人去出图。
+        // 状态行给 12 —— 最长的一条是「停用 · 派了会被拒」（10 字）。
         let all37 = [subLead37, subWorker37, subOrphan37]
-        check(subLead37 == "管理 · 4 分钟"
-              && subWorker37.hasPrefix(lead13.name + " · ") && subWorker37.contains("派了会被拒")
-              && subOrphan37.hasPrefix("未归属 · ")
+        let allState37 = [stateRun37, stateOff37, stateIdle37]
+        check(subLead37 == "管理"                       // 队长写角色短标记
+              && subWorker37 == lead13.name              // 执行助理写归属名（不是"执行"）
+              && subOrphan37 == "未归属"                  // 悬挂值（main 被删）说残队，不写角色
+              // 归属行**不许再带时长** —— 这是这次改写的全部意义
+              && !subLead37.contains("分钟") && !subOrphan37.contains("分钟")
               && all37.allSatisfy { $0.count <= 13 }
-              && stats37 == "6 个助理 · 2 支队伍 · 2 在跑 · 4 空闲"
+              && stateRun37 == "在跑 4 分钟"
+              && stateOff37 == "停用 · 派了会被拒"        // 后果，不是 stateWord 的"已停用"
+              && stateIdle37 == "空闲"
+              && allState37.allSatisfy { $0.count <= 12 }
+              && chipsText37 == ["6 个助理", "2 支队伍", "2 在跑", "4 空闲"]
               // 只有一支队伍时不报「1 支队伍」: 那是每个单队伍用户的默认状态，报了就是白占一格。
-              && statsOne37 == "3 个助理 · 3 空闲",
-              "T-TEAM ㊲(doc P5)卡片第二行=归属·时态(管理助理写「管理」、执行助理写归属名、悬挂写未归属;"
-              + " 停用那一档写「派了会被拒」而不是同义反复); 统计行只列非零档、队伍数 >1 才出现"
-              + " (实测 \(subLead37) / \(subWorker37) / \(subOrphan37) / \(stats37))")
+              && chipsOneText37 == ["3 个助理", "3 空闲"]
+              // 颜色只给状态档 —— "7 个助理"是数，不是状态，上色会让"在跑"那格不再突出。
+              && chips37.filter { $0.stage != nil }.map(\.label) == ["在跑", "空闲"],
+              "T-TEAM ㊲(doc P5)卡片第二行=**只写归属**(队长写「管理」、执行助理写归属名、"
+              + " 悬挂写未归属) —— 时态已分家到状态行，同一张卡不说两遍时长;"
+              + " 状态行停用那一档写后果「派了会被拒」而不只写标签; 顶栏 chip 只列非零档、"
+              + " 队伍数 >1 才出现、颜色只给状态档"
+              + " (实测 \(subLead37) / \(subWorker37) / \(subOrphan37)"
+              + " / \(stateRun37) / \(stateOff37) / \(stateIdle37) / \(chipsText37))")
 
         // ══ ㊳（2026-11-25）"自己起的那一轮"也算在跑 —— 补的是**没有派活单**的那条路 ══════
         // boss 实机对比: worker 走满 已排上 → 在跑 → 等回执 → 空闲，而 main 的卡一动不动。

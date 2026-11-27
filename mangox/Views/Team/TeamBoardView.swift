@@ -1,16 +1,34 @@
 //
 //  TeamBoardView.swift
-//  P20 P5 助理团队页（泳道 · 纯展示，2026-11-25）。
+//  P20 P5 助理团队页（分组卡片 · 纯展示，2026-11-25 → 2026-11-27 改版）。
 //
-//  设计来源: `docs/P20-functional-design.html` §03「助理团队 · 状态泳道 · 纯展示」。
+//  设计来源: `docs/P20-functional-design.html` §03「助理团队 · 纯展示」。
 //
-//  布局（2026-11-25 boss 定）: **左栏 + 上下两栏**。
-//     · 左栏 = 队伍筛选（200pt，固定）
-//     · 上栏 = 统计行 + 五条泳道（吃掉剩下的**全部宽度与高度**）
-//     · 下栏 = 检查器（横条，定高 200pt，三段并排: 身份职责 / 最近五次执行 / 台账 + 动作）
-//  ⚠️ 检查器原来是**右栏**（272pt 竖条）。改到下方是因为两条: ① 五列等宽要求横向有整幅
-//  可用宽 —— 右栏一占 272，中间只剩 400 出头，五列连 90pt 都分不到；② 这一页纵向本来
-//  就空（"几个人"的数据撑不满一屏），把检查器放到下面正好把那份空填掉。
+//  布局（2026-11-27 boss 定稿）: **一栏到底**。
+//    · 顶栏 = 标题 + 统计 chips
+//    · 主体 = 按队伍分组的卡片网格（纵向滚，每组一个组头 + 若干张 200 宽的卡）
+//    · 下栏 = 检查器（横条，定高 200pt，四段并排: 身份职责 / 职责说明·模型 / 最近五次 / 台账 + 动作）
+//
+//  ## 为什么把泳道整层拆掉（2026-11-27）
+//
+//  boss 的原话: 「泳道的优点在于工作状态展示清晰，非工作状态时就会有很大的一块空旷显示；
+//  卡片的好处就是非工作状态时平铺展示很友好，但是工作状态时有点分不清谁在什么状态」。
+//
+//  两者的主轴不同: 泳道的主轴是**状态**（人站在哪一列），卡片的主轴是**归属**（这人是谁的人）。
+//  泳道在全员待命时四列空着 —— 那不是"设计留白"，是四条空跑道。
+//  ⇒ 换成卡片，**状态改由亮度回答**（亮 = 手上有活，暗 = 没有）:
+//      · 卡面三档: 浮起（在跑/已排上/等回执）/ 平贴（空闲）/ 沉下（停用）—— `CodexTheme.teamCard*`
+//      · 头像在非工作态 `saturation(0)` 褪成灰 —— **这一条才是明暗的主通道**，一张灰脸比一段灰字好扫
+//      · 左边缘 3px 状态色 + 那行状态文字 = 第二、三通道（只靠明暗，红绿色弱的人分不出来）
+//
+//  ⚠️ **明暗不许长在文字上**。第一版把非工作态的正文压到 56% / 42%，实测对比度只有
+//     2.33:1 / 1.85:1（浅色）—— 那叫"把内容藏了"，不叫弱化；而要让正文回到 4.5:1，
+//     透明度得给到 0.85，也就等于没变暗。所以: **面承担明暗，字只轻推一档**
+//     （空闲 0.90 / 停用 0.78，四态实测 6.39 / 4.52 / 3.36 浅色、5.37 / 5.51 / 4.89 暗色）。
+//
+//  ⚠️ 左侧那道**队伍筛选栏整层删掉了**（2026-11-27）：个人用户 3 支队伍 × 3~5 人，
+//     而分组头已经写着「写清楚了的 4 人 · 2 在跑」—— 左栏再列一遍是同一个数字说两遍。
+//     代价: 人多之后（12 人 / 6 队）没有快速收敛的手段，只能滚；那时再加顶部下拉。
 //
 //  这一页**不可编辑**（归属与职责都在定时任务页改）—— 它不是第二个入口，
 //  是同一批数据的另一种看法: 列表页答"这个助理怎么配"，这里答"谁现在在干什么"。
@@ -21,7 +39,6 @@ import SwiftUI
 struct TeamBoardView: View {
     @ObservedObject var store: ChatStore
 
-    @State private var scope: TeamBoardScope = .all
     @State private var selectedId: UUID?
     @State private var hoveringId: UUID?
 
@@ -34,20 +51,13 @@ struct TeamBoardView: View {
     @State private var ledger: AssistantLedger = .init()
 
     var body: some View {
-        HStack(spacing: 0) {
-            filterPane
-                .frame(width: Tune.teamFilterWidth)
-                .background(CodexTheme.bgSidebar)
+        VStack(spacing: 0) {
+            boardPane
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             Divider().overlay(CodexTheme.divider)
-            // 上下两栏: 上面是泳道（吃掉全部剩余宽度与高度），下面那条横的检查器。
-            VStack(spacing: 0) {
-                boardPane
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                Divider().overlay(CodexTheme.divider)
-                inspectorBar
-            }
-            .background(CodexTheme.bgChat)
+            inspectorBar
         }
+        .background(CodexTheme.bgChat)
         .onAppear { refreshInspector() }
         .onChange(of: selectedId) { _, _ in refreshInspector() }
         .onChange(of: selectedTask?.lastRunAt) { _, _ in refreshInspector() }
@@ -58,8 +68,8 @@ struct TeamBoardView: View {
     /// 这一页的**全体**：助理档，且不是只读归档。
     ///
     /// ⚠️ **Cron 档不进这一页**。它在存储上也是 `role == .main`（`TaskRole` 缺省值），
-    /// 但它没有队伍这个概念 —— 派不了活、也没人会派它。混进来之后左侧"全部 6"与泳道总数
-    /// 就对不上（文档样张里那张"发版检查"就是画错的: 7 张卡 vs 左侧 6）。
+    /// 但它没有队伍这个概念 —— 派不了活、也没人会派它。混进来之后统计行的"7 个助理"
+    /// 与画面上的卡片数就对不上（文档样张里那张"发版检查"就是画错的: 7 张卡 vs 左侧 6）。
     /// 数字对不上的界面，人第一眼就会怀疑整页是假的。
     private var allPeople: [ScheduledTask] {
         store.scheduler.scheduledTasks.filter { $0.isAssistant && !$0.isLegacyWaiting }
@@ -69,48 +79,33 @@ struct TeamBoardView: View {
         allPeople.filter { $0.role == .main }
     }
 
+    /// 未归属 = `parentId` 空着（老库）或指向一个已经不在名单里的 main（悬挂值）——
+    /// 判据在 `TeamBoardText.people(.orphans:)`，本文件不再自己算一遍。
     private var orphans: [ScheduledTask] {
         TeamBoardText.people(.orphans, all: allPeople)
     }
 
     /// 每支队伍一个色，**整块板子算一次**（见 `TeamBoardText.tintIndexMap` 里那三条）。
-    /// 卡片竖条与左栏图例读的是同一份映射 —— 分两处各算一次，改一处就会对不上。
+    /// 头像底色与检查器里的色点读的是同一份映射 —— 分两处各算一次，改一处就会对不上。
     private var tintMap: [UUID: Int] {
         TeamBoardText.tintIndexMap(teamIds: mains.map(\.id))
     }
 
-    private var scoped: [ScheduledTask] {
-        TeamBoardText.people(scope, all: allPeople)
+    /// 某个人的队伍色下标 —— `nil` = 没有队伍（悬挂的 `parentId` 也算），画中性灰。
+    ///
+    /// `parentIsAlive` 与卡片第二行那个「未归属」是**同一个判据**（`parentName(of:)` 查不到人
+    /// 就返回 nil）—— 一处说"未归属"、另一处还给上队伍色，是最容易犯的那种不一致。
+    private func tintIndex(_ t: ScheduledTask, parentName: String?) -> Int? {
+        TeamBoardText.cardTintIndex(t, parentIsAlive: parentName != nil, tintMap: tintMap)
     }
 
-    /// 五列各几个人。空列要折叠，所以这个字典是布局的输入（不只是统计）。
-    private var cards: [TeamLane: Int] {
-        var out: [TeamLane: Int] = [:]
-        for t in scoped {
-            out[TeamLane.of(store.scheduler.teamState(of: t.id)), default: 0] += 1
+    /// 状态计数（统计行与检查器空态共用）。
+    private var stageCounts: [TeamStage: Int] {
+        var out: [TeamStage: Int] = [:]
+        for t in allPeople {
+            out[TeamStage.of(store.scheduler.teamState(of: t.id)), default: 0] += 1
         }
         return out
-    }
-
-    private var teamsInScope: Int {
-        switch scope {
-        case .all:     return mains.count
-        case .team:    return 1
-        case .orphans: return 0
-        }
-    }
-
-    private var scopeName: String {
-        switch scope {
-        case .all:
-            return L("全部")
-        case .team(let id):
-            // 这个 main 被删了（人还停在那一页）⇒ 说清原委，不要回落成「全部」——
-            // 那会让人以为自己选的筛选静默失效了。
-            return mains.first { $0.id == id }?.name ?? L("原队伍已删除")
-        case .orphans:
-            return L("未归属")
-        }
     }
 
     private var selectedTask: ScheduledTask? {
@@ -118,129 +113,160 @@ struct TeamBoardView: View {
         return store.scheduler.scheduledTasks.first { $0.id == id }
     }
 
-    // MARK: - 左栏：队伍筛选
+    // MARK: - 分组
 
-    private var filterPane: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            Text(L("团队"))
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(CodexTheme.textPrimary)
-                .padding(.horizontal, 14)
-                .padding(.top, 16)
-                .padding(.bottom, 8)
-            ScrollView {
-                VStack(alignment: .leading, spacing: 1) {
-                    scopeRow(.all, title: L("全部"), count: allPeople.count)
-                    ForEach(mains) { m in
-                        scopeRow(.team(m.id), title: m.name,
-                                 count: 1 + store.scheduler.workerCount(of: m.id),
-                                 // 与卡片竖条**同一个下标**（同一支队伍 ⇒ 同一个颜色）:
-                                 // 这一列同时是图例 —— 卡片上那条 3px 的色，在这里能查到是谁。
-                                 tint: TeamBoardText.cardTintIndex(
-                                     m, parentIsAlive: true, tintMap: tintMap)
-                                     .map { CodexTheme.teamTints[$0] })
-                    }
-                    if !orphans.isEmpty {
-                        Divider()
-                            .overlay(CodexTheme.divider)
-                            .padding(.horizontal, 10)
-                            .padding(.vertical, 6)
-                        scopeRow(.orphans, title: L("未归属"), count: orphans.count)
-                    }
-                }
-                .padding(.horizontal, 8)
-                .padding(.bottom, 12)
-            }
-        }
+    /// 一个分组 = 一支队伍（队长 + 他的执行）或"未归属"那一堆。
+    private struct TeamGroup: Identifiable {
+        let id: String
+        let name: String
+        let tint: Color?
+        /// **已经排好序**的人（`TeamBoardText.order`）—— 视图不再自己排。
+        let people: [ScheduledTask]
     }
 
-    private func scopeRow(_ s: TeamBoardScope, title: String, count: Int,
-                          tint: Color? = nil) -> some View {
-        let active = scope == s
-        return Button { scope = s; selectedId = nil } label: {
-            HStack(spacing: 6) {
-                // 队伍色的小圆点 —— 只有队伍行有（「全部」「未归属」不是队伍）。
-                // 它顺带把队伍行**缩进**一级，读起来是"全部 > 各队"的层级。
-                if let tint {
-                    Circle()
-                        .fill(tint)
-                        .frame(width: 6, height: 6)
-                }
-                Text(title)
-                    .font(.system(size: 12, weight: active ? .medium : .regular))
-                    .foregroundStyle(active ? CodexTheme.textPrimary : CodexTheme.textSecondary)
-                    .lineLimit(1)
-                Spacer(minLength: 4)
-                Text("\(count)")
-                    .font(CodexFonts.monoFont(9.5))
-                    .foregroundStyle(CodexTheme.textMuted)
-            }
-            .padding(.horizontal, 8)
-            .padding(.vertical, 5)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background {
-                RoundedRectangle(cornerRadius: CodexTheme.radiusSm)
-                    .fill(active ? CodexTheme.selected : Color.clear)
-            }
-            .contentShape(Rectangle())
+    /// 分组次序 = 队伍建立次序（`mains` 就是 `scheduledTasks` 的顺序），未归属永远垫底。
+    private var groups: [TeamGroup] {
+        let states = store.scheduler.teamStates
+        var out: [TeamGroup] = mains.map { m in
+            let members = TeamBoardText.people(.team(m.id), all: allPeople)
+            return TeamGroup(
+                id: m.id.uuidString,
+                name: m.name,
+                tint: tintIndex(m, parentName: m.name).map { CodexTheme.teamTints[$0] },
+                people: TeamBoardText.order(members, states: states)
+            )
         }
-        .buttonStyle(.plain)
+        if !orphans.isEmpty {
+            out.append(TeamGroup(id: "orphans", name: L("未归属"), tint: nil,
+                                 people: TeamBoardText.order(orphans, states: states)))
+        }
+        return out
     }
 
-    // MARK: - 中栏：统计行 + 五条泳道
+    /// 组头右边那句:「4 人 · 2 在跑 · 1 等回执」。
+    ///
+    /// 只列**非零**的档 —— 四个 `0 空闲` 是噪音。这与顶栏 chip 同一口径
+    /// （`TeamBoardText.statChips`），只是这里不带"个助理"三个字。
+    private func groupMeta(_ people: [ScheduledTask]) -> String {
+        var counts: [TeamStage: Int] = [:]
+        for t in people {
+            counts[TeamStage.of(store.scheduler.teamState(of: t.id)), default: 0] += 1
+        }
+        var parts = [String(format: L("%lld 人"), people.count)]
+        for stage in TeamStage.allCases {
+            guard let n = counts[stage], n > 0 else { continue }
+            parts.append(String(format: L("%lld %@"), n, TeamBoardText.stageTitle(stage)))
+        }
+        return parts.joined(separator: " · ")
+    }
+
+    // MARK: - 主体
 
     private var boardPane: some View {
         VStack(alignment: .leading, spacing: 0) {
-            Text(TeamBoardText.statsLine(total: scoped.count, teams: teamsInScope, cards: cards))
-                .font(.system(size: 11))
-                .foregroundStyle(CodexTheme.textSecondary)
-                .padding(.horizontal, 16)
-                .padding(.top, 14)
-                .padding(.bottom, 8)
-
+            headerBar
             if allPeople.isEmpty {
                 emptyBoard
-            } else if scoped.isEmpty {
-                // 有人、但这个范围里没有 —— 与"一个人都没有"是两件事，
-                // 用同一个空态会让人以为名单被清空了。
-                Text(L("这个范围里没有人。"))
-                    .font(.system(size: 11.5))
-                    .foregroundStyle(CodexTheme.textMuted)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-                    .padding(.top, 24)
             } else {
                 GeometryReader { geo in
-                    // 五列**等宽**，宽度由这一栏的可用宽算出来（`laneWidth(available:)`）。
-                    // 常见窗口下它正好是"均分后放满"—— 既不横向滚，也不留一截空白。
-                    let laneW = TeamBoardText.laneWidth(available: geo.size.width)
-                    ScrollView(.horizontal, showsIndicators: false) {
-                        // `spacing: 0` —— 列间距改由 `laneRule` 自己占（12pt 的槽中间画 1px 线），
-                        // 于是"五列 + 四条线"的实际宽仍然是 `laneWidth × 5 + gap × 4`，
-                        // `boardWidth` 那个判据不用改。
-                        HStack(alignment: .top, spacing: 0) {
-                            ForEach(TeamLane.allCases) { lane in
-                                if lane != TeamLane.allCases.first { laneRule }
-                                laneColumn(lane, width: laneW)
+                    // 可用宽 = min(视口, 卡区上界) − 左右内边距。用它算列数，卡片本身宽度恒定。
+                    let contentCap = Tune.teamBoardMaxWidth + Tune.teamBoardHPadding * 2
+                    let avail = min(geo.size.width, contentCap) - Tune.teamBoardHPadding * 2
+                    let cols = TeamBoardText.cardColumns(available: avail)
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 20) {
+                            ForEach(groups) { g in
+                                groupSection(g, cols: cols)
                             }
                         }
-                        // 宽窗口下列宽封顶 150、整片会窄于这一栏 —— 那时居中（不是靠左）:
-                        // 靠左会让"看板只有右边一半空"，居中读起来是"一片看板浮在中间"。
-                        .frame(minWidth: geo.size.width, alignment: .center)
-                        .padding(.bottom, 12)
+                        .padding(.horizontal, Tune.teamBoardHPadding)
+                        .padding(.top, 16)
+                        .padding(.bottom, 20)
+                        // 窄于上界 ⇒ 铺满；宽于上界 ⇒ 封顶住、靠外层 maxWidth 居中。
+                        // ⚠️ 靠左会读成"右边一半坏了"（与泳道那套同一条理由）。
+                        .frame(maxWidth: contentCap, alignment: .leading)
+                        .frame(maxWidth: .infinity, alignment: .center)
                     }
-                    // 溢出时右缘渐隐。**不用原生滚动指示器**: 亮色下它是横贯底部的一条
-                    // 白杠（出图实测），既难看又占掉一行 —— 而它要说的只有一句"右边还有"。
-                    // 只有**窄到列宽下限**时才会溢出，判据与布局同一个 `laneWidth`。
-                    .overlay(alignment: .trailing) {
-                        if TeamBoardText.boardWidth(available: geo.size.width) > geo.size.width {
-                            LinearGradient(
-                                colors: [CodexTheme.bgChat.opacity(0), CodexTheme.bgChat],
-                                startPoint: .leading, endPoint: .trailing
-                            )
-                            .frame(width: 30)
-                            .allowsHitTesting(false)
-                        }
-                    }
+                }
+            }
+        }
+    }
+
+    /// 顶栏 —— 标题 + 统计 chips。原来统计行是一句纯文本，改版后做成 chip:
+    /// 卡片页没有列头了，"有几件事在动"这一眼就得靠这一行；而分块才能给"在跑"上色。
+    /// 成文规则（只列非零档、队伍数 >1 才出现）住在 `TeamBoardText.statChips` 里，冒烟钉着它。
+    private var headerBar: some View {
+        let chips = TeamBoardText.statChips(total: allPeople.count,
+                                            teams: mains.count,
+                                            cards: stageCounts)
+        return HStack(alignment: .firstTextBaseline, spacing: 12) {
+            Text(L("团队"))
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(CodexTheme.textPrimary)
+            Spacer(minLength: 8)
+            HStack(spacing: 6) {
+                ForEach(Array(chips.enumerated()), id: \.offset) { _, chip in
+                    statChip(chip)
+                }
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.top, 14)
+        .padding(.bottom, 11)
+        .overlay(alignment: .bottom) {
+            Rectangle().fill(CodexTheme.divider).frame(height: 1)
+        }
+    }
+
+    private func statChip(_ chip: StatChip) -> some View {
+        HStack(spacing: 4) {
+            Text(chip.value)
+                .font(CodexFonts.monoFont(10.5))
+                .foregroundStyle(chip.stage.map { stageTint($0) } ?? CodexTheme.textPrimary)
+            Text(chip.label)
+                .font(.system(size: 10.5))
+                .foregroundStyle(CodexTheme.textSecondary)
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 3)
+        .background {
+            Capsule().fill(CodexTheme.bgPill)
+        }
+    }
+
+    private func groupSection(_ g: TeamGroup, cols: Int) -> some View {
+        // ⚠️ 必须在**组内**分配（不是全表）：头像的用处是"这一屏里分得开谁是谁"，
+        //    而两支队各有一只猫并不冲突 —— 它们本来就分在两张组头下面。
+        //    这也让"超过 10 人的组"才可能重复，而不是"超过 10 个助理就开始重复"。
+        let avatars = TeamAvatar.assign(g.people)
+        return VStack(alignment: .leading, spacing: 9) {
+            HStack(spacing: 9) {
+                // 组头左边那条竖条 = **队伍色**（与头像底色同源）。
+                // 「未归属」没有队伍 ⇒ 中性灰，与自己那行第二行「未归属」对得上。
+                // ⚠️ 高度必须写死: `Shape` 在两个方向都是贪心的，只给 width 时它会跟 HStack
+                //    互相等着要尺寸，窄组头下容易塌成 0（画不出来又不报错）。
+                RoundedRectangle(cornerRadius: 2)
+                    .fill(g.tint ?? CodexTheme.textMuted)
+                    .frame(width: Tune.teamIdentityBarWidth, height: 13)
+                Text(g.name)
+                    .font(.system(size: 12.5, weight: .semibold))
+                    .foregroundStyle(CodexTheme.textPrimary)
+                    .lineLimit(1)
+                Text(groupMeta(g.people))
+                    .font(.system(size: 11))
+                    .foregroundStyle(CodexTheme.textTertiary)
+                    .lineLimit(1)
+                Spacer(minLength: 0)
+            }
+            .frame(height: 15)
+
+            LazyVGrid(columns: Array(repeating: GridItem(.fixed(Tune.teamCardWidth),
+                                                         spacing: Tune.teamCardGap),
+                                     count: cols),
+                      alignment: .leading,
+                      spacing: Tune.teamCardGap) {
+                ForEach(g.people) { t in
+                    cardView(t, glyph: avatars[t.id] ?? TeamAvatar.of(t))
                 }
             }
         }
@@ -265,131 +291,211 @@ struct TeamBoardView: View {
         .padding(.horizontal, 40)
     }
 
-    /// 列与列之间那条**淡线**（2026-11-25 boss：「能不能在不同的列之间有一条淡淡的分割线」）。
+    // MARK: - 卡片
+
+    /// 这张卡的明暗参数 —— 一档一个值，**只在这里读一次**。
     ///
-    /// 三条分寸:
-    ///   · **1px** —— 再粗就变成格子边框，而这五格里四格是空的，边框会强调"空";
-    ///   · **`divider` 的 60%** —— 与面板分割线（筛选 / 检查器那两条）用同一个色，但更弱:
-    ///     它们分的是"不同的东西"，这条分的只是"同一种东西的五份";
-    ///   · **整条高度到底** —— 只画在有卡的那几行就回到"列头漂浮"的老问题; 到底才读成五条道。
-    private var laneRule: some View {
-        Rectangle()
-            .fill(CodexTheme.divider.opacity(0.6))
-            .frame(width: 1)
-            // 外面这层把 12pt 的列间距接过来 —— 线正好落在间距正中，整片宽度不变。
-            .frame(width: Tune.teamLaneGap)
+    /// 三档的分法就是"手上有活吗":
+    ///   · 浮起（在跑 / 已排上 / 等回执）—— 有活在手（含"交出去了在等回话"）
+    ///   · 平贴（空闲）—— 没活
+    ///   · 沉下（停用）—— 没活且不被派
+    private struct CardLook {
+        let surface: Color
+        let border: Color
+        let bar: Color
+        /// 正文透明度。**轻推一档而已**，见文件头那段"明暗不许长在文字上"。
+        let textDim: Double
+        /// 头像 —— 明暗的主通道。
+        let avatarDim: Double
+        let avatarGray: Bool
     }
 
-    private func laneColumn(_ lane: TeamLane, width: CGFloat) -> some View {
-        let people = TeamBoardText.order(lane, scoped, states: store.scheduler.teamStates)
-        return VStack(alignment: .leading, spacing: Tune.teamCardGap) {
-            laneHeader(lane, count: people.count)
-            ForEach(people) { t in cardView(t, lane: lane) }
-            Spacer(minLength: 0)
+    private func look(_ stage: TeamStage) -> CardLook {
+        switch stage {
+        case .running:
+            return CardLook(surface: CodexTheme.teamCardRaised,
+                            border: CodexTheme.thinking.opacity(0.32),
+                            bar: stageTint(stage), textDim: 1, avatarDim: 1, avatarGray: false)
+        case .awaiting:
+            return CardLook(surface: CodexTheme.teamCardRaised,
+                            border: CodexTheme.accent.opacity(0.32),
+                            bar: stageTint(stage), textDim: 1, avatarDim: 1, avatarGray: false)
+        case .queued:
+            // 已排上 = 有活、还没起跑。**也浮起** —— 这一页的明暗只回答"手上有没有活"，
+            // 不回答"是正在跑还是排着队"；后者由左条颜色和状态文字说。
+            return CardLook(surface: CodexTheme.teamCardRaised,
+                            border: CodexTheme.border,
+                            bar: stageTint(stage), textDim: 1, avatarDim: 1, avatarGray: false)
+        case .idle:
+            return CardLook(surface: CodexTheme.bgCard,
+                            border: CodexTheme.border,
+                            bar: stageTint(stage), textDim: 0.90, avatarDim: 0.72, avatarGray: true)
+        case .disabled:
+            return CardLook(surface: CodexTheme.teamCardRecessed,
+                            border: CodexTheme.border,
+                            bar: stageTint(stage), textDim: 0.78, avatarDim: 0.42, avatarGray: true)
         }
-        .frame(width: width, alignment: .top)
     }
 
-    /// 列头。**只有一份画法**：圆点 + 列名一行 + 数字右对齐。空列与有卡列长得一模一样，
-    /// 区别只有"下面有没有卡"—— 宽度是五列共用的（`TeamBoardText.laneWidth(available:)`）。
+    /// 状态色 —— **只画在左边缘那 3px 和组头之外**，卡面不上色。
     ///
-    /// ⚠️ 这里推翻过两版（2026-11-25 两次出图）: ① 空列把列名**按字符竖排** + 定高 36
-    /// ⇒「又是横字，又是竖字」; ② 空列按实测列名收窄到 61pt ⇒「至少要等宽吧」。
-    /// 两版都错在"给空列开特例"这个念头上 —— 这一页是**五条等宽的泳道**，空的那条只是没人。
-    private func laneHeader(_ lane: TeamLane, count: Int) -> some View {
-        HStack(spacing: 5) {
-            Circle()
-                .fill(laneTint(lane))
-                .frame(width: 5, height: 5)
-            Text(TeamBoardText.laneTitle(lane))
-                .font(.system(size: 10.5, weight: .medium))
-                .foregroundStyle(CodexTheme.textSecondary)
-                .lineLimit(1)
-            Spacer(minLength: 0)
-            Text("\(count)")
-                .font(CodexFonts.monoFont(9))
-                .foregroundStyle(CodexTheme.textMuted)
-        }
-        .padding(.horizontal, 2)
-    }
-
-    /// 状态色 —— **只画在列头那个小圆点上**，卡片本身不上色。
-    ///
-    /// 文档 §03「身份与颜色分两个通道」: 身份走 3px 竖条 + 名字 500（都不占颜色），
-    /// 颜色只表示状态。给卡片再上一个底色，同一屏就有两套色编码 —— main 用了蓝，
-    /// "正在跑的 main"就分不出是身份还是状态；而二十张卡各带底色就是一堵彩墙。
-    private func laneTint(_ lane: TeamLane) -> Color {
-        switch lane {
-        case .running:  return CodexTheme.info
+    /// 文档 §03「身份与颜色分两个通道」: 身份走**队伍色**（头像底 + 组头竖条），
+    /// 状态走**色相**（琥珀 / 灰蓝 / 红 / 灰）。给卡面再上一个底色，同一屏就有两套色编码
+    /// —— 而二十张卡各带底色就是一堵彩墙。
+    private func stageTint(_ stage: TeamStage) -> Color {
+        switch stage {
+        case .running:  return CodexTheme.thinking
         case .queued:   return CodexTheme.toolQueued
-        case .awaiting: return CodexTheme.thinking
+        case .awaiting: return CodexTheme.accent
         case .idle:     return CodexTheme.textTertiary
         case .disabled: return CodexTheme.textMuted
         }
     }
 
-    private func cardView(_ t: ScheduledTask, lane: TeamLane) -> some View {
+    private func cardView(_ t: ScheduledTask, glyph: String) -> some View {
+        let state = store.scheduler.teamState(of: t.id)
+        let stage = TeamStage.of(state)
+        let card = look(stage)
         let selected = selectedId == t.id
         let hovered = hoveringId == t.id
         let lead = TeamRowText.isTeamLead(t)
         let parentName = store.scheduler.parentName(of: t)
-        let subtitle = TeamBoardText.cardSubtitle(
-            t,
-            parentName: parentName,
-            state: store.scheduler.teamState(of: t.id),
-            now: Date()
-        )
-        // 这张卡属于哪支队伍 —— `nil` = 没有队伍（悬挂的 parentId 也算），中性灰。
-        // ⚠️ `parentIsAlive` 与上面那个 `parentName` 是**同一个判据**（`parentName(of:)` 查不到人
-        // 就返回 nil）—— 一处说"未归属"、另一处还给上队伍色，是最容易犯的那种不一致。
-        let tint: Color? = TeamBoardText
-            .cardTintIndex(t, parentIsAlive: parentName != nil, tintMap: tintMap)
-            .map { CodexTheme.teamTints[$0] }
+        let teamTint = tintIndex(t, parentName: parentName).map { CodexTheme.teamTints[$0] }
+        let stat = store.scheduler.cardStat(of: t.id)
+
         return Button { selectedId = t.id } label: {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(t.name)
-                    // 名字 500 = 身份三样里的第二样。只给队长 —— 全员加粗等于没加粗。
-                    .font(.system(size: 11.5, weight: lead ? .medium : .regular))
-                    .foregroundStyle(CodexTheme.textPrimary)
-                    .lineLimit(1)
-                Text(subtitle)
-                    .font(.system(size: 9.5))
-                    .foregroundStyle(CodexTheme.textTertiary)
-                    .lineLimit(1)
+            VStack(alignment: .leading, spacing: 0) {
+                // ① 头像 + 名字 / 归属·时态
+                HStack(spacing: 8) {
+                    avatar(glyph, tint: teamTint, dim: card.avatarDim, gray: card.avatarGray)
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(t.name)
+                            // 名字 500 = 身份三样里的第二样。只给队长 —— 全员加粗等于没加粗。
+                            .font(.system(size: 12.5, weight: lead ? .semibold : .regular))
+                            .foregroundStyle(CodexTheme.textPrimary)
+                            .lineLimit(1)
+                        Text(TeamBoardText.cardSubtitle(t, parentName: parentName))
+                            .font(.system(size: 9.5))
+                            .foregroundStyle(CodexTheme.textTertiary)
+                            .lineLimit(1)
+                            .opacity(card.textDim)
+                    }
+                    Spacer(minLength: 0)
+                }
+
+                // ② 状态那行 —— 第三通道（"在跑 3 分钟"）。归属行已经只说归属，
+                //    时长只在这里出现一次（2026-11-27：上一版两行都说时长，读起来像复读）。
+                HStack(spacing: 4) {
+                    Circle().fill(card.bar).frame(width: 5, height: 5)
+                    Text(TeamBoardText.cardStateLine(state, now: Date()))
+                        .font(.system(size: 10.5, weight: stage == .running || stage == .awaiting
+                                      ? .medium : .regular))
+                        .foregroundStyle(stage == .idle || stage == .disabled
+                                         ? CodexTheme.textTertiary : card.bar)
+                        .lineLimit(1)
+                }
+                .padding(.top, 7)
+
+                // ③ 职责两行。**固定两行高**（不是 `lineLimit(2)` 就够）——
+                //    只写一行的卡会让底部三格数字与同排的卡错开一格，看着像排版坏了。
+                Text(t.description.isEmpty ? "—" : t.description)
+                    .font(.system(size: 10.5))
+                    .foregroundStyle(CodexTheme.textSecondary)
+                    .lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, minHeight: 31, alignment: .topLeading)
+                    .opacity(card.textDim)
+                    .padding(.top, 6)
+
+                Spacer(minLength: 0)
+
+                // ④ 三格数字 —— **全部来自 db 聚合**，一格都不读盘（见 `TeamCardStat` 的注释）。
+                HStack(spacing: 0) {
+                    numCell(stat.tokenLabel, L("token"), dim: card.textDim)
+                    numCell("\(stat.turns)", L("回合"), dim: card.textDim)
+                    numCell(stat.doneLabel, L("交活"), dim: card.textDim)
+                }
+                .padding(.top, 7)
+                .overlay(alignment: .top) {
+                    Rectangle().fill(CodexTheme.divider).frame(height: 1)
+                }
             }
-            .padding(.horizontal, Tune.teamCardPadH)
+            .padding(.leading, Tune.teamCardPadH + Tune.teamIdentityBarWidth + 1)
+            .padding(.trailing, Tune.teamCardPadH)
             .padding(.vertical, Tune.teamCardPadV)
-            .frame(maxWidth: .infinity, alignment: .leading)
+            // 卡片**高度天然一致**: 职责块是 `minHeight: 31` + `lineLimit(2)`，而两行
+            // 10.5pt 只有约 26pt ⇒ 无论职责写一行还是两行，块高恒是 31、卡高恒等。
+            // 下面这两个 `.infinity` 是**防御**，不是实现手段: 将来谁把这个块改高
+            // （比如加第四格数字），`LazyVGrid` 会让同排的卡各自按内容取高 ⇒ 数字行错开，
+            // 那时 `Spacer` 才把差额吸在数字行之前。
+            // ⚠️ 实测坐标（2026-11-27，`/tmp/teamrender` 探针出 2560×1600 图后逐行扫像素）:
+            //    四张卡的头像块 192–243、副行 263–281、状态行 301–319、职责 327–345 与
+            //    379–395、三格数字 407–422 —— **全部逐像素对齐，误差 ≤1px**。
+            //    别凭缩略图判断对齐（我据一张 950pt 宽的缩略图误判过"错开一格"，
+            //    真实原因是卡 4 的副行「管理」与状态行「空闲」在缩略图里被读串了）。
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             .background {
-                // 3px 竖条与底同层、整层裁圆角 —— 竖条跟着卡片圆角走，不会在左上角露一个直角。
+                // 左边缘 3px + 卡面同层、整层裁圆角 —— 竖条跟着卡片圆角走，不会在左上角露直角。
                 ZStack(alignment: .leading) {
                     RoundedRectangle(cornerRadius: CodexTheme.radiusSm)
-                        .fill(selected ? CodexTheme.bgElevated : CodexTheme.bgCard)
+                        .fill(selected ? CodexTheme.bgElevated : card.surface)
                     if hovered && !selected { CodexTheme.hover }
-                    // 竖条 = **队伍色**（2026-11-25 boss：「不同的团队，应该有颜色区分」）。
-                    // ⚠️ 它原来只画给队长（"竖条一旦到处都是就什么也不表示"）—— 那条判据在
-                    // **只有一支队伍**时成立; 多队并存时，卡片上没有一个东西说得出"我属于谁"，
-                    // 而 worker 的第二行写的是归属**名字**，扫读要逐卡看字。
-                    // 现在竖条人人都有、且同队同色 ⇒ 队长改由**名字 500 + 身份行里的「管理」**认。
-                    // 孤儿（main 被删）没有队伍 ⇒ 中性灰，与自己那行「未归属」对得上。
                     Rectangle()
-                        .fill(tint ?? CodexTheme.textMuted.opacity(0.45))
+                        .fill(card.bar)
                         .frame(width: Tune.teamIdentityBarWidth)
                 }
                 .clipShape(RoundedRectangle(cornerRadius: CodexTheme.radiusSm))
             }
-            // 亮色下卡片面 #F1F1F1 压在纸 #F8F8F8 上只差 Δ7，没有边就"看不出这是一张卡"
-            // （出图实测: 整片读成一行行文字浮在纸上）。边用 `border`（两套主题都成立），
-            // 选中时换成 accent —— 不是加一条更粗的边，是**换颜色**（同一处只画一次）。
+            // 亮色下"浮起"是白、纸是 #F8F8F8 —— 只差 Δ7，没有边就读成"一行字浮在纸上"；
+            // 暗色下投影几乎不可见，所以浮起那一档的落差靠面本身（`teamCardRaised`）。
             .overlay {
                 RoundedRectangle(cornerRadius: CodexTheme.radiusSm)
-                    .strokeBorder(selected ? CodexTheme.accent.opacity(0.75) : CodexTheme.border,
+                    .strokeBorder(selected ? CodexTheme.accent.opacity(0.75) : card.border,
                                   lineWidth: 1)
             }
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .onHover { hoveringId = $0 ? t.id : nil }
+    }
+
+    /// 头像 —— **内置 emoji + 队伍色描边**（2026-11-27 boss 定）。
+    ///
+    /// 为什么不再用名字首字: 助理全叫「助理 X」⇒ 首字恒是"助"，一屏三张卡长得一模一样，
+    /// 头像等于没有。内置 10 个 emoji 见 `TeamAvatar`（显式设置优先，没设过按 id 自动分配）。
+    ///
+    /// ⚠️ 底**不再是实心队伍色**，改成中性底 + 队伍色描边：emoji 自带颜色，再垫一个彩色圆
+    ///    就是两层色彩打架（🦊 落在橙色队伍上几乎看不见）。队伍色仍在这一圈描边上，
+    ///    "身份颜色"这个通道没丢，只是从面挪到了线。
+    /// ⚠️ 它仍是**明暗的主通道**: 非工作态 `saturation(0)` + 降透明度 —— emoji 跟着一起变灰。
+    private func avatar(_ glyph: String, tint: Color?, dim: Double, gray: Bool) -> some View {
+        Text(glyph)
+            .font(.system(size: 14))
+            .frame(width: Tune.teamAvatarSize, height: Tune.teamAvatarSize)
+            .background {
+                Circle().fill(CodexTheme.bgPill)
+            }
+            .overlay {
+                Circle().strokeBorder(tint ?? CodexTheme.textMuted, lineWidth: 1.5)
+            }
+            .saturation(gray ? 0 : 1)
+            .opacity(dim)
+    }
+
+    private func numCell(_ value: String, _ key: String, dim: Double) -> some View {
+        VStack(alignment: .leading, spacing: 1) {
+            Text(value)
+                .font(CodexFonts.monoFont(11.5))
+                .foregroundStyle(CodexTheme.textPrimary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.85)
+            Text(key)
+                .font(.system(size: 9))
+                .foregroundStyle(CodexTheme.textMuted)
+                .lineLimit(1)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .opacity(dim)
     }
 
     // MARK: - 下栏：检查器（横条）
@@ -426,7 +532,7 @@ struct TeamBoardView: View {
                         .frame(maxWidth: .infinity, alignment: .leading)
                     }
                 } else {
-                    scopeInspector
+                    overviewInspector
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -455,7 +561,7 @@ struct TeamBoardView: View {
             .fixedSize(horizontal: false, vertical: true)
             Text(TeamRowText.stateWord(state, now: Date()))
                 .font(CodexFonts.monoFont(10))
-                .foregroundStyle(laneTint(TeamLane.of(state)))
+                .foregroundStyle(stageTint(TeamStage.of(state)))
         }
     }
 
@@ -488,18 +594,20 @@ struct TeamBoardView: View {
         }
     }
 
-    /// 没选卡时：**当前范围的真实读数**，不是一片空白。
+    /// 没选卡时：**真实读数**，不是一片空白。
     ///
     /// 纯展示页的第一眼大概率是"什么都没选中"—— 那一眼若是一片空白，整页就只剩
-    /// "左边一列名单 + 中间几张卡"，人会以为这页没做完。
-    private var scopeInspector: some View {
-        let lines = TeamBoardText.scopeLines(scopeName: scopeName, total: scoped.count,
-                                             teams: teamsInScope, cards: cards)
+    /// "几张卡 + 一条空横栏"，人会以为这页没做完。
+    private var overviewInspector: some View {
+        let lines = TeamBoardText.scopeLines(scopeName: L("全部"),
+                                             total: allPeople.count,
+                                             teams: mains.count,
+                                             cards: stageCounts)
         return VStack(alignment: .leading, spacing: 6) {
             Text(L("当前范围"))
                 .font(.system(size: 10))
                 .foregroundStyle(CodexTheme.textMuted)
-            Text(lines.first ?? scopeName)
+            Text(lines.first ?? "")
                 .font(.system(size: 15, weight: .medium))
                 .foregroundStyle(CodexTheme.textPrimary)
                 .lineLimit(2)
@@ -510,7 +618,7 @@ struct TeamBoardView: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
             Divider().overlay(CodexTheme.divider).padding(.vertical, 4)
-            Text(L("点一张卡，看它的职责、最近五次执行与台账进度。"))
+            Text(L("点一张卡，看它的职责说明、最近五次执行与台账进度。"))
                 .font(.system(size: 11))
                 .foregroundStyle(CodexTheme.textMuted)
                 .fixedSize(horizontal: false, vertical: true)

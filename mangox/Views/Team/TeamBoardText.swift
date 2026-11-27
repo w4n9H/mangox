@@ -1,28 +1,32 @@
 //
 //  TeamBoardText.swift
-//  P20 P5 助理团队页的措辞、排序与度量（2026-11-25）。
+//  P20 P5 助理团队页的措辞、排序与度量（2026-11-25，2026-11-27 泳道退役）。
 //
-//  设计来源: `docs/P20-functional-design.html` §03「助理团队 · 状态泳道 · 纯展示」。
+//  设计来源: `docs/P20-functional-design.html` §03「助理团队 · 纯展示」。
 //
 //  ⚠️ 为什么这些要抽成纯函数: 团队页**视图层没有门**。整个 P5 能被断言的东西，
 //     只有"从数据到文字/顺序/宽度"这几步 —— 它们全部不碰库、不读时钟（`now` 由调用方给），
-//     于是冒烟可以直接喂一组人和一组状态，把列内排序、列宽、统计口径逐条钉死。
+//     于是冒烟可以直接喂一组人和一组状态，把组内排序、列数、统计口径逐条钉死。
 //     与 P4 的 `TeamRowText` 同一款式（视图层无门 ⇒ 把能断言的抽出来）。
 //
-//  ⚠️ 宽度那两个函数**只吃一个数**（可用宽），不再吃"这一列空不空" —— 五列等宽是结构性的，
-//     不是判出来的。见 `laneWidth(available:)` 里那三版的历史。
+//  ⚠️ 度量那个函数**只吃一个数**（可用宽），吐"一行摆几张"。卡宽是定稿常数（200），
+//     不是算出来的 —— 宽度不够就少摆一张。见 `cardColumns(available:)` 里那张窗口对照表。
 //
 
 import Foundation
 
-// MARK: - 泳道
+// MARK: - 状态档
 
-/// 泳道的五档 —— **顺序即语义**，从左到右 = 从"最该被我看见"到"最不需要管"。
+/// 状态的五档 —— **顺序即语义**，从"最该被我看见"到"最不需要管"。
 ///
 /// 为什么单独一个枚举而不是直接用 `TeamState`: `TeamState` 带载荷（时刻），
-/// 而"哪一列"是**分类**。分类只有五份、顺序固定；载荷每 tick 在变。
-/// 把两件事混在一起，列宽/列序就会被载荷的相等性牵着走（`Date` 一改就整片重算）。
-enum TeamLane: Int, CaseIterable, Identifiable {
+/// 而"哪一档"是**分类**。分类只有五份、顺序固定；载荷每 tick 在变。
+/// 把两件事混在一起，排序/配色就会被载荷的相等性牵着走（`Date` 一改就整片重算）。
+///
+/// ⚠️ 2026-11-27 由 `TeamLane` 改名: 泳道那层已经整层退役（改成分组卡片），
+/// 但"五档"本身一点没少 —— 它现在管的是**组内排序 + 左边缘状态色 + 统计行**。
+/// 名字叫回 `lane` 会让后来的人以为界面里还有列。
+enum TeamStage: Int, CaseIterable, Identifiable {
     case running
     case queued
     case awaiting
@@ -31,9 +35,9 @@ enum TeamLane: Int, CaseIterable, Identifiable {
 
     var id: Int { rawValue }
 
-    /// 状态 → 列。**全量分支**（不用 `default`）: `TeamState` 将来加一档时，
-    /// 这里必须编译不过，而不是把它悄悄折进某个已有的列里。
-    static func of(_ s: TeamState) -> TeamLane {
+    /// 状态 → 档。**全量分支**（不用 `default`）: `TeamState` 将来加一档时，
+    /// 这里必须编译不过，而不是把它悄悄折进某个已有的档里。
+    static func of(_ s: TeamState) -> TeamStage {
         switch s {
         case .running:  return .running
         case .queued:   return .queued
@@ -44,6 +48,11 @@ enum TeamLane: Int, CaseIterable, Identifiable {
     }
 }
 
+/// 一个人归谁 —— 2026-11-27 起它不再是"左侧筛选项"，而是**分组的输入**。
+///
+/// 左栏筛选整层删掉了（boss: 个人用户 3 支队伍 × 3~5 人，列出来反而重复 ——
+/// 分组头已经写着「写清楚了的 4 人 · 2 在跑」）。但这个枚举留着: 分组要算的三件事
+/// （全部 / 某支队伍含队长本人 / 未归属）一点没变，冒烟里那三条也照旧成立。
 enum TeamBoardScope: Equatable {
     case all
     /// 某支队伍: **含队长本人**（他是这支队伍的人，不是"另外一个人"）。
@@ -82,15 +91,14 @@ enum TeamBoardText {
         }
     }
 
-    // MARK: 列头
+    // MARK: 档名
 
-    /// 列头那几个字。**不用 `TeamRowText.stateWord` 那一套** —— 那是"一句话"（在跑 4 分钟），
-    /// 列头要的是"这一列叫什么"（在跑），数字由调用方单独画在右边。
+    /// 那一档的字。**不用 `TeamRowText.stateWord` 那一套** —— 那是"一句话"（在跑 4 分钟），
+    /// 这里要的是"这一档叫什么"（在跑），用在统计行与检查器。
     ///
-    /// 用「停用」而不是「已停用」: 列头是**标签**不是**状态叙述**，两个字比三个字在 36pt 的
-    /// 折叠栏里排得整齐（折叠态是竖排，每个字占一行）。
-    static func laneTitle(_ lane: TeamLane) -> String {
-        switch lane {
+    /// 用「停用」而不是「已停用」: 这里是**标签**不是**状态叙述**，两个字并排更好排。
+    static func stageTitle(_ stage: TeamStage) -> String {
+        switch stage {
         case .running:  return L("在跑")
         case .queued:   return L("已排上")
         case .awaiting: return L("等回执")
@@ -99,69 +107,46 @@ enum TeamBoardText {
         }
     }
 
-    // MARK: 卡片第二行
+    // MARK: 卡片第二行 / 状态行
 
-    /// 卡片第二行 = **归属 · 时态**（样张: `CI 看守 · 3 分钟` / `金融对账 · 3 天`）。
+    /// 卡片第二行 = **归属**（样张: `管理` / `写清楚了的` / `未归属`）。
     ///
-    /// ⚠️ 归属是泳道页**唯一还能认出"谁是谁的人"的地方**（文档 §03 明写）——
-    /// 泳道按状态分列之后，一支队伍被拆到五列里，卡片上再不写归属，二十张卡就是认不出谁是谁的。
-    /// 所以这一格**不许省**，宁可时态短语再短一点。
-    static func cardSubtitle(_ t: ScheduledTask, parentName: String?,
-                             state: TeamState, now: Date) -> String {
-        let owner: String
+    /// ⚠️ 2026-11-27 改版后这一行**只写归属，不再带时态**。原因: 卡片上多了一行独立的状态行
+    /// （"在跑 1 分钟"），而原来的 `归属 · 时态` 会让**同一个时长说两遍**
+    /// （"写清楚了的 · 1 分钟" 紧接 "在跑 1 分钟"—— 出图当场看出来的）。
+    /// 时态归状态行，这一行归身份，两个通道各说一件事。
+    ///
+    /// ⚠️ 归属这一格**不许省**: 一支队伍的卡与"未归属"的卡混在一屏里，卡片上不写归属，
+    /// 二十张卡就是认不出谁是谁的人。
+    static func cardSubtitle(_ t: ScheduledTask, parentName: String?) -> String {
         if t.role == .worker {
             // 悬挂值（main 被删了）说「未归属」，与列表行 L2 同一个词 ——
             // 留空会让这张卡读成"这个人没有队伍这个概念"，而它其实是一支残队的人。
-            owner = parentName ?? L("未归属")
-        } else {
-            // 队长自己的卡写它的角色短标记（`管理`）。2026-11-25 起与列表行**同一个函数**取词
-            // （`roleToken`），两处不会漂。
-            owner = TeamRowText.roleToken(kind: t.kind, role: t.role)
+            return parentName ?? L("未归属")
         }
-        return owner + " · " + statePhrase(state, now: now)
+        // 队长自己的卡写它的角色短标记（`管理`）。2026-11-25 起与列表行**同一个函数**取词
+        // （`roleToken`），两处不会漂。
+        return TeamRowText.roleToken(kind: t.kind, role: t.role)
     }
 
-    /// 卡片上的**时态短语** —— 比 `TeamRowText.stateWord` 更短（卡片只有 127pt 可用宽 = 150 − 左右各 10 − 竖条 3）。
+    /// 卡片上那行**状态**（第三通道）。
     ///
-    /// 与列表行那份的差别是刻意的: 列表行要能独立读成一句话（"在跑 4 分钟"），
-    /// 卡片前面已经有归属（"CI 看守 · 4 分钟"），再写"在跑"就是同一列说两遍 ——
-    /// 卡片坐在哪一列，本来就已经说了它是哪一档。
-    static func statePhrase(_ s: TeamState, now: Date) -> String {
-        switch s {
-        case .running(let since):
-            // 样张就是 `4 分钟`（不带"起跑"）—— 卡片坐在「在跑」列里，动词已经由列头给了。
-            let minutes = since.map { max(1, Int(now.timeIntervalSince($0) / 60)) } ?? 1
-            return String(format: L("%lld 分钟"), minutes)
-        case .queued(let at):
-            return DelegationRefusal.hhmm(at)
-        case .awaiting(let since):
-            // 等回执的时态是"什么时候交的活"（样张 09:42）—— 人要知道的是"这张单躺了多久"，
-            // 而"躺了多久"由列内排序回答（等最久的在最上面）。
-            return DelegationRefusal.hhmm(since)
-        case .idle(let last):
-            // ⚠️ 时态短语必须**短到放得进 127pt**（150 卡宽 − 左右各 10 − 竖条 3）。
-            // 第一版写的是「N 天没派 / 还没跑过」，出图实测整行被尾部截断 —— 而截掉的
-            // 恰恰是后面的字（"派"字没了，读起来是"N 天"）。归属在前、时态在后，
-            // 截尾保住归属是对的；但这个短语本身就不该长到需要截。
-            // 「几天」的语义由列头「空闲」承担，卡片上只留数字 —— 与样张同一个口径。
-            guard let last else { return L("没跑过") }
-            let days = Int(now.timeIntervalSince(last) / 86_400)
-            if days >= 1 { return String(format: L("%lld 天"), days) }
-            let hours = Int(now.timeIntervalSince(last) / 3_600)
-            if hours >= 1 { return String(format: L("%lld 小时"), hours) }
-            return L("刚跑过")
-        case .disabled:
-            // 这句话是"停用"这一档的**后果**，不是同义反复: 派活会被硬拒
-            // （`TeamRule` 的 `.workerDisabled` 分支），人得知道点了会怎样。
-            return L("派了会被拒")
+    /// 停用那一档要多带一句后果 —— "停用"只说了一个标签，而人真正要知道的是"派了会怎样"。
+    /// 这句话是**后果**不是同义反复（`TeamRule` 的 `.workerDisabled` 分支会硬拒），
+    /// 原来住在 `cardSubtitle` 里，2026-11-27 归属与状态分家后搬到这里。
+    static func cardStateLine(_ state: TeamState, now: Date) -> String {
+        if case .disabled = state {
+            return L("停用 · 派了会被拒")
         }
+        return TeamRowText.stateWord(state, now: now)
     }
 
-    // MARK: 列内排序
+    // MARK: 组内排序
 
-    /// 列内排序 —— **不是按名字，是按"最该被我看见的"**（文档 §03）。
+    /// 组内排序 —— **不是按名字，是按"最该被我看见的"**。
     ///
-    /// 五档的键各不相同，但都指向同一句人话:
+    /// 两级: ① **档位**（在跑 → 已排上 → 等回执 → 空闲 → 停用，即 `TeamStage.rawValue`）；
+    /// ② 同档内按各自的时刻键:
     ///   · 在跑 —— 起跑时刻**升序**（跑得久的浮上来: 那是"卡住了"的最大嫌疑）
     ///   · 已排上 —— 到点时刻**升序**（最快起跑的在上）
     ///   · 等回执 —— 交活时刻**升序**（等最久的在上）
@@ -170,20 +155,23 @@ enum TeamBoardText {
     ///     （`ScheduledTask` 没有 `updatedAt`）⇒ 用"最后动过"顶替，并在界面上不声称是停用时刻。
     ///     这是**如实降级**，不是凑数: 两档之间唯一有意义的比较本来就是"谁更久没动静"。
     ///
+    /// ⚠️ 2026-11-27 起**不再按档过滤**（泳道退役，一张卡只属于一个组，不归属某一列）。
+    ///    档位从"第几次调用"变成"排序的第一级键" —— 顺序语义一字未改。
+    ///
     /// 排序必须**确定**: 键相等时按 `createdAt`（建人顺序）再按名字。
     /// `sort` 本身不稳定，少了这个 tiebreaker，同键的两张卡每 tick 换位 —— 而"位置固定"
     /// 正是这个页面敢叫人靠位置认人的前提。
-    static func order(_ lane: TeamLane, _ people: [ScheduledTask],
-                      states: [UUID: TeamState]) -> [ScheduledTask] {
-        people
-            .filter { TeamLane.of(stateOfOrIdle($0, states)) == lane }
-            .sorted { a, b in
-                let ka = sortKey(stateOfOrIdle(a, states)) ?? .distantPast
-                let kb = sortKey(stateOfOrIdle(b, states)) ?? .distantPast
-                if ka != kb { return ka < kb }
-                if a.createdAt != b.createdAt { return a.createdAt < b.createdAt }
-                return a.name < b.name
-            }
+    static func order(_ people: [ScheduledTask], states: [UUID: TeamState]) -> [ScheduledTask] {
+        people.sorted { a, b in
+            let sa = stateOfOrIdle(a, states), sb = stateOfOrIdle(b, states)
+            let ra = TeamStage.of(sa).rawValue, rb = TeamStage.of(sb).rawValue
+            if ra != rb { return ra < rb }
+            let ka = sortKey(sa) ?? .distantPast
+            let kb = sortKey(sb) ?? .distantPast
+            if ka != kb { return ka < kb }
+            if a.createdAt != b.createdAt { return a.createdAt < b.createdAt }
+            return a.name < b.name
+        }
     }
 
     /// 没算过状态的人当"从没动过"（与 `SchedulerService.teamState(of:)` 的兜底同一个值）——
@@ -241,83 +229,133 @@ enum TeamBoardText {
 
     // MARK: 度量
 
-    /// 五列的宽度 —— **永远等宽**，由可用宽算出来，夹在 [`teamLaneMinWidth`, `teamLaneWidth`] 之间。
+    /// 一行摆几张卡 —— **宽度不够就少摆一张，不是把卡挤窄**。
     ///
-    /// 2026-11-25 boss 两次出图，把这个数改了三次。前两版都错在同一个念头上: **给空列开特例**。
-    ///   ① `36 + 逐字竖排` —— 四个空列收成四根字柱，与旁边 150pt 的「空闲」并排
-    ///      ⇒「又是横字，又是竖字，还有宽度」（竖排不是 SwiftUI 的折行，是我自己加的渲染方式）;
-    ///   ② `实测最长列名 ≈ 61` —— 字横过来了、五列都一行，但**空列比有卡列窄**
-    ///      ⇒「至少要等宽吧」;
-    ///   ③ **等宽**（现在这版）。空列不再有任何特殊处理 —— 列头一份画法、宽度一个来源。
+    /// 2026-11-27 boss 定稿的规则。判据只有一条: `teamCardWidth` 是**定稿宽度**（200），
+    /// 压到 190 就会出现名字被省略号吃掉；所以能摆几张算几张，剩的留白。
     ///
-    /// 为什么不是恒 150: 5×150 + gap×4 = 798pt，而窗口中间那一栏只有 700 上下 ⇒ 恒 150 会
-    /// **永远**横向滚、最后两列被切在边上。"等宽"的前提是**放得下**，所以宽度跟着可用宽走:
-    ///   · 宽窗口 ⇒ 封顶 150（再宽不多读一个字，只是每张卡右边空一片）;
-    ///   · 常见窗口（≈700）⇒ 均分后 130 左右，整片刚好放满;
-    ///   · 窄窗口 ⇒ 落到下限 118（卡片第二行要放得下 9~10 个字），再窄才横向滚。
+    /// | 内容区可用宽 | 几张 | 出现在 |
+    /// |---|---|---|
+    /// | 1053 − 侧栏 257 = 796 | 3 | 窗口拖到最窄（`Tune.windowMinWidth` 常态档） |
+    /// | 1280 − 257 = 1023 | 4 | 开机默认窗口 |
+    /// | ≥ 1040 | 5（封顶） | 更宽也只是留白，卡片不跟着变宽 |
     ///
-    /// ⚠️ 仍然不做的两件事: ① **不隐藏空列** —— 隐藏会让某一列一有卡就整片右移，而"位置固定"
-    /// 是这个页面唯一的导航锚；② **不做换列/宽度动画** —— 卡片在列间移动的几百毫秒里，
-    /// 点谁都是错的位置（文档同一条理由）。
-    static func laneWidth(available: CGFloat) -> CGFloat {
-        let count = CGFloat(TeamLane.allCases.count)
-        let gaps = Tune.teamLaneGap * (count - 1)
-        // **向下取整**: 让"刚好放得下"那一档不会因为 0.4pt 的余数滚出一像素（滚出来了就是
-        // 一条永远擦不掉的渐隐 + 最后一列被切）。
-        let fit = ((available - gaps) / count).rounded(.down)
-        return min(Tune.teamLaneWidth, max(Tune.teamLaneMinWidth, fit))
-    }
-
-    /// 整片泳道的宽（含列间 gap）。调用方拿它跟可用宽比: **只有窄到下限**时才装不下、才横向滚。
-    /// 同一个 `laneWidth` 算出来的，所以"布局多宽"与"要不要渐隐"不会各说各话。
-    static func boardWidth(available: CGFloat) -> CGFloat {
-        let count = CGFloat(TeamLane.allCases.count)
-        return laneWidth(available: available) * count + Tune.teamLaneGap * (count - 1)
+    /// ⚠️ **这个数跟窗口下限无关**: 团队页最窄需要两列 = 2×200 + 10 + 32 = 442 内容宽 ⇒
+    ///    加侧栏 257 = 699 窗口，远低于既有的 1053 ⇒ **一行代码都不用为它抬低下限**。
+    ///    抬下限那条路的代价见 `WorkspaceWindowFit` 文件头（补宽同步阻塞 217ms）。
+    ///
+    /// ⚠️ 向下取整: 让"刚好放得下"那一档不会因为 0.4pt 的余数把最后一张挤到下一行。
+    static func cardColumns(available: CGFloat) -> Int {
+        let step = Tune.teamCardWidth + Tune.teamCardGap
+        let fit = Int(((available + Tune.teamCardGap) / step).rounded(.down))
+        return min(Tune.teamCardMaxColumns, max(1, fit))
     }
 
     // MARK: 统计行
 
-    /// 顶部那一行。**只列非零的档** —— 零有列头的 `0` 在说，统计行再说一遍就是噪音，
-    /// 而这一行的用处是"扫一眼知道有几件事在动"。
+    /// 顶栏那几个 chip 的**数据** —— 不是一句拼好的话。
     ///
-    /// 队伍的计数**只在 > 1 时出现**: "1 支队伍"是每个单队伍用户的默认状态，
-    /// 天天报一个恒为 1 的数，等于那一格白占。
-    static func statsLine(total: Int, teams: Int, cards: [TeamLane: Int]) -> String {
-        var parts = [String(format: L("%lld 个助理"), total)]
-        if teams > 1 { parts.append(String(format: L("%lld 支队伍"), teams)) }
-        for lane in TeamLane.allCases {
-            let n = cards[lane] ?? 0
+    /// 为什么返回结构而不是字符串: 改版后这一行是**分块上色**的（"2 在跑"用琥珀、"1 等回执"用红），
+    /// 一句拼好的话没法分色。原来那个 `statsLine(...) -> String` 在泳道页是一行纯文本，
+    /// 改版后视图用不上它了 —— 留着就成了一条**只有冒烟在守的死代码**（断言恒绿，界面根本没画）。
+    ///
+    /// 规则与那句一模一样: **只列非零的档**（零有卡片在说，这里再说一遍是噪音），
+    /// 队伍的计数**只在 > 1 时出现**（"1 支队伍"是单队伍用户的默认状态，天天报等于白占一格）。
+    /// 目标: "扫一眼知道有几件事在动"。
+    static func statChips(total: Int, teams: Int, cards: [TeamStage: Int]) -> [StatChip] {
+        var out = [StatChip(value: "\(total)", label: L("个助理"), stage: nil)]
+        if teams > 1 { out.append(StatChip(value: "\(teams)", label: L("支队伍"), stage: nil)) }
+        for stage in TeamStage.allCases {
+            let n = cards[stage] ?? 0
             guard n > 0 else { continue }
-            parts.append(String(format: L("%lld %@"), n, laneTitle(lane)))
+            out.append(StatChip(value: "\(n)", label: stageTitle(stage), stage: stage))
         }
-        return parts.joined(separator: " · ")
+        return out
     }
 
     // MARK: 检查器空态
 
-    /// 没选卡时右侧那一栏 —— **不画一片空白**。
+    /// 没选卡时下方那一栏 —— **不画一片空白**。
     ///
     /// 为什么值得单独设计: 这是个纯展示页，进来看的第一眼大概率是"没选中任何东西"，
-    /// 而那一眼如果是一片空白，整页就只剩"左边一列名单 + 中间几张卡"，
-    /// 人会觉得这个页面没做完。这里放的是**当前范围的真实读数**（不是引导占位）。
+    /// 而那一眼如果是一片空白，整页就只剩"几张卡 + 一条空横栏"，
+    /// 人会觉得这个页面没做完。这里放的是**真实读数**（不是引导占位）。
     static func scopeLines(scopeName: String, total: Int, teams: Int,
-                           cards: [TeamLane: Int]) -> [String] {
+                           cards: [TeamStage: Int]) -> [String] {
         var lines = [scopeName]
         lines.append(String(format: L("%lld 个人 · %lld 支队伍"), total, teams))
-        let moving = TeamLane.allCases.compactMap { lane -> String? in
-            let n = cards[lane] ?? 0
-            guard n > 0, lane == .running || lane == .awaiting || lane == .queued else { return nil }
-            return String(format: L("%lld %@"), n, laneTitle(lane))
+        let moving = TeamStage.allCases.compactMap { stage -> String? in
+            let n = cards[stage] ?? 0
+            guard n > 0, stage == .running || stage == .awaiting || stage == .queued else { return nil }
+            return String(format: L("%lld %@"), n, stageTitle(stage))
         }
         lines.append(moving.isEmpty ? L("手上都没有活") : moving.joined(separator: " · "))
         return lines
     }
 
-    /// 一个人都还没有时的整页空态（**五列全空 + 一句去哪里建**）。
+    /// 一个人都还没有时的整页空态（**一句去哪里建**）。
     ///
     /// 判据: 空态必须给出**下一步去哪**，而不是只说"还没有"。这个页面的入口在侧栏，
     /// 而人可以是从定时任务页点过来的 —— 只写"还没有助理"，他下一步会去翻设置。
     static func emptyBoardLine() -> String {
         L("还没有助理。去「定时任务」新建一个，或把已有的改成助理（执行）")
     }
+
+    // MARK: 卡片底部那三格数字
+
+    /// `41.2k` / `1.2k` / `860` / `—`。
+    ///
+    /// 为什么用 k 而不是原始位数: 卡片可用宽只有 175pt（200 − 左右各 10 − 竖条 3 − 右边 2），
+    /// 三格并排时每格约 58pt；`1234567` 这种七位数会撑破格子并把旁边两格挤歪。
+    /// 一位小数够用来比较量级，而"具体多少"在检查器里。
+    ///
+    /// `0 → "—"` 是**如实**: 没跑过的人没有 token 这个概念，写 `0` 会被读成"跑了但没花钱"。
+    static func tokenLabel(_ n: Int) -> String {
+        guard n > 0 else { return "—" }
+        if n >= 1_000_000 {
+            return String(format: "%.1fm", Double(n) / 1_000_000)
+        }
+        if n >= 10_000 {
+            return String(format: "%.1fk", Double(n) / 1_000)
+        }
+        if n >= 1_000 {
+            return String(format: "%.2fk", Double(n) / 1_000)
+        }
+        return "\(n)"
+    }
+
+}
+
+/// 顶栏一个 chip 的数据。`stage` 为 `nil` = 中性灰（"7 个助理"这种数不是状态）；
+/// 非 `nil` = 用该档的状态色（"2 在跑"上琥珀）。
+struct StatChip: Equatable {
+    let value: String
+    let label: String
+    let stage: TeamStage?
+}
+
+/// 卡片底部那三格数字的**快照**（2026-11-27）。
+///
+/// ⚠️ 为什么必须是快照而不是 `body` 里现算: 每格都是一条聚合查询，而一张卡要三格。
+/// 七张卡放进 `body` = 一次滚动求值几十次 × 七个人 —— 与本文件头那条「视图层没有门，
+/// 把能断言的抽出来」同源的纪律，也是 `teamStates` 那条「界面读快照」。
+/// 刷新点与 `teamStates` **同一个**（`SchedulerService.refreshTeamStates`），不另开时点。
+///
+/// ⚠️ **三格全部来自 db，一格都不读盘**（2026-11-27 boss：「台账计算有点麻烦，能不能换成
+///    别的可以从 db 获取的指标」）。原来第三格是「台账 · 验收 7/9」，要每人读一次交接文件
+///    （≤4420 字）再逐行 parse —— 那是这一页唯一碰文件系统的地方，也是"麻烦"的全部来源。
+///    换成**交活**（`agent_delegations` 里 `status = 'done'` 的条数）之后:
+///    三格都是"这台机器上它一共产出过多少"，语义还更齐（token / 回合 / 交活都是累计量）。
+///    ⚠️ 台账本身没消失 —— 它还在**下方检查器**里（选中谁才读一次，本来就只读一次）。
+struct TeamCardStat: Equatable {
+    var tokens: Int = 0
+    var turns: Int = 0
+    /// 交过几次活 —— `agent_delegations.status = 'done'` 的条数。
+    var doneDelegations: Int = 0
+
+    static let empty = TeamCardStat()
+
+    var tokenLabel: String { TeamBoardText.tokenLabel(tokens) }
+    /// 交活数: 0 显示 `—`（与 token 同一条理由 —— 没交过就是没交过，写 `0` 会被读成"交了但记成 0"）。
+    var doneLabel: String { doneDelegations > 0 ? "\(doneDelegations)" : "—" }
 }

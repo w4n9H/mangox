@@ -76,6 +76,22 @@ enum CodexTheme {
     /// 所以既能在聊天页当"凹槽", 又能当其他页面上的字段底 (旧注释说的"必须比 bgChat 亮"已过时)。
     static let bgComposer = adaptive(light: 0xFFFFFF, dark: Dark.bgInput)
 
+    // MARK: - 团队页卡面的三档明暗 (2026-11-27)
+    //
+    // 判据: 团队页**只靠明暗**说"在不在工作"。而明暗**不能长在文字上** ——
+    // 把正文压到 56% / 42% 实测只有 2.33:1 / 1.85:1（浅色），等于把内容藏起来；
+    // 要做到 4.5:1 透明度得给到 0.85，那也就等于没变暗。⇒ 明暗长在**卡面**和**头像**上。
+    //
+    // ⚠️ 三档都是**几度的灰阶差**，不是三种颜色。排在一起分得开，单看一张"它不是另一种卡"。
+    //    平贴那一档直接复用 `bgCard`（浅 #F1F1F1 / 暗 #282830），所以只需补上下两档。
+    // ⚠️ 亮色这两档**不在 `enum Dark` 的算例覆盖里**（亮色板零门禁，本仓既有状况）——
+    //    这两个值是从团队页稿实测出来的，改之前先量对比度，别凭眼感。
+    /// 浮起 —— 在跑 / 等回执。浅色比纸**亮**（白），暗色比平贴**亮**（靠面本身，不靠投影:
+    /// 暗色下投影几乎不可见）。
+    static let teamCardRaised   = adaptive(light: 0xFFFFFF, dark: 0x32323D)
+    /// 沉下去 —— 停用。浅色比平贴深一档，暗色比平贴深两档（暗色本来就深，落差要更大才看得出）。
+    static let teamCardRecessed = adaptive(light: 0xE8E8EC, dark: 0x1C1C24)
+
     // MARK: - 交互态 (悬停 / 选中)
     //
     // 用**半透明叠加**而不是实色: 实色只在"比它更暗的面"上成立。侧栏选中行 (底=侧栏)、
@@ -663,32 +679,36 @@ enum Tune {
     /// 给身份再配一个色，同一行上就有两套色编码（"正在跑的 main"分不出是身份还是状态）。
     /// ⇒ 竖条本身用中性灰，**不是 accent**。P5 的泳道卡复用同一个数。
     static let teamIdentityBarWidth: CGFloat = 3
-    // P20 P5 助理团队页（泳道 · 纯展示）—— 布局度量。
+    // P20 P5 助理团队页（分组卡片 · 纯展示）—— 布局度量。
     //
-    // ⚠️ 列宽**不写死**，由可用宽算: 五列**永远等宽** =（可用宽 − gap×4）÷ 5，夹在
-    //    [`teamLaneMinWidth`, `teamLaneWidth`] 之间。见 `TeamBoardText.laneWidth(available:)`。
-    //    同一个数改了三版，前两版都是被 boss 出图否掉的（空列特殊化的两条路都走不通）:
-    //      ① 36 + 逐字竖排 ⇒ "又是横字，又是竖字，还有宽度"
-    //      ② 实测最长列名（≈61）⇒ 字横过来了，但空列比有卡列窄 ⇒ "至少要等宽吧"
-    //      ③ 等宽（现在这版）。空列不再有任何特殊处理。
+    // 2026-11-27 boss 定稿：**泳道整层退役**，改成分组卡片网格。判据是「用明暗表示是否在工作」——
+    // 泳道把状态画成"人站在哪一列"（要横着扫五列），卡片把状态画成"这张卡亮不亮"（竖着扫一张卡）。
+    // 前者的代价是"非工作态有一大块空旷"，后者的代价是"同屏分不清谁在什么状态" ⇒ 补了明暗三档
+    // （卡面浮起/平贴/沉下）+ 左边缘状态色 + 状态文字，三个通道叠着说同一件事。
     //
-    //    为什么不恒 150: 5×150 + gap×4 = 798pt，而窗口中间那一栏只有 700 上下 —— 恒 150
-    //    会**永远**横向滚、最后两列被切在边上。"等宽"的前提是放得下，所以宽度必须跟着可用宽走。
-    //    收窄的**只是宽度，不是列序**: 五列永远按「在跑 / 已排上 / 等回执 / 空闲 / 停用」排，
-    //    位置是这个页面唯一的导航锚。
-    static let teamFilterWidth: CGFloat = 200       // 左列：队伍筛选（全部 / 各 main / 未归属）
-    /// 一列的**设计宽（上限）**: 再宽也不会多读出一个字（卡片文字左对齐），只是每张卡右边空一片。
-    static let teamLaneWidth: CGFloat = 150
-    /// 下限: 卡片第二行（`归属 · 时态`）要放得下 9~10 个字 —— 118 是那个下限。
-    static let teamLaneMinWidth: CGFloat = 118
-    static let teamLaneGap: CGFloat = 12
+    // ⚠️ 卡宽**固定 200 且永不压缩**：宽度不够就少摆一张，不是把卡片挤窄。
+    //    200 是定稿宽度，压到 190 就会出现名字被省略号吃掉（"巡检北区"→"巡检北…"）。
+    //    判据在 `TeamBoardText.cardColumns(available:)`：列数从可用宽算，跟窗口下限无关。
+    static let teamCardWidth: CGFloat = 200
+    /// 卡片之间（横竖同值）。横 10 是"两张卡还看得出是两张"，竖 10 与卡内 padding 同一量级。
+    static let teamCardGap: CGFloat = 10
+    /// 一行最多几张。5 的依据: 6 张在 1680 的窗口里就要 1250，而卡区再宽也不会多读出一个字。
+    static let teamCardMaxColumns: Int = 5
+    /// 卡区的内容宽上界 = 5 张正好摆满（5×200 + 4×10）。**超过就居中**，与泳道那套
+    /// 「宽窗口居中、不靠左」同一条理由：靠左会读成"右边一半坏了"。
+    static var teamBoardMaxWidth: CGFloat {
+        teamCardWidth * CGFloat(teamCardMaxColumns) + teamCardGap * CGFloat(teamCardMaxColumns - 1)
+    }
+    /// 卡区左右内边距。16 与检查器、统计行同一个数。
+    static let teamBoardHPadding: CGFloat = 16
     /// 下方检查器那条横栏的**高度**（2026-11-25 boss 定: 它从右栏挪到了下栏）。
     /// 200 的依据: 三段里最长的一段是「最近五次执行」（5 行 × 约 14pt + 标题），
     /// 再高就只剩空白、再矮则五行要滚 —— 而"最近五次"滚着看就没有意义了。
     static let teamInspectorHeight: CGFloat = 200
     static let teamCardPadH: CGFloat = 10
     static let teamCardPadV: CGFloat = 9
-    static let teamCardGap: CGFloat = 8
+    /// 头像直径。26 与名字（12.5pt）并排时等高 —— 再大就把那行撑成两行。
+    static let teamAvatarSize: CGFloat = 26
     /// 检查器里「最近五次执行」那一块的高度上限（内联，超过就内部滚）。
     /// 与 `scheduleLedgerCardMaxHeight` 同一条理由: 它长在一个会随选中变化重排的栏里，
     /// 没上界时"某个人被派过特别多的活"会把下面两个动作按钮顶出可视区。

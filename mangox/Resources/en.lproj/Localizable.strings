@@ -7,7 +7,7 @@
    **本文件由 scripts/l10n/gen_strings.py --write 生成, 别手改** ——
    译文改 scripts/l10n/en_values.py 的 VALUES, 再跑 --write。
 
-   条数: 1228
+   条数: 1232
 */
 
 " (值:\"%@\")" = " (value: %@)";
@@ -63,6 +63,7 @@
 "%lld 个文件" = "%lld files";
 "%lld 个来源" = "%lld sources";
 "%lld 个模型因缺元数据未列出: %@" = "%lld models not listed — no metadata available: %@";
+"%lld 人" = "%lld people";
 "%lld 分 %lld 秒" = "%lldm %llds";
 "%lld 分钟" = "%lldm";
 "%lld 天" = "%lldd";
@@ -72,7 +73,6 @@
 "%lld 字节" = "%lld bytes";
 "%lld 小时" = "%lldh";
 "%lld 小时 %lld 分" = "%lldh %lldm";
-"%lld 支队伍" = "%lld teams";
 "%lld 条与 persona pack 的 key 冲突, 已跳过注入: %@" = "%lld items collide with a persona pack key and were skipped: %@";
 "%lld 条常驻条目被静默丢弃: %@" = "%lld always-on items were silently dropped: %@";
 "%lld 次工具调用" = "%lld tool calls";
@@ -149,6 +149,7 @@
 "provider (自定义)" = "provider (custom)";
 "scroll 要说清往哪滚(up / down) ⇒ 没动。" = "scroll must say which way (up / down) ⇒ nothing was done.";
 "sort 写文件" = "sort writes a file";
+"token" = "tokens";
 "token / 天" = "tokens / day";
 "tokens" = "tokens";
 "txt / html 没有 frontmatter — 标题就是文件名" = "txt / html have no frontmatter — the filename is the title";
@@ -243,6 +244,7 @@
 "两个都说, 我不知道该按哪个。" = "Both were given; I do not know which one you mean.";
 "两次巡检之间，它可以给自己约一个时刻回来（比如「构建还在跑，10 分钟后再看」）。" = "Between scheduled runs it may book itself a time to come back — e.g. \"the build is still running, look again in 10 minutes\".";
 "个任务" = " tasks";
+"个助理" = "assistants";
 "中" = "Medium";
 "为「%@」设置目录…" = "Set a directory for “%@”…";
 "为「%@」选择工作目录" = "Choose a working directory for “%@”";
@@ -251,6 +253,7 @@
 "二" = "Tue";
 "五" = "Fri";
 "交互" = "Interactive";
+"交活" = "delivered";
 "产出" = "Output";
 "人手还在键鼠上时我不抢 —— 你让我继续, 我下一步接着来。" = "While your hands are on the keyboard or mouse I stay out of the way - say the word and I pick up from here.";
 "人格" = "Persona";
@@ -316,6 +319,7 @@
 "停止 (⌘.)" = "Stop (⌘.)";
 "停止该任务" = "Stop this task";
 "停用" = "Paused";
+"停用 · 派了会被拒" = "Paused · delegation would be refused";
 "允许" = "Allow";
 "允许发送组合按键" = "Allow sending key combinations";
 "允许按坐标点击" = "Allow clicking by position";
@@ -365,7 +369,6 @@
 "分钟" = "Minutes";
 "刚刚" = "now";
 "刚才有人动了鼠标 / 键盘 ⇒ 这次没动(界面一下都没动)。" = "Someone just touched the mouse or keyboard - nothing was done (the window did not move at all).";
-"刚跑过" = "Just ran";
 "创建" = "Create";
 "创建备份目录失败: %@" = "Could not create the backup directory: %@";
 "删" = "Drop";
@@ -422,7 +425,6 @@
 "压缩中…" = "Compacting…";
 "原归属已删除" = "Its lead was deleted";
 "原触发条件（旧类型 · 已停用，不再值守）" = "Original trigger condition (legacy type · disabled, no longer watching)";
-"原队伍已删除" = "Its team was deleted";
 "去处" = "Goes to";
 "去定时任务" = "Open Scheduled";
 "去审核" = "Review";
@@ -477,6 +479,7 @@
 "四" = "Thu";
 "回「同意」我就按这份方案去做（起手做快照，跑完能回滚）；回「先别动」就搁置。" = "Reply 「同意」 and I will run this plan (snapshot first, rollback available); reply 「先别动」 to shelve it.";
 "回到最新" = "Back to latest";
+"回合" = "turns";
 "回合完成 · 耗时 %02d:%02d" = "Turn finished · took %02d:%02d";
 "回合完成 · 耗时 %02d:%02d\n%@" = "Turn finished · took %02d:%02d\n%@";
 "回合完成通知" = "Turn completion notifications";
@@ -519,6 +522,7 @@
 "大小" = "Size";
 "太大了（%ld MB，上限 %ld MB）: %@" = "Too big (%ld MB, the limit is %ld MB): %@";
 "太长 · 改用复制" = "Too long · copy text";
+"头像" = "Avatar";
 "好" = "OK";
 "好的,先记下「%@」的需求,我会在下一轮把上下文喂给模型,再回执计划。" = "Got it. Noting the \"%@\" request; I will feed the context to the model on the next turn and reply with a plan.";
 "始终允许" = "Always allow";
@@ -695,6 +699,7 @@
 "按" = "Press";
 "按 #" = "Press #";
 "按 (" = "Press (";
+"按 id 派生一个，不写进设置；想固定成某一张再挑" = "Derived from its id — nothing is saved until you pick one.";
 "按下新组合键…" = "Press a new key combination…";
 "按坐标点这一档认不出控件语义, 这类词一律不替你点 —— 这一步你自己点。" = "Clicking by position cannot tell what a control means, so I never tap these words for you — this step is yours.";
 "按这份方案执行；起手先做整轮快照，红线动作恒拒" = "Run this plan. A full snapshot is taken first; redlined actions are always refused";
@@ -727,6 +732,7 @@
 "摘要" = "Summary";
 "摘要重试中…" = "Retrying summary…";
 "支付" = "Pay";
+"支队伍" = "teams";
 "收起" = "Collapse";
 "收起侧栏" = "Collapse sidebar";
 "收起工作区" = "Collapse workspace";
@@ -899,14 +905,12 @@
 "没绑机器人 —— 在助理的「入口 · 飞书」里选一个" = "No bot is bound — pick one under Inbound · Feishu in the assistant.";
 "没给要写的字 ⇒ 没写。" = "No text to write ⇒ nothing was typed.";
 "没给要按的键 ⇒ 没按。" = "No keys to press ⇒ nothing was pressed.";
-"没跑过" = "Never ran";
 "没选 —— 只能在 MangoX 里用它" = "Nothing selected — usable only inside MangoX";
 "注入块在 spawn 期生效; 点此重启引擎立刻生效" = "The injection block takes effect at spawn; restart the engine to apply it now";
 "注入块已是最新" = "Injected block is up to date";
 "注入量" = "PAYLOAD";
 "注册失败: %@" = "Registration failed: %@";
 "注销失败: %@" = "Unregistration failed: %@";
-"派了会被拒" = "Delegation would be refused";
 "浅色" = "Light";
 "测试中…" = "Testing…";
 "测试连接" = "Test connection";
@@ -926,7 +930,7 @@
 "漏 %lld 次" = "%lld missed";
 "漏跑 %lld 个任务" = "%lld tasks missed";
 "点「常驻」区头的文件夹按钮: 目录不在时会就地建出来; 若那个位置被同名文件占着, 请先移走它" = "Click the folder button in the “Always on” header: it creates the folder if it is missing; if a file of the same name occupies that spot, move it away first";
-"点一张卡，看它的职责、最近五次执行与台账进度。" = "Pick a card to see its role, last five runs and ledger progress.";
+"点一张卡，看它的职责说明、最近五次执行与台账进度。" = "Pick a card to see its role details, last five runs and ledger progress.";
 "点一行就选中它（选中后要点右上角「保存」才生效）。选中的机器人收到的话会直接进这个助理的会话，回复原路发回飞书。群聊不接（只做单聊）。机器人没有自己的开关 —— 助理关着它就**不连**，飞书那边输入框会变灰。" = "Click a row to select it (it only takes effect after Save). Messages sent to the selected bot go straight into this assistant's session, and the reply travels back to Feishu. Group chats are ignored (direct messages only). Bots have no switch of their own — while the assistant is paused the bot does not connect, and the Feishu input box greys out.";
 "点击复制 hash: %@" = "Click to copy hash: %@";
 "点击查看大图" = "Click to view full size";
@@ -1020,6 +1024,7 @@
 "联网搜索扩展没配博查 API Key —— 挂上它也只会每次调用都回「未启用」, 所以不挂。在 设置 → 联网搜索 里填一个 Key 并保存, 它就会挂上。" = "The web search extension has no Bocha API key set - mounting it would only make every call answer not enabled, so it stays unmounted. Enter a key under Settings - Web search and save; it gets mounted right away.";
 "聚焦" = "Focus";
 "聚焦 #" = "Focus #";
+"自动" = "Auto";
 "自动放行" = "Auto allow";
 "自动裁决" = "Auto judge";
 "自定义" = "Custom";
@@ -1141,7 +1146,6 @@
 "这个构建不能注册登录项 —— 打开 App 才会巡检" = "This build cannot register a login item — checks only run while the app is open";
 "这个构建没有应用标识，不能注册登录项" = "This build has no application identifier, so a login item cannot be registered";
 "这个目录里没有可读的文档" = "No readable documents in this directory";
-"这个范围里没有人。" = "Nobody in this scope.";
 "这个路径不在笔记目录里" = "That path is outside the notes directory";
 "这个页面没能加载出来（文件太大或编码不对）" = "This page could not be loaded (file too large or wrong encoding)";
 "这么长的东西多半是搞错了对象。" = "That much text usually means the wrong field was picked.";

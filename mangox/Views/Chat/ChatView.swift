@@ -94,6 +94,27 @@ enum ChatFollowWatchdog {
         // ③ 越界：文档比视口长，而**新鲜**的探针说内容底落在视口上半截。
         //    实测那一拍 `bottom=438 / vp=754`（健康态 666）⇒ 视口底部 316pt 没有内容。
         if doc > vp, let age = probeAgeMs, age < 1500, bottom > 0, bottom < vp * 0.75 { return true }
+        // ④ 探针**一次都没报过**（`probeAgeMs == nil`），而文档明明比视口长
+        //    ⇒ 视口整个落在懒栈还没实例化的那一段（内容底探针根本不在渲染范围里）。
+        //
+        // 2026-11-27 现场（`mangox-20261127-092811.log`，1023 条消息的开屏）：
+        //   `msgs=1023 mat=1` → 四拍全 `bottom=0 age=na` → `retry step=0 gap=3107` →
+        //   重试滚到 `gap=0` → `.settle gap=0` **判绿收手**，而屏幕整块是底色。
+        //   ①②③ 全部接不住它：
+        //     ① `doc == peak`（40192），不塌；
+        //     ② `gap` 确实一度 3107 > 240 触发过，但重试落到的是**估算文档的底**，
+        //        于是 `gap` 归零 —— 一个拿自己算出来的数证明自己贴底的闭环；
+        //     ③ 的前置就是 `bottom > 0`，恰好把"从没报过"排除在外。
+        //   ⇒ 结果是"永不自我纠正"，用户只能靠切会话/滚轮那种外力救回来。
+        //
+        // ⚠️ 判"从没报过"用 `probeAgeMs == nil`，**不用 `bottom == 0`**。
+        //    两者在今天等价（`handleContentBottom` 对 `bottomY <= 0` 直接 return ⇒ 0 从不记账，
+        //    所以 `bottom == 0` 只可能是初值），但等价是**巧合**不是契约：`0` 是"没写过"的
+        //    副作用值，而 `nil` 是明写的"从没报过"。哪天初值换个数、或者允许记 0，
+        //    `bottom == 0` 就悄悄变成另一个意思，这条判据跟着哑掉且没有任何红灯。
+        // ⚠️ 别把它并进 ③ —— ③ 要求探针**新鲜**，这里要求探针**不存在**，前提正好相反；
+        //    合并就得在 ③ 里开一个 `age == nil` 的岔路，读的人会以为它们是同一件事。
+        if doc > vp, probeAgeMs == nil { return true }
         return false
     }
 }
@@ -465,6 +486,12 @@ struct ChatView: View {
                             "msgs": "\(store.messages.count)",
                             "near": nearBottom ? "1" : "0",
                             "vp": String(format: "%.0f", viewportHeight)])
+        // ⚠️ 这里**试过**在初屏第一拍之前先 `nudgeForRealLayout()`（为了省掉下面那次
+        //    0.6 秒后的"跳一下"），实测**不可行**：无论同步还是甩到 `DispatchQueue.main.async`，
+        //    都可能撞上 SwiftUI 正在进行的布局 ⇒ 重入 `layoutSubtreeIfNeeded` ⇒ **启动卡死**
+        //    （2026-11-27，五次冷启里两次只剩 `view log-enabled` 两行，模型进程都没起）。
+        //    偶发卡死比"晚 0.6 秒落准"坏得多 ⇒ 只保留看门狗那条路（它在 `asyncAfter` 里跑，
+        //    五次冷启五次干净）。要真正去掉那一下跳，得换掉"锚哨兵"这套机制本身。
         for (i, delay) in Self.followBeats.enumerated() {
             // 第一拍**先试**把最后一块量出来，其余各拍按 `followTarget` 选锚点。
             // ⚠️ 这里只是候选：真正记账在 `tap` 里、veto 之后（见 `ChatTailLedger`）。
@@ -524,6 +551,18 @@ struct ChatView: View {
                                  "gap": String(format: "%.0f", gap),
                                  "band": String(format: "%.0f", s.vp - bottom),
                                  "peak": String(format: "%.0f", docPeak.value)])
+            // 白屏 / 欠冲（内容底探针**从没**报过数）⇒ 再走 `scrollToTail` 是白跑：落点没变，
+            // 位移不变 ⇒ 不触发布局 ⇒ 没有任何行被实例化（2026-11-27 实测：五拍 `y` 恒为
+            // 104453）。这种形态下先补一次**真滚动**（`nudgeForRealLayout`，就是"滚一下滚轮"
+            // 那件事），把视口**挪开**再落。
+            // ⚠️ 别用 `doc0 == doc1` 判"这一下没用"—— 实测（11:51 那次）`doc0 == doc1 == 40192`
+            //    而紧接着的 `scrollToTail` 一把把文档高量成 137922 并落到真底。挪开的那几屏
+            //    已经让行实例化了，只是**当帧还没回写**。所以这里只记数、不判断、不提前 return。
+            if age == nil, let hit = scrollMetrics.nudgeForRealLayout() {
+                Log.scroll("retry-forced", ["step": "\(step)",
+                                            "doc0": String(format: "%.0f", hit.before),
+                                            "doc1": String(format: "%.0f", hit.after)])
+            }
             scrollToTail(proxy, origin: "retry", veto: veto)
             armRetry(proxy, step: step + 1, veto: veto)
         }
@@ -1082,6 +1121,56 @@ final class ChatScrollMetrics {
     func snapshot() -> (y: CGFloat, doc: CGFloat, vp: CGFloat)? {
         guard let sv = scrollView, let doc = sv.documentView else { return nil }
         return (sv.contentView.bounds.origin.y, doc.frame.height, sv.contentView.bounds.height)
+    }
+
+    /// 白屏的**唯一有效动作**: 替用户滚一下（就是档案里那个"滚轮救回来"的外力）。
+    ///
+    /// ── 现场读数（2026-11-27 第二次，`mangox-20261127-113732.log`，1023 条）──
+    /// | 拍 | 锚 | doc | y | 说明 |
+    /// |----|----|-----|---|------|
+    /// | i=0 | `mat` | 39547 | 34684 | 锚真实行 ⇒ 内容**是**实例化了、量到了 |
+    /// | i=1~3 | `tail` | 105207 | 38793 | 换成锚哨兵，文档高当场涨到 105207 |
+    /// | settle | — | 105207 | **104453** | 0.24 秒后视口被推到虚高底，下面一行都没有 |
+    /// | retry ×5 | `tail` | 105207 | **104453** | 五拍同一个数，`bottom=0 age=na` 一直到底 |
+    ///
+    /// 两个结论：
+    /// ① **不是"内容没实例化"** —— i=0 那一拍成功量过（39547）。是**后来**被推到虚高底，
+    ///    而那个位置没有任何行 ⇒ `LazyVStack` 没有理由去重算，于是它**永不自我纠正**。
+    /// ② 所以"再 `scrollTo` 一次"必然无效：落点还是 104453，**位移没变**。位移不变 ⇒ 没有
+    ///    滚动事件 ⇒ 没有布局 ⇒ 没有实例化。五拍重试就是这么变成五个空动作的。
+    ///
+    /// ⇒ 唯一有效的动作 = **先真的滚开一屏，再落到（此刻量出来的）底**。滚开会强迫
+    ///   `LazyVStack` 把新视口里的行实例化、把文档高重量一遍；那之后落底才落在真内容上。
+    ///   这也解释了"切会话 / 滚轮能救"：它们都是**位移真的变了**的那一下。
+    ///
+    /// ⚠️ 拿不到 `scrollView`（SwiftUI 私有层级变了）时返回 nil，调用方照旧走 `scrollToTail`
+    ///    —— 退化成今天的行为，不会更糟。
+    /// ⚠️ 上滚 3 次而不是 1 次: 一次滚动只让**新滚进视口**的那一段实例化，高度是一段一段长出来的。
+    /// ⚠️ 返回值只用来**记账**，别拿 `after == before` 判"没用"：实测 11:51 那一拍两笔都是
+    ///    40192，紧接着的落底却把文档高量成 137922 —— 挪开的效果要下一帧才回写。
+    /// ⚠️ 它只是**前置动作**，落底仍归 `scrollToTail`（一处实现，别在这儿再写第二份落底逻辑）。
+    @discardableResult
+    func nudgeForRealLayout() -> (before: CGFloat, after: CGFloat)? {
+        guard let sv = scrollView, let doc = sv.documentView else { return nil }
+        let clip = sv.contentView
+        let vh = max(1, clip.bounds.height)
+        let before = doc.frame.height
+        // ⚠️ 3 次是**实测**选的，不是随手写的：同一份 1023 条会话各冷启 4 次，
+        //    3 次落在 `band=88`（健康），改 5 次反而出现 `band=244` —— 挪得越远，
+        //    懒栈重算出来的文档高涨得越离谱（实测 40817 → 213775），落点跟着漂。
+        for _ in 0..<3 {
+            let y = clip.bounds.origin.y
+            // 已在顶（滚不动）时改往下 —— 目的只是"位移必须变"，方向无所谓。
+            let step = y > vh ? y - vh * 0.9 : min(before - vh, y + vh * 0.9)
+            clip.scroll(to: CGPoint(x: clip.bounds.origin.x, y: max(0, step)))
+            sv.reflectScrolledClipView(clip)
+            doc.layoutSubtreeIfNeeded()
+        }
+        clip.scroll(to: CGPoint(x: clip.bounds.origin.x,
+                                y: max(0, doc.frame.height - vh)))
+        sv.reflectScrolledClipView(clip)
+        doc.layoutSubtreeIfNeeded()
+        return (before, doc.frame.height)
     }
 }
 
